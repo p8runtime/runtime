@@ -37,7 +37,7 @@ pub fn document_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     {
         let mut d = r.doc.borrow_mut();
         let version = arg(args, 0);
-        if !matches!(version, Value::Null) {
+        if !version.is_null() {
             d.settings.version = Some(bytes(&version));
         }
         let enc = bytes(&arg(args, 1));
@@ -46,7 +46,7 @@ pub fn document_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
         }
     }
     bind(this, &r);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The libxml2 options a load uses: the document's settings and `flags`.
@@ -89,14 +89,14 @@ fn load(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename: Option<St
         crate::libxml::report(ctx, e, |ctx| ctx.warn(&format!("{func}(): {msg} in {where_}, line: {}", e.line)));
     }
     if !parser.well_formed && flags & build::RECOVER == 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if let Some(f) = filename {
         doc.settings.url = Some(f.into_bytes());
     }
     let r = NodeRef { doc: Rc::new(RefCell::new(doc)), id: DOC };
     bind(this, &r);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn load_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -120,7 +120,7 @@ pub fn load_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
         }
         Err(_) => {
             ctx.warn(&format!("DOMDocument::load(): I/O warning : failed to load external entity \"{path}\""));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -152,7 +152,7 @@ fn load_html_data(ctx: &mut dyn Ctx, this: &Rc<Object>, data: Vec<u8>, filename:
     }
     let r = NodeRef { doc: Rc::new(RefCell::new(doc)), id: DOC };
     bind(this, &r);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn load_html(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -178,7 +178,7 @@ pub fn load_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         }
         Err(_) => {
             ctx.warn(&format!("DOMDocument::loadHTMLFile(): I/O warning : failed to load external entity \"{path}\""));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -210,7 +210,7 @@ fn schema_run(ctx: &mut dyn Ctx, this: &Rc<Object>, schema: Result<crate::xsd::S
         Err(errors) => {
             report_all(ctx, &errors);
             ctx.warn(&format!("{func}(): Invalid Schema"));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let r = this_doc(this);
@@ -219,7 +219,7 @@ fn schema_run(ctx: &mut dyn Ctx, this: &Rc<Object>, schema: Result<crate::xsd::S
         crate::xsd::validate(&schema, &mut d, flags & 1 != 0)
     };
     report_all(ctx, &errors);
-    Ok(Value::Bool(errors.is_empty()))
+    Ok(Value::bool(errors.is_empty()))
 }
 
 pub fn schema_validate(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -233,7 +233,7 @@ pub fn schema_validate(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
     let path = String::from_utf8_lossy(&name).into_owned();
     if name.len() > p8_runtime::stream::MAXPATHLEN {
         ctx.warn("DOMDocument::schemaValidate(): Invalid Schema file source");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
     let schema = match std::fs::read(&path) {
@@ -311,23 +311,23 @@ pub fn register_node_class(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Val
             doc.node_classes.push((base.lower.clone(), e));
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn save_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let node = arg_node(args, 0);
     Ok(match save(ctx, this, node, arg(args, 1).to_int())? {
         Some(b) => str(&b),
-        None => Value::Bool(false),
+        None => Value::FALSE,
     })
 }
 
 pub fn save_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let path = String::from_utf8_lossy(&bytes(&arg(args, 0))).into_owned();
-    let Some(b) = save(ctx, this, None, arg(args, 1).to_int())? else { return Ok(Value::Bool(false)) };
+    let Some(b) = save(ctx, this, None, arg(args, 1).to_int())? else { return Ok(Value::FALSE) };
     match std::fs::write(&path, &b) {
-        Ok(()) => Ok(Value::Int(b.len() as i64)),
-        Err(_) => Ok(Value::Bool(false)),
+        Ok(()) => Ok(Value::int(b.len() as i64)),
+        Err(_) => Ok(Value::FALSE),
     }
 }
 
@@ -375,7 +375,7 @@ pub fn save_html(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
                     crate::libxml::report(ctx, &e, |ctx| ctx.warn("DOMDocument::saveHTML(): encoder error"));
                 }
             }
-            Ok(if bytes.is_empty() { Value::Bool(false) } else { str(&bytes) })
+            Ok(if bytes.is_empty() { Value::FALSE } else { str(&bytes) })
         }
     }
 }
@@ -399,12 +399,12 @@ pub fn save_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     out.dump(DOC);
     let (bytes, _) = html_out::encode_output(out.buf, encoding.as_deref());
     Ok(match std::fs::write(&path, &bytes) {
-        Ok(()) => Value::Int(bytes.len() as i64),
+        Ok(()) => Value::int(bytes.len() as i64),
         Err(e) => {
             let why = e.to_string();
             let why = why.split(" (os error").next().unwrap_or(&why);
             ctx.warn(&format!("DOMDocument::saveHTMLFile({path}): Failed to open stream: {why}"));
-            Value::Int(0)
+            Value::int(0)
         }
     })
 }
@@ -547,7 +547,7 @@ pub fn get_element_by_id(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
 
 pub fn import_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_doc(this);
-    let Some(n) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(n) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     if matches!(n.kind(), Kind::Document | Kind::DocType) {
         return Err(dom_error(ctx, NOT_SUPPORTED));
     }
@@ -564,7 +564,7 @@ pub fn import_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
 
 pub fn adopt_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_doc(this);
-    let Some(n) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(n) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     if matches!(n.kind(), Kind::Document | Kind::DocType) {
         return Err(dom_error(ctx, NOT_SUPPORTED));
     }
@@ -586,7 +586,7 @@ pub fn xinclude(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let flags = arg(args, 0).to_int();
     if flags > i64::from(i32::MAX) || flags < i64::from(i32::MIN) {
         ctx.warn("DOMDocument::xinclude(): Invalid flags");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let r = this_doc(this);
     let (done, diags) = super::xinclude::run(&mut r.doc.borrow_mut(), flags);
@@ -597,7 +597,7 @@ pub fn xinclude(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
             }
         });
     }
-    Ok(if done == 0 { Value::Bool(false) } else { Value::Int(done) })
+    Ok(if done == 0 { Value::FALSE } else { Value::int(done) })
 }
 
 getter!(document_element_get, |ctx, r| {
@@ -610,16 +610,16 @@ getter!(doctype_get, |ctx, r| {
 });
 getter!(encoding_get, |ctx, r| Ok(opt_str(r.doc.borrow().settings.encoding.as_deref())));
 getter!(version_get, |ctx, r| Ok(opt_str(r.doc.borrow().settings.version.as_deref())));
-getter!(standalone_get, |ctx, r| Ok(Value::Bool(r.doc.borrow().settings.standalone == 1)));
+getter!(standalone_get, |ctx, r| Ok(Value::bool(r.doc.borrow().settings.standalone == 1)));
 getter!(document_uri_get, |ctx, r| Ok(opt_str(r.doc.borrow().settings.url.as_deref())));
 getter!(config_get, |ctx, r| {
     let _ = r;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 });
 
 pub fn implementation_get(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
     let class = ctx.class(b"DOMImplementation").expect("declared");
-    Ok(Value::Object(ctx.new_object(&class)))
+    Ok(Value::object(ctx.new_object(&class)))
 }
 
 pub fn encoding_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -629,36 +629,36 @@ pub fn encoding_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
         return Err(ctx.throw("ValueError", "Invalid document encoding".into()));
     }
     r.doc.borrow_mut().settings.encoding = Some(v);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn version_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().settings.version = Some(bytes(&arg(args, 0)));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn standalone_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().settings.standalone = i32::from(arg(args, 0).to_bool());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn document_uri_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().settings.url = Some(bytes(&arg(args, 0)));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The document's boolean settings, each a get/set pair.
 macro_rules! flag {
     ($get:ident, $set:ident, $field:ident) => {
         pub fn $get(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-            Ok(Value::Bool(this_doc(this).doc.borrow().settings.$field))
+            Ok(Value::bool(this_doc(this).doc.borrow().settings.$field))
         }
         pub fn $set(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
             this_doc(this).doc.borrow_mut().settings.$field = arg(args, 0).to_bool();
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     };
 }
@@ -697,27 +697,27 @@ pub fn element_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value
     };
     set_content_parsed(ctx, "DOMElement::__construct", &mut d, id, &bytes(&arg(args, 1)));
     bind(this, &NodeRef { doc: Rc::new(RefCell::new(d)), id });
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn text_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     orphan(this, valued(Kind::Text, b"", &bytes(&arg(args, 0))));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn comment_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     orphan(this, valued(Kind::Comment, b"", &bytes(&arg(args, 0))));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn cdata_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     orphan(this, valued(Kind::CData, b"", &bytes(&arg(args, 0))));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn fragment_construct(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     orphan(this, Node::new(Kind::Fragment, Vec::new()));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn pi_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -726,7 +726,7 @@ pub fn pi_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
         return Err(dom_error(ctx, INVALID_CHARACTER));
     }
     orphan(this, valued(Kind::Pi, &target, &bytes(&arg(args, 1))));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn entity_ref_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -735,7 +735,7 @@ pub fn entity_ref_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Va
         return Err(dom_error(ctx, INVALID_CHARACTER));
     }
     orphan(this, Node::new(Kind::EntityRef, name));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn attr_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -744,7 +744,7 @@ pub fn attr_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         return Err(dom_error(ctx, INVALID_CHARACTER));
     }
     orphan(this, valued(Kind::Attribute, &name, &bytes(&arg(args, 1))));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- DOMElement ----
@@ -777,7 +777,7 @@ pub fn get_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 pub fn has_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let name = bytes(&arg(args, 0));
-    Ok(Value::Bool(attr_value(&r.doc.borrow(), r.id, &name).is_some()))
+    Ok(Value::bool(attr_value(&r.doc.borrow(), r.id, &name).is_some()))
 }
 
 pub fn set_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -796,7 +796,7 @@ pub fn set_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
                 Some(def) => def.1 = value,
                 None => defs.push((prefix, value)),
             }
-            return Ok(Value::Bool(true));
+            return Ok(Value::TRUE);
         }
         match d.attr(r.id, &name) {
             Some(a) => {
@@ -820,7 +820,7 @@ pub fn remove_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     match d.attr(r.id, &name) {
         Some(a) => {
             d.detach(a);
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         None => {
             let prefix = if name == b"xmlns" { Some(None) } else { name.strip_prefix(b"xmlns:").map(|p| Some(p.to_vec())) };
@@ -829,9 +829,9 @@ pub fn remove_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
                     let defs = &mut d.node_mut(r.id).ns_defs;
                     let before = defs.len();
                     defs.retain(|(q, _)| *q != p);
-                    Ok(Value::Bool(defs.len() != before))
+                    Ok(Value::bool(defs.len() != before))
                 }
-                None => Ok(Value::Bool(false)),
+                None => Ok(Value::FALSE),
             }
         }
     }
@@ -848,17 +848,17 @@ pub fn toggle_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     // An element of an HTML document without a namespace takes a lower-case name.
     let name = if d.html && d.node(r.id).ns.is_none() { name.to_ascii_lowercase() } else { name };
     let existing = d.attr(r.id, &name);
-    match (existing, force) {
-        (Some(_), Value::Bool(true)) => Ok(Value::Bool(true)),
+    match (existing, force.as_bool()) {
+        (Some(_), Some(true)) => Ok(Value::TRUE),
         (Some(a), _) => {
             d.detach(a);
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
-        (None, Value::Bool(false)) => Ok(Value::Bool(false)),
+        (None, Some(false)) => Ok(Value::FALSE),
         (None, _) => {
             let a = d.add(Node::new(Kind::Attribute, name));
             d.set_attr(r.id, a);
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
     }
 }
@@ -875,7 +875,7 @@ pub fn get_attribute_names(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]
         });
     }
     names.extend(n.attrs.iter().map(|&a| str(&d.node(a).qname())));
-    Ok(Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(names))))
+    Ok(Value::array(p8_runtime::array::PhpArray::from_list(names)))
 }
 
 pub fn get_attribute_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -884,15 +884,15 @@ pub fn get_attribute_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Valu
     let a = r.doc.borrow().attr(r.id, &name);
     match a {
         Some(a) => wrap(ctx, &r.at(a)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
 pub fn set_attribute_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(a) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(a) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     if a.kind() != Kind::Attribute {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if a.same_doc(&r) && a.doc.borrow().parent(a.id).is_some_and(|p| p != r.id) {
         return Err(dom_error(ctx, INUSE_ATTRIBUTE));
@@ -914,13 +914,13 @@ pub fn set_attribute_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Valu
     drop(d);
     match old {
         Some(o) => wrap(ctx, &r.at(o)),
-        None => Ok(Value::Null),
+        None => Ok(Value::NULL),
     }
 }
 
 pub fn remove_attribute_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(a) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(a) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     if !a.same_doc(&r) || a.doc.borrow().parent(a.id) != Some(r.id) || a.kind() != Kind::Attribute {
         return Err(dom_error(ctx, NOT_FOUND));
     }
@@ -943,7 +943,7 @@ pub fn has_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     let r = this_node(ctx, this)?;
     let ns = opt_bytes(&arg(args, 0)).filter(|n| !n.is_empty());
     let local = bytes(&arg(args, 1));
-    Ok(Value::Bool(r.doc.borrow().attr_ns(r.id, ns.as_deref(), &local).is_some()))
+    Ok(Value::bool(r.doc.borrow().attr_ns(r.id, ns.as_deref(), &local).is_some()))
 }
 
 pub fn get_attribute_node_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -972,7 +972,7 @@ pub fn set_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
             Some(def) => def.1 = value,
             None => defs.push((p, value)),
         }
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     match d.attr_ns(r.id, ns.as_deref(), &local) {
         Some(a) => {
@@ -992,7 +992,7 @@ pub fn set_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
             d.set_attr(r.id, a);
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn remove_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1003,7 +1003,7 @@ pub fn remove_attribute_ns(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Val
     if let Some(a) = d.attr_ns(r.id, ns.as_deref(), &local) {
         d.detach(a);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn id_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1013,7 +1013,7 @@ pub fn id_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 
 pub fn id_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let mut a = vec![str(b"id"), arg(args, 0)];
-    set_attribute(ctx, this, &mut a).map(|_| Value::Null)
+    set_attribute(ctx, this, &mut a).map(|_| Value::NULL)
 }
 
 pub fn class_name_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -1023,11 +1023,11 @@ pub fn class_name_get(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
 
 pub fn class_name_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let mut a = vec![str(b"class"), arg(args, 0)];
-    set_attribute(ctx, this, &mut a).map(|_| Value::Null)
+    set_attribute(ctx, this, &mut a).map(|_| Value::NULL)
 }
 
 pub fn schema_type_info_get(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- DOMAttr ----
@@ -1040,13 +1040,13 @@ getter!(owner_element_get, |ctx, r| {
 });
 getter!(specified_get, |ctx, r| {
     let _ = r;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 });
 
 pub fn attr_value_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().node_mut(r.id).value = bytes(&arg(args, 0));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// xmlIsID for an HTML document: id, and name on an a element.
@@ -1058,7 +1058,7 @@ fn is_html_id(d: &Doc, el: Id, attr: Id) -> bool {
 pub fn is_id(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let d = r.doc.borrow();
-    Ok(Value::Bool(d.html && d.parent(r.id).is_some_and(|el| is_html_id(&d, el, r.id))))
+    Ok(Value::bool(d.html && d.parent(r.id).is_some_and(|el| is_html_id(&d, el, r.id))))
 }
 
 // ---- DOMCharacterData, DOMText, DOMProcessingInstruction ----
@@ -1068,7 +1068,7 @@ getter!(data_get, |ctx, r| Ok(str(&r.doc.borrow().node(r.id).value)));
 pub fn data_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().node_mut(r.id).value = bytes(&arg(args, 0));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Characters, as DOM counts them in character data (UTF-8 characters).
@@ -1086,7 +1086,7 @@ fn chars(v: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-getter!(length_get, |ctx, r| Ok(Value::Int(chars(&r.doc.borrow().node(r.id).value).len() as i64)));
+getter!(length_get, |ctx, r| Ok(Value::int(chars(&r.doc.borrow().node(r.id).value).len() as i64)));
 
 fn edit(ctx: &mut dyn Ctx, this: &Rc<Object>, offset: i64, count: Option<i64>, insert: Option<&[u8]>, keep_rest: bool) -> R {
     let r = this_node(ctx, this)?;
@@ -1105,28 +1105,28 @@ fn edit(ctx: &mut dyn Ctx, this: &Rc<Object>, offset: i64, count: Option<i64>, i
         out.extend(cs[end..].concat());
     }
     r.doc.borrow_mut().node_mut(r.id).value = out;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn append_data(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let add = bytes(&arg(args, 0));
     r.doc.borrow_mut().node_mut(r.id).value.extend_from_slice(&add);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn insert_data(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let data = bytes(&arg(args, 1));
-    edit(ctx, this, arg(args, 0).to_int(), Some(0), Some(&data), true).map(|_| Value::Bool(true))
+    edit(ctx, this, arg(args, 0).to_int(), Some(0), Some(&data), true).map(|_| Value::TRUE)
 }
 
 pub fn delete_data(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    edit(ctx, this, arg(args, 0).to_int(), Some(arg(args, 1).to_int()), None, true).map(|_| Value::Bool(true))
+    edit(ctx, this, arg(args, 0).to_int(), Some(arg(args, 1).to_int()), None, true).map(|_| Value::TRUE)
 }
 
 pub fn replace_data(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let data = bytes(&arg(args, 2));
-    edit(ctx, this, arg(args, 0).to_int(), Some(arg(args, 1).to_int()), Some(&data), true).map(|_| Value::Bool(true))
+    edit(ctx, this, arg(args, 0).to_int(), Some(arg(args, 1).to_int()), Some(&data), true).map(|_| Value::TRUE)
 }
 
 pub fn substring_data(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1186,7 +1186,7 @@ pub fn split_text(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 pub fn is_whitespace_in_element_content(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    Ok(Value::Bool(r.doc.borrow().node(r.id).value.iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))))
+    Ok(Value::bool(r.doc.borrow().node(r.id).value.iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))))
 }
 
 getter!(target_get, |ctx, r| Ok(str(&r.doc.borrow().node(r.id).name)));
@@ -1201,7 +1201,7 @@ getter!(notations_get, |ctx, r| super::lists::named_map(ctx, super::lists::Src::
 getter!(internal_subset_get, |ctx, r| {
     let d = r.doc.borrow();
     if d.node(r.id).children.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let mut out = Out::new(&d, false, false);
     for &c in &d.node(r.id).children {
@@ -1226,14 +1226,14 @@ pub fn append_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         crate::libxml::report(ctx, e, |ctx| ctx.warn(&format!("DOMDocumentFragment::appendXML(): {} in Entity, line: {}", e.message.trim_end_matches('\n'), e.line)));
     }
     if !parser.well_formed {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let Some(w) = tmp.root() else { return Ok(Value::Bool(false)) };
+    let Some(w) = tmp.root() else { return Ok(Value::FALSE) };
     for c in tmp.node(w).children.clone() {
         let id = r.doc.borrow_mut().copy_from(&tmp, c, true);
         r.doc.borrow_mut().insert(r.id, id, None);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 pub fn implementation_create_document(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1253,7 +1253,7 @@ pub fn implementation_create_document(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &
         };
         r.doc.borrow_mut().insert(DOC, id, None);
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 pub fn implementation_create_document_type(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1267,9 +1267,9 @@ pub fn implementation_create_document_type(ctx: &mut dyn Ctx, _: &Rc<Object>, ar
     n.public_id = Some(bytes(&arg(args, 1))).filter(|v| !v.is_empty());
     n.system_id = Some(bytes(&arg(args, 2))).filter(|v| !v.is_empty());
     orphan(&o, n);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 pub fn implementation_has_feature(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }

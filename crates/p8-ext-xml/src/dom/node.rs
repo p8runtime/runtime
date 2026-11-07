@@ -64,14 +64,12 @@ pub fn this_node(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<NodeRef, Throw>
 
 /// The node object argument `i` is (the stubs checked its class).
 pub fn arg_node(args: &[Value], i: usize) -> Option<NodeRef> {
-    match args.get(i).map(Value::deref) {
-        Some(Value::Object(o)) => o.native::<DomObj>().and_then(|d| d.node.borrow().clone()),
-        _ => None,
-    }
+    let v = args.get(i).map(Value::deref)?;
+    v.as_object()?.native::<DomObj>().and_then(|d| d.node.borrow().clone())
 }
 
 pub fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 pub fn bytes(v: &Value) -> Vec<u8> {
@@ -79,18 +77,15 @@ pub fn bytes(v: &Value) -> Vec<u8> {
 }
 
 pub fn opt_bytes(v: &Value) -> Option<Vec<u8>> {
-    match v {
-        Value::Null => None,
-        v => Some(bytes(v)),
-    }
+    if v.is_null() { None } else { Some(bytes(v)) }
 }
 
 pub fn str(b: &[u8]) -> Value {
-    Value::Str(PhpStr::new(b.to_vec()))
+    Value::str(PhpStr::new(b.to_vec()))
 }
 
 pub fn opt_str(b: Option<&[u8]>) -> Value {
-    b.map_or(Value::Null, str)
+    b.map_or(Value::NULL, str)
 }
 
 /// The class a node's object is made with.
@@ -120,19 +115,19 @@ fn class_for(doc: &Doc, kind: Kind) -> Vec<u8> {
 /// The PHP object for a node: the one it has, or a new one.
 pub fn wrap(ctx: &mut dyn Ctx, r: &NodeRef) -> R {
     if let Some(o) = r.doc.borrow().object(r.id) {
-        return Ok(Value::Object(o));
+        return Ok(Value::object(o));
     }
     let name = class_for(&r.doc.borrow(), r.kind());
     let class = ctx.class(&name).ok_or_else(|| ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(&name))))?;
     let o = ctx.new_object(&class);
     bind(&o, r);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 pub fn wrap_opt(ctx: &mut dyn Ctx, r: &NodeRef, id: Option<Id>) -> R {
     match id {
         Some(id) => wrap(ctx, &r.at(id)),
-        None => Ok(Value::Null),
+        None => Ok(Value::NULL),
     }
 }
 
@@ -178,7 +173,7 @@ pub fn dom_error(ctx: &mut dyn Ctx, code: i64) -> Throw {
 
 pub fn dom_error_msg(ctx: &mut dyn Ctx, code: i64, msg: &str) -> Throw {
     let Some(class) = ctx.class(b"DOMException") else { return ctx.throw("Exception", msg.to_owned()) };
-    let mut args = [str(msg.as_bytes()), Value::Int(code)];
+    let mut args = [str(msg.as_bytes()), Value::int(code)];
     match ctx.new_instance(&class, &mut args, true) {
         Ok(o) => Throw::Object(o),
         Err(t) => t,
@@ -192,7 +187,7 @@ pub fn dom_fail(ctx: &mut dyn Ctx, func: &str, r: &NodeRef, code: i64) -> R {
         Err(dom_error(ctx, code))
     } else {
         ctx.warn(&format!("{func}(): {}", message(code)));
-        Ok(Value::Bool(false))
+        Ok(Value::FALSE)
     }
 }
 
@@ -400,16 +395,16 @@ pub(crate) use getter;
 
 getter!(node_name_get, |ctx, r| Ok(str(&node_name(&r.doc.borrow(), r.id))));
 // An HTML document is XML_HTML_DOCUMENT_NODE (13).
-getter!(node_type_get, |ctx, r| Ok(Value::Int(if r.kind() == Kind::Document && r.doc.borrow().html { 13 } else { r.kind() as i64 })));
+getter!(node_type_get, |ctx, r| Ok(Value::int(if r.kind() == Kind::Document && r.doc.borrow().html { 13 } else { r.kind() as i64 })));
 getter!(node_value_get, |ctx, r| {
     let d = r.doc.borrow();
     let n = d.node(r.id);
     Ok(match n.kind {
         // A processing instruction the HTML parser read without data has no content.
-        Kind::Pi if n.no_value && n.value.is_empty() => Value::Null,
+        Kind::Pi if n.no_value && n.value.is_empty() => Value::NULL,
         Kind::Element => str(&d.text_content(r.id)),
         Kind::Text | Kind::CData | Kind::Comment | Kind::Pi | Kind::Attribute => str(&n.value),
-        _ => Value::Null,
+        _ => Value::NULL,
     })
 });
 
@@ -421,7 +416,7 @@ pub fn node_value_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         Kind::Attribute | Kind::Text | Kind::CData | Kind::Comment | Kind::Pi => set_text(&mut r.doc.borrow_mut(), r.id, &v),
         _ => {}
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 getter!(parent_node_get, |ctx, r| {
@@ -453,7 +448,7 @@ getter!(attributes_get, |ctx, r| {
     if r.kind() == Kind::Element {
         super::lists::named_map(ctx, super::lists::Src::Attrs(r))
     } else {
-        Ok(Value::Null)
+        Ok(Value::NULL)
     }
 });
 getter!(is_connected_get, |ctx, r| {
@@ -462,11 +457,11 @@ getter!(is_connected_get, |ctx, r| {
     while let Some(p) = d.parent(at) {
         at = p;
     }
-    Ok(Value::Bool(at == DOC && !d.orphan))
+    Ok(Value::bool(at == DOC && !d.orphan))
 });
 getter!(owner_document_get, |ctx, r| {
     if r.kind() == Kind::Document || r.doc.borrow().orphan {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     wrap(ctx, &r.at(DOC))
 });
@@ -475,7 +470,7 @@ getter!(namespace_uri_get, |ctx, r| {
     let n = d.node(r.id);
     Ok(match n.kind {
         Kind::Element | Kind::Attribute => opt_str(n.ns.as_deref()),
-        _ => Value::Null,
+        _ => Value::NULL,
     })
 });
 getter!(prefix_get, |ctx, r| {
@@ -491,7 +486,7 @@ getter!(local_name_get, |ctx, r| {
     let n = d.node(r.id);
     Ok(match n.kind {
         Kind::Element | Kind::Attribute => str(&n.name),
-        _ => Value::Null,
+        _ => Value::NULL,
     })
 });
 getter!(base_uri_get, |ctx, r| Ok(opt_str(r.doc.borrow().settings.url.as_deref())));
@@ -501,7 +496,7 @@ pub fn text_content_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     let r = this_node(ctx, this)?;
     let v = bytes(&arg(args, 0));
     set_text(&mut r.doc.borrow_mut(), r.id, &v);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- DOMNode's methods ----
@@ -539,7 +534,7 @@ pub fn insert_before(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 
 pub fn remove_child(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let parent = this_node(ctx, this)?;
-    let Some(child) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(child) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     if !child.same_doc(&parent) || child.doc.borrow().parent(child.id) != Some(parent.id) || child.kind() == Kind::Attribute {
         return dom_fail(ctx, "DOMNode::removeChild", &parent, NOT_FOUND);
     }
@@ -549,7 +544,7 @@ pub fn remove_child(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
 
 pub fn replace_child(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let parent = this_node(ctx, this)?;
-    let (Some(new), Some(old)) = (arg_node(args, 0), arg_node(args, 1)) else { return Ok(Value::Bool(false)) };
+    let (Some(new), Some(old)) = (arg_node(args, 0), arg_node(args, 1)) else { return Ok(Value::FALSE) };
     if !old.same_doc(&parent) || old.doc.borrow().parent(old.id) != Some(parent.id) {
         return dom_fail(ctx, "DOMNode::replaceChild", &parent, NOT_FOUND);
     }
@@ -566,14 +561,14 @@ pub fn replace_child(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 
 pub fn has_child_nodes(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    Ok(Value::Bool(!r.doc.borrow().node(r.id).children.is_empty()))
+    Ok(Value::bool(!r.doc.borrow().node(r.id).children.is_empty()))
 }
 
 pub fn has_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let d = r.doc.borrow();
     let n = d.node(r.id);
-    Ok(Value::Bool(n.kind == Kind::Element && !n.attrs.is_empty()))
+    Ok(Value::bool(n.kind == Kind::Element && !n.attrs.is_empty()))
 }
 
 pub fn clone_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -588,12 +583,12 @@ pub fn clone_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 pub fn is_same_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    Ok(Value::Bool(arg_node(args, 0).is_some_and(|o| o.same_doc(&r) && o.id == r.id)))
+    Ok(Value::bool(arg_node(args, 0).is_some_and(|o| o.same_doc(&r) && o.id == r.id)))
 }
 
 pub fn contains(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    Ok(Value::Bool(arg_node(args, 0).is_some_and(|o| o.same_doc(&r) && r.doc.borrow().is_ancestor_or_self(r.id, o.id))))
+    Ok(Value::bool(arg_node(args, 0).is_some_and(|o| o.same_doc(&r) && r.doc.borrow().is_ancestor_or_self(r.id, o.id))))
 }
 
 pub fn get_root_node(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -607,13 +602,13 @@ pub fn get_root_node(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R
 
 pub fn get_line_no(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    Ok(Value::Int(r.doc.borrow().node(r.id).line as i64))
+    Ok(Value::int(r.doc.borrow().node(r.id).line as i64))
 }
 
 pub fn normalize(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     normalize_at(&mut r.doc.borrow_mut(), r.id);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Merges adjacent text nodes and drops empty ones, all the way down.
@@ -649,29 +644,29 @@ pub fn lookup_namespace_uri(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Va
     let r = this_node(ctx, this)?;
     let prefix = opt_bytes(&arg(args, 0)).filter(|p| !p.is_empty());
     let at = element_for_lookup(&r);
-    let Some(at) = at else { return Ok(Value::Null) };
+    let Some(at) = at else { return Ok(Value::NULL) };
     Ok(opt_str(r.doc.borrow().lookup_ns(at, prefix.as_deref()).as_deref()))
 }
 
 pub fn lookup_prefix(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let uri = bytes(&arg(args, 0));
-    let Some(at) = element_for_lookup(&r) else { return Ok(Value::Null) };
+    let Some(at) = element_for_lookup(&r) else { return Ok(Value::NULL) };
     if uri.is_empty() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     Ok(match r.doc.borrow().lookup_prefix(at, &uri) {
         Some(Some(p)) => str(&p),
-        _ => Value::Null,
+        _ => Value::NULL,
     })
 }
 
 pub fn is_default_namespace(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let uri = bytes(&arg(args, 0));
-    let Some(at) = element_for_lookup(&r) else { return Ok(Value::Bool(false)) };
+    let Some(at) = element_for_lookup(&r) else { return Ok(Value::FALSE) };
     let default = r.doc.borrow().lookup_ns(at, None);
-    Ok(Value::Bool(!uri.is_empty() && default.as_deref() == Some(&uri[..])))
+    Ok(Value::bool(!uri.is_empty() && default.as_deref() == Some(&uri[..])))
 }
 
 /// The element namespace lookups start from (the document's element, an
@@ -688,13 +683,13 @@ fn element_for_lookup(r: &NodeRef) -> Option<Id> {
 
 pub fn is_equal_node(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(o) = arg_node(args, 0) else { return Ok(Value::Bool(false)) };
+    let Some(o) = arg_node(args, 0) else { return Ok(Value::FALSE) };
     let a = r.doc.borrow();
     if o.same_doc(&r) {
-        return Ok(Value::Bool(equal(&a, r.id, &a, o.id)));
+        return Ok(Value::bool(equal(&a, r.id, &a, o.id)));
     }
     let b = o.doc.borrow();
-    Ok(Value::Bool(equal(&a, r.id, &b, o.id)))
+    Ok(Value::bool(equal(&a, r.id, &b, o.id)))
 }
 
 /// DOM's node equality: same kind, names, values, attributes (any order)
@@ -722,12 +717,13 @@ fn equal(da: &Doc, a: Id, db: &Doc, b: Id) -> bool {
 pub fn nodes_from_args(ctx: &mut dyn Ctx, r: &NodeRef, args: &[Value]) -> Result<Vec<NodeRef>, Throw> {
     let mut out = Vec::new();
     for v in args {
-        match v.deref() {
-            Value::Object(o) if o.native::<DomObj>().is_some() => {
+        let v = v.deref();
+        match v.as_object() {
+            Some(o) if o.native::<DomObj>().is_some() => {
                 let n = o.native::<DomObj>().and_then(|d| d.node.borrow().clone()).ok_or_else(|| ctx.throw("Error", "Couldn't fetch DOMNode".into()))?;
                 out.push(n);
             }
-            v => {
+            _ => {
                 let mut t = Node::new(Kind::Text, Vec::new());
                 t.value = bytes(&v);
                 let id = r.doc.borrow_mut().add(t);
@@ -754,12 +750,12 @@ pub fn insert_all(ctx: &mut dyn Ctx, parent: &NodeRef, nodes: &[NodeRef], before
 pub fn remove(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     r.doc.borrow_mut().detach(r.id);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn before(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::Null) };
+    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::NULL) };
     let nodes = nodes_from_args(ctx, &r, args)?;
     // The first sibling before this one that is not being moved.
     let mut anchor = Some(r.id);
@@ -769,12 +765,12 @@ pub fn before(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         anchor = r.doc.borrow().next_sibling(a);
     }
     insert_all(ctx, &r.at(parent), &nodes, anchor)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn after(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::Null) };
+    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::NULL) };
     let nodes = nodes_from_args(ctx, &r, args)?;
     let mut anchor = r.doc.borrow().next_sibling(r.id);
     while let Some(a) = anchor
@@ -783,12 +779,12 @@ pub fn after(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         anchor = r.doc.borrow().next_sibling(a);
     }
     insert_all(ctx, &r.at(parent), &nodes, anchor)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn replace_with(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
-    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::Null) };
+    let Some(parent) = r.doc.borrow().parent(r.id) else { return Ok(Value::NULL) };
     let nodes = nodes_from_args(ctx, &r, args)?;
     let mut anchor = r.doc.borrow().next_sibling(r.id);
     while let Some(a) = anchor
@@ -801,7 +797,7 @@ pub fn replace_with(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
         r.doc.borrow_mut().detach(r.id);
     }
     insert_all(ctx, &r.at(parent), &nodes, anchor)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ParentNode
@@ -809,7 +805,7 @@ pub fn append(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let r = this_node(ctx, this)?;
     let nodes = nodes_from_args(ctx, &r, args)?;
     insert_all(ctx, &r, &nodes, None)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn prepend(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -817,7 +813,7 @@ pub fn prepend(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let nodes = nodes_from_args(ctx, &r, args)?;
     let first = r.doc.borrow().node(r.id).children.iter().copied().find(|&c| !nodes.iter().any(|n| n.same_doc(&r) && n.id == c));
     insert_all(ctx, &r, &nodes, first)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 pub fn replace_children(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -831,7 +827,7 @@ pub fn replace_children(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
         r.doc.borrow_mut().detach(c);
     }
     insert_all(ctx, &r, &nodes, None)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Element children counts and neighbours (ParentNode/ChildNode props).
@@ -847,7 +843,7 @@ getter!(last_element_child_get, |ctx, r| {
     let c = element_children(&r.doc.borrow(), r.id).last().copied();
     wrap_opt(ctx, &r, c)
 });
-getter!(child_element_count_get, |ctx, r| Ok(Value::Int(element_children(&r.doc.borrow(), r.id).len() as i64)));
+getter!(child_element_count_get, |ctx, r| Ok(Value::int(element_children(&r.doc.borrow(), r.id).len() as i64)));
 getter!(previous_element_sibling_get, |ctx, r| {
     let mut at = r.doc.borrow().prev_sibling(r.id);
     while let Some(a) = at

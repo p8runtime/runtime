@@ -62,7 +62,7 @@ pub(crate) fn destroy(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> 
     if let Some(mut open) = old {
         flush(ctx, &mut open);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// A call: its writer, the arguments after it, and how it was called
@@ -79,7 +79,7 @@ struct Call<'a> {
 
 impl Call<'_> {
     fn arg(&self, i: usize) -> Value {
-        self.args.get(i).map(Value::deref).unwrap_or(Value::Null)
+        self.args.get(i).map(Value::deref).unwrap_or(Value::NULL)
     }
 
     /// A string argument (C stops at a NUL, as libxml2 sees it).
@@ -91,10 +91,7 @@ impl Call<'_> {
 
     /// A nullable string argument (missing: null).
     fn opt(&self, i: usize) -> Option<Vec<u8>> {
-        match self.arg(i) {
-            Value::Null | Value::Undef => None,
-            _ => Some(self.str(i)),
-        }
+        if self.arg(i).is_null_or_undef() { None } else { Some(self.str(i)) }
     }
 
     fn bool(&self, i: usize, default: bool) -> bool {
@@ -138,7 +135,7 @@ impl Call<'_> {
         if !matches!(open.sink, Sink::Memory(_)) && open.writer.wants_flush() {
             flush(ctx, open);
         }
-        Ok(Value::Bool(ok))
+        Ok(Value::bool(ok))
     }
 }
 
@@ -383,9 +380,9 @@ fn flush_op(ctx: &mut dyn Ctx, c: &Call, force_string: bool) -> Result<Value, Th
             if empty {
                 buf.clear();
             }
-            Value::Str(PhpStr::new(shown))
+            Value::str(PhpStr::new(shown))
         }
-        _ => Value::Int(n.map_or(-1, |n| n as i64)),
+        _ => Value::int(n.map_or(-1, |n| n as i64)),
     })
 }
 
@@ -465,20 +462,20 @@ fn open_uri_op(ctx: &mut dyn Ctx, this: &Rc<Object>, uri: &[u8], shown: &str) ->
     match open_file(ctx, uri) {
         Ok(sink) => {
             open_on(ctx, this, sink)?;
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err("resolve") => {
             ctx.warn(&format!("{shown}(): Unable to resolve file path"));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
-        Err(_) => Ok(Value::Bool(false)),
+        Err(_) => Ok(Value::FALSE),
     }
 }
 
 /// A call's string argument `i`, PHP's "must not contain any null bytes"
 /// checked (a path).
 fn path_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize, shown: &str, param: &str) -> Result<Vec<u8>, Throw> {
-    let s = args.get(i).map(Value::deref).unwrap_or(Value::Null).to_php_string().unwrap_or_else(PhpStr::empty);
+    let s = args.get(i).map(Value::deref).unwrap_or(Value::NULL).to_php_string().unwrap_or_else(PhpStr::empty);
     if s.as_bytes().contains(&0) {
         return Err(ctx.throw("ValueError", format!("{shown}(): Argument #{} (${param}) must not contain any null bytes", i + 1)));
     }
@@ -502,13 +499,13 @@ fn xmlwriter_open_uri(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
     let uri = path_arg(ctx, args, 0, "xmlwriter_open_uri", "uri")?;
     let o = new_writer(ctx)?;
     let r = open_uri_op(ctx, &o, &uri, "xmlwriter_open_uri")?;
-    Ok(if r.to_bool() { Value::Object(o) } else { r })
+    Ok(if r.to_bool() { Value::object(o) } else { r })
 }
 
 fn xmlwriter_open_memory(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let o = new_writer(ctx)?;
     open_on(ctx, &o, Sink::Memory(Vec::new()))?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn m_open_uri(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -518,13 +515,13 @@ fn m_open_uri(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resul
 
 fn m_open_memory(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     open_on(ctx, this, Sink::Memory(Vec::new()))?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn s_to_memory(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let o = called_writer(ctx)?;
     open_on(ctx, &o, Sink::Memory(Vec::new()))?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn s_to_uri(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -539,11 +536,11 @@ fn s_to_uri(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     };
     let o = called_writer(ctx)?;
     open_on(ctx, &o, sink)?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn s_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
+    let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
     let Some(res) = p8_runtime::stream::resource_of(&v) else {
         return Err(ctx.throw(
             "TypeError",
@@ -555,19 +552,19 @@ fn s_to_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let o = called_writer(ctx)?;
     open_on(ctx, &o, Sink::Stream(v))?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// Run an operation as its function: the writer is argument 0.
 fn as_function(ctx: &mut dyn Ctx, fname: &'static str, params: &'static [&'static str], op: Op, args: &[Value]) -> Result<Value, Throw> {
-    let writer = args.first().map(Value::deref).unwrap_or(Value::Null);
-    let this = match &writer {
-        Value::Object(o) if o.native::<State>().is_some() => Rc::clone(o),
-        Value::Object(o) => {
+    let writer = args.first().map(Value::deref).unwrap_or(Value::NULL);
+    let this = match writer.as_object() {
+        Some(o) if o.native::<State>().is_some() => Rc::clone(o),
+        Some(o) => {
             let given = String::from_utf8_lossy(o.class.name.as_bytes()).into_owned();
             return Err(ctx.throw("TypeError", format!("{fname}(): Argument #1 ($writer) must be of type XMLWriter, {given} given")));
         }
-        v => return Err(ctx.throw("TypeError", format!("{fname}(): Argument #1 ($writer) must be of type XMLWriter, {} given", v.type_name()))),
+        None => return Err(ctx.throw("TypeError", format!("{fname}(): Argument #1 ($writer) must be of type XMLWriter, {} given", writer.type_name()))),
     };
     op(ctx, &Call { this, args: &args[1..], shown: fname, params, method: false })
 }

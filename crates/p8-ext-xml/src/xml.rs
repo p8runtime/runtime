@@ -87,12 +87,15 @@ fn with<R>(o: &Object, f: impl FnOnce(&mut XmlParser) -> R) -> R {
 }
 
 fn parser_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    match args.first().map(Value::deref) {
-        Some(Value::Object(o)) if o.native::<State>().is_some_and(|s| s.0.borrow().is_some()) => Ok(o),
-        v => {
+    let v = args.first().map(Value::deref);
+    match v.as_ref().and_then(Value::as_object) {
+        Some(o) if o.native::<State>().is_some_and(|s| s.0.borrow().is_some()) => Ok(Rc::clone(o)),
+        _ => {
             let given = match &v {
-                Some(Value::Object(o)) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
-                Some(v) => v.type_name().into_owned(),
+                Some(v) => match v.as_object() {
+                    Some(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    None => v.type_name().into_owned(),
+                },
                 None => "null".into(),
             };
             Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($parser) must be of type XMLParser, {given} given")))
@@ -101,7 +104,7 @@ fn parser_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<Rc<Object
 }
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn bytes(v: &Value) -> Vec<u8> {
@@ -111,7 +114,8 @@ fn bytes(v: &Value) -> Vec<u8> {
 /// xml_parser_create / xml_parser_create_ns.
 fn create(ctx: &mut dyn Ctx, args: &[Value], ns: bool, func: &str) -> Result<Value, Throw> {
     let target_encoding = match args.first().map(Value::deref) {
-        None | Some(Value::Null) => "UTF-8",
+        None => "UTF-8",
+        Some(v) if v.is_null() => "UTF-8",
         Some(v) => {
             let e = bytes(&v);
             if e.is_empty() || e.eq_ignore_ascii_case(b"UTF-8") {
@@ -155,7 +159,7 @@ fn create(ctx: &mut dyn Ctx, args: &[Value], ns: bool, func: &str) -> Result<Val
         level: 0,
         structure: None,
     });
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn xml_parser_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -169,17 +173,22 @@ fn xml_parser_create_ns(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
 /// A handler argument: a callable, null (none), or (deprecated) the name
 /// of a method of the xml_set_object object: (handler, given by name).
 fn handler_value(ctx: &mut dyn Ctx, o: &Object, func: &str, arg_num: usize, param: &str, v: Value) -> Result<(Option<Value>, bool), Throw> {
-    match &v {
-        Value::Null => Ok((None, false)),
-        _ if ctx.is_callable(&v) => Ok((Some(v), false)),
-        Value::Str(s) => {
+    if v.is_null() {
+        return Ok((None, false));
+    }
+    if ctx.is_callable(&v) {
+        return Ok((Some(v), false));
+    }
+    match v.as_str() {
+        Some(s) => {
             if s.is_empty() {
                 return Ok((None, false));
             }
             let Some(object) = with(o, |p| p.object.clone()) else {
                 return Err(ctx.throw("ValueError", format!("{func}(): Argument #{arg_num} (${param}) an object must be set via xml_set_object() to be able to lookup method")));
             };
-            let Value::Object(obj) = object.deref() else { return Ok((None, false)) };
+            let object_v = object.deref();
+            let Some(obj) = object_v.as_object() else { return Ok((None, false)) };
             if obj.class.method(&s.as_bytes().to_ascii_lowercase()).is_none() {
                 return Err(ctx.throw(
                     "ValueError",
@@ -190,22 +199,22 @@ fn handler_value(ctx: &mut dyn Ctx, o: &Object, func: &str, arg_num: usize, para
                     ),
                 ));
             }
-            Ok((Some(Value::Array(Rc::new(PhpArray::from_list(vec![object.clone(), v.clone()])))), true))
+            Ok((Some(Value::array(PhpArray::from_list(vec![object.clone(), v.clone()]))), true))
         }
-        _ => Err(ctx.throw("TypeError", format!("{func}(): Argument #{arg_num} (${param}) must be of type callable|string|null"))),
+        None => Err(ctx.throw("TypeError", format!("{func}(): Argument #{arg_num} (${param}) must be of type callable|string|null"))),
     }
 }
 
 /// Whether a handler argument is a string that is not callable (PHP's
 /// "Passing non-callable strings is deprecated").
 fn non_callable_string(ctx: &mut dyn Ctx, v: &Value) -> bool {
-    matches!(v, Value::Str(_)) && !ctx.is_callable(v)
+    v.is_str() && !ctx.is_callable(v)
 }
 
 fn set_handler(ctx: &mut dyn Ctx, args: &[Value], which: usize, func: &str) -> Result<Value, Throw> {
     let o = parser_arg(ctx, func, args)?;
     let v = arg(args, 1);
-    if !matches!(v, Value::Null | Value::Str(_)) && !ctx.is_callable(&v) {
+    if !(v.is_null() || v.is_str()) && !ctx.is_callable(&v) {
         return Err(ctx.throw("TypeError", format!("{func}(): Argument #2 ($handler) must be of type callable|string|null")));
     }
     if non_callable_string(ctx, &v) {
@@ -220,18 +229,18 @@ fn set_handler(ctx: &mut dyn Ctx, args: &[Value], which: usize, func: &str) -> R
         p.by_name[which] = by_name;
         p.installed[which] = true;
     });
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn xml_set_element_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let func = "xml_set_element_handler";
     let o = parser_arg(ctx, func, args)?;
     let (a, b) = (arg(args, 1), arg(args, 2));
-    let invalid = |ctx: &mut dyn Ctx, v: &Value| !matches!(v, Value::Null | Value::Str(_)) && !ctx.is_callable(v);
+    let invalid = |ctx: &mut dyn Ctx, v: &Value| !(v.is_null() || v.is_str()) && !ctx.is_callable(v);
     if invalid(ctx, &a) || invalid(ctx, &b) {
         // PHP's fallback parse blames the start handler unless it is null
         // or a string (even when it is a valid callable).
-        let (n, param) = if matches!(a, Value::Null | Value::Str(_)) { (3, "end_handler") } else { (2, "start_handler") };
+        let (n, param) = if a.is_null() || a.is_str() { (3, "end_handler") } else { (2, "start_handler") };
         return Err(ctx.throw("TypeError", format!("{func}(): Argument #{n} (${param}) must be of type callable|string|null")));
     }
     if non_callable_string(ctx, &a) || non_callable_string(ctx, &b) {
@@ -250,7 +259,7 @@ fn xml_set_element_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
         p.installed[START] = true;
         p.installed[END] = true;
     });
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 macro_rules! setter {
@@ -289,13 +298,14 @@ const SETTERS: [&str; 10] = [
 fn xml_set_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_set_object", args)?;
     let target = arg(args, 1);
-    let Value::Object(new) = &target else {
+    let Some(new) = target.as_object() else {
         return Err(ctx.throw("TypeError", format!("xml_set_object(): Argument #2 ($object) must be of type object, {} given", target.type_name())));
     };
     for (i, setter) in SETTERS.iter().enumerate() {
         let (handler, named) = with(&o, |p| (p.handlers[i].clone(), p.by_name[i]));
-        let (Some(Value::Array(a)), true) = (handler, named) else { continue };
-        let method = a.get(&Key::Int(1)).cloned().unwrap_or(Value::Null);
+        let (Some(handler), true) = (handler, named) else { continue };
+        let Some(a) = handler.as_array() else { continue };
+        let method = a.get(&Key::Int(1)).cloned().unwrap_or(Value::NULL);
         let name = method.to_php_string().unwrap_or_else(PhpStr::empty);
         if new.class.method(&name.as_bytes().to_ascii_lowercase()).is_none() {
             return Err(ctx.throw(
@@ -308,10 +318,10 @@ fn xml_set_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
                 ),
             ));
         }
-        with(&o, |p| p.handlers[i] = Some(Value::Array(Rc::new(PhpArray::from_list(vec![target.clone(), method])))));
+        with(&o, |p| p.handlers[i] = Some(Value::array(PhpArray::from_list(vec![target.clone(), method]))));
     }
     with(&o, |p| p.object = Some(target.clone()));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 
@@ -369,7 +379,7 @@ impl Events<'_> {
             return None;
         }
         let handler = self.p(|x| x.handlers[which].clone())?;
-        args.insert(0, Value::Object(Rc::clone(&self.this)));
+        args.insert(0, Value::object(Rc::clone(&self.this)));
         match self.ctx.call(&handler, &mut args) {
             Ok(v) => Some(v),
             Err(t) => {
@@ -385,13 +395,13 @@ impl Events<'_> {
 
     fn text(&self, s: &[u8]) -> Value {
         let target = self.p(|x| x.target_encoding);
-        Value::Str(PhpStr::new(decode(s, target)))
+        Value::str(PhpStr::new(decode(s, target)))
     }
 
     fn opt_text(&self, s: Option<&[u8]>) -> Value {
         match s {
             Some(s) => self.text(s),
-            None => Value::Bool(false),
+            None => Value::FALSE,
         }
     }
 
@@ -439,8 +449,8 @@ impl Events<'_> {
             attributes.insert(Key::from_string(PhpStr::new(key)), self.text(v));
         }
         if self.p(|x| x.handlers[START].is_some()) {
-            let skipped = Value::Str(PhpStr::new(self.skipped(&tag)));
-            self.call(START, vec![skipped, Value::Array(Rc::new(attributes.clone()))]);
+            let skipped = Value::str(PhpStr::new(self.skipped(&tag)));
+            self.call(START, vec![skipped, Value::array(attributes.clone())]);
         }
         if self.thrown.is_some() {
             return;
@@ -453,11 +463,11 @@ impl Events<'_> {
             }
             add_to_info(s, &skipped);
             let mut entry = PhpArray::new();
-            entry.insert(Key::from_string(PhpStr::from("tag")), Value::Str(PhpStr::new(skipped.clone())));
+            entry.insert(Key::from_string(PhpStr::from("tag")), Value::str(PhpStr::new(skipped.clone())));
             entry.insert(Key::from_string(PhpStr::from("type")), Value::str("open"));
-            entry.insert(Key::from_string(PhpStr::from("level")), Value::Int(level));
+            entry.insert(Key::from_string(PhpStr::from("level")), Value::int(level));
             if !attributes.is_empty() {
-                entry.insert(Key::from_string(PhpStr::from("attributes")), Value::Array(Rc::new(attributes)));
+                entry.insert(Key::from_string(PhpStr::from("attributes")), Value::array(attributes));
             }
             s.ltags.truncate(level as usize - 1);
             s.ltags.push(tag.clone());
@@ -477,7 +487,7 @@ impl Events<'_> {
         }
         let tag = self.tag(name);
         if self.p(|x| x.handlers[END].is_some()) {
-            let skipped = Value::Str(PhpStr::new(self.skipped(&tag)));
+            let skipped = Value::str(PhpStr::new(self.skipped(&tag)));
             self.call(END, vec![skipped]);
         }
         if self.thrown.is_some() {
@@ -494,9 +504,9 @@ impl Events<'_> {
                 } else {
                     add_to_info(s, &skipped);
                     let mut entry = PhpArray::new();
-                    entry.insert(Key::from_string(PhpStr::from("tag")), Value::Str(PhpStr::new(skipped.clone())));
+                    entry.insert(Key::from_string(PhpStr::from("tag")), Value::str(PhpStr::new(skipped.clone())));
                     entry.insert(Key::from_string(PhpStr::from("type")), Value::str("close"));
-                    entry.insert(Key::from_string(PhpStr::from("level")), Value::Int(level));
+                    entry.insert(Key::from_string(PhpStr::from("level")), Value::int(level));
                     s.values.push(entry);
                 }
                 s.lastwasopen = false;
@@ -526,25 +536,25 @@ impl Events<'_> {
             let value_key = Key::from_string(PhpStr::from("value"));
             if st.lastwasopen {
                 let Some(ctag) = st.values.last_mut() else { return false };
-                match ctag.get(&value_key) {
-                    Some(Value::Str(old)) => {
+                match ctag.get(&value_key).and_then(Value::as_str) {
+                    Some(old) => {
                         let joined = [old.as_bytes(), &decoded].concat();
-                        ctag.insert(value_key, Value::Str(PhpStr::new(joined)));
+                        ctag.insert(value_key, Value::str(PhpStr::new(joined)));
                     }
-                    _ => {
+                    None => {
                         if printable || !skip_white {
-                            ctag.insert(value_key, Value::Str(PhpStr::new(decoded)));
+                            ctag.insert(value_key, Value::str(PhpStr::new(decoded)));
                         }
                     }
                 }
                 return false;
             }
             if let Some(last) = st.values.last_mut()
-                && matches!(last.get(&Key::from_string(PhpStr::from("type"))), Some(Value::Str(t)) if t.as_bytes() == b"cdata")
-                && let Some(Value::Str(old)) = last.get(&value_key)
+                && last.get(&Key::from_string(PhpStr::from("type"))).and_then(Value::as_str).is_some_and(|t| t.as_bytes() == b"cdata")
+                && let Some(old) = last.get(&value_key).and_then(Value::as_str)
             {
                 let joined = [old.as_bytes(), &decoded].concat();
-                last.insert(value_key, Value::Str(PhpStr::new(joined)));
+                last.insert(value_key, Value::str(PhpStr::new(joined)));
                 return false;
             }
             if level > 0 && level <= 255 && (printable || !skip_white) {
@@ -552,10 +562,10 @@ impl Events<'_> {
                 let tag = tag[tag_start.min(tag.len())..].to_vec();
                 add_to_info(st, &tag);
                 let mut entry = PhpArray::new();
-                entry.insert(Key::from_string(PhpStr::from("tag")), Value::Str(PhpStr::new(tag)));
-                entry.insert(value_key, Value::Str(PhpStr::new(decoded)));
+                entry.insert(Key::from_string(PhpStr::from("tag")), Value::str(PhpStr::new(tag)));
+                entry.insert(value_key, Value::str(PhpStr::new(decoded)));
                 entry.insert(Key::from_string(PhpStr::from("type")), Value::str("cdata"));
-                entry.insert(Key::from_string(PhpStr::from("level")), Value::Int(level));
+                entry.insert(Key::from_string(PhpStr::from("level")), Value::int(level));
                 st.values.push(entry);
                 return false;
             }
@@ -571,7 +581,7 @@ impl Events<'_> {
 impl Struct {
     /// The values argument still holds an array.
     fn writable(&self) -> bool {
-        self.values_ref.as_ref().is_none_or(|c| matches!(*c.borrow(), Value::Array(_)))
+        self.values_ref.as_ref().is_none_or(|c| c.borrow().is_array())
     }
 }
 
@@ -580,12 +590,12 @@ fn add_to_info(s: &mut Struct, name: &[u8]) {
     let curtag = s.curtag;
     if let Some(index) = s.index.as_mut() {
         let key = Key::from_string(PhpStr::new(name.to_vec()));
-        let mut list = match index.get(&key) {
-            Some(Value::Array(a)) => (**a).clone(),
-            _ => PhpArray::new(),
+        let mut list = match index.get(&key).and_then(Value::as_array) {
+            Some(a) => a.clone(),
+            None => PhpArray::new(),
         };
-        let _ = list.push(Value::Int(curtag));
-        index.insert(key, Value::Array(Rc::new(list)));
+        let _ = list.push(Value::int(curtag));
+        index.insert(key, Value::array(list));
     }
     s.curtag += 1;
 }
@@ -688,7 +698,7 @@ impl Sax for Events<'_> {
             return;
         }
         if self.installed(UNPARSED) {
-            let args = vec![self.text(name), Value::Bool(false), self.opt_text(system_id), self.opt_text(public_id), self.text(notation)];
+            let args = vec![self.text(name), Value::FALSE, self.opt_text(system_id), self.opt_text(public_id), self.text(notation)];
             self.call(UNPARSED, args);
         }
     }
@@ -699,7 +709,7 @@ impl Sax for Events<'_> {
             return;
         }
         if self.installed(NOTATION) {
-            let args = vec![self.text(name), Value::Bool(false), self.opt_text(system_id), self.opt_text(public_id)];
+            let args = vec![self.text(name), Value::FALSE, self.opt_text(system_id), self.opt_text(public_id)];
             self.call(NOTATION, args);
         }
     }
@@ -788,26 +798,23 @@ fn xml_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let data = bytes(&arg(args, 1));
     let is_final = args.len() > 2 && arg(args, 2).to_bool();
     if with(&o, |p| p.done) {
-        return Ok(Value::Int(0));
+        return Ok(Value::int(0));
     }
     with(&o, |p| {
         p.buffer.extend_from_slice(&data);
         p.calling = "xml_parse";
     });
-    Ok(Value::Int(run(ctx, &o, is_final)?))
+    Ok(Value::int(run(ctx, &o, is_final)?))
 }
 
 /// By-reference argument `i`'s cell.
 fn ref_cell(args: &[Value], i: usize) -> Option<Rc<RefCell<Value>>> {
-    match args.get(i) {
-        Some(Value::Ref(cell)) => Some(Rc::clone(cell)),
-        _ => None,
-    }
+    args.get(i).and_then(Value::cloned_reference)
 }
 
 /// Write `v` into by-reference argument `i`.
 fn set_ref(args: &mut [Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -816,13 +823,13 @@ fn xml_parse_into_struct(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     let o = parser_arg(ctx, "xml_parse_into_struct", args)?;
     if with(&o, |p| p.parsing) {
         ctx.warn("xml_parse_into_struct(): Parser must not be called recursively");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let with_index = args.len() > 3;
     if with_index {
-        set_ref(args, 3, Value::Array(Rc::new(PhpArray::new())));
+        set_ref(args, 3, Value::array(PhpArray::new()));
     }
-    set_ref(args, 2, Value::Array(Rc::new(PhpArray::new())));
+    set_ref(args, 2, Value::array(PhpArray::new()));
     let data = bytes(&arg(args, 1));
     with(&o, |p| {
         p.buffer.extend_from_slice(&data);
@@ -843,22 +850,22 @@ fn xml_parse_into_struct(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     });
     let r = if with(&o, |p| p.done) { Ok(0) } else { run(ctx, &o, true) };
     let s = with(&o, |p| p.structure.take()).expect("the structure");
-    let still_array = |c: &Option<Rc<RefCell<Value>>>| c.as_ref().is_none_or(|c| matches!(*c.borrow(), Value::Array(_)));
+    let still_array = |c: &Option<Rc<RefCell<Value>>>| c.as_ref().is_none_or(|c| c.borrow().is_array());
     if still_array(&s.values_ref) {
-        let values = PhpArray::from_list(s.values.into_iter().map(|a| Value::Array(Rc::new(a))).collect());
-        set_ref(args, 2, Value::Array(Rc::new(values)));
+        let values = PhpArray::from_list(s.values.into_iter().map(Value::array).collect());
+        set_ref(args, 2, Value::array(values));
     }
     if let Some(index) = s.index
         && still_array(&s.index_ref)
     {
-        set_ref(args, 3, Value::Array(Rc::new(index)));
+        set_ref(args, 3, Value::array(index));
     }
-    Ok(Value::Int(r?))
+    Ok(Value::int(r?))
 }
 
 fn xml_get_error_code(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_get_error_code", args)?;
-    Ok(Value::Int(i64::from(with(&o, |p| p.err_no))))
+    Ok(Value::int(i64::from(with(&o, |p| p.err_no))))
 }
 
 /// compat.c's error_mapping, by libxml2 error code.
@@ -903,33 +910,33 @@ fn xml_error_string(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 
 fn xml_get_current_line_number(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_get_current_line_number", args)?;
-    Ok(Value::Int(with(&o, |p| p.line)))
+    Ok(Value::int(with(&o, |p| p.line)))
 }
 
 fn xml_get_current_column_number(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_get_current_column_number", args)?;
-    Ok(Value::Int(with(&o, |p| p.column)))
+    Ok(Value::int(with(&o, |p| p.column)))
 }
 
 fn xml_get_current_byte_index(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_get_current_byte_index", args)?;
-    Ok(Value::Int(with(&o, |p| p.byte_index)))
+    Ok(Value::int(with(&o, |p| p.byte_index)))
 }
 
 fn xml_parser_free(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_parser_free", args)?;
     if with(&o, |p| p.parsing) {
         ctx.warn("xml_parser_free(): Parser cannot be freed while it is parsing");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn xml_parser_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_parser_set_option", args)?;
     let opt = arg(args, 1).to_int();
     let value = arg(args, 2);
-    if !matches!(value, Value::Bool(_) | Value::Int(_) | Value::Str(_)) {
+    if !(value.is_bool() || value.is_int() || value.is_str()) {
         ctx.warn(&format!("xml_parser_set_option(): Argument #3 ($value) must be of type string|int|bool, {} given", value.type_name()));
     }
     match opt {
@@ -942,25 +949,25 @@ fn xml_parser_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
             with(&o, |p| p.parse_huge = value.to_bool());
         }
         3 => {
-            if let Value::Object(obj) = &value {
+            if let Some(obj) = value.as_object() {
                 ctx.warn(&format!("Object of class {} could not be converted to int", String::from_utf8_lossy(obj.class.name.as_bytes())));
             }
-            let n = if matches!(value, Value::Object(_)) { 1 } else { value.to_int() };
+            let n = if value.is_object() { 1 } else { value.to_int() };
             if !(0..=i64::from(i32::MAX)).contains(&n) {
                 ctx.warn(&format!("xml_parser_set_option(): Argument #3 ($value) must be between 0 and {} for option XML_OPTION_SKIP_TAGSTART", i32::MAX));
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
             with(&o, |p| p.tag_start = n as usize);
         }
         2 => {
-            match &value {
-                Value::Array(_) => ctx.warn("Array to string conversion"),
-                Value::Object(obj) if obj.class.method(b"__tostring").is_none() => {
-                    return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(obj.class.name.as_bytes()))));
-                }
-                _ => {}
+            if value.is_array() {
+                ctx.warn("Array to string conversion");
+            } else if let Some(obj) = value.as_object()
+                && obj.class.method(b"__tostring").is_none()
+            {
+                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(obj.class.name.as_bytes()))));
             }
-            let e = if matches!(value, Value::Array(_)) { b"Array".to_vec() } else { bytes(&value) };
+            let e = if value.is_array() { b"Array".to_vec() } else { bytes(&value) };
             let enc = if e.eq_ignore_ascii_case(b"ISO-8859-1") {
                 "ISO-8859-1"
             } else if e.eq_ignore_ascii_case(b"UTF-8") {
@@ -974,16 +981,16 @@ fn xml_parser_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
         }
         _ => return Err(ctx.throw("ValueError", "xml_parser_set_option(): Argument #2 ($option) must be a XML_OPTION_* constant".into())),
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn xml_parser_get_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = parser_arg(ctx, "xml_parser_get_option", args)?;
     Ok(match arg(args, 1).to_int() {
-        1 => Value::Bool(with(&o, |p| p.case_folding)),
-        3 => Value::Int(with(&o, |p| p.tag_start as i64)),
-        4 => Value::Bool(with(&o, |p| p.skip_white)),
-        5 => Value::Bool(with(&o, |p| p.parse_huge)),
+        1 => Value::bool(with(&o, |p| p.case_folding)),
+        3 => Value::int(with(&o, |p| p.tag_start as i64)),
+        4 => Value::bool(with(&o, |p| p.skip_white)),
+        5 => Value::bool(with(&o, |p| p.parse_huge)),
         2 => Value::str(with(&o, |p| p.target_encoding)),
         _ => return Err(ctx.throw("ValueError", "xml_parser_get_option(): Argument #2 ($option) must be a XML_OPTION_* constant".into())),
     })

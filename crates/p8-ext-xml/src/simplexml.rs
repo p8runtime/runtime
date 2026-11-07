@@ -206,7 +206,7 @@ fn wrap(this: &Object, r: &NodeRef, id: Id, kind: IterKind, name: Option<Vec<u8>
         data: RefCell::new(None),
         xpath_ns: RefCell::new(Vec::new()),
     };
-    Value::Object(this.sibling(Rc::clone(&this.class), Some(Rc::new(data))))
+    Value::object(this.sibling(Rc::clone(&this.class), Some(Rc::new(data))))
 }
 
 fn element_by_offset(d: &Doc, it: &Iter, offset: i64, mut at: Option<Id>, cnt: &mut i64) -> Option<Id> {
@@ -251,10 +251,13 @@ enum Member {
 }
 
 fn member(v: &Value) -> Member {
-    match v.deref() {
-        Value::Null | Value::Undef => Member::None,
-        Value::Int(i) => Member::Index(i),
-        v => Member::Name(bytes(&v)),
+    let v = v.deref();
+    if v.is_null_or_undef() {
+        Member::None
+    } else if let Some(i) = v.as_int() {
+        Member::Index(i)
+    } else {
+        Member::Name(bytes(&v))
     }
 }
 
@@ -269,7 +272,7 @@ fn prop_dim_read(ctx: &mut dyn Ctx, this: &Rc<Object>, m: Member, mut elements: 
         attribs = false;
         elements = true;
     }
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Null) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::NULL) };
     let d = r.doc.borrow();
     let mut node = Some(r.id);
     let mut attr: Option<Id> = None;
@@ -284,7 +287,7 @@ fn prop_dim_read(ctx: &mut dyn Ctx, this: &Rc<Object>, m: Member, mut elements: 
         node = first_node(&d, r.id, &it);
         attr = node.and_then(|n| first_attr(&d, n));
     }
-    let Some(node) = node else { return Ok(Value::Null) };
+    let Some(node) = node else { return Ok(Value::NULL) };
     if attribs && (!matches!(m, Member::Index(_)) || it.kind == IterKind::AttrList) {
         let mut ndx = 0;
         while let Some(a) = attr {
@@ -322,7 +325,7 @@ fn prop_dim_read(ctx: &mut dyn Ctx, this: &Rc<Object>, m: Member, mut elements: 
             Member::Name(name) => return Ok(wrap(this, &r, node, IterKind::Element, Some(name.clone()), it.ns.clone(), it.is_prefix)),
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn prop_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -395,24 +398,25 @@ fn prop_dim_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, m: Member, mut elements
 }
 
 fn prop_isset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    Ok(Value::Bool(prop_dim_exists(ctx, this, Member::Name(bytes(&arg(args, 0))), true, false)?))
+    Ok(Value::bool(prop_dim_exists(ctx, this, Member::Name(bytes(&arg(args, 0))), true, false)?))
 }
 
 fn dim_has(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    Ok(Value::Bool(prop_dim_exists(ctx, this, member(&arg(args, 0)), false, true)?))
+    Ok(Value::bool(prop_dim_exists(ctx, this, member(&arg(args, 0)), false, true)?))
 }
 
 // ---- writes (sxe_prop_dim_write) ----
 
 /// The string a written value becomes ("complex type" error otherwise).
 fn value_string(ctx: &mut dyn Ctx, v: &Value, attribs: bool) -> Result<Vec<u8>, Throw> {
-    match v.deref() {
-        Value::Object(o) if o.native::<Sxe>().is_some() => Ok(cast_string(&o).as_bytes().to_vec()),
-        Value::Array(_) | Value::Object(_) => {
+    let v = v.deref();
+    match v.as_object() {
+        Some(o) if o.native::<Sxe>().is_some() => Ok(cast_string(o).as_bytes().to_vec()),
+        _ if v.is_array() || v.is_object() => {
             let what = if attribs { "attributes" } else { "properties" };
             Err(ctx.throw("TypeError", format!("It's not possible to assign a complex type to {what}, {} given", p8_runtime::args::value_name(&v.deref()))))
         }
-        v => Ok(bytes(&v)),
+        _ => Ok(bytes(&v)),
     }
 }
 
@@ -614,14 +618,14 @@ fn prop_dim_write(ctx: &mut dyn Ctx, func: &str, this: &Rc<Object>, m: Member, v
 fn prop_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let v = arg(args, 1);
     prop_dim_write(ctx, "SimpleXMLElement::__set()", this, Member::Name(bytes(&arg(args, 0))), &v, true, false)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dim_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let v = arg(args, 1);
     let m = member(&arg(args, 0));
     prop_dim_write(ctx, "SimpleXMLElement::offsetSet()", this, m, &v, false, true)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- unset (sxe_prop_dim_delete) ----
@@ -702,12 +706,12 @@ fn prop_dim_delete(ctx: &mut dyn Ctx, this: &Rc<Object>, m: Member, mut elements
 
 fn prop_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     prop_dim_delete(ctx, this, Member::Name(bytes(&arg(args, 0))), true, false)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn dim_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     prop_dim_delete(ctx, this, member(&arg(args, 0)), false, true)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- casts, properties ----
@@ -814,12 +818,14 @@ fn prop_is_empty(o: &Object) -> bool {
 fn add_prop(rv: &mut PhpArray, name: &[u8], v: Value) {
     let key = Key::from_string(PhpStr::new(name.to_vec()));
     match rv.get(&key).cloned() {
-        Some(Value::Array(a)) => {
-            let mut a = (*a).clone();
-            let _ = a.push(v);
-            rv.insert(key, Value::Array(Rc::new(a)));
-        }
-        Some(old) => rv.insert(key, Value::Array(Rc::new(PhpArray::from_list(vec![old, v])))),
+        Some(old) => match old.into_array() {
+            Ok(a) => {
+                let mut a = (*a).clone();
+                let _ = a.push(v);
+                rv.insert(key, Value::array(a));
+            }
+            Err(old) => rv.insert(key, Value::array(PhpArray::from_list(vec![old, v]))),
+        },
         None => rv.insert(key, v),
     }
 }
@@ -848,7 +854,7 @@ fn prop_hash(o: &Object, is_debug: bool) -> PhpArray {
                 attr = next(&d, a);
             }
             if any {
-                add_prop(&mut rv, b"@attributes", Value::Array(Rc::new(attrs)));
+                add_prop(&mut rv, b"@attributes", Value::array(attrs));
             }
         }
     }
@@ -930,11 +936,11 @@ fn this_first(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Option<(NodeRef, I
 }
 
 fn to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Str(cast_string(this)))
+    Ok(Value::str(cast_string(this)))
 }
 
 fn count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Int(0)) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::int(0)) };
     let it = sxe(this).iter.borrow().clone();
     let d = r.doc.borrow();
     let mut n = 0;
@@ -943,7 +949,7 @@ fn count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
         n += 1;
         at = iter_fetch(&d, &it, next(&d, id));
     }
-    Ok(Value::Int(n))
+    Ok(Value::int(n))
 }
 
 fn get_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -955,22 +961,22 @@ fn get_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn children(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     if sxe(this).iter.borrow().kind == IterKind::AttrList {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    let Some((r, f, _)) = this_first(ctx, this)? else { return Ok(Value::Null) };
+    let Some((r, f, _)) = this_first(ctx, this)? else { return Ok(Value::NULL) };
     Ok(wrap(this, &r, f, IterKind::Child, None, opt_bytes(&arg(args, 0)), arg(args, 1).to_bool()))
 }
 
 fn attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((r, f, it)) = this_first(ctx, this)? else { return Ok(Value::Null) };
+    let Some((r, f, it)) = this_first(ctx, this)? else { return Ok(Value::NULL) };
     if it.kind == IterKind::AttrList {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     Ok(wrap(this, &r, f, IterKind::AttrList, None, opt_bytes(&arg(args, 0)), arg(args, 1).to_bool()))
 }
 
 fn as_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((r, f, _)) = this_first(ctx, this)? else { return Ok(Value::Bool(false)) };
+    let Some((r, f, _)) = this_first(ctx, this)? else { return Ok(Value::FALSE) };
     let d = r.doc.borrow();
     let whole = d.parent(f) == Some(DOC);
     let mut out = if whole { Out::new(&d, false, d.settings.encoding.is_none()) } else { Out::new(&d, false, false) };
@@ -983,7 +989,7 @@ fn as_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     match opt_bytes(&arg(args, 0)) {
         Some(file) => {
             let path = String::from_utf8_lossy(&file).into_owned();
-            Ok(Value::Bool(std::fs::write(path, &buf).is_ok()))
+            Ok(Value::bool(std::fs::write(path, &buf).is_ok()))
         }
         None => Ok(str(&buf)),
     }
@@ -994,15 +1000,15 @@ fn add_child(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     if qname.is_empty() {
         return Err(ctx.throw("ValueError", "SimpleXMLElement::addChild(): Argument #1 ($qualifiedName) must not be empty".into()));
     }
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Null) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::NULL) };
     let it = sxe(this).iter.borrow().clone();
     if it.kind == IterKind::AttrList {
         ctx.warn("SimpleXMLElement::addChild(): Cannot add element to attributes");
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let Some(node) = first_node(&r.doc.borrow(), r.id, &it) else {
         ctx.warn("SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree");
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     };
     let (prefix, local) = match qname.iter().position(|&b| b == b':') {
         Some(i) if i > 0 && i + 1 < qname.len() => (Some(qname[..i].to_vec()), qname[i + 1..].to_vec()),
@@ -1057,7 +1063,7 @@ fn add_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     if qname.is_empty() {
         return Err(ctx.throw("ValueError", "SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty".into()));
     }
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Null) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::NULL) };
     let it = sxe(this).iter.borrow().clone();
     let mut node = first_node(&r.doc.borrow(), r.id, &it);
     if let Some(n) = node
@@ -1067,7 +1073,7 @@ fn add_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     }
     let Some(node) = node else {
         ctx.warn("SimpleXMLElement::addAttribute(): Unable to locate parent Element");
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     };
     let value = bytes(&arg(args, 1));
     let nsuri = opt_bytes(&arg(args, 2));
@@ -1076,7 +1082,7 @@ fn add_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
         _ => {
             if nsuri.as_ref().is_some_and(|u| !u.is_empty()) {
                 ctx.warn("SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace");
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             (None, qname.clone())
         }
@@ -1085,7 +1091,7 @@ fn add_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     if d.attr_ns(node, nsuri.as_deref().filter(|u| !u.is_empty()), &local).is_some() {
         drop(d);
         ctx.warn("SimpleXMLElement::addAttribute(): Attribute already exists");
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let mut a = Node::new(Kind::Attribute, local);
     a.value = value;
@@ -1101,7 +1107,7 @@ fn add_attribute(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     }
     let a = d.add(a);
     d.set_attr(node, a);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Namespaces used by `id` (and, recursively, below it): prefix => URI.
@@ -1134,7 +1140,7 @@ fn used_namespaces(d: &Doc, id: Id, recursive: bool, out: &mut PhpArray) {
 fn get_namespaces(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let recursive = arg(args, 0).to_bool();
     let mut out = PhpArray::new();
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Array(Rc::new(out))) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::array(out)) };
     let it = sxe(this).iter.borrow().clone();
     let d = r.doc.borrow();
     let mut at = first_node(&d, r.id, &it);
@@ -1153,7 +1159,7 @@ fn get_namespaces(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
         }
         at = if it.kind == IterKind::None { None } else { iter_fetch(&d, &it, next(&d, id)) };
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn declared_namespaces(d: &Doc, id: Id, recursive: bool, out: &mut PhpArray) {
@@ -1178,36 +1184,36 @@ fn get_doc_namespaces(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     let recursive = arg(args, 0).to_bool();
     let from_root = args.len() < 2 || arg(args, 1).to_bool();
     let mut out = PhpArray::new();
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Array(Rc::new(out))) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::array(out)) };
     let d = r.doc.borrow();
     let start = if from_root { d.root() } else { Some(r.id) };
     if let Some(s) = start {
         declared_namespaces(&d, s, recursive, &mut out);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 // Iteration (RecursiveIterator)
 fn rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     *sxe(this).data.borrow_mut() = None;
-    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::Null) };
+    let Some(r) = get_node(Some(ctx), this)? else { return Ok(Value::NULL) };
     let it = sxe(this).iter.borrow().clone();
     let first = first_iterated(&r.doc.borrow(), r.id, &it);
     if let Some(f) = first
-        && let Value::Object(o) = wrap(this, &r, f, IterKind::None, None, it.ns.clone(), it.is_prefix)
+        && let Ok(o) = wrap(this, &r, f, IterKind::None, None, it.ns.clone(), it.is_prefix).into_object()
     {
         *sxe(this).data.borrow_mut() = Some(o);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Bool(sxe(this).data.borrow().is_some()))
+    Ok(Value::bool(sxe(this).data.borrow().is_some()))
 }
 
 fn current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     match sxe(this).data.borrow().clone() {
-        Some(o) => Ok(Value::Object(o)),
+        Some(o) => Ok(Value::object(o)),
         None => Err(ctx.throw("Error", "Iterator not initialized or already consumed".into())),
     }
 }
@@ -1224,37 +1230,37 @@ fn key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn next_item(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let cur = sxe(this).data.borrow_mut().take();
-    let Some(cur) = cur else { return Ok(Value::Null) };
-    let Some(r) = sxe(&cur).node.borrow().clone() else { return Ok(Value::Null) };
+    let Some(cur) = cur else { return Ok(Value::NULL) };
+    let Some(r) = sxe(&cur).node.borrow().clone() else { return Ok(Value::NULL) };
     let it = sxe(this).iter.borrow().clone();
     let found = {
         let d = r.doc.borrow();
         iter_fetch(&d, &it, next(&d, r.id))
     };
     if let Some(f) = found
-        && let Value::Object(o) = wrap(this, &r, f, IterKind::None, None, it.ns.clone(), it.is_prefix)
+        && let Ok(o) = wrap(this, &r, f, IterKind::None, None, it.ns.clone(), it.is_prefix).into_object()
     {
         *sxe(this).data.borrow_mut() = Some(o);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn has_children(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     if sxe(this).iter.borrow().kind == IterKind::AttrList {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let cur = sxe(this).data.borrow().clone();
-    let Some(cur) = cur else { return Ok(Value::Bool(false)) };
-    let Some(r) = sxe(&cur).node.borrow().clone() else { return Ok(Value::Bool(false)) };
+    let Some(cur) = cur else { return Ok(Value::FALSE) };
+    let Some(r) = sxe(&cur).node.borrow().clone() else { return Ok(Value::FALSE) };
     let d = r.doc.borrow();
-    Ok(Value::Bool(d.node(r.id).children.iter().any(|&c| d.node(c).kind == Kind::Element)))
+    Ok(Value::bool(d.node(r.id).children.iter().any(|&c| d.node(c).kind == Kind::Element)))
 }
 
 fn get_children(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     if sxe(this).iter.borrow().kind == IterKind::AttrList {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    Ok(sxe(this).data.borrow().clone().map_or(Value::Null, Value::Object))
+    Ok(sxe(this).data.borrow().clone().map_or(Value::NULL, Value::object))
 }
 
 /// SimpleXMLElement::xpath: the matching nodes as SimpleXMLElements (a
@@ -1262,16 +1268,16 @@ fn get_children(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 /// of that name), false for an invalid expression.
 fn xpath(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     if sxe(this).iter.borrow().kind == IterKind::AttrList {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    let Some((r, node, _)) = this_first(ctx, this)? else { return Ok(Value::Null) };
+    let Some((r, node, _)) = this_first(ctx, this)? else { return Ok(Value::NULL) };
     let expr = bytes(&arg(args, 0));
     let registered = sxe(this).xpath_ns.borrow().clone();
     let v = match crate::dom::xpath::evaluate_at(&r, Some(r.at(node)), &expr, &registered, true) {
         Ok(v) => v,
         Err(e) => {
             ctx.warn(&format!("SimpleXMLElement::xpath(): {}", e.message()));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let mut out = PhpArray::new();
@@ -1290,7 +1296,7 @@ fn xpath(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
             }
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn register_xpath_namespace(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1300,11 +1306,11 @@ fn register_xpath_namespace(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Valu
         Some(e) => e.1 = uri,
         None => ns.push((prefix, uri)),
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn debug_info_method(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Array(Rc::new(debug_info(this))))
+    Ok(Value::array(debug_info(this)))
 }
 
 // ---- loading ----
@@ -1330,10 +1336,7 @@ fn parse_into(ctx: &mut dyn Ctx, func: &str, data: Vec<u8>, filename: Option<Str
 
 /// The class to make (simplexml_load_*'s $class_name), checked.
 fn element_class(ctx: &mut dyn Ctx, func: &str, v: &Value) -> Result<Rc<p8_runtime::object::Class>, Throw> {
-    let name = match v {
-        Value::Null | Value::Undef => b"SimpleXMLElement".to_vec(),
-        v => bytes(v),
-    };
+    let name = if v.is_null_or_undef() { b"SimpleXMLElement".to_vec() } else { bytes(v) };
     match ctx.class_load(&name)? {
         Some(c) if c.is_a(b"simplexmlelement") => Ok(c),
         _ => Err(ctx.throw(
@@ -1351,13 +1354,13 @@ fn from_doc(ctx: &mut dyn Ctx, class: &Rc<p8_runtime::object::Class>, doc: Doc, 
         *sxe(&o).node.borrow_mut() = Some(NodeRef { doc, id: root });
     }
     *sxe(&o).iter.borrow_mut() = Iter { kind: IterKind::None, name: None, ns: ns.filter(|n| !n.is_empty()), is_prefix };
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn load_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let data = bytes(&arg(args, 0));
     let class = element_class(ctx, "simplexml_load_string", &arg(args, 1))?;
-    let Some(doc) = parse_into(ctx, "simplexml_load_string", data, None, arg(args, 2).to_int()) else { return Ok(Value::Bool(false)) };
+    let Some(doc) = parse_into(ctx, "simplexml_load_string", data, None, arg(args, 2).to_int()) else { return Ok(Value::FALSE) };
     from_doc(ctx, &class, doc, opt_bytes(&arg(args, 3)), arg(args, 4).to_bool())
 }
 
@@ -1366,9 +1369,9 @@ fn load_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = element_class(ctx, "simplexml_load_file", &arg(args, 1))?;
     let Ok(data) = std::fs::read(&name) else {
         ctx.warn(&format!("simplexml_load_file(): I/O warning : failed to load external entity \"{name}\""));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
-    let Some(doc) = parse_into(ctx, "simplexml_load_file", data, Some(name), arg(args, 2).to_int()) else { return Ok(Value::Bool(false)) };
+    let Some(doc) = parse_into(ctx, "simplexml_load_file", data, Some(name), arg(args, 2).to_int()) else { return Ok(Value::FALSE) };
     from_doc(ctx, &class, doc, opt_bytes(&arg(args, 3)), arg(args, 4).to_bool())
 }
 
@@ -1394,12 +1397,12 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let root = doc.root();
     *sxe(this).node.borrow_mut() = root.map(|id| NodeRef { doc: Rc::new(RefCell::new(doc)), id });
     *sxe(this).iter.borrow_mut() = Iter { kind: IterKind::None, name: None, ns: opt_bytes(&arg(args, 3)).filter(|n| !n.is_empty()), is_prefix: arg(args, 4).to_bool() };
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn import_dom(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = element_class(ctx, "simplexml_import_dom", &arg(args, 1))?;
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
     // A SimpleXMLElement given: its node.
     let node = match o.native::<DomObj>() {
         Some(d) => d.node.borrow().clone(),
@@ -1409,7 +1412,7 @@ fn import_dom(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if r.kind() == Kind::Document {
         match r.doc.borrow().root() {
             Some(root) => r.id = root,
-            None => return Ok(Value::Null),
+            None => return Ok(Value::NULL),
         }
     }
     if !matches!(r.kind(), Kind::Element | Kind::Attribute) {
@@ -1417,12 +1420,12 @@ fn import_dom(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let o = ctx.new_object(&class);
     *sxe(&o).node.borrow_mut() = Some(r);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// dom_import_simplexml: the DOM node a SimpleXMLElement stands on.
 pub fn dom_import(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
     let Some(s) = o.native::<Sxe>() else { return Ok(arg(args, 0)) };
     let r = s.node.borrow().clone();
     let it = s.iter.borrow().clone();
