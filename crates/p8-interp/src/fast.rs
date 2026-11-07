@@ -951,7 +951,7 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
         frame.owner = None;
     }
     if frame.ret != NO_RET {
-        regs[frame.ret as usize] = value;
+        put(&mut regs[frame.ret as usize], value);
     }
 }
 
