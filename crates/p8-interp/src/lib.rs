@@ -39,7 +39,7 @@ use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::symbol::Sym;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Ordering;
 use p8_runtime::fast::HashMap;
