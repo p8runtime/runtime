@@ -199,6 +199,28 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
 }
 
+/// The declared slot a property write the cache answers goes to when the
+/// write is a plain store (`write_cached`'s test): `cached_slot`'s
+/// conditions but the slot's own state (the caller looks at the slot
+/// once, to write it), a defined value that is not a reference, and a
+/// property that is not readonly, has no set visibility, and is untyped
+/// or plainly of its type. Everything else is the full write's.
+#[inline(always)]
+pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: usize, v: &Value) -> Option<usize> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+        return None;
+    }
+    if matches!(v, Value::Undef | Value::Ref(_)) {
+        return None;
+    }
+    let slot = site.slot as usize;
+    let prop = o.class.properties.get(slot)?;
+    if prop.readonly || prop.set_visibility.is_some() || prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
+        return None;
+    }
+    Some(slot)
+}
+
 impl Context<'_> {
     /// `class_of` through the closure's cache: a named class reference
     /// is looked up by name once.

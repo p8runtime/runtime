@@ -1171,77 +1171,72 @@ impl Context<'_> {
         Ok(callee)
     }
 
-    /// Run frames until the bottom one returns: `fast` runs the common
-    /// cases (cached calls and returns included), `step` the one
-    /// instruction it stopped at.
-    fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let mut pc = self.frames.last().expect("a frame").pc as usize;
-        // The function `step` last ran in (refreshed when `fast` switched).
-        let mut func = Rc::clone(&self.frames.last().expect("a frame").func);
-        // Fiber::throw(): the exception is raised where the fiber went on.
-        if let Some(e) = self.fiber_throw.take() {
-            pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
+    /// Call builtin `i` from the loop (`Instr::Call` at `pc` of the frame
+    /// at `base`, its call site resolved to the builtin; `call` is the
+    /// instruction's arguments' start, count and result register): the
+    /// call, then what it raised (an exception unwound to its handler,
+    /// errors to the error handler, the destructors due). Returns the pc
+    /// to go on at.
+    #[cold]
+    #[inline(never)]
+    fn builtin_call(&mut self, regs: &mut Vec<Value>, pc: usize, base: usize, i: usize, call: (Reg, u8, Reg)) -> Result<usize, Throw> {
+        let (args, argc, dst) = call;
+        self.pc = pc + 1;
+        let next = match self.call_builtin(regs, base, i, args, argc, dst) {
+            Ok(()) => pc + 1,
+            Err(t) => self.unwind(regs, t, pc)?,
+        };
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            return self.after_errors(regs, next, pc);
         }
-        loop {
-            // (The interrupt flag is borrowed, not cloned: no atomic count per run.)
-            pc = fast(regs, &mut self.frames, &self.closures, pc, &self.stop, &self.ids);
-            if self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-            }
-            let frame = self.frames.last().expect("a frame");
-            if !Rc::ptr_eq(&func, &frame.func) {
-                func = Rc::clone(&frame.func);
-            }
-            let (base, argc) = (frame.base as usize, frame.argc as usize);
-            self.pc = pc + 1;
-            // A builtin the call site already resolved is called from here,
-            // not through `step`.
-            if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
-                && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
-            {
-                let at = pc;
-                match self.call_builtin(regs, base, i, args, n, dst) {
-                    Ok(()) => pc += 1,
-                    Err(t) => pc = self.unwind(regs, t, pc)?,
-                }
-                if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                    pc = self.after_errors(regs, pc, at)?;
-                }
-                continue;
-            }
-            let at = pc;
-            match self.step(regs, &func, base, argc, pc) {
-                Ok(Next::Go(next)) => {
-                    pc = next;
-                    // Fiber::suspend(): leave the fiber's frames where they are.
-                    if self.fiber_suspended.is_some() {
-                        if let Some(top) = self.frames.last_mut() {
-                            top.pc = pc as u32;
-                        }
-                        return Ok(());
+        Ok(next)
+    }
+
+    /// Run the instruction at `pc` of the top frame the way `execute`'s
+    /// loop does not: through `step`, then what it raised (an exception
+    /// unwound to its handler, errors to the error handler, the
+    /// destructors due). Called from inside the loop, which goes on with
+    /// the pc this gives back.
+    #[cold]
+    #[inline(never)]
+    fn slow(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<Flow, Throw> {
+        let frame = self.frames.last().expect("a frame");
+        let func = Rc::clone(&frame.func);
+        let (base, argc) = (frame.base as usize, frame.argc as usize);
+        self.pc = pc + 1;
+        let at = pc;
+        match self.step(regs, &func, base, argc, pc) {
+            Ok(Next::Go(next)) => {
+                pc = next;
+                // Fiber::suspend(): leave the fiber's frames where they are.
+                if self.fiber_suspended.is_some() {
+                    if let Some(top) = self.frames.last_mut() {
+                        top.pc = pc as u32;
                     }
+                    return Ok(Flow::Done);
                 }
-                Ok(Next::Switch) => {
-                    if self.frames.len() == self.frames.floor {
-                        if !self.pending_errors.is_empty() {
-                            self.dispatch_errors(regs)?;
-                        }
-                        if self.ids.has_pending() {
-                            self.run_destructors(regs)?;
-                        }
-                        return Ok(());
+            }
+            Ok(Next::Switch) => {
+                if self.frames.len() == self.frames.floor {
+                    if !self.pending_errors.is_empty() {
+                        self.dispatch_errors(regs)?;
                     }
-                    pc = self.frames.last().expect("a frame").pc as usize;
+                    if self.ids.has_pending() {
+                        self.run_destructors(regs)?;
+                    }
+                    return Ok(Flow::Done);
                 }
-                // A class an autoloader may declare: run them, then this
-                // instruction again.
-                Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
-                Err(t) => pc = self.unwind(regs, t, pc)?,
+                pc = self.frames.last().expect("a frame").pc as usize;
             }
-            if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, at)?;
-            }
+            // A class an autoloader may declare: run them, then this
+            // instruction again.
+            Err(Throw::Autoload(name)) => pc = self.autoload_then(regs, name, at)?,
+            Err(t) => pc = self.unwind(regs, t, pc)?,
         }
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            pc = self.after_errors(regs, pc, at)?;
+        }
+        Ok(Flow::Go(pc))
     }
 
     /// Run the autoloaders for `name`, then go on at `at` (the instruction
@@ -1402,7 +1397,9 @@ impl Context<'_> {
                     clear(&mut reg!(src));
                     assign(w, var, v);
                 }
-                Instr::Free { reg } => clear(&mut reg!(reg)),
+                Instr::Free { reg } => {
+                    clear(&mut reg!(reg));
+                }
                 Instr::LoadNull { dst } => reg!(dst) = Value::Null,
                 Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
                 Instr::Binary { op, dst, a, b } => {
@@ -3826,7 +3823,7 @@ impl Context<'_> {
     /// and the register file is lent to the context while the builtin
     /// runs, so it can call back into PHP (array_map, usort) and run the
     /// autoloaders where it looks a class up (class_exists, is_a).
-    #[inline]
+    #[inline(never)]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
         // An object argument may need its __toString() (PHP code) to become
@@ -5675,27 +5672,6 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
     true
 }
 
-/// `$a[string]` on an array (or a reference to one) holding a value that is
-/// not a reference at that key; None for anything else (a missing key
-/// warns, in `step`).
-#[inline(never)]
-fn str_elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
-    let Value::Str(s) = &w[key as usize] else { return None };
-    let key = Key::from_string(s.clone());
-    let elem = |a: &PhpArray| match a.get(&key) {
-        Some(Value::Ref(_)) | None => None,
-        Some(v) => Some(v.clone()),
-    };
-    match &w[arr as usize] {
-        Value::Array(a) => elem(a),
-        Value::Ref(cell) => match &*cell.borrow() {
-            Value::Array(a) => elem(a),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// `$a[string] = v`, `$a` an array whose element there (if any) is not a
 /// reference, `v` defined and not a reference; false (nothing done) for
 /// anything else.
@@ -5855,25 +5831,32 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
 #[inline(always)]
 fn num_op(op: BinOp, a: &Value, b: &Value) -> Option<Value> {
     match (a, b) {
-        (&Value::Int(x), &Value::Int(y)) => match op {
-            BinOp::Add => x.checked_add(y).map(Value::Int),
-            BinOp::Sub => x.checked_sub(y).map(Value::Int),
-            BinOp::Mul => x.checked_mul(y).map(Value::Int),
-            // % by zero throws and PHP_INT_MIN % -1 is 0: both take `step`.
-            BinOp::Mod => x.checked_rem(y).filter(|_| y != 0).map(Value::Int),
-            BinOp::BitAnd => Some(Value::Int(x & y)),
-            BinOp::BitOr => Some(Value::Int(x | y)),
-            BinOp::BitXor => Some(Value::Int(x ^ y)),
-            // A negative shift throws (`step`); 64 or more shifts every bit out.
-            BinOp::Shl if (0..64).contains(&y) => Some(Value::Int(x << y)),
-            BinOp::Shl if y >= 64 => Some(Value::Int(0)),
-            BinOp::Shr if (0..64).contains(&y) => Some(Value::Int(x >> y)),
-            BinOp::Shr if y >= 64 => Some(Value::Int(if x < 0 { -1 } else { 0 })),
-            _ => None,
-        },
+        (&Value::Int(x), &Value::Int(y)) => int_op(op, x, y).map(Value::Int),
         (Value::Float(x), Value::Float(y)) => float_op(op, *x, *y),
         (Value::Int(x), Value::Float(y)) => float_op(op, *x as f64, *y),
         (Value::Float(x), Value::Int(y)) => float_op(op, *x, *y as f64),
+        _ => None,
+    }
+}
+
+/// Arithmetic and the bit operators on two ints, when no warning, error
+/// or overflow is involved (anything else takes the slow path).
+#[inline(always)]
+fn int_op(op: BinOp, x: i64, y: i64) -> Option<i64> {
+    match op {
+        BinOp::Add => x.checked_add(y),
+        BinOp::Sub => x.checked_sub(y),
+        BinOp::Mul => x.checked_mul(y),
+        // % by zero throws and PHP_INT_MIN % -1 is 0: both take `step`.
+        BinOp::Mod => x.checked_rem(y).filter(|_| y != 0),
+        BinOp::BitAnd => Some(x & y),
+        BinOp::BitOr => Some(x | y),
+        BinOp::BitXor => Some(x ^ y),
+        // A negative shift throws (`step`); 64 or more shifts every bit out.
+        BinOp::Shl if (0..64).contains(&y) => Some(x << y),
+        BinOp::Shl if y >= 64 => Some(0),
+        BinOp::Shr if (0..64).contains(&y) => Some(x >> y),
+        BinOp::Shr if y >= 64 => Some(if x < 0 { -1 } else { 0 }),
         _ => None,
     }
 }

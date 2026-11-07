@@ -1309,10 +1309,12 @@ impl Context<'_> {
             },
         };
         let result = self.update_path(&mut root, keys, 0, append, val, op);
-        match slot {
+        // (A destructor the old value's release leaves due runs after the
+        // instruction, as every `step` write's does.)
+        let _ = match slot {
             Some(i) => put(&mut object.slots.borrow_mut()[i], root),
             None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
-        }
+        };
         result
     }
 
