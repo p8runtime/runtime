@@ -279,10 +279,14 @@ impl Context<'_> {
                         Rare::IsObject => Value::Bool(matches!(x, Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
                         _ => slow!(),
                     };
+                    // The arguments consumed may have been an object's last
+                    // holder (`count([new D])`): a destructor due runs here.
+                    let mut released = false;
                     for i in 0..usize::from(argc) {
-                        clear(&mut $w[rx!(args as usize + i)]);
+                        released |= clear(&mut $w[rx!(args as usize + i)]);
                     }
-                    done!(put(&mut $w[rx!(dst as usize)], r));
+                    released |= put(&mut $w[rx!(dst as usize)], r);
+                    done!(released);
                 }
                 // `$o->m($v)`: an argument the method the call site's cache
                 // names for this class and scope takes by value is copied
@@ -621,7 +625,8 @@ impl Context<'_> {
                     let Some(v) = taken(&mut $w[..],val, take) else { slow!() };
                     let Value::Array(a) = &mut $w[rx!(arr as usize)] else { unreachable!("checked above") };
                     let _ = Rc::make_mut(a).push(v);
-                    pc += 1;
+                    // (A taken temporary that held a reference let go of it.)
+                    done!(true);
                 }
                 Instr::ArraySet { arr, key, val, take } => {
                     let k = match (&$w[rx!(arr as usize)], &$w[rx!(key as usize)]) {
