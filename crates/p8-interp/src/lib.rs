@@ -2058,8 +2058,7 @@ impl Context<'_> {
                 }
                 Instr::BindGlobal { var, name } => {
                     // The name's constant, shared (not copied).
-                    let name = clo.consts[name as usize].cloned_str().expect("BindGlobal names a constant string");
-                    let name = name.as_bytes();
+                    let name = clo.consts[name as usize].as_str().expect("BindGlobal names a constant string").as_bytes();
                     // The main frame's window starts at 0: it is `w` when
                     // the main frame is running, else the start of `below`
                     // (or of the first task's registers, in a fiber).
@@ -2906,7 +2905,7 @@ impl Context<'_> {
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
                         && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                     {
-                        let pname = name!(name).cloned_str().expect("a string");
+                        let pname = name!(name).clone();
                         let v = self.operand_take(w, func, val, take);
                         self.write_cached(o, slot, &pname, v.clone())?;
                         reg!(dst) = v;
@@ -2959,7 +2958,7 @@ impl Context<'_> {
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
                         && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
                     {
-                        let (o, pname, slot) = (Rc::clone(o), name!(name).cloned_str().expect("a string"), site.get().slot as usize);
+                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = ops::binary(op, &x, &y, &mut self.diags);
                         self.report_diags();
                         let v = r.map_err(|e| self.op_error(e))?;
@@ -3009,7 +3008,7 @@ impl Context<'_> {
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
                         && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
                     {
-                        let (o, pname, slot) = (Rc::clone(o), name!(name).cloned_str().expect("a string"), site.get().slot as usize);
+                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                         self.report_diags();
                         let new = r.map_err(|e| self.op_error(e))?;

@@ -1192,13 +1192,16 @@ impl Context<'_> {
     /// untyped or already of its type, as zend_assign_to_typed_prop's
     /// ZEND_TYPE_CONTAINS_CODE test); else the full checks.
     #[inline]
-    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &PhpStr, value: Value) -> Result<(), Throw> {
+    /// `name` is the name's constant (a string): an owned handle of it is
+    /// made only past the plain store.
+    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &Value, value: Value) -> Result<(), Throw> {
         let prop = &object.class.properties[slot];
         if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
             object.slots()[slot].assign(value);
             return Ok(());
         }
-        self.write_slot(object, slot, prop, name, value)
+        let name = name.cloned_str().expect("a property name is a string");
+        self.write_slot(object, slot, prop, &name, value)
     }
 
     /// Store `value` in declared property `slot` of `object` (`prop`, named
