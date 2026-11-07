@@ -608,9 +608,9 @@ fn read_file(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<Read>, p8_runti
         let shown = lossy(path.as_bytes());
         let p = shown.strip_prefix("file://").unwrap_or(&shown).to_string();
         let (data, time) = if shown.contains("://") && !shown.starts_with("file://") || shown.starts_with("data:") {
-            match ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])? {
-                Value::Str(s) => (s.as_bytes().to_vec(), 0),
-                _ => {
+            match ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])?.as_str() {
+                Some(s) => (s.as_bytes().to_vec(), 0),
+                None => {
                     ctx.warn("exif_read_data(): Unable to open file");
                     return Ok(None);
                 }
@@ -701,7 +701,7 @@ fn basename(p: &str) -> String {
 }
 
 fn bytes_val(b: &[u8]) -> Value {
-    Value::Str(PhpStr::new(b.to_vec()))
+    Value::str(PhpStr::new(b.to_vec()))
 }
 
 fn key(name: &str) -> Key {
@@ -711,18 +711,18 @@ fn key(name: &str) -> Key {
 
 fn item_value(it: &Item) -> Value {
     match &it.val {
-        Val::Null => Value::Null,
+        Val::Null => Value::NULL,
         Val::Bytes(b) => bytes_val(b),
         Val::Nums(n) => {
             let one = |x: &Num| match x {
-                Num::U(u) => Value::Int(i64::from(*u as i32)),
-                Num::I(i) => Value::Int(i64::from(*i)),
-                Num::L(l) => Value::Int(*l),
+                Num::U(u) => Value::int(i64::from(*u as i32)),
+                Num::I(i) => Value::int(i64::from(*i)),
+                Num::L(l) => Value::int(*l),
                 Num::UR(a, b) => Value::str(format!("{a}/{b}").as_str()),
                 Num::SR(a, b) => Value::str(format!("{a}/{b}").as_str()),
-                Num::F(f) => Value::Float(*f),
+                Num::F(f) => Value::float(*f),
             };
-            if n.len() == 1 { one(&n[0]) } else { Value::Array(Rc::new(PhpArray::from_list(n.iter().map(one).collect()))) }
+            if n.len() == 1 { one(&n[0]) } else { Value::array(PhpArray::from_list(n.iter().map(one).collect())) }
         }
     }
 }
@@ -742,7 +742,7 @@ fn add_section(out: &mut PhpArray, sub_array: bool, info: &Info, section: usize)
     }
     let _ = idx;
     if sub_array {
-        out.insert(Key::from_string(SECTION_NAMES[section].into()), Value::Array(Rc::new(target)));
+        out.insert(Key::from_string(SECTION_NAMES[section].into()), Value::array(target));
     } else {
         *out = target;
     }
@@ -891,21 +891,21 @@ fn exif_read_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     };
     let sub = arg(args, 2).to_bool();
     let thumb = arg(args, 3).to_bool();
-    let Some(mut r) = read_file(ctx, args)? else { return Ok(Value::Bool(false)) };
+    let Some(mut r) = read_file(ctx, args)? else { return Ok(Value::FALSE) };
     if needed != 0 && needed & (r.info.found | (1 << COMPUTED) | 1) == 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Array(Rc::new(build(&mut r, sub, thumb))))
+    Ok(Value::array(build(&mut r, sub, thumb)))
 }
 
 fn exif_tagname(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let tag = int(args, 0);
     if tag < 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     Ok(match u16::try_from(tag).ok().and_then(|t| tag_name(IFD, t)) {
         Some(n) => Value::str(n),
-        None => Value::Bool(false),
+        None => Value::FALSE,
     })
 }
 
@@ -917,16 +917,16 @@ fn exif_imagetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let shown = lossy(path.as_bytes());
     let p = shown.strip_prefix("file://").unwrap_or(&shown);
     let data = if shown.contains("://") && !shown.starts_with("file://") {
-        match ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])? {
-            Value::Str(s) => s.as_bytes().to_vec(),
-            _ => return Ok(Value::Bool(false)),
+        match ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])?.as_str() {
+            Some(s) => s.as_bytes().to_vec(),
+            None => return Ok(Value::FALSE),
         }
     } else {
         match std::fs::read(p) {
             Ok(d) => d,
             Err(e) => {
                 ctx.warn(&format!("exif_imagetype({shown}): Failed to open stream: {}", os_error(&e)));
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     };
@@ -935,32 +935,32 @@ fn exif_imagetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             if data.len() < 12 {
                 ctx.notice(&format!("exif_imagetype({shown}): Error reading from {shown}!"));
             }
-            Value::Bool(false)
+            Value::FALSE
         }
-        t => Value::Int(t),
+        t => Value::int(t),
     })
 }
 
 fn set_ref(args: &[Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
 
 fn exif_thumbnail(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some(mut r) = read_file(ctx, args)? else { return Ok(Value::Bool(false)) };
+    let Some(mut r) = read_file(ctx, args)? else { return Ok(Value::FALSE) };
     let _ = build(&mut r, false, true);
     let info = &r.info;
     let Some(t) = thumb_bytes(&r.data, info).filter(|t| !t.is_empty()) else {
         ctx.notice("exif_thumbnail(): No thumbnail data");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     if args.len() > 3 {
-        set_ref(args, 3, Value::Int(info.thumb_filetype));
+        set_ref(args, 3, Value::int(info.thumb_filetype));
     }
     if args.len() > 2 {
-        set_ref(args, 1, Value::Int(info.thumb_width));
-        set_ref(args, 2, Value::Int(info.thumb_height));
+        set_ref(args, 1, Value::int(info.thumb_width));
+        set_ref(args, 2, Value::int(info.thumb_height));
     }
     Ok(bytes_val(t))
 }

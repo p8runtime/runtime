@@ -216,10 +216,12 @@ fn scroll(options: &Options) -> bool {
 
 /// pdo_get_bool_param()
 fn bool_param(ctx: &mut dyn Ctx, value: &Value) -> Result<bool, Throw> {
-    match value {
-        Value::Bool(b) => Ok(*b),
-        Value::Int(i) => Ok(*i != 0),
-        other => Err(ctx.throw("TypeError", format!("Attribute value must be of type bool for selected attribute, {} given", p8_runtime::args::value_name(other)))),
+    if let Some(b) = value.as_bool() {
+        Ok(b)
+    } else if let Some(i) = value.as_int() {
+        Ok(i != 0)
+    } else {
+        Err(ctx.throw("TypeError", format!("Attribute value must be of type bool for selected attribute, {} given", p8_runtime::args::value_name(value))))
     }
 }
 
@@ -340,8 +342,8 @@ impl Connection for PgConn {
         let w = self.wire.borrow();
         let param = |name: &str| String::from_utf8_lossy(w.parameter(name).unwrap_or_default()).into_owned();
         Some(match attr {
-            ATTR_EMULATE_PREPARES => Value::Bool(self.emulate),
-            ATTR_DISABLE_PREPARES => Value::Bool(self.disable_prepares),
+            ATTR_EMULATE_PREPARES => Value::bool(self.emulate),
+            ATTR_DISABLE_PREPARES => Value::bool(self.disable_prepares),
             ATTR_CLIENT_VERSION => Value::str(LIBPQ_VERSION),
             ATTR_SERVER_VERSION => Value::str(param("server_version").as_str()),
             ATTR_CONNECTION_STATUS => Value::str(if w.ok { "Connection OK; waiting to send." } else { "Bad connection." }),
@@ -490,7 +492,7 @@ impl Statement for PgStmt {
                 DbValue::Null => None,
                 DbValue::Bool(b) => Some((if *b { b"t".to_vec() } else { b"f".to_vec() }, 0)),
                 DbValue::Int(i) => Some((i.to_string().into_bytes(), 0)),
-                DbValue::Float(f) => Some((Value::Float(*f).to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(), 0)),
+                DbValue::Float(f) => Some((Value::float(*f).to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(), 0)),
                 DbValue::Text(t) => Some((t.clone(), 0)),
                 DbValue::Blob(b) | DbValue::Lob(b) => Some((b.clone(), 1)),
             };
@@ -593,12 +595,12 @@ impl Statement for PgStmt {
     fn column_meta(&mut self, i: usize) -> Option<ColumnMeta> {
         let f = self.result.as_ref()?.fields.get(i)?.clone();
         let mut w = self.wire.borrow_mut();
-        let mut entries: Vec<(String, Value)> = vec![("pgsql:oid".into(), Value::Int(i64::from(f.type_oid))), ("pgsql:table_oid".into(), Value::Int(i64::from(f.table_oid)))];
+        let mut entries: Vec<(String, Value)> = vec![("pgsql:oid".into(), Value::int(i64::from(f.type_oid))), ("pgsql:table_oid".into(), Value::int(i64::from(f.table_oid)))];
         let table = w.exec(format!("SELECT RELNAME FROM PG_CLASS WHERE OID={}", f.table_oid as i32).as_bytes());
         if table.status == TUPLES_OK
             && let Some(Some(name)) = table.rows.first().and_then(|r| r.first())
         {
-            entries.push(("table".into(), Value::Str(PhpStr::new(name.clone()))));
+            entries.push(("table".into(), Value::str(PhpStr::new(name.clone()))));
         }
         let label = match f.type_oid {
             BOOLOID => Some("bool"),
@@ -622,7 +624,7 @@ impl Statement for PgStmt {
                     && t.rows.len() == 1
                     && let Some(Some(name)) = t.rows[0].first()
                 {
-                    entries.push(("native_type".into(), Value::Str(PhpStr::new(name.clone()))));
+                    entries.push(("native_type".into(), Value::str(PhpStr::new(name.clone()))));
                 }
             }
         }
@@ -632,7 +634,7 @@ impl Statement for PgStmt {
             OIDOID | BYTEAOID => 3,
             _ => 2,
         };
-        entries.push(("pdo_type".into(), Value::Int(pdo_type)));
+        entries.push(("pdo_type".into(), Value::int(pdo_type)));
         Some(ColumnMeta { ordered: Some(entries), len: Some(i64::from(f.size)), precision: Some(i64::from(f.modifier)), ..ColumnMeta::default() })
     }
 
@@ -647,7 +649,7 @@ impl Statement for PgStmt {
 
     fn get_attribute(&mut self, attr: i64) -> Option<Value> {
         match attr {
-            ATTR_RESULT_MEMORY_SIZE => Some(self.result.as_ref().map_or(Value::Null, |r| Value::Int(r.memory_size()))),
+            ATTR_RESULT_MEMORY_SIZE => Some(self.result.as_ref().map_or(Value::NULL, |r| Value::int(r.memory_size()))),
             _ => None,
         }
     }
@@ -658,7 +660,7 @@ impl Statement for PgStmt {
 type R = Result<Value, Throw>;
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn type_error(ctx: &mut dyn Ctx, func: &str, i: usize, name: &str, want: &str, v: &Value) -> Throw {
@@ -672,21 +674,23 @@ fn str_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize, name: &str, 
     {
         return Ok(d.to_vec());
     }
-    match arg(args, i) {
-        Value::Str(s) => Ok(s.as_bytes().to_vec()),
-        v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_)) => Ok(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()),
-        Value::Null if i < args.len() => {
-            ctx.deprecated(&format!("{func}(): Passing null to parameter #{} (${name}) of type string is deprecated", i + 1));
-            Ok(Vec::new())
-        }
-        v => Err(type_error(ctx, func, i, name, "string", &v)),
+    let v = arg(args, i);
+    if let Some(s) = v.as_str() {
+        Ok(s.as_bytes().to_vec())
+    } else if v.is_number() || v.is_bool() {
+        Ok(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
+    } else if v.is_null() && i < args.len() {
+        ctx.deprecated(&format!("{func}(): Passing null to parameter #{} (${name}) of type string is deprecated", i + 1));
+        Ok(Vec::new())
+    } else {
+        Err(type_error(ctx, func, i, name, "string", &v))
     }
 }
 
 /// A `?string` parameter (zpp "s!").
 fn opt_str_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize, name: &str) -> Result<Option<Vec<u8>>, Throw> {
     match arg(args, i) {
-        Value::Null => Ok(None),
+        v if v.is_null() => Ok(None),
         _ => str_arg(ctx, func, args, i, name, None).map(Some),
     }
 }
@@ -695,12 +699,20 @@ fn int_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize, name: &str, 
     if i >= args.len() {
         return Ok(default);
     }
-    match arg(args, i) {
-        Value::Int(n) => Ok(n),
-        Value::Bool(b) => Ok(i64::from(b)),
-        Value::Float(f) if f.fract() == 0.0 && f.is_finite() => Ok(f as i64),
-        v @ Value::Str(_) if matches!(p8_runtime::numeric::numeric_string(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()), Some(p8_runtime::numeric::Number::Int(_))) => Ok(v.to_int()),
-        v => Err(type_error(ctx, func, i, name, "int", &v)),
+    let v = arg(args, i);
+    if let Some(n) = v.as_int() {
+        Ok(n)
+    } else if let Some(b) = v.as_bool() {
+        Ok(i64::from(b))
+    } else if let Some(f) = v.as_float()
+        && f.fract() == 0.0
+        && f.is_finite()
+    {
+        Ok(f as i64)
+    } else if v.is_str() && matches!(p8_runtime::numeric::numeric_string(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()), Some(p8_runtime::numeric::Number::Int(_))) {
+        Ok(v.to_int())
+    } else {
+        Err(type_error(ctx, func, i, name, "int", &v))
     }
 }
 
@@ -730,7 +742,7 @@ fn with_pg<T>(dbh: &Dbh, f: impl FnOnce(&mut PgConn) -> T) -> T {
 fn fail(ctx: &mut dyn Ctx, func: &str, dbh: &Dbh, e: DriverError) -> R {
     record(dbh, &Where::Dbh, &e);
     handle_error(ctx, func, dbh, Where::Dbh)?;
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// The error of the connection's last command (pdo_pgsql_error(dbh, status, sqlstate)).
@@ -798,7 +810,7 @@ fn copy_in(ctx: &mut dyn Ctx, func: &str, dbh: &Dbh, query: &[u8], lines: &[Vec<
     });
     p8_ext_pdo::dispatch_notices(ctx, dbh)?;
     match outcome {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => fail(ctx, func, dbh, e),
     }
 }
@@ -824,9 +836,9 @@ fn copy_out(dbh: &Dbh, query: &[u8]) -> Result<Vec<Vec<u8>>, DriverError> {
 
 fn copy_from_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
     let table = str_arg(ctx, func, args, 0, "tableName", None)?;
-    let rows = match arg(args, 1) {
-        Value::Array(a) => a,
-        v => return Err(type_error(ctx, func, 1, "rows", "array", &v)),
+    let rows = match arg(args, 1).into_array() {
+        Ok(a) => a,
+        Err(v) => return Err(type_error(ctx, func, 1, "rows", "array", &v)),
     };
     let opts = CopyOptions::read(ctx, func, args, 2)?;
     if rows.is_empty() {
@@ -836,17 +848,18 @@ fn copy_from_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], fun
     dbh.clear_error();
     let mut lines = Vec::with_capacity(rows.len());
     for (_, v) in rows.iter() {
-        let mut line = match v.deref() {
-            Value::Array(_) => {
-                ctx.warn("Array to string conversion");
-                b"Array".to_vec()
+        let v = v.deref();
+        let mut line = if v.is_array() {
+            ctx.warn("Array to string conversion");
+            b"Array".to_vec()
+        } else if let Some(o) = v.as_object() {
+            if o.class.method(b"__tostring").is_none() {
+                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown()))));
             }
-            Value::Object(o) if o.class.method(b"__tostring").is_some() => {
-                let callable = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(&o)), Value::str("__toString")])));
-                ctx.call(&callable, &mut [])?.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()
-            }
-            Value::Object(o) => return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown())))),
-            other => other.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+            let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__toString")]));
+            ctx.call(&callable, &mut [])?.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()
+        } else {
+            v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()
         };
         if line.last() != Some(&b'\n') {
             line.push(b'\n');
@@ -886,7 +899,7 @@ fn copy_to_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func:
     let r = copy_out(&dbh, &q);
     p8_ext_pdo::dispatch_notices(ctx, &dbh)?;
     match r {
-        Ok(rows) => Ok(Value::Array(Rc::new(PhpArray::from_list(rows.into_iter().map(|r| Value::Str(PhpStr::new(r))).collect())))),
+        Ok(rows) => Ok(Value::array(PhpArray::from_list(rows.into_iter().map(|r| Value::str(PhpStr::new(r))).collect()))),
         Err(e) => fail(ctx, func, &dbh, e),
     }
 }
@@ -914,7 +927,7 @@ fn copy_to_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
                     return fail(ctx, func, &dbh, DriverError::new("HY000", FATAL_ERROR, "Unable to write to file"));
                 }
             }
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => fail(ctx, func, &dbh, e),
     }
@@ -949,7 +962,7 @@ fn lob_create(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &s
     dbh.clear_error();
     // INV_READ | INV_WRITE
     match lo_call(&dbh, "SELECT pg_catalog.lo_creat(393216)".into()) {
-        Ok(Some(oid)) if oid != b"0" => Ok(Value::Str(PhpStr::new(oid))),
+        Ok(Some(oid)) if oid != b"0" => Ok(Value::str(PhpStr::new(oid))),
         Ok(_) => {
             let e = last_error(&dbh, FATAL_ERROR, None);
             fail(ctx, func, &dbh, e)
@@ -961,7 +974,7 @@ fn lob_create(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &s
 fn lob_open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
     let oid = str_arg(ctx, func, args, 0, "oid", None)?;
     let mode = str_arg(ctx, func, args, 1, "mode", Some(b"rb"))?;
-    let Some(oid) = oid_arg(&oid) else { return Ok(Value::Bool(false)) };
+    let Some(oid) = oid_arg(&oid) else { return Ok(Value::FALSE) };
     let dbh = conn_of(ctx, this)?;
     dbh.clear_error();
     let write = mode.iter().any(|&c| c == b'+' || c == b'w');
@@ -980,12 +993,12 @@ fn lob_open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str
                 }));
             }
             let v = ctx.new_resource(Resource { kind: "stream", closed: Cell::new(false), stream: RefCell::new(stream) });
-            if let Value::Object(o) = &v {
+            if let Some(o) = v.as_object() {
                 with_pg(&dbh, |pg| pg.lobs.push(Rc::downgrade(o)));
             }
             Ok(v)
         }
-        Ok(None) => Ok(Value::Bool(false)),
+        Ok(None) => Ok(Value::FALSE),
         Err(e) => fail(ctx, func, &dbh, e),
     }
 }
@@ -1008,11 +1021,11 @@ fn lob_read(wire: &RefCell<Wire>, oid: u32) -> Option<Vec<u8>> {
 
 fn lob_unlink(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
     let oid = str_arg(ctx, func, args, 0, "oid", None)?;
-    let Some(oid) = oid_arg(&oid) else { return Ok(Value::Bool(false)) };
+    let Some(oid) = oid_arg(&oid) else { return Ok(Value::FALSE) };
     let dbh = conn_of(ctx, this)?;
     dbh.clear_error();
     match lo_call(&dbh, format!("SELECT pg_catalog.lo_unlink({oid})")) {
-        Ok(Some(r)) if r == b"1" => Ok(Value::Bool(true)),
+        Ok(Some(r)) if r == b"1" => Ok(Value::TRUE),
         Ok(_) => {
             let e = last_error(&dbh, FATAL_ERROR, None);
             fail(ctx, func, &dbh, e)
@@ -1055,32 +1068,32 @@ fn get_notify(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &s
     p8_ext_pdo::dispatch_notices(ctx, &dbh)?;
     let n = match got {
         Ok(Some(n)) => n,
-        Ok(None) => return Ok(Value::Bool(false)),
+        Ok(None) => return Ok(Value::FALSE),
         Err(e) => return fail(ctx, func, &dbh, e),
     };
     let mut a = PhpArray::new();
-    let text = |b: &[u8]| Value::Str(PhpStr::new(b.iter().take_while(|&&c| c != 0).copied().collect::<Vec<u8>>()));
+    let text = |b: &[u8]| Value::str(PhpStr::new(b.iter().take_while(|&&c| c != 0).copied().collect::<Vec<u8>>()));
     if mode == FETCH_NUM || mode == FETCH_BOTH {
         a.insert(Key::Int(0), text(&n.channel));
-        a.insert(Key::Int(1), Value::Int(i64::from(n.pid)));
+        a.insert(Key::Int(1), Value::int(i64::from(n.pid)));
         if !n.payload.is_empty() {
             a.insert(Key::Int(2), text(&n.payload));
         }
     }
     if mode == FETCH_ASSOC || mode == FETCH_BOTH {
         a.insert(Key::from_string(PhpStr::from("message")), text(&n.channel));
-        a.insert(Key::from_string(PhpStr::from("pid")), Value::Int(i64::from(n.pid)));
+        a.insert(Key::from_string(PhpStr::from("pid")), Value::int(i64::from(n.pid)));
         if !n.payload.is_empty() {
             a.insert(Key::from_string(PhpStr::from("payload")), text(&n.payload));
         }
     }
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 fn get_pid(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: &str) -> R {
     no_args(ctx, func, args)?;
     let dbh = conn_of(ctx, this)?;
-    Ok(Value::Int(i64::from(with_pg(&dbh, |pg| pg.wire.borrow().pid))))
+    Ok(Value::int(i64::from(with_pg(&dbh, |pg| pg.wire.borrow().pid))))
 }
 
 fn escape_identifier(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -1092,12 +1105,12 @@ fn escape_identifier(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     let dbh = conn_of(ctx, this)?;
     dbh.clear_error();
     match wire::escape_identifier(&input) {
-        Ok(s) => Ok(Value::Str(PhpStr::new(s))),
+        Ok(s) => Ok(Value::str(PhpStr::new(s))),
         Err(msg) => {
             with_pg(&dbh, |pg| pg.wire.borrow_mut().error_message = msg.as_bytes().to_vec());
             let e = last_error(&dbh, FATAL_ERROR, None);
             fail(ctx, func, &dbh, e)?;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
@@ -1108,13 +1121,13 @@ fn set_notice_callback(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
         return Err(ctx.throw("ArgumentCountError", format!("{func}() expects exactly 1 argument, 0 given")));
     }
     let cb = arg(args, 0);
-    if !matches!(cb, Value::Null) && !ctx.is_callable(&cb) {
+    if !cb.is_null() && !ctx.is_callable(&cb) {
         let why = p8_runtime::args::callable_error(ctx, &cb);
         return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($callback) must be a valid callback or null, {why}")));
     }
     let dbh = conn_of(ctx, this)?;
-    with_pg(&dbh, |pg| pg.notice_callback = if matches!(cb, Value::Null) { None } else { Some(cb) });
-    Ok(Value::Null)
+    with_pg(&dbh, |pg| pg.notice_callback = if cb.is_null() { None } else { Some(cb) });
+    Ok(Value::NULL)
 }
 
 macro_rules! methods {
