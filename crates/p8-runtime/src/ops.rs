@@ -8,7 +8,7 @@
 
 use crate::array::PhpArray;
 use crate::string::PhpStr;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string, push_int};
 use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::rc::Rc;
@@ -117,22 +117,22 @@ impl BinOp {
 
 /// `a op b`.
 pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Value, OpError> {
-    if let Value::Ref(cell) = a {
+    if let Some(cell) = a.as_reference() {
         return binary(op, &cell.borrow(), b, diags);
     }
-    if let Value::Ref(cell) = b {
+    if let Some(cell) = b.as_reference() {
         return binary(op, a, &cell.borrow(), diags);
     }
     // An object with a scalar cast (SimpleXML) takes part as its string.
-    if let Value::Object(x) = a
+    if let Some(x) = a.as_object()
         && let Some(cast) = x.class.cast_string
     {
-        return binary(op, &Value::Str(cast(x)), b, diags);
+        return binary(op, &Value::str(cast(x)), b, diags);
     }
-    if let Value::Object(y) = b
+    if let Some(y) = b.as_object()
         && let Some(cast) = y.class.cast_string
     {
-        return binary(op, a, &Value::Str(cast(y)), diags);
+        return binary(op, a, &Value::str(cast(y)), diags);
     }
     match op {
         BinOp::Concat => {
@@ -146,16 +146,16 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
             let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
             match y {
                 0 => Err(OpError::DivisionByZero("Modulo by zero")),
-                -1 => Ok(Value::Int(0)),
-                _ => Ok(Value::Int(x % y)),
+                -1 => Ok(Value::int(0)),
+                _ => Ok(Value::int(x % y)),
             }
         }
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
-            if let (Value::Str(x), Value::Str(y)) = (a, b) {
-                return Ok(Value::Str(bytewise(op, x.as_bytes(), y.as_bytes())));
+            if let (Some(x), Some(y)) = (a.as_str(), b.as_str()) {
+                return Ok(Value::str(bytewise(op, x.as_bytes(), y.as_bytes())));
             }
             let (x, y) = (int_operand(op, a, b, a, diags)?, int_operand(op, a, b, b, diags)?);
-            Ok(Value::Int(match op {
+            Ok(Value::int(match op {
                 BinOp::BitAnd => x & y,
                 BinOp::BitOr => x | y,
                 _ => x ^ y,
@@ -166,7 +166,7 @@ pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
             if y < 0 {
                 return Err(OpError::Arithmetic("Bit shift by negative number"));
             }
-            Ok(Value::Int(match (op, y >= 64) {
+            Ok(Value::int(match (op, y >= 64) {
                 (BinOp::Shl, true) => 0,
                 (BinOp::Shl, false) => x.wrapping_shl(y as u32),
                 (_, true) => if x < 0 { -1 } else { 0 },
@@ -182,22 +182,25 @@ fn unsupported(op: BinOp, a: &Value, b: &Value) -> OpError {
 
 /// The number an arithmetic operand stands for (zendi_try_convert_scalar_to_number).
 fn number_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) -> Result<Number, OpError> {
-    Ok(match v {
-        Value::Int(i) => Number::Int(*i),
-        Value::Float(f) => Number::Float(*f),
-        Value::Null | Value::Undef => Number::Int(0),
-        Value::Bool(x) => Number::Int(i64::from(*x)),
-        Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(n) => n,
-            None => match leading_numeric(s.as_bytes()) {
-                Some((n, _)) => {
-                    diags.push(Diag::Warning("A non-numeric value encountered".into()));
-                    n
-                }
-                None => return Err(unsupported(op, a, b)),
-            },
-        },
-        Value::Array(_) | Value::Ref(_) | Value::Object(_) => return Err(unsupported(op, a, b)),
+    Ok(match v.kind() {
+        Kind::Int => Number::Int(v.as_int().expect("an int")),
+        Kind::Float => Number::Float(v.as_float().expect("a float")),
+        Kind::Null | Kind::Undef => Number::Int(0),
+        Kind::Bool => Number::Int(i64::from(v.as_bool().expect("a bool"))),
+        Kind::Str => {
+            let s = v.as_str().expect("a string");
+            match numeric_string(s.as_bytes()) {
+                Some(n) => n,
+                None => match leading_numeric(s.as_bytes()) {
+                    Some((n, _)) => {
+                        diags.push(Diag::Warning("A non-numeric value encountered".into()));
+                        n
+                    }
+                    None => return Err(unsupported(op, a, b)),
+                },
+            }
+        }
+        Kind::Array | Kind::Ref | Kind::Object => return Err(unsupported(op, a, b)),
     })
 }
 
@@ -210,8 +213,8 @@ fn int_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) ->
         // zendi_try_get_long: a float string saturates and loses precision
         // (deprecated) when it isn't an int; a float goes through
         // zend_dval_to_lval_safe.
-        Number::Float(f) => match v {
-            Value::Str(s) => {
+        Number::Float(f) => match v.as_str() {
+            Some(s) => {
                 // zend_dval_to_lval_cap: not finite is 0, out of range saturates
                 let i = if f.is_finite() { f as i64 } else { 0 };
                 if i as f64 != f {
@@ -222,7 +225,7 @@ fn int_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) ->
                 }
                 i
             }
-            _ => {
+            None => {
                 float_to_int_diags(f, diags);
                 dval_to_lval(f)
             }
@@ -232,16 +235,17 @@ fn int_operand(op: BinOp, a: &Value, b: &Value, v: &Value, diags: &mut Diags) ->
 
 fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Value, OpError> {
     if op == BinOp::Add
-        && let (Value::Array(x), Value::Array(y)) = (a, b)
+        && let Some(y) = b.as_array()
+        && let Some(x) = a.cloned_array()
     {
-        return Ok(Value::Array(array_union(x, y)));
+        return Ok(Value::array(array_union(x, y)));
     }
     // Operands convert left to right; an array operand stops there.
-    if matches!(a, Value::Array(_)) {
+    if a.is_array() {
         return Err(unsupported(op, a, b));
     }
     let x = number_operand(op, a, b, a, diags)?;
-    if matches!(b, Value::Array(_)) {
+    if b.is_array() {
         return Err(unsupported(op, a, b));
     }
     let y = number_operand(op, a, b, b, diags)?;
@@ -250,24 +254,24 @@ fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
     }
     Ok(match (x, y) {
         (Number::Int(x), Number::Int(y)) => match op {
-            BinOp::Add => x.checked_add(y).map_or(Value::Float(x as f64 + y as f64), Value::Int),
-            BinOp::Sub => x.checked_sub(y).map_or(Value::Float(x as f64 - y as f64), Value::Int),
-            BinOp::Mul => x.checked_mul(y).map_or(Value::Float(x as f64 * y as f64), Value::Int),
+            BinOp::Add => x.checked_add(y).map_or(Value::float(x as f64 + y as f64), Value::int),
+            BinOp::Sub => x.checked_sub(y).map_or(Value::float(x as f64 - y as f64), Value::int),
+            BinOp::Mul => x.checked_mul(y).map_or(Value::float(x as f64 * y as f64), Value::int),
             BinOp::Div => {
                 if y == 0 {
                     return Err(OpError::DivisionByZero("Division by zero"));
                 }
                 if !(x == i64::MIN && y == -1) && x % y == 0 {
-                    Value::Int(x / y)
+                    Value::int(x / y)
                 } else {
-                    Value::Float(x as f64 / y as f64)
+                    Value::float(x as f64 / y as f64)
                 }
             }
             _ => int_pow(x, y),
         },
         (x, y) => {
             let (x, y) = (as_f64(x), as_f64(y));
-            Value::Float(match op {
+            Value::float(match op {
                 BinOp::Add => x + y,
                 BinOp::Sub => x - y,
                 BinOp::Mul => x * y,
@@ -295,13 +299,13 @@ fn as_f64(n: Number) -> f64 {
 /// rounding matches).
 fn int_pow(base: i64, exp: i64) -> Value {
     if exp < 0 {
-        return Value::Float((base as f64).powf(exp as f64));
+        return Value::float((base as f64).powf(exp as f64));
     }
     if exp == 0 {
-        return Value::Int(1);
+        return Value::int(1);
     }
     if base == 0 {
-        return Value::Int(0);
+        return Value::int(0);
     }
     let (mut l1, mut l2, mut i) = (1i64, base, exp);
     while i >= 1 {
@@ -309,25 +313,26 @@ fn int_pow(base: i64, exp: i64) -> Value {
             i -= 1;
             match l1.checked_mul(l2) {
                 Some(v) => l1 = v,
-                None => return Value::Float((l1 as f64 * l2 as f64) * (l2 as f64).powf(i as f64)),
+                None => return Value::float((l1 as f64 * l2 as f64) * (l2 as f64).powf(i as f64)),
             }
         } else {
             i /= 2;
             match l2.checked_mul(l2) {
                 Some(v) => l2 = v,
-                None => return Value::Float(l1 as f64 * (l2 as f64 * l2 as f64).powf(i as f64)),
+                None => return Value::float(l1 as f64 * (l2 as f64 * l2 as f64).powf(i as f64)),
             }
         }
     }
-    Value::Int(l1)
+    Value::int(l1)
 }
 
-/// `$a + $b` on arrays: the left, plus the right's keys it lacks.
-fn array_union(a: &Rc<PhpArray>, b: &Rc<PhpArray>) -> Rc<PhpArray> {
+/// `$a + $b` on arrays: the left (its handle, shared until a key is
+/// added), plus the right's keys it lacks.
+fn array_union(a: Rc<PhpArray>, b: &PhpArray) -> Rc<PhpArray> {
     if b.is_empty() {
-        return a.clone();
+        return a;
     }
-    let mut out = a.clone();
+    let mut out = a;
     for (key, value) in b.iter() {
         if !out.contains_key(&key) {
             Rc::make_mut(&mut out).insert(key, value.clone());
@@ -358,14 +363,18 @@ fn bytewise(op: BinOp, x: &[u8], y: &[u8]) -> PhpStr {
 /// The Error converting an object to a string raises (until __toString
 /// is called by the engine: an object without it can't be converted).
 pub fn object_string_error(v: &Value) -> Option<OpError> {
-    match v {
-        Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 || o.class.cast_string.is_some() => None,
-        Value::Object(o) => Some(OpError::Error(format!(
+    if let Some(o) = v.as_object() {
+        if o.class.flags & crate::object::CLASS_RESOURCE != 0 || o.class.cast_string.is_some() {
+            return None;
+        }
+        Some(OpError::Error(format!(
             "Object of class {} could not be converted to string",
             String::from_utf8_lossy(o.class.name.as_bytes())
-        ))),
-        Value::Ref(cell) => object_string_error(&cell.borrow()),
-        _ => None,
+        )))
+    } else if let Some(cell) = v.as_reference() {
+        object_string_error(&cell.borrow())
+    } else {
+        None
     }
 }
 
@@ -384,33 +393,37 @@ pub fn to_string_lossy(v: &Value, diags: &mut Diags) -> PhpStr {
 }
 
 fn concat(a: &Value, b: &Value, diags: &mut Diags) -> Value {
-    if let (Value::Str(x), Value::Str(y)) = (a, b) {
-        return Value::Str(PhpStr::concat(x.as_bytes(), y.as_bytes()));
+    if let (Some(x), Some(y)) = (a.as_str(), b.as_str()) {
+        return Value::str(PhpStr::concat(x.as_bytes(), y.as_bytes()));
     }
     let mut bytes = PhpStr::scratch(string_len_hint(a) + string_len_hint(b));
     push_string(&mut bytes, a, diags);
     push_string(&mut bytes, b, diags);
-    Value::Str(PhpStr::from_scratch(bytes))
+    Value::str(PhpStr::from_scratch(bytes))
 }
 
 /// Append `v` as a string (what `.` and interpolation do), the same text
 /// as `to_string_lossy` gives, without building a string for a number.
 pub fn push_string(out: &mut Vec<u8>, v: &Value, diags: &mut Diags) {
-    match v {
-        Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-        Value::Int(i) => push_int(out, *i),
-        Value::Null | Value::Undef | Value::Bool(false) => {}
-        Value::Bool(true) => out.push(b'1'),
-        other => out.extend_from_slice(to_string_lossy(other, diags).as_bytes()),
+    match v.kind() {
+        Kind::Str => out.extend_from_slice(v.as_str().expect("a string").as_bytes()),
+        Kind::Int => push_int(out, v.as_int().expect("an int")),
+        Kind::Null | Kind::Undef => {}
+        Kind::Bool => {
+            if v.as_bool().expect("a bool") {
+                out.push(b'1');
+            }
+        }
+        _ => out.extend_from_slice(to_string_lossy(v, diags).as_bytes()),
     }
 }
 
 /// Bytes `v` probably takes as a string (for reserving room).
 pub fn string_len_hint(v: &Value) -> usize {
-    match v {
-        Value::Str(s) => s.len(),
-        Value::Int(_) | Value::Float(_) => 20,
-        _ => 1,
+    match v.as_str() {
+        Some(s) => s.len(),
+        None if v.is_number() => 20,
+        None => 1,
     }
 }
 
@@ -418,10 +431,12 @@ pub fn string_len_hint(v: &Value) -> usize {
 
 /// `-$a` (as `$a * -1`, keeping -0.0 and int overflow rules).
 pub fn negate(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
-    match a {
-        Value::Int(i) => Ok(i.checked_neg().map_or(Value::Float(-(*i as f64)), Value::Int)),
-        Value::Float(f) => Ok(Value::Float(negate_float(*f))),
-        _ => binary(BinOp::Mul, a, &Value::Int(-1), diags),
+    if let Some(i) = a.as_int() {
+        Ok(i.checked_neg().map_or(Value::float(-(i as f64)), Value::int))
+    } else if let Some(f) = a.as_float() {
+        Ok(Value::float(negate_float(f)))
+    } else {
+        binary(BinOp::Mul, a, &Value::int(-1), diags)
     }
 }
 
@@ -436,15 +451,16 @@ pub fn negate_float(f: f64) -> f64 {
 
 /// `~$a` (bitwise_not_function: a float through zend_dval_to_lval_safe)
 pub fn bit_not(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
-    match a {
-        Value::Int(i) => Ok(Value::Int(!i)),
-        Value::Float(f) => {
-            float_to_int_diags(*f, diags);
-            Ok(Value::Int(!dval_to_lval(*f)))
+    match a.kind() {
+        Kind::Int => Ok(Value::int(!a.as_int().expect("an int"))),
+        Kind::Float => {
+            let f = a.as_float().expect("a float");
+            float_to_int_diags(f, diags);
+            Ok(Value::int(!dval_to_lval(f)))
         }
-        Value::Str(s) => Ok(Value::Str(PhpStr::new(s.as_bytes().iter().map(|b| !b).collect()))),
-        Value::Ref(cell) => bit_not(&cell.borrow(), diags),
-        other => Err(OpError::Type(format!("Cannot perform bitwise not on {}", other.type_name()))),
+        Kind::Str => Ok(Value::str(PhpStr::new(a.as_str().expect("a string").as_bytes().iter().map(|b| !b).collect()))),
+        Kind::Ref => bit_not(&a.as_reference().expect("a reference").borrow(), diags),
+        _ => Err(OpError::Type(format!("Cannot perform bitwise not on {}", a.type_name()))),
     }
 }
 
@@ -452,69 +468,81 @@ const INCREMENT_NON_NUMERIC: &str = "Increment on non-numeric string is deprecat
 
 /// `++$a` (increment_function).
 pub fn increment(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
-    Ok(match a {
-        Value::Int(i) => i.checked_add(1).map_or(Value::Float(*i as f64 + 1.0), Value::Int),
-        Value::Float(f) => Value::Float(f + 1.0),
-        Value::Null | Value::Undef => Value::Int(1),
-        Value::Bool(_) => {
+    Ok(match a.kind() {
+        Kind::Int => {
+            let i = a.as_int().expect("an int");
+            i.checked_add(1).map_or(Value::float(i as f64 + 1.0), Value::int)
+        }
+        Kind::Float => Value::float(a.as_float().expect("a float") + 1.0),
+        Kind::Null | Kind::Undef => Value::int(1),
+        Kind::Bool => {
             diags.push(Diag::Warning(
                 "Increment on type bool has no effect, this will change in the next major version of PHP".into(),
             ));
             a.clone()
         }
-        // increment_string(): every non-numeric string, the empty one included,
-        // is deprecated since 8.5 (8.3 only deprecated non-alphanumeric ones).
-        Value::Str(s) if s.is_empty() => {
-            diags.push(Diag::Deprecated(INCREMENT_NON_NUMERIC.into()));
-            Value::str("1")
-        }
-        Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(Number::Int(i)) => i.checked_add(1).map_or(Value::Float(i as f64 + 1.0), Value::Int),
-            Some(Number::Float(f)) => Value::Float(f + 1.0),
-            None => {
+        Kind::Str => {
+            let s = a.as_str().expect("a string");
+            // increment_string(): every non-numeric string, the empty one included,
+            // is deprecated since 8.5 (8.3 only deprecated non-alphanumeric ones).
+            if s.is_empty() {
                 diags.push(Diag::Deprecated(INCREMENT_NON_NUMERIC.into()));
-                let mut bytes = s.as_bytes().to_vec();
-                increment_alphanumeric(&mut bytes);
-                Value::Str(PhpStr::new(bytes))
+                return Ok(Value::str("1"));
             }
-        },
-        Value::Array(_) => return Err(OpError::Type("Cannot increment array".into())),
-        Value::Object(_) => return Err(OpError::Type(format!("Cannot increment {}", a.type_name()))),
-        Value::Ref(cell) => return increment(&cell.borrow(), diags),
+            match numeric_string(s.as_bytes()) {
+                Some(Number::Int(i)) => i.checked_add(1).map_or(Value::float(i as f64 + 1.0), Value::int),
+                Some(Number::Float(f)) => Value::float(f + 1.0),
+                None => {
+                    diags.push(Diag::Deprecated(INCREMENT_NON_NUMERIC.into()));
+                    let mut bytes = s.as_bytes().to_vec();
+                    increment_alphanumeric(&mut bytes);
+                    Value::str(PhpStr::new(bytes))
+                }
+            }
+        }
+        Kind::Array => return Err(OpError::Type("Cannot increment array".into())),
+        Kind::Object => return Err(OpError::Type(format!("Cannot increment {}", a.type_name()))),
+        Kind::Ref => return increment(&a.as_reference().expect("a reference").borrow(), diags),
     })
 }
 
 /// `--$a` (decrement_function).
 pub fn decrement(a: &Value, diags: &mut Diags) -> Result<Value, OpError> {
-    Ok(match a {
-        Value::Int(i) => i.checked_sub(1).map_or(Value::Float(*i as f64 - 1.0), Value::Int),
-        Value::Float(f) => Value::Float(f - 1.0),
-        Value::Null | Value::Undef => {
+    Ok(match a.kind() {
+        Kind::Int => {
+            let i = a.as_int().expect("an int");
+            i.checked_sub(1).map_or(Value::float(i as f64 - 1.0), Value::int)
+        }
+        Kind::Float => Value::float(a.as_float().expect("a float") - 1.0),
+        Kind::Null | Kind::Undef => {
             diags.push(Diag::Warning(
                 "Decrement on type null has no effect, this will change in the next major version of PHP".into(),
             ));
-            Value::Null
+            Value::NULL
         }
-        Value::Bool(_) => {
+        Kind::Bool => {
             diags.push(Diag::Warning(
                 "Decrement on type bool has no effect, this will change in the next major version of PHP".into(),
             ));
             a.clone()
         }
-        Value::Str(s) if s.is_empty() => {
-            diags.push(Diag::Deprecated("Decrement on empty string is deprecated as non-numeric".into()));
-            Value::Int(-1)
-        }
-        Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(Number::Int(i)) => i.checked_sub(1).map_or(Value::Float(i as f64 - 1.0), Value::Int),
-            Some(Number::Float(f)) => Value::Float(f - 1.0),
-            None => {
-                diags.push(Diag::Deprecated("Decrement on non-numeric string has no effect and is deprecated".into()));
-                a.clone()
+        Kind::Str => {
+            let s = a.as_str().expect("a string");
+            if s.is_empty() {
+                diags.push(Diag::Deprecated("Decrement on empty string is deprecated as non-numeric".into()));
+                return Ok(Value::int(-1));
             }
-        },
-        Value::Array(_) => return Err(OpError::Type("Cannot decrement array".into())),
-        Value::Object(_) => return Err(OpError::Type(format!("Cannot decrement {}", a.type_name()))),
-        Value::Ref(cell) => return decrement(&cell.borrow(), diags),
+            match numeric_string(s.as_bytes()) {
+                Some(Number::Int(i)) => i.checked_sub(1).map_or(Value::float(i as f64 - 1.0), Value::int),
+                Some(Number::Float(f)) => Value::float(f - 1.0),
+                None => {
+                    diags.push(Diag::Deprecated("Decrement on non-numeric string has no effect and is deprecated".into()));
+                    a.clone()
+                }
+            }
+        }
+        Kind::Array => return Err(OpError::Type("Cannot decrement array".into())),
+        Kind::Object => return Err(OpError::Type(format!("Cannot decrement {}", a.type_name()))),
+        Kind::Ref => return decrement(&a.as_reference().expect("a reference").borrow(), diags),
     })
 }

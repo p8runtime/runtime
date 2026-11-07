@@ -13,7 +13,7 @@ use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Native, Object};
 use p8_runtime::string::PhpStr;
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -143,17 +143,14 @@ impl Context<'_> {
 
     fn new_closure(&self, data: ClosureData) -> Value {
         let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
-        Value::Object(Object::with_data(class, &self.ids, Some(Rc::new(data))))
+        Value::object(Object::with_data(class, &self.ids, Some(Rc::new(data))))
     }
 
     /// Closure::bind / bindTo: a copy bound to `new_this` and the scope
     /// `scope` names ("static" or none: its own).
     pub(crate) fn bind(&mut self, closure: &Rc<Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw> {
-        let Some(data) = closure_data(closure) else { return Ok(Value::Null) };
-        let this = match new_this {
-            Value::Object(o) => Some(o),
-            _ => None,
-        };
+        let Some(data) = closure_data(closure) else { return Ok(Value::NULL) };
+        let this = new_this.into_object().ok();
         // zend_valid_closure_binding: a closure made from a method (or by
         // a partial application) keeps its method's $this and scope.
         let method_name = || match &data.func {
@@ -164,34 +161,37 @@ impl Context<'_> {
         match &this {
             Some(_) if data.is_static => {
                 self.warn("Cannot bind an instance to a static closure, this will be an error in PHP 9");
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             Some(t) if data.fake && data.scope.as_ref().is_some_and(|s| !t.class.is_a(&s.name.as_bytes().to_ascii_lowercase())) => {
                 let scope = data.scope.as_ref().map_or_else(String::new, |s| text(s.name.as_bytes()));
                 let message = format!("Cannot bind method {scope}::{}() to object of class {}, this will be an error in PHP 9", method_name(), text(t.class.name.as_bytes()));
                 self.warn(message);
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             None if data.fake && data.scope.is_some() && !data.is_static => {
                 self.warn("Cannot unbind $this of method, this will be an error in PHP 9");
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             _ => {}
         }
         let scope = match scope {
             None => data.scope.clone(),
-            Some(Value::Object(o)) => Some(Rc::clone(&o.class)),
-            Some(Value::Null) => None,
+            Some(v) if v.is_null() => None,
             Some(v) => {
-                let name = v.to_php_string().unwrap_or_else(PhpStr::empty);
-                if name.as_bytes() == b"static" {
-                    data.scope.clone()
+                if let Some(o) = v.as_object() {
+                    Some(Rc::clone(&o.class))
                 } else {
-                    match self.class_named(name.as_bytes()) {
-                        Some(c) => Some(Rc::clone(c)),
-                        None => {
-                            self.warn(format!("Class \"{}\" not found", text(name.as_bytes())));
-                            return Ok(Value::Null);
+                    let name = v.to_php_string().unwrap_or_else(PhpStr::empty);
+                    if name.as_bytes() == b"static" {
+                        data.scope.clone()
+                    } else {
+                        match self.class_named(name.as_bytes()) {
+                            Some(c) => Some(Rc::clone(c)),
+                            None => {
+                                self.warn(format!("Class \"{}\" not found", text(name.as_bytes())));
+                                return Ok(Value::NULL);
+                            }
                         }
                     }
                 }
@@ -205,7 +205,7 @@ impl Context<'_> {
         if data.fake && !same_scope {
             let what = if data.scope.is_none() { "function" } else { "method" };
             self.warn(format!("Cannot rebind scope of closure created from {what}, this will be an error in PHP 9"));
-            return Ok(Value::Null);
+            return Ok(Value::NULL);
         }
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or_else(|| scope.clone());
         let copy = ClosureData {
@@ -223,10 +223,10 @@ impl Context<'_> {
 
     /// Closure::fromCallable, and `f(...)`: a Closure calling `callable`.
     pub(crate) fn closure_from_callable(&mut self, callable: &Value) -> Result<Value, Throw> {
-        if let Value::Object(o) = callable.deref()
+        if let Ok(o) = callable.deref().into_object()
             && closure_data(&o).is_some()
         {
-            return Ok(Value::Object(o));
+            return Ok(Value::object(o));
         }
         let data = self.callable_data(callable)?;
         Ok(self.new_closure(data))
@@ -239,7 +239,7 @@ impl Context<'_> {
     /// expression, as zend_ast_evaluate looks it up (no __callStatic, only
     /// a static method). Any other callable is closure_from_callable's.
     pub(crate) fn static_callable(&mut self, callable: &Value, in_const: bool) -> Result<Value, Throw> {
-        let Value::Str(s) = callable.deref() else { return self.closure_from_callable(callable) };
+        let Ok(s) = callable.deref().into_str() else { return self.closure_from_callable(callable) };
         let name = s.as_bytes();
         let Some(at) = name.windows(2).position(|w| w == b"::") else { return self.closure_from_callable(callable) };
         let (class, method) = (&name[..at], &name[at + 2..]);
@@ -342,7 +342,7 @@ impl Context<'_> {
     /// An argument as parameter `n` gets it: a reference (an argument
     /// compiled as one) only where the parameter takes one.
     fn arg_or_ref(&self, target: &Target, n: usize, v: &Value) -> Value {
-        if matches!(v, Value::Ref(_)) && self.takes_ref(target, n) { v.clone() } else { v.deref() }
+        if v.is_reference() && self.takes_ref(target, n) { v.clone() } else { v.deref() }
     }
 
     /// Whether the parameter of `target` named `name` takes a reference.
@@ -352,7 +352,7 @@ impl Context<'_> {
     /// read from the closure itself (no frame made); None for any other
     /// callable.
     pub(crate) fn closure_takes_ref(callee: &Value, n: usize) -> Option<bool> {
-        let Value::Object(o) = callee.deref() else { return None };
+        let o = callee.deref().into_object().ok()?;
         match &closure_data(&o)?.func {
             ClosureFunc::User(clo) => Some(clo.code.param_by_ref(n)),
             _ => None,
@@ -379,30 +379,37 @@ impl Context<'_> {
 
     /// What `callable` calls, with PHP's error when it is not callable.
     pub(crate) fn resolve_callable(&mut self, callable: &Value) -> Result<Target, Throw> {
-        match callable.deref() {
-            Value::Object(o) => {
-                if let Some(target) = self.closure_target(&o) {
+        let callable = callable.deref();
+        match callable.kind() {
+            Kind::Object => {
+                let o = callable.as_object().expect("an object");
+                if let Some(target) = self.closure_target(o) {
                     return Ok(target);
                 }
                 if o.class.method(b"__invoke").is_some() {
-                    return self.method_frame(&Value::Object(Rc::clone(&o)), Some(p8_runtime::symbol::known::INVOKE), b"__invoke").map(Target::Frame);
+                    return self.method_frame(&Value::object(Rc::clone(o)), Some(p8_runtime::symbol::known::INVOKE), b"__invoke").map(Target::Frame);
                 }
                 Err(self.throw("Error", "Object of type ".to_string() + &o.class.name.to_string_lossy() + " is not callable"))
             }
-            Value::Str(name) => self.resolve_name(name.as_bytes()),
-            Value::Array(a) if a.len() == 2 => {
-                let (Some(target), Some(Value::Str(method))) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) else {
+            Kind::Str => self.resolve_name(callable.as_str().expect("a string").as_bytes()),
+            Kind::Array => {
+                let a = callable.as_array().expect("an array");
+                if a.len() != 2 {
+                    return Err(self.throw("Error", "Array callback must have exactly two elements"));
+                }
+                let (Some(target), Some(method)) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref).and_then(|v| v.into_str().ok())) else {
                     return Err(self.throw("Error", "Array callback must have exactly two elements"));
                 };
-                match target {
-                    Value::Object(_) => self.method_frame(&target, self.method_key(method.as_bytes()), method.as_bytes()).map(Target::Frame),
-                    Value::Str(class) => self.static_by_name(class.as_bytes(), method.as_bytes()),
-                    _ => Err(self.throw("Error", "Array callback must have exactly two elements")),
+                if target.is_object() {
+                    self.method_frame(&target, self.method_key(method.as_bytes()), method.as_bytes()).map(Target::Frame)
+                } else if let Some(class) = target.as_str() {
+                    self.static_by_name(class.as_bytes(), method.as_bytes())
+                } else {
+                    Err(self.throw("Error", "Array callback must have exactly two elements"))
                 }
             }
-            Value::Array(_) => Err(self.throw("Error", "Array callback must have exactly two elements")),
             // ZEND_INIT_DYNAMIC_CALL's message.
-            other => Err(self.throw("Error", format!("Value of type {} is not callable", other.type_name()))),
+            _ => Err(self.throw("Error", format!("Value of type {} is not callable", callable.type_name()))),
         }
     }
 
@@ -476,13 +483,9 @@ impl Context<'_> {
         // its captured values put straight into the callee's variables, no
         // list of them made per call (ZEND_BIND_LEXICAL bound them once, at
         // creation).
-        let closure = match callee {
-            Value::Object(o) => Some(Rc::clone(o)),
-            Value::Ref(cell) => match &*cell.borrow() {
-                Value::Object(o) => Some(Rc::clone(o)),
-                _ => None,
-            },
-            _ => None,
+        let closure = match callee.as_reference() {
+            Some(cell) => cell.borrow().cloned_object(),
+            None => callee.cloned_object(),
         };
         if let Some(o) = &closure
             && let Some(data) = closure_data(o)
@@ -506,7 +509,7 @@ impl Context<'_> {
                 // unless its parameter takes one (a spread call's).
                 let by_ref = |n: usize| matches!(&m.func, Code::User(f) if f.code.param_by_ref(n));
                 for (n, r) in regs[args..args + argc as usize].iter_mut().enumerate() {
-                    if let Value::Ref(cell) = r
+                    if let Some(cell) = r.as_reference()
                         && !by_ref(n)
                     {
                         let v = cell.borrow().clone();
@@ -546,7 +549,7 @@ impl Context<'_> {
                 // A builtin that calls back finds the registers lent; it is
                 // running, for its messages' prefix and stack traces.
                 for (n, a) in args.iter_mut().enumerate() {
-                    if matches!(a, Value::Ref(_)) && !self.isolate.registry.by_ref(i, n) {
+                    if a.is_reference() && !self.isolate.registry.by_ref(i, n) {
                         *a = a.deref();
                     }
                 }
@@ -585,7 +588,7 @@ impl Context<'_> {
         // __call / __callStatic: the arguments become (name, [arguments]).
         if let Some(name) = m.trampoline.take() {
             let packed: Vec<Value> = args.iter().map(Value::deref).collect();
-            let mut repacked = [Value::Str(name), Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(packed)))];
+            let mut repacked = [Value::str(name), Value::array(p8_runtime::array::PhpArray::from_list(packed))];
             return self.run_nested_at(regs, m, &mut repacked, at);
         }
         // Each nested run takes native stack: stop before it runs out.
@@ -598,7 +601,7 @@ impl Context<'_> {
             ));
         }
         if regs.len() < at + args.len() + 1 {
-            regs.resize(at + args.len() + 1, Value::Undef);
+            regs.resize(at + args.len() + 1, Value::UNDEF);
         }
         let by_ref = |n: usize| match &m.func {
             Code::User(f) => f.code.param_by_ref(n),
@@ -609,7 +612,7 @@ impl Context<'_> {
         if let Code::User(f) = &m.func {
             let code = &f.code;
             for (n, a) in args.iter().enumerate() {
-                if by_ref(n) && !matches!(a, Value::Ref(_)) {
+                if by_ref(n) && !a.is_reference() {
                     let name = match &code.class {
                         Some(class) => format!("{}::{}", text(class.as_bytes()), text(code.name.as_bytes())),
                         None => text(code.name.as_bytes()),
@@ -620,10 +623,7 @@ impl Context<'_> {
             }
         }
         for (n, a) in args.iter().enumerate() {
-            regs[at + n] = match a {
-                Value::Ref(_) if by_ref(n) => a.clone(),
-                other => other.deref(),
-            };
+            regs[at + n] = if a.is_reference() && by_ref(n) { a.clone() } else { a.deref() };
         }
         let argc = args.len() as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
@@ -633,7 +633,7 @@ impl Context<'_> {
         let next = self.call_method(regs, m, at, argc, at as u32, caller_pc as usize)?;
         if let Next::Go(_) = next {
             // Nothing to run (a generator function made its Generator).
-            return Ok(std::mem::replace(&mut regs[at], Value::Undef));
+            return Ok(std::mem::replace(&mut regs[at], Value::UNDEF));
         }
         self.frames.floor = self.frames.len() - 1;
         let saved_result_reg = std::mem::replace(&mut self.result_reg, at + 1);
@@ -646,10 +646,10 @@ impl Context<'_> {
         }
         if r.is_err() {
             // A result the callee returned before a destructor threw is dropped with the frame.
-            regs[at] = Value::Undef;
+            regs[at] = Value::UNDEF;
         }
         r?;
-        let v = std::mem::replace(&mut regs[at], Value::Undef);
+        let v = std::mem::replace(&mut regs[at], Value::UNDEF);
         Ok(v)
     }
 
@@ -692,7 +692,7 @@ impl Context<'_> {
                         return Err(self.throw("Error", format!("Named parameter ${} overwrites previous argument", text(key.as_bytes()))));
                     }
                     if out.len() <= i {
-                        out.resize(i + 1, Value::Undef);
+                        out.resize(i + 1, Value::UNDEF);
                         set.resize(i + 1, false);
                     }
                     out[i] = self.arg_or_ref(target, i, v);
@@ -815,19 +815,19 @@ impl Context<'_> {
             for part in t.split('|') {
                 acc |= self.stub_default(part)?.to_int();
             }
-            return Some(Value::Int(acc));
+            return Some(Value::int(acc));
         }
         Some(match t {
-            "null" | "NULL" => Value::Null,
-            "true" => Value::Bool(true),
-            "false" => Value::Bool(false),
-            "[]" => Value::Array(Rc::new(PhpArray::new())),
-            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::Str(PhpStr::from(&unquote(t)[..])),
+            "null" | "NULL" => Value::NULL,
+            "true" => Value::TRUE,
+            "false" => Value::FALSE,
+            "[]" => Value::array(PhpArray::new()),
+            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::str(PhpStr::from(&unquote(t)[..])),
             _ => {
                 if let Ok(i) = t.parse::<i64>() {
-                    Value::Int(i)
+                    Value::int(i)
                 } else if let Ok(x) = t.parse::<f64>() {
-                    Value::Float(x)
+                    Value::float(x)
                 } else {
                     let c = self.isolate.registry.constant(t.trim_start_matches('\\').as_bytes())?;
                     c.to_value()
@@ -862,30 +862,35 @@ impl Context<'_> {
     /// `["C", "P::m"]` callables (as is_callable() and the checks of
     /// arguments do; a call itself does not).
     pub(crate) fn why_not_callable(&mut self, v: &Value, warn: bool) -> Result<Option<String>, Throw> {
-        match v.deref() {
-            Value::Str(name) => self.callable_func(name.as_bytes(), None, warn),
-            Value::Array(a) => {
+        let v = v.deref();
+        match v.kind() {
+            Kind::Str => self.callable_func(v.as_str().expect("a string").as_bytes(), None, warn),
+            Kind::Array => {
+                let a = v.as_array().expect("an array");
                 if a.len() != 2 {
                     return Ok(Some("array callback must have exactly two members".into()));
                 }
                 let (Some(holder), Some(method)) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) else {
                     return Ok(Some("array callback has to contain indices 0 and 1".into()));
                 };
-                let holder = match holder {
-                    Value::Str(class) => match self.callable_class(class.as_bytes(), None, warn)? {
+                let holder = if let Some(class) = holder.as_str() {
+                    match self.callable_class(class.as_bytes(), None, warn)? {
                         Ok(holder) => holder,
                         Err(why) => return Ok(Some(why)),
-                    },
-                    Value::Object(o) => (Rc::clone(&o.class), Some(o)),
-                    _ => return Ok(Some("first array member is not a valid class name or object".into())),
+                    }
+                } else {
+                    match holder.into_object() {
+                        Ok(o) => (Rc::clone(&o.class), Some(o)),
+                        Err(_) => return Ok(Some("first array member is not a valid class name or object".into())),
+                    }
                 };
-                let Value::Str(method) = method else {
+                let Ok(method) = method.into_str() else {
                     return Ok(Some("second array member is not a valid method".into()));
                 };
                 self.callable_func(method.as_bytes(), Some(holder), warn)
             }
             // A Closure, or an object with __invoke (zend_std_get_closure).
-            Value::Object(o) if closure_data(&o).is_some() || o.class.method(b"__invoke").is_some() => Ok(None),
+            Kind::Object if v.as_object().is_some_and(|o| closure_data(o).is_some() || o.class.method(b"__invoke").is_some()) => Ok(None),
             _ => Ok(Some("no array or string given".into())),
         }
     }
@@ -1048,7 +1053,7 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
                 let name = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
                 params.insert(Key::from_string(PhpStr::from(name)), Value::str(if p.optional() { "<optional>" } else { "<required>" }));
             }
-            out.insert(key("parameter"), Value::Array(Rc::new(params)));
+            out.insert(key("parameter"), Value::array(params));
         }
         return out;
     }
@@ -1059,26 +1064,26 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
             Some(scope) => format!("{}::{}", scope.name.to_string_lossy(), String::from_utf8_lossy(func.name.as_bytes())),
             None => String::from_utf8_lossy(func.name.as_bytes()).into_owned(),
         };
-        out.insert(key("function"), Value::Str(PhpStr::from(name)));
+        out.insert(key("function"), Value::str(PhpStr::from(name)));
     } else {
-        out.insert(key("name"), Value::Str(PhpStr::from(func.name.as_bytes())));
-        out.insert(key("file"), Value::Str(PhpStr::from(&*func.file)));
-        out.insert(key("line"), Value::Int(i64::from(func.line)));
+        out.insert(key("name"), Value::str(PhpStr::from(func.name.as_bytes())));
+        out.insert(key("file"), Value::str(PhpStr::from(&*func.file)));
+        out.insert(key("line"), Value::int(i64::from(func.line)));
     }
     let captured = data.captured.borrow();
     if !captured.is_empty() {
         let mut vars = PhpArray::new();
         for (r, v) in func.bound.iter().zip(captured.iter()) {
-            if matches!(v, Value::Undef) {
+            if v.is_undef() {
                 continue;
             }
             let name = func.cv_names[*r as usize].clone();
             vars.insert(Key::from_string(PhpStr::from(name.as_bytes())), v.clone());
         }
-        out.insert(key("static"), Value::Array(Rc::new(vars)));
+        out.insert(key("static"), Value::array(vars));
     }
     if let Some(this) = &data.this {
-        out.insert(key("this"), Value::Object(Rc::clone(this)));
+        out.insert(key("this"), Value::object(Rc::clone(this)));
     }
     if !func.params.is_empty() {
         let mut params = PhpArray::new();
@@ -1087,7 +1092,7 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
             let kind = if p.has_default || p.variadic { "<optional>" } else { "<required>" };
             params.insert(Key::from_string(PhpStr::from(name)), Value::str(kind));
         }
-        out.insert(key("parameter"), Value::Array(Rc::new(params)));
+        out.insert(key("parameter"), Value::array(params));
     }
     out
 }

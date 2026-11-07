@@ -12,7 +12,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "mb_ereg", run: mb_ereg, by_ref: &[2] },
@@ -41,17 +40,14 @@ fn option_bits(ctx: &mut dyn Ctx, given: Option<Vec<u8>>) -> i64 {
             b'p' => bits | MULTILINE | SINGLELINE,
             _ => bits,
         }),
-        None => match ctx.state("mb_regex_bits") {
-            Value::Int(b) => *b,
-            _ => MULTILINE | SINGLELINE,
-        },
+        None => ctx.state("mb_regex_bits").as_int().unwrap_or(MULTILINE | SINGLELINE),
     }
 }
 
 fn is_utf8(ctx: &mut dyn Ctx) -> bool {
-    match ctx.state("mb_regex_enc") {
-        Value::Str(s) => s.as_bytes().eq_ignore_ascii_case(b"UTF-8"),
-        _ => true,
+    match ctx.state("mb_regex_enc").as_str() {
+        Some(s) => s.as_bytes().eq_ignore_ascii_case(b"UTF-8"),
+        None => true,
     }
 }
 
@@ -101,7 +97,7 @@ fn char_len(re: &Regex, s: &[u8], at: usize) -> usize {
 }
 
 fn bytes(s: &[u8]) -> Value {
-    Value::Str(PhpStr::from(s))
+    Value::str(PhpStr::from(s))
 }
 
 /// The groups as mb_ereg gives them: by number (false for one that did
@@ -119,7 +115,7 @@ fn groups(re: &Regex, s: &[u8], caps: &Captures, empty_as: fn(&[u8]) -> Value) -
     for (name, i) in re.names() {
         let v = match caps.get(*i) {
             Some((b, e)) if b < e => bytes(&s[b..e]),
-            _ => Value::Bool(false),
+            _ => Value::FALSE,
         };
         out.insert(Key::from_string(PhpStr::from(name.as_slice())), v);
     }
@@ -127,7 +123,7 @@ fn groups(re: &Regex, s: &[u8], caps: &Captures, empty_as: fn(&[u8]) -> Value) -
 }
 
 fn set_ref(args: &[Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -135,18 +131,18 @@ fn set_ref(args: &[Value], i: usize, v: Value) {
 fn ereg(ctx: &mut dyn Ctx, args: &mut [Value], caseless: bool) -> R {
     let pattern = str_arg(args, 0);
     let s = str_arg(args, 1);
-    set_ref(args, 2, Value::Array(Rc::new(PhpArray::new())));
+    set_ref(args, 2, Value::array(PhpArray::new()));
     if pattern.is_empty() {
         return Err(arg_error(ctx, 1, "must not be empty"));
     }
     let bits = option_bits(ctx, None) | if caseless { CASELESS } else { 0 };
-    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::Bool(false)) };
+    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::FALSE) };
     if re.is_utf() && p8_pcre::check_utf8(&s).is_err() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let Some(caps) = search(&re, &s, 0) else { return Ok(Value::Bool(false)) };
-    set_ref(args, 2, Value::Array(Rc::new(groups(&re, &s, &caps, |_| Value::Bool(false)))));
-    Ok(Value::Bool(true))
+    let Some(caps) = search(&re, &s, 0) else { return Ok(Value::FALSE) };
+    set_ref(args, 2, Value::array(groups(&re, &s, &caps, |_| Value::FALSE)));
+    Ok(Value::TRUE)
 }
 
 fn mb_ereg(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -163,12 +159,12 @@ fn mb_ereg_match(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = str_arg(args, 1);
     let given = opt_str(args, 2);
     let bits = option_bits(ctx, given);
-    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::Bool(false)) };
+    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::FALSE) };
     if re.is_utf() && p8_pcre::check_utf8(&s).is_err() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let anchored = MatchOptions { anchored: true, ..MatchOptions::default() };
-    Ok(Value::Bool(matches!(re.exec(&s, 0, &anchored), Ok(Some(_)))))
+    Ok(Value::bool(matches!(re.exec(&s, 0, &anchored), Ok(Some(_)))))
 }
 
 /// The replacement with `\0`..`\9` and `\k<name>` / `\k'name'` filled in
@@ -221,9 +217,9 @@ enum With<'a> {
 }
 
 fn replace(ctx: &mut dyn Ctx, pattern: &[u8], with: With, s: &[u8], bits: i64) -> R {
-    let Some(re) = compile(ctx, pattern, bits) else { return Ok(Value::Bool(false)) };
+    let Some(re) = compile(ctx, pattern, bits) else { return Ok(Value::FALSE) };
     if re.is_utf() && p8_pcre::check_utf8(s).is_err() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0;
@@ -238,7 +234,7 @@ fn replace(ctx: &mut dyn Ctx, pattern: &[u8], with: With, s: &[u8], bits: i64) -
             With::Text(r) => substitute(&re, s, &caps, r, &mut out),
             With::Callback(f) => {
                 let arr = groups(&re, s, &caps, bytes);
-                let v = ctx.call(f, &mut [Value::Array(Rc::new(arr))])?;
+                let v = ctx.call(f, &mut [Value::array(arr)])?;
                 out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
             }
         }
@@ -272,7 +268,7 @@ fn mb_eregi_replace(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn mb_ereg_replace_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let pattern = str_arg(args, 0);
-    let callback = args.get(1).map(Value::deref).unwrap_or(Value::Null);
+    let callback = args.get(1).map(Value::deref).unwrap_or(Value::NULL);
     let s = str_arg(args, 2);
     let bits = option_bits(ctx, opt_str(args, 3));
     replace(ctx, &pattern, With::Callback(&callback), &s, bits)
@@ -285,7 +281,7 @@ fn mb_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = str_arg(args, 1);
     let mut count = int_arg(args, 2, -1);
     let bits = option_bits(ctx, None);
-    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::Bool(false)) };
+    let Some(re) = compile(ctx, &pattern, bits) else { return Ok(Value::FALSE) };
     if count > 0 {
         count -= 1;
     }
@@ -304,5 +300,5 @@ fn mb_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     }
     let _ = out.push(bytes(&s[chunk.min(s.len())..]));
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }

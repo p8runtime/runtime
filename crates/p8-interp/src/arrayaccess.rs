@@ -24,17 +24,20 @@ pub(crate) fn path_has_object(root: &Value, keys: &[Value], append: bool) -> boo
     // through references), nothing copied.
     let walk = if append { keys.len() } else { keys.len().saturating_sub(1) };
     fn reaches(cur: &Value, keys: &[Value]) -> bool {
-        match cur {
-            Value::Ref(cell) => reaches(&cell.borrow(), keys),
-            Value::Object(_) => true,
-            Value::Array(a) => match keys.split_first() {
+        if let Some(cell) = cur.as_reference() {
+            reaches(&cell.borrow(), keys)
+        } else if cur.is_object() {
+            true
+        } else if let Some(a) = cur.as_array() {
+            match keys.split_first() {
                 Some((k, rest)) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k)) {
                     Some(v) => reaches(v, rest),
                     None => false,
                 },
                 None => false,
-            },
-            _ => false,
+            }
+        } else {
+            false
         }
     }
     reaches(root, &keys[..walk])
@@ -70,7 +73,7 @@ impl Context<'_> {
             }
             return Err(self.throw("Error", format!("Cannot use object of type {} as array", String::from_utf8_lossy(o.class.name.as_bytes()))));
         }
-        let m = self.method_frame(&Value::Object(Rc::clone(o)), self.method_key(name.as_bytes()), name.as_bytes())?;
+        let m = self.method_frame(&Value::object(Rc::clone(o)), self.method_key(name.as_bytes()), name.as_bytes())?;
         match m.func {
             Code::Native(native, _) => {
                 let this = m.this.clone();
@@ -86,7 +89,7 @@ impl Context<'_> {
     /// `$o[k]` (quiet: for isset/??, offsetExists asked first).
     pub(crate) fn aa_get(&mut self, regs: &mut Vec<Value>, o: &Rc<Object>, key: Value, quiet: bool) -> Result<Value, Throw> {
         if quiet && !self.aa_call(regs, o, "offsetExists", &mut [key.clone()])?.to_bool() {
-            return Ok(Value::Null);
+            return Ok(Value::NULL);
         }
         self.aa_call(regs, o, "offsetGet", &mut [key])
     }
@@ -97,38 +100,37 @@ impl Context<'_> {
         let mut cur = root.deref();
         let walk = if append { keys.len() } else { keys.len() - 1 };
         for (i, k) in keys[..walk].iter().enumerate() {
-            cur = match cur {
+            cur = match cur.into_object() {
                 // An internal class whose read_dimension for writing gives the
                 // element itself (zend_weakmap_read_dimension,
                 // spl_array_get_dimension_ptr): what is under it is changed
                 // in place; one not there is the class's own error.
-                Value::Object(o) if writes_in_place(&o, &op) => {
+                Ok(o) if writes_in_place(&o, &op) => {
                     let mut entry = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref();
-                    if let Value::Object(_) = entry {
+                    if entry.is_object() {
                         return self.aa_write(regs, &entry, &keys[i + 1..], append, op);
                     }
                     let r = self.write_in(regs, &mut entry, &keys[i + 1..], append, op)?;
                     self.aa_call(regs, &o, "offsetSet", &mut [k.clone(), entry])?;
                     return Ok(r);
                 }
-                Value::Object(o) => {
-                    let got = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?;
-                    match got.deref() {
-                        v @ Value::Object(_) => v,
-                        _ => return self.no_effect(&o, op),
-                    }
+                Ok(o) => {
+                    let got = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref();
+                    if got.is_object() { got } else { return self.no_effect(&o, op) }
                 }
-                Value::Array(a) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref)) {
-                    Some(v) => v,
-                    None => return Ok(Value::Null),
+                Err(cur) => match cur.into_array() {
+                    Ok(a) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref)) {
+                        Some(v) => v,
+                        None => return Ok(Value::NULL),
+                    },
+                    Err(_) => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
                 },
-                _ => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
             };
         }
-        let Value::Object(o) = cur else {
+        let Ok(o) = cur.into_object() else {
             return Err(self.throw("Error", "Cannot use a scalar value as an array"));
         };
-        let key = if append { Value::Null } else { keys[keys.len() - 1].clone() };
+        let key = if append { Value::NULL } else { keys[keys.len() - 1].clone() };
         match op {
             DimOp::Set(v) => {
                 self.aa_call(regs, &o, "offsetSet", &mut [key, v.clone()])?;
@@ -155,7 +157,7 @@ impl Context<'_> {
             }
             DimOp::Unset => {
                 self.aa_call(regs, &o, "offsetUnset", &mut [key])?;
-                Ok(Value::Null)
+                Ok(Value::NULL)
             }
         }
     }
@@ -165,27 +167,27 @@ impl Context<'_> {
     /// arrays made where there are none, as an assignment to a variable's
     /// elements does; the expression's value.
     fn write_in(&mut self, regs: &mut Vec<Value>, target: &mut Value, keys: &[Value], append: bool, op: DimOp) -> Result<Value, Throw> {
-        if matches!(target, Value::Null | Value::Undef) {
-            *target = Value::Array(Rc::new(p8_runtime::array::PhpArray::new()));
+        if target.is_null_or_undef() {
+            *target = Value::array(p8_runtime::array::PhpArray::new());
         }
-        let Value::Array(a) = target else {
-            if let Value::Object(_) = target {
+        if !target.is_array() {
+            if target.is_object() {
                 let obj = target.clone();
                 return self.aa_write(regs, &obj, keys, append, op);
             }
             return Err(self.throw("Error", "Cannot use a scalar value as an array"));
-        };
-        let arr = Rc::make_mut(a);
+        }
+        let arr = target.array_mut().expect("an array");
         let last = if append { keys.len() + 1 } else { keys.len() };
         if last > 1 {
             let k = Key::from_value(&keys[0]).map_err(|_| self.throw("TypeError", "Illegal offset type"))?.0;
             if arr.get(&k).is_none() {
-                arr.insert(k.clone(), Value::Null);
+                arr.insert(k.clone(), Value::NULL);
             }
-            let mut inner = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+            let mut inner = arr.get(&k).map(Value::deref).unwrap_or(Value::NULL);
             let r = self.write_in(regs, &mut inner, &keys[1..], append, op)?;
-            if let Value::Array(a) = target {
-                Rc::make_mut(a).insert(k, inner);
+            if let Some(a) = target.array_mut() {
+                a.insert(k, inner);
             }
             return Ok(r);
         }
@@ -203,7 +205,7 @@ impl Context<'_> {
                 v
             }
             DimOp::Op(op, v) => {
-                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::NULL);
                 let r = p8_runtime::ops::binary(op, &old, &v, &mut self.diags);
                 self.report_diags();
                 let new = r.map_err(|e| self.op_error(e))?;
@@ -211,7 +213,7 @@ impl Context<'_> {
                 new
             }
             DimOp::IncDec { inc, post } => {
-                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::Null);
+                let old = arr.get(&k).map(Value::deref).unwrap_or(Value::NULL);
                 let r = if inc { p8_runtime::ops::increment(&old, &mut self.diags) } else { p8_runtime::ops::decrement(&old, &mut self.diags) };
                 self.report_diags();
                 let new = r.map_err(|e| self.op_error(e))?;
@@ -220,7 +222,7 @@ impl Context<'_> {
             }
             DimOp::Unset => {
                 arr.remove(&k);
-                Value::Null
+                Value::NULL
             }
         })
     }
@@ -232,7 +234,7 @@ impl Context<'_> {
         self.notice(&message);
         Ok(match op {
             DimOp::Set(v) | DimOp::Op(_, v) => v,
-            _ => Value::Null,
+            _ => Value::NULL,
         })
     }
 
@@ -242,8 +244,8 @@ impl Context<'_> {
         let mut cur = root.deref();
         for (i, k) in keys.iter().enumerate() {
             let last = i + 1 == keys.len();
-            cur = match cur {
-                Value::Object(o) => {
+            cur = match cur.into_object() {
+                Ok(o) => {
                     if !self.aa_call(regs, &o, "offsetExists", &mut [k.clone()])?.to_bool() {
                         return Ok(false);
                     }
@@ -252,14 +254,13 @@ impl Context<'_> {
                     }
                     self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref()
                 }
-                Value::Array(a) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref)) {
+                Err(cur) => match cur.as_array().and_then(|a| Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref))) {
                     Some(v) => v,
                     None => return Ok(false),
                 },
-                _ => return Ok(false),
             };
         }
-        Ok(!matches!(cur, Value::Null | Value::Undef))
+        Ok(!cur.is_null_or_undef())
     }
 }
 

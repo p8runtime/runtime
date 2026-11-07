@@ -129,10 +129,10 @@ impl Stat {
         let values = self.values();
         let mut out = PhpArray::new();
         for (i, v) in values.iter().enumerate() {
-            out.insert(Key::Int(i as i64), Value::Int(*v));
+            out.insert(Key::Int(i as i64), Value::int(*v));
         }
         for (k, v) in Stat::NAMES.iter().zip(values) {
-            out.insert(Key::Str(PhpStr::from(*k)), Value::Int(v));
+            out.insert(Key::Str(PhpStr::from(*k)), Value::int(v));
         }
         out
     }
@@ -357,7 +357,8 @@ pub fn warn_disabled(ctx: &mut dyn Ctx, func: &str) {
 /// The request's default stream context (FG(default_context)), made when
 /// first asked for.
 pub fn default_context(ctx: &mut dyn Ctx) -> Value {
-    if let v @ Value::Object(_) = ctx.state("stream_context_default").clone() {
+    let v = ctx.state("stream_context_default").clone();
+    if v.is_object() {
         return v;
     }
     let v = new_context(ctx);
@@ -414,11 +415,11 @@ fn call(ctx: &mut dyn Ctx, o: &Rc<Object>, name: &str, args: &mut [Value]) -> Re
         }
         // __call gets the arguments as an array, a reference (stream_open's
         // fourth) kept one, as PHP's trampoline copies them.
-        let packed = Value::Array(Rc::new(PhpArray::from_list(args.to_vec())));
-        let callable = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::str("__call")])));
+        let packed = Value::array(PhpArray::from_list(args.to_vec()));
+        let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__call")]));
         return ctx.call(&callable, &mut [Value::str(name), packed]).map(Some);
     }
-    let callable = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::str(name)])));
+    let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str(name)]));
     ctx.call(&callable, args).map(Some)
 }
 
@@ -429,20 +430,21 @@ fn not_implemented(ctx: &mut dyn Ctx, func: &str, o: &Object, method: &str) {
 
 /// try_convert_to_string on what stream_read gave.
 fn to_bytes(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw> {
-    match v.deref() {
-        Value::Array(_) => {
-            ctx.warn("Array to string conversion");
-            Ok(b"Array".to_vec())
-        }
-        Value::Object(o) if o.class.method(b"__tostring").is_some() => {
-            let s = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(&o)), Value::str("__toString")]))), &mut [])?;
-            Ok(s.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
-        }
-        Value::Object(o) if o.class.cast_string.is_none() && o.class.flags & crate::object::CLASS_RESOURCE == 0 => {
-            Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", class_name(&o))))
-        }
-        v => Ok(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()),
+    let v = v.deref();
+    if v.is_array() {
+        ctx.warn("Array to string conversion");
+        return Ok(b"Array".to_vec());
     }
+    if let Some(o) = v.as_object() {
+        if o.class.method(b"__tostring").is_some() {
+            let s = ctx.call(&Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__toString")])), &mut [])?;
+            return Ok(s.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default());
+        }
+        if o.class.cast_string.is_none() && o.class.flags & crate::object::CLASS_RESOURCE == 0 {
+            return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", class_name(o))));
+        }
+    }
+    Ok(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
 }
 
 /// Opens `url` with the wrapper (stream_open, or dir_opendir for a
@@ -454,13 +456,13 @@ pub fn open(ctx: &mut dyn Ctx, w: &Rc<Wrapper>, url: &str, mode: &str, options: 
     }
     state(ctx).opening = Some(url.to_string());
     let made = instance(ctx, w, context);
-    let opened = Value::Ref(Rc::new(RefCell::new(Value::Null)));
+    let opened = Value::new_reference(Value::NULL);
     let r = match made {
         Ok(Some(o)) => {
             let r = if dir {
-                call(ctx, &o, "dir_opendir", &mut [Value::str(url), Value::Int(options)])
+                call(ctx, &o, "dir_opendir", &mut [Value::str(url), Value::int(options)])
             } else {
-                call(ctx, &o, "stream_open", &mut [Value::str(url), Value::str(mode), Value::Int(options), opened.clone()])
+                call(ctx, &o, "stream_open", &mut [Value::str(url), Value::str(mode), Value::int(options), opened.clone()])
             };
             r.map(|v| Some((o, v)))
         }
@@ -473,16 +475,13 @@ pub fn open(ctx: &mut dyn Ctx, w: &Rc<Wrapper>, url: &str, mode: &str, options: 
         let method = if dir { "dir_opendir" } else { "stream_open" };
         return Ok(Err(format!("\"{}::{method}\" call failed", class_name(&o))));
     }
-    let opened = match opened.deref() {
-        Value::Str(s) => Some(s),
-        _ => None,
-    };
+    let opened = opened.deref().into_str().ok();
     Ok(Ok((Stream::new(Target::User(Box::new(UserStream::new(o, dir))), url, mode), opened)))
 }
 
 /// Keep a stream resource a wrapper opened, for the request's end.
 pub fn adopt(ctx: &mut dyn Ctx, resource: &Value) {
-    if let Value::Object(o) = resource {
+    if let Some(o) = resource.as_object() {
         let st = state(ctx);
         st.open.retain(|w| w.strong_count() > 0);
         st.open.push(Rc::downgrade(o));
@@ -503,13 +502,13 @@ pub fn close_open(ctx: &mut dyn Ctx) -> Result<(), Throw> {
 /// A stream resource a wrapper opened goes (its last reference): closed
 /// as fclose would.
 pub fn free(ctx: &mut dyn Ctx, o: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    let Some(r) = crate::stream::resource(o) else { return Ok(Value::Null) };
+    let Some(r) = crate::stream::resource(o) else { return Ok(Value::NULL) };
     if r.closed.replace(true) {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    let Ok(mut s) = r.stream.try_borrow_mut() else { return Ok(Value::Null) };
+    let Ok(mut s) = r.stream.try_borrow_mut() else { return Ok(Value::NULL) };
     close(ctx, &mut s)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn user(s: &mut Stream) -> &mut UserStream {
@@ -528,11 +527,11 @@ fn running(ctx: &dyn Ctx, func: &str) -> String {
 /// whether that was the end. None: the read failed.
 fn op_read(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, count: usize) -> Result<Option<Vec<u8>>, Throw> {
     let o = Rc::clone(&user(s).object);
-    let Some(v) = call(ctx, &o, "stream_read", &mut [Value::Int(count as i64)])? else {
+    let Some(v) = call(ctx, &o, "stream_read", &mut [Value::int(count as i64)])? else {
         not_implemented(ctx, func, &o, "stream_read");
         return Ok(None);
     };
-    if matches!(v.deref(), Value::Bool(false)) {
+    if v.deref().as_bool() == Some(false) {
         return Ok(None);
     }
     let mut bytes = to_bytes(ctx, &v)?;
@@ -720,8 +719,8 @@ pub fn write(ctx: &mut dyn Ctx, s: &mut Stream, bytes: &[u8]) -> Result<Option<u
     let mut done = 0;
     while done < bytes.len() {
         let piece = &bytes[done..(done + chunk).min(bytes.len())];
-        let wrote = match call(ctx, &o, "stream_write", &mut [Value::Str(PhpStr::from(piece))])? {
-            Some(Value::Bool(false)) => -1,
+        let wrote = match call(ctx, &o, "stream_write", &mut [Value::str(PhpStr::from(piece))])? {
+            Some(v) if v.as_bool() == Some(false) => -1,
             Some(v) => v.to_int(),
             None => {
                 not_implemented(ctx, &func, &o, "stream_write");
@@ -756,7 +755,7 @@ pub fn write(ctx: &mut dyn Ctx, s: &mut Stream, bytes: &[u8]) -> Result<Option<u
 /// went. Ok(None) when stream_seek is missing.
 fn op_seek(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, offset: i64, whence: i64) -> Result<Option<bool>, Throw> {
     let o = Rc::clone(&user(s).object);
-    let Some(moved) = call(ctx, &o, "stream_seek", &mut [Value::Int(offset), Value::Int(whence)])? else {
+    let Some(moved) = call(ctx, &o, "stream_seek", &mut [Value::int(offset), Value::int(whence)])? else {
         user(s).no_seek = true;
         return Ok(None);
     };
@@ -764,8 +763,8 @@ fn op_seek(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, offset: i64, whence: i
         return Ok(Some(false));
     }
     match call(ctx, &o, "stream_tell", &mut [])? {
-        Some(Value::Int(at)) => {
-            s.pos = at.max(0) as usize;
+        Some(v) if v.is_int() => {
+            s.pos = v.as_int().expect("an int").max(0) as usize;
             Ok(Some(true))
         }
         Some(_) => Ok(Some(false)),
@@ -842,9 +841,9 @@ pub fn at_end(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<bool, Throw> {
     }
     if !s.eof {
         let o = Rc::clone(&user(s).object);
-        match call(ctx, &o, "stream_eof", &mut [])? {
-            Some(Value::Bool(b)) => s.eof = b,
-            _ => {
+        match call(ctx, &o, "stream_eof", &mut [])?.and_then(|v| v.as_bool()) {
+            Some(b) => s.eof = b,
+            None => {
                 let func = running(ctx, "");
                 ctx.warn(&format!("{func}(): {}::stream_eof is not implemented! Assuming EOF", class_name(&o)));
                 s.eof = true;
@@ -887,7 +886,7 @@ pub fn stat(ctx: &mut dyn Ctx, func: &str, s: &mut Stream) -> Result<Option<Stat
     let func = running(ctx, func);
     let o = Rc::clone(&user(s).object);
     Ok(match call(ctx, &o, "stream_stat", &mut [])? {
-        Some(Value::Array(a)) => Some(Stat::from_array(&a)),
+        Some(v) if v.is_array() => Some(Stat::from_array(v.as_array().expect("an array"))),
         Some(_) => None,
         None => {
             not_implemented(ctx, &func, &o, "stream_stat");
@@ -905,8 +904,8 @@ pub fn truncate(ctx: &mut dyn Ctx, s: &mut Stream, size: i64) -> Result<Option<b
         return Ok(None);
     }
     let func = running(ctx, "");
-    Ok(Some(match call(ctx, &o, "stream_truncate", &mut [Value::Int(size)])? {
-        Some(Value::Bool(b)) => b,
+    Ok(Some(match call(ctx, &o, "stream_truncate", &mut [Value::int(size)])? {
+        Some(v) if v.is_bool() => v.as_bool().expect("a bool"),
         Some(_) => {
             ctx.warn(&format!("{func}(): {}::stream_truncate did not return a boolean!", class_name(&o)));
             false
@@ -922,8 +921,8 @@ pub fn truncate(ctx: &mut dyn Ctx, s: &mut Stream, size: i64) -> Result<Option<b
 /// stream_lock's answer; operation 0 only asks whether locking works.
 pub fn lock(ctx: &mut dyn Ctx, s: &mut Stream, operation: i64) -> Result<bool, Throw> {
     let o = Rc::clone(&user(s).object);
-    match call(ctx, &o, "stream_lock", &mut [Value::Int(operation)])? {
-        Some(Value::Bool(b)) => Ok(b),
+    match call(ctx, &o, "stream_lock", &mut [Value::int(operation)])? {
+        Some(v) if v.is_bool() => Ok(v.as_bool().expect("a bool")),
         Some(_) => Ok(false),
         None if operation == 0 => Ok(true),
         None => {
@@ -941,10 +940,10 @@ pub fn set_option(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, option: i64, ar
     let func = running(ctx, func);
     let o = Rc::clone(&user(s).object);
     let arg2 = match option {
-        OPTION_READ_BUFFER | OPTION_WRITE_BUFFER => Value::Int(arg2.unwrap_or(BUFSIZ)),
-        _ => arg2.map_or(Value::Null, Value::Int),
+        OPTION_READ_BUFFER | OPTION_WRITE_BUFFER => Value::int(arg2.unwrap_or(BUFSIZ)),
+        _ => arg2.map_or(Value::NULL, Value::int),
     };
-    match call(ctx, &o, "stream_set_option", &mut [Value::Int(option), arg1, arg2])? {
+    match call(ctx, &o, "stream_set_option", &mut [Value::int(option), arg1, arg2])? {
         Some(v) => Ok(v.to_bool()),
         None => {
             not_implemented(ctx, &func, &o, "stream_set_option");
@@ -958,7 +957,7 @@ pub fn set_option(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, option: i64, ar
 pub fn readdir(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<Option<Vec<u8>>, Throw> {
     let o = Rc::clone(&user(s).object);
     match call(ctx, &o, "dir_readdir", &mut [])? {
-        Some(Value::Bool(_)) => Ok(None),
+        Some(v) if v.is_bool() => Ok(None),
         Some(v) => {
             let mut name = to_bytes(ctx, &v)?;
             name.truncate(255);
@@ -988,8 +987,8 @@ pub fn url_stat(ctx: &mut dyn Ctx, func: &str, w: &Wrapper, path: &str, flags: i
         }
     }
     let Some(o) = instance(ctx, w, context)? else { return Ok(None) };
-    let stat = match call(ctx, &o, "url_stat", &mut [Value::str(path), Value::Int(flags)])? {
-        Some(Value::Array(a)) => Stat::from_array(&a),
+    let stat = match call(ctx, &o, "url_stat", &mut [Value::str(path), Value::int(flags)])? {
+        Some(v) if v.is_array() => Stat::from_array(v.as_array().expect("an array")),
         Some(_) => return Ok(None),
         None => {
             not_implemented(ctx, func, &o, "url_stat");
@@ -1020,7 +1019,7 @@ pub fn clear_stat_cache(ctx: &mut dyn Ctx) {
 pub fn url_op(ctx: &mut dyn Ctx, func: &str, w: &Wrapper, method: &str, args: &mut [Value], context: Value) -> Result<bool, Throw> {
     let Some(o) = instance(ctx, w, context)? else { return Ok(false) };
     match call(ctx, &o, method, args)? {
-        Some(Value::Bool(b)) => Ok(b),
+        Some(v) if v.is_bool() => Ok(v.as_bool().expect("a bool")),
         Some(_) => Ok(false),
         None => {
             not_implemented(ctx, func, &o, method);
@@ -1040,7 +1039,7 @@ pub fn dir_options(recursive: bool) -> i64 {
 /// resource, which it must not give back.
 pub fn cast(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, this: &Rc<Object>) -> Result<Option<Value>, Throw> {
     let o = Rc::clone(&user(s).object);
-    let Some(v) = call(ctx, &o, "stream_cast", &mut [Value::Int(3)])? else {
+    let Some(v) = call(ctx, &o, "stream_cast", &mut [Value::int(3)])? else {
         not_implemented(ctx, func, &o, "stream_cast");
         return Ok(None);
     };

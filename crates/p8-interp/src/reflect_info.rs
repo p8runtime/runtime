@@ -79,9 +79,9 @@ impl Context<'_> {
                             code.consts[*src as usize - consts.start].to_value()
                         }
                         (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
-                            Value::Array(Rc::new(PhpArray::new()))
+                            Value::array(PhpArray::new())
                         }
-                        _ => Value::Null,
+                        _ => Value::NULL,
                     },
                 };
                 out.insert(Key::from_string(name(u32::from(*var))), v);
@@ -216,8 +216,8 @@ impl Context<'_> {
 
     pub(crate) fn invoke_callee(&mut self, callee: &Callee, this: Option<Rc<Object>>, args: &mut [Value]) -> Result<Value, Throw> {
         match callee {
-            Callee::Function(name) => self.call_from_builtin(&Value::Str(name.clone()), args),
-            Callee::Closure(o) => self.call_from_builtin(&Value::Object(Rc::clone(o)), args),
+            Callee::Function(name) => self.call_from_builtin(&Value::str(name.clone()), args),
+            Callee::Closure(o) => self.call_from_builtin(&Value::object(Rc::clone(o)), args),
             Callee::Method(class, name) => {
                 let Some(m) = class.method(&name.as_bytes().to_ascii_lowercase()).cloned() else {
                     return Err(self.throw("ReflectionException", format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()))));
@@ -281,15 +281,15 @@ impl Context<'_> {
 
     pub(crate) fn closure_of_callee(&mut self, callee: &Callee, this: Option<Rc<Object>>) -> Result<Value, Throw> {
         match callee {
-            Callee::Function(name) => self.closure_from_callable(&Value::Str(name.clone())),
-            Callee::Closure(o) => Ok(Value::Object(Rc::clone(o))),
+            Callee::Function(name) => self.closure_from_callable(&Value::str(name.clone())),
+            Callee::Closure(o) => Ok(Value::object(Rc::clone(o))),
             Callee::Method(class, name) => {
                 let target = match this {
-                    Some(o) => Value::Object(o),
-                    None => Value::Str(class.name.clone()),
+                    Some(o) => Value::object(o),
+                    None => Value::str(class.name.clone()),
                 };
-                let pair = p8_runtime::array::PhpArray::from_list(vec![target, Value::Str(name.clone())]);
-                self.closure_from_callable(&Value::Array(Rc::new(pair)))
+                let pair = p8_runtime::array::PhpArray::from_list(vec![target, Value::str(name.clone())]);
+                self.closure_from_callable(&Value::array(pair))
             }
         }
     }

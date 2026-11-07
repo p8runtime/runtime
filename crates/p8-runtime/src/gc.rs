@@ -44,11 +44,14 @@ impl Node {
 
     /// The nodes this one refers to.
     fn children(&self, out: &mut Vec<Node>) {
-        let mut add = |v: &Value| match v {
-            Value::Object(o) => out.push(Node::Object(Rc::clone(o))),
-            Value::Array(a) => out.push(Node::Array(Rc::clone(a))),
-            Value::Ref(c) => out.push(Node::Cell(Rc::clone(c))),
-            _ => {}
+        let mut add = |v: &Value| {
+            if let Some(o) = v.cloned_object() {
+                out.push(Node::Object(o));
+            } else if let Some(a) = v.cloned_array() {
+                out.push(Node::Array(a));
+            } else if let Some(c) = v.cloned_reference() {
+                out.push(Node::Cell(c));
+            }
         };
         match self {
             Node::Object(o) => {
@@ -61,7 +64,7 @@ impl Node {
                 if let Some(l) = o.lazy_info.borrow().as_ref() {
                     add(&l.initializer);
                     if let Some(i) = &l.instance {
-                        add(&Value::Object(Rc::clone(i)));
+                        add(&Value::object(Rc::clone(i)));
                     }
                 }
             }
@@ -172,7 +175,7 @@ mod tests {
     }
 
     fn link(from: &Rc<Object>, to: &Rc<Object>, name: &str) {
-        from.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), Value::Object(Rc::clone(to)));
+        from.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), Value::object(Rc::clone(to)));
     }
 
     #[test]
@@ -211,10 +214,10 @@ mod tests {
         drop((a, b));
         assert!(find_cycles(&ids).objects.is_empty());
         // Through an array and a reference too.
-        let arr = Rc::new(crate::array::PhpArray::from_list(vec![Value::Object(Rc::clone(&root))]));
-        let cell = Rc::new(RefCell::new(Value::Array(Rc::clone(&arr))));
+        let arr = Rc::new(crate::array::PhpArray::from_list(vec![Value::object(Rc::clone(&root))]));
+        let cell = Rc::new(RefCell::new(Value::array(Rc::clone(&arr))));
         link(&root, &root, "self");
-        root.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("r")), Value::Ref(Rc::clone(&cell)));
+        root.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("r")), Value::reference(Rc::clone(&cell)));
         drop((arr, cell));
         assert!(find_cycles(&ids).objects.is_empty());
         drop(root);

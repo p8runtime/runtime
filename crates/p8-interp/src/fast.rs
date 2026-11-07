@@ -417,20 +417,22 @@ impl Context<'_> {
                     if taken.is_undef() {
                         slow!();
                     }
-                    let released = match taken.into_reference() {
+                    let released = if let Some(cell) = taken.as_reference() {
                         // A reference's value, and the temporary lets go of
                         // the reference (which may have been its last holder).
-                        Ok(cell) => match read_ref(&cell) {
+                        match read_ref(cell) {
                             Some(v) => {
                                 let _ = put_var(&mut $w[rx!(var as usize)], v);
+                                drop(taken);
                                 true
                             }
                             None => {
-                                $w[rx!(src as usize)] = Value::reference(cell);
+                                $w[rx!(src as usize)] = taken;
                                 slow!();
                             }
-                        },
-                        Err(v) => put_var(&mut $w[rx!(var as usize)], v),
+                        }
+                    } else {
+                        put_var(&mut $w[rx!(var as usize)], taken)
                     };
                     done!(released);
                 }

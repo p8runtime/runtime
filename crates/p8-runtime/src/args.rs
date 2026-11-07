@@ -10,8 +10,7 @@
 use crate::number::{Precision, float_to_string};
 use crate::numeric::{Number, numeric_string};
 use crate::ops::{Diag, Diags};
-use crate::string::PhpStr;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 use p8_stubs::{
     Param, Sig, T_ARRAY, T_BOOL, T_CALLABLE, T_FALSE, T_FLOAT, T_INT, T_MIXED, T_NULL, T_OBJECT, T_STRING, T_TRUE,
     type_to_string,
@@ -109,16 +108,15 @@ fn plainly(param: &Param, value: &Value) -> bool {
     if mask & T_MIXED != 0 || param.untyped() {
         return true;
     }
-    mask & match value {
-        Value::Null => T_NULL,
-        Value::Bool(true) => T_BOOL | T_TRUE,
-        Value::Bool(false) => T_BOOL | T_FALSE,
-        Value::Int(_) => T_INT,
-        Value::Float(_) => T_FLOAT,
-        Value::Str(_) => T_STRING | T_CALLABLE,
-        Value::Array(_) => T_ARRAY | T_CALLABLE,
-        Value::Object(_) => T_OBJECT | T_CALLABLE,
-        Value::Undef | Value::Ref(_) => 0,
+    mask & match value.kind() {
+        Kind::Null => T_NULL,
+        Kind::Bool => T_BOOL | if value.as_bool().expect("a bool") { T_TRUE } else { T_FALSE },
+        Kind::Int => T_INT,
+        Kind::Float => T_FLOAT,
+        Kind::Str => T_STRING | T_CALLABLE,
+        Kind::Array => T_ARRAY | T_CALLABLE,
+        Kind::Object => T_OBJECT | T_CALLABLE,
+        Kind::Undef | Kind::Ref => 0,
     } != 0
 }
 
@@ -129,12 +127,12 @@ pub fn wants_callable_check(param: &Param, value: &Value) -> bool {
     let mask = param.mask;
     pure_callable(param)
         && !param.by_ref
-        && match value {
-            Value::Null | Value::Undef => mask & T_NULL == 0,
-            Value::Str(_) => mask & T_STRING == 0,
-            Value::Array(_) => mask & T_ARRAY == 0,
-            Value::Object(_) => mask & T_OBJECT == 0,
-            Value::Ref(cell) => wants_callable_check(param, &cell.borrow()),
+        && match value.kind() {
+            Kind::Null | Kind::Undef => mask & T_NULL == 0,
+            Kind::Str => mask & T_STRING == 0,
+            Kind::Array => mask & T_ARRAY == 0,
+            Kind::Object => mask & T_OBJECT == 0,
+            Kind::Ref => wants_callable_check(param, &value.as_reference().expect("a reference").borrow()),
             _ => true,
         }
 }
@@ -162,11 +160,12 @@ fn label(param: &Param) -> String {
 
 /// How a TypeError names a value (zend_zval_value_name).
 pub fn value_name(v: &Value) -> std::borrow::Cow<'static, str> {
-    match v {
-        Value::Bool(true) => "true".into(),
-        Value::Bool(false) => "false".into(),
-        Value::Ref(cell) => value_name(&cell.borrow()),
-        other => other.type_name(),
+    if let Some(b) = v.as_bool() {
+        if b { "true".into() } else { "false".into() }
+    } else if let Some(cell) = v.as_reference() {
+        value_name(&cell.borrow())
+    } else {
+        v.type_name()
     }
 }
 
@@ -190,8 +189,8 @@ pub(crate) fn accepts(param: &Param, value: &Value) -> Accept {
         return Accept::Yes;
     }
     let scalar = mask & (T_BOOL | T_TRUE | T_FALSE | T_INT | T_FLOAT | T_STRING);
-    match value {
-        Value::Null | Value::Undef => {
+    match value.kind() {
+        Kind::Null | Kind::Undef => {
             if mask & T_NULL != 0 {
                 Accept::Yes
             } else if scalar != 0 {
@@ -200,23 +199,25 @@ pub(crate) fn accepts(param: &Param, value: &Value) -> Accept {
                 Accept::No
             }
         }
-        Value::Bool(b) => {
-            let exact = mask & T_BOOL != 0 || mask & if *b { T_TRUE } else { T_FALSE } != 0;
+        Kind::Bool => {
+            let b = value.as_bool().expect("a bool");
+            let exact = mask & T_BOOL != 0 || mask & if b { T_TRUE } else { T_FALSE } != 0;
             if exact || mask & (T_INT | T_FLOAT | T_STRING) != 0 { Accept::Yes } else { Accept::No }
         }
-        Value::Int(_) => {
+        Kind::Int => {
             if mask & (T_INT | T_FLOAT | T_STRING | T_BOOL) != 0 { Accept::Yes } else { Accept::No }
         }
-        Value::Float(f) => {
+        Kind::Float => {
+            let f = value.as_float().expect("a float");
             if mask & T_FLOAT != 0 {
                 Accept::Yes
             } else if mask & T_INT != 0 {
-                if !fits_long(*f) {
+                if !fits_long(f) {
                     if mask & (T_STRING | T_BOOL) != 0 { Accept::Yes } else { Accept::No }
                 } else if f.fract() != 0.0 && mask & T_STRING == 0 {
                     Accept::Deprecated(format!(
                         "Implicit conversion from float {} to int loses precision",
-                        float_to_string(*f, Precision::SERIALIZE, 'E')
+                        float_to_string(f, Precision::SERIALIZE, 'E')
                     ))
                 } else {
                     Accept::Yes
@@ -227,7 +228,8 @@ pub(crate) fn accepts(param: &Param, value: &Value) -> Accept {
                 Accept::No
             }
         }
-        Value::Str(s) => {
+        Kind::Str => {
+            let s = value.as_str().expect("a string");
             if mask & (T_STRING | T_CALLABLE) != 0 {
                 return Accept::Yes;
             }
@@ -252,11 +254,12 @@ pub(crate) fn accepts(param: &Param, value: &Value) -> Accept {
             }
             if mask & T_BOOL != 0 { Accept::Yes } else { Accept::No }
         }
-        Value::Array(_) => {
+        Kind::Array => {
             if mask & (T_ARRAY | T_CALLABLE) != 0 { Accept::Yes } else { Accept::No }
         }
-        Value::Ref(cell) => accepts(param, &cell.borrow()),
-        Value::Object(o) => {
+        Kind::Ref => accepts(param, &value.as_reference().expect("a reference").borrow()),
+        Kind::Object => {
+            let o = value.as_object().expect("an object");
             let named = param.classes.iter().any(|c| o.class.is_a(c.to_ascii_lowercase().as_bytes()));
             // A callable object (a Closure, an invokable) is checked when called.
             if mask & (T_OBJECT | T_CALLABLE) != 0 || named { Accept::Yes } else { Accept::No }
@@ -270,72 +273,75 @@ pub(crate) fn convert(mask: u32, value: &Value) -> Option<Value> {
     if mask == 0 || mask & (T_MIXED | T_CALLABLE) != 0 {
         return None;
     }
-    if let Value::Ref(cell) = value {
+    if let Some(cell) = value.as_reference() {
         return convert(mask, &cell.borrow()).or_else(|| Some(cell.borrow().clone()));
     }
     let accepts = |bit: u32| mask & bit != 0;
-    let already = match value {
-        Value::Null | Value::Undef => accepts(T_NULL),
-        Value::Bool(true) => accepts(T_BOOL | T_TRUE),
-        Value::Bool(false) => accepts(T_BOOL | T_FALSE),
-        Value::Int(_) => accepts(T_INT),
-        Value::Float(_) => accepts(T_FLOAT),
-        Value::Str(_) => accepts(T_STRING),
-        Value::Array(_) | Value::Ref(_) | Value::Object(_) => true,
+    let already = match value.kind() {
+        Kind::Null | Kind::Undef => accepts(T_NULL),
+        Kind::Bool => accepts(T_BOOL | if value.as_bool().expect("a bool") { T_TRUE } else { T_FALSE }),
+        Kind::Int => accepts(T_INT),
+        Kind::Float => accepts(T_FLOAT),
+        Kind::Str => accepts(T_STRING),
+        Kind::Array | Kind::Ref | Kind::Object => true,
     };
     if already {
         return None;
     }
-    Some(match value {
-        Value::Null | Value::Undef | Value::Bool(_) => {
+    Some(match value.kind() {
+        Kind::Null | Kind::Undef | Kind::Bool => {
             let b = value.to_bool();
             if accepts(T_INT) {
-                Value::Int(i64::from(b))
+                Value::int(i64::from(b))
             } else if accepts(T_FLOAT) {
-                Value::Float(if b { 1.0 } else { 0.0 })
+                Value::float(if b { 1.0 } else { 0.0 })
             } else if accepts(T_STRING) {
-                Value::Str(PhpStr::from(if b { "1" } else { "" }))
+                Value::str(if b { "1" } else { "" })
             } else if accepts(T_BOOL | T_TRUE | T_FALSE) {
-                Value::Bool(b)
+                Value::bool(b)
             } else {
                 return None;
             }
         }
-        Value::Int(i) => {
+        Kind::Int => {
+            let i = value.as_int().expect("an int");
             if accepts(T_FLOAT) {
-                Value::Float(*i as f64)
+                Value::float(i as f64)
             } else if accepts(T_STRING) {
-                Value::Str(value.to_php_string()?)
+                Value::str(value.to_php_string()?)
             } else {
-                Value::Bool(*i != 0)
+                Value::bool(i != 0)
             }
         }
-        Value::Float(f) => {
-            if accepts(T_INT) && fits_long(*f) && (f.fract() == 0.0 || !accepts(T_STRING)) {
-                Value::Int(*f as i64)
+        Kind::Float => {
+            let f = value.as_float().expect("a float");
+            if accepts(T_INT) && fits_long(f) && (f.fract() == 0.0 || !accepts(T_STRING)) {
+                Value::int(f as i64)
             } else if accepts(T_STRING) {
-                Value::Str(value.to_php_string()?)
+                Value::str(value.to_php_string()?)
             } else {
-                Value::Bool(*f != 0.0)
+                Value::bool(f != 0.0)
             }
         }
-        Value::Str(s) => match numeric_string(s.as_bytes()) {
-            Some(Number::Int(i)) if accepts(T_INT) => Value::Int(i),
-            Some(Number::Int(i)) if accepts(T_FLOAT) => Value::Float(i as f64),
-            Some(Number::Float(f)) if accepts(T_FLOAT) => Value::Float(f),
-            Some(Number::Float(f)) if accepts(T_INT) => Value::Int(f as i64),
-            _ => Value::Bool(value.to_bool()),
+        Kind::Str => match numeric_string(value.as_str().expect("a string").as_bytes()) {
+            Some(Number::Int(i)) if accepts(T_INT) => Value::int(i),
+            Some(Number::Int(i)) if accepts(T_FLOAT) => Value::float(i as f64),
+            Some(Number::Float(f)) if accepts(T_FLOAT) => Value::float(f),
+            Some(Number::Float(f)) if accepts(T_INT) => Value::int(f as i64),
+            _ => Value::bool(value.to_bool()),
         },
-        Value::Array(_) | Value::Ref(_) | Value::Object(_) => return None,
+        Kind::Array | Kind::Ref | Kind::Object => return None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::PhpArray;
+    use crate::string::PhpStr;
 
     fn s(text: &str) -> Value {
-        Value::Str(PhpStr::from(text))
+        Value::str(PhpStr::from(text))
     }
 
     fn run(name: &str, mut args: Vec<Value>) -> (Result<(), Refused>, Vec<Value>, Vec<String>) {
@@ -358,19 +364,19 @@ mod tests {
         assert_eq!(r, Err(("ArgumentCountError", "strlen() expects exactly 1 argument, 0 given".into())));
         let (r, ..) = run("str_repeat", vec![s("a")]);
         assert_eq!(r, Err(("ArgumentCountError", "str_repeat() expects exactly 2 arguments, 1 given".into())));
-        let (r, ..) = run("strlen", vec![Value::Array(Default::default())]);
+        let (r, ..) = run("strlen", vec![Value::array(PhpArray::default())]);
         assert_eq!(r, Err(("TypeError", "strlen(): Argument #1 ($string) must be of type string, array given".into())));
-        let (r, args, _) = run("strlen", vec![Value::Int(123)]);
+        let (r, args, _) = run("strlen", vec![Value::int(123)]);
         assert_eq!((r, args[0].identical(&s("123"))), (Ok(()), true));
-        let (r, args, diags) = run("strlen", vec![Value::Null]);
+        let (r, args, diags) = run("strlen", vec![Value::NULL]);
         assert_eq!((r, args[0].identical(&s(""))), (Ok(()), true));
         assert_eq!(diags, ["strlen(): Passing null to parameter #1 ($string) of type string is deprecated"]);
-        let (r, args, diags) = run("str_repeat", vec![s("a"), Value::Float(2.5)]);
-        assert_eq!((r, args[1].identical(&Value::Int(2))), (Ok(()), true));
+        let (r, args, diags) = run("str_repeat", vec![s("a"), Value::float(2.5)]);
+        assert_eq!((r, args[1].identical(&Value::int(2))), (Ok(()), true));
         assert_eq!(diags, ["Implicit conversion from float 2.5 to int loses precision"]);
         let (r, ..) = run("str_repeat", vec![s("a"), s("x")]);
         assert_eq!(r, Err(("TypeError", "str_repeat(): Argument #2 ($times) must be of type int, string given".into())));
-        let (r, ..) = run("str_repeat", vec![s("a"), Value::Bool(true), Value::Int(1)]);
+        let (r, ..) = run("str_repeat", vec![s("a"), Value::TRUE, Value::int(1)]);
         assert_eq!(r, Err(("ArgumentCountError", "str_repeat() expects exactly 2 arguments, 3 given".into())));
     }
 }

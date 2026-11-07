@@ -142,7 +142,7 @@ impl Context<'_> {
             return self.include_failed(kind, shown, include_path);
         }
         let options = user_stream::USE_PATH | user_stream::OPEN_FOR_INCLUDE | user_stream::OPEN_FOR_ZEND_STREAM;
-        let (mut stream, opened) = match user_stream::open(self, wrapper, url, "rb", options, Value::Null, false)? {
+        let (mut stream, opened) = match user_stream::open(self, wrapper, url, "rb", options, Value::NULL, false)? {
             Ok(opened) => opened,
             Err(reason) => {
                 self.warn(format!("{verb}({shown}): Failed to open stream: {reason}"));
@@ -150,7 +150,7 @@ impl Context<'_> {
             }
         };
         // PHP_STREAM_OPTION_READ_BUFFER, PHP_STREAM_BUFFER_NONE.
-        user_stream::set_option(self, verb, &mut stream, user_stream::OPTION_READ_BUFFER, Value::Int(0), None)?;
+        user_stream::set_option(self, verb, &mut stream, user_stream::OPTION_READ_BUFFER, Value::int(0), None)?;
         let file = opened.map_or_else(|| url.to_string(), |p| String::from_utf8_lossy(p.as_bytes()).into_owned());
         let real = PathBuf::from(&file);
         if kind.once() && self.included.contains(&real) {
@@ -201,9 +201,9 @@ impl Context<'_> {
 
 impl Context<'_> {
     fn include_path(&self) -> String {
-        match Ctx::ini_get(self, b"include_path") {
-            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-            _ => ".".to_string(),
+        match Ctx::ini_get(self, b"include_path").as_ref().and_then(Value::as_str) {
+            Some(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            None => ".".to_string(),
         }
     }
 

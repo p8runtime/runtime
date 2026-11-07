@@ -85,10 +85,10 @@ impl Context<'_> {
     /// registers set up from the arguments at `args`.
     pub(crate) fn make_generator(&mut self, regs: &mut [Value], m: MethodFrame, func: Rc<Closure>, args: usize, argc: usize) -> Rc<Object> {
         let code = &func.code;
-        let mut window = vec![Value::Undef; code.nregs as usize];
+        let mut window = vec![Value::UNDEF; code.nregs as usize];
         let nparams = code.params.len();
         for (i, r) in regs[args..args + argc].iter_mut().enumerate() {
-            let v = std::mem::replace(r, Value::Undef);
+            let v = std::mem::replace(r, Value::UNDEF);
             if i < nparams {
                 window[i] = v;
             }
@@ -114,8 +114,8 @@ impl Context<'_> {
             scope: m.scope,
             called: m.called,
             closure: m.closure,
-            current: Value::Null,
-            key: Value::Null,
+            current: Value::NULL,
+            key: Value::NULL,
             largest: -1,
             started: false,
             advanced: false,
@@ -157,7 +157,7 @@ impl Context<'_> {
         };
         let nregs = func.code.nregs as usize;
         if regs.len() < at + nregs {
-            regs.resize(at + nregs, Value::Undef);
+            regs.resize(at + nregs, Value::UNDEF);
         }
         {
             let mut s = state.0.borrow_mut();
@@ -203,8 +203,8 @@ impl Context<'_> {
         s.running = false;
         if r.is_err() {
             s.finished = true;
-            s.current = Value::Null;
-            s.key = Value::Null;
+            s.current = Value::NULL;
+            s.key = Value::NULL;
             s.regs.clear();
             s.delegate = None;
         }
@@ -223,12 +223,12 @@ impl Context<'_> {
         frame.called = None;
         let state = gen_of(&generator).expect("a Generator");
         let mut s = state.0.borrow_mut();
-        s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::Undef)).collect();
+        s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)).collect();
         s.pc = resume_pc as u32;
         s.resume_dst = dst;
         s.key = match key {
             Some(k) => {
-                if let Value::Int(i) = k
+                if let Some(i) = k.as_int()
                     && i > s.largest
                 {
                     s.largest = i;
@@ -237,7 +237,7 @@ impl Context<'_> {
             }
             None => {
                 s.largest += 1;
-                Value::Int(s.largest)
+                Value::int(s.largest)
             }
         };
         s.current = value;
@@ -250,8 +250,8 @@ impl Context<'_> {
         let mut s = state.0.borrow_mut();
         s.finished = true;
         s.returned = Some(value);
-        s.current = Value::Null;
-        s.key = Value::Null;
+        s.current = Value::NULL;
+        s.key = Value::NULL;
         s.delegate = None;
     }
 
@@ -263,16 +263,18 @@ impl Context<'_> {
         let state = gen_of(&generator).expect("a Generator");
         let first = state.0.borrow().delegate.is_none();
         if first {
-            let delegate = match regs[base + src as usize].deref() {
-                Value::Array(a) => Delegate::Array(a, 0),
-                Value::Object(o) if gen_of(&o).is_some() => {
-                    if Rc::ptr_eq(&o, &generator) {
-                        return Err(self.throw("Error", "Impossible to yield from the Generator being currently run"));
+            let delegate = match regs[base + src as usize].deref().into_array() {
+                Ok(a) => Delegate::Array(a, 0),
+                Err(v) => match v.into_object() {
+                    Ok(o) if gen_of(&o).is_some() => {
+                        if Rc::ptr_eq(&o, &generator) {
+                            return Err(self.throw("Error", "Impossible to yield from the Generator being currently run"));
+                        }
+                        Delegate::Generator(o)
                     }
-                    Delegate::Generator(o)
-                }
-                Value::Object(o) if o.class.is_a(b"traversable") => self.iterator_delegate(regs, o)?,
-                _ => return Err(self.throw("Error", "Can use \"yield from\" only with arrays and Traversables")),
+                    Ok(o) if o.class.is_a(b"traversable") => self.iterator_delegate(regs, o)?,
+                    _ => return Err(self.throw("Error", "Can use \"yield from\" only with arrays and Traversables")),
+                },
             };
             state.0.borrow_mut().delegate = Some(delegate);
         }
@@ -284,7 +286,7 @@ impl Context<'_> {
             let item = self.iter_object_next(regs, &it, first)?;
             let Some((value, key)) = item else {
                 state.0.borrow_mut().delegate = None;
-                return Ok(Err(Value::Null));
+                return Ok(Err(Value::NULL));
             };
             let largest = state.0.borrow().largest;
             let next = self.suspend(regs, value, Some(key), at, None);
@@ -308,11 +310,11 @@ impl Context<'_> {
             Err(Some(inner)) => {
                 let started = gen_of(&inner).expect("a Generator").0.borrow().started;
                 if !started || !first {
-                    self.resume(regs, &inner, Value::Null, None)?;
+                    self.resume(regs, &inner, Value::NULL, None)?;
                 }
                 let s = gen_of(&inner).expect("a Generator").0.borrow();
                 if s.finished {
-                    let r = s.returned.clone().unwrap_or(Value::Null);
+                    let r = s.returned.clone().unwrap_or(Value::NULL);
                     drop(s);
                     state.0.borrow_mut().delegate = None;
                     return Ok(Err(r));
@@ -333,7 +335,7 @@ impl Context<'_> {
             }
             None => {
                 state.0.borrow_mut().delegate = None;
-                Ok(Err(Value::Null))
+                Ok(Err(Value::NULL))
             }
         }
     }
@@ -349,8 +351,8 @@ impl Context<'_> {
                 self.call_named(regs, &object, b"rewind")?;
                 return Ok(Delegate::Iterator(object, true));
             }
-            match self.call_named(regs, &object, b"getIterator")? {
-                Value::Object(o) if o.class.is_a(b"traversable") => object = o,
+            match self.call_named(regs, &object, b"getIterator")?.into_object() {
+                Ok(o) if o.class.is_a(b"traversable") => object = o,
                 _ => {
                     return Err(self.throw(
                         "Exception",
@@ -368,7 +370,7 @@ impl Context<'_> {
     fn start(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>) -> Result<(), Throw> {
         let started = gen_of(object).expect("a Generator").0.borrow().started;
         if !started {
-            self.resume(regs, object, Value::Null, None)?;
+            self.resume(regs, object, Value::NULL, None)?;
         }
         Ok(())
     }
@@ -385,19 +387,19 @@ impl Context<'_> {
                 Ok(match op {
                     Op::Current => s.current.clone(),
                     Op::Key => s.key.clone(),
-                    _ => Value::Bool(!s.finished),
+                    _ => Value::bool(!s.finished),
                 })
             }
             Op::Next => {
                 let started = state(object).0.borrow().started;
                 if started {
-                    self.resume(regs, object, Value::Null, None)?;
+                    self.resume(regs, object, Value::NULL, None)?;
                 } else {
                     // PHP's next() on a new generator: to its first yield, then on.
                     self.start(regs, object)?;
-                    self.resume(regs, object, Value::Null, None)?;
+                    self.resume(regs, object, Value::NULL, None)?;
                 }
-                Ok(Value::Null)
+                Ok(Value::NULL)
             }
             Op::Send => {
                 self.start(regs, object)?;
@@ -409,7 +411,7 @@ impl Context<'_> {
                 if state(object).0.borrow().advanced {
                     return Err(self.throw("Exception", "Cannot rewind a generator that was already run"));
                 }
-                Ok(Value::Null)
+                Ok(Value::NULL)
             }
             Op::GetReturn => {
                 let s = state(object).0.borrow();
@@ -422,7 +424,7 @@ impl Context<'_> {
                 }
             }
             Op::Throw => {
-                let Value::Object(e) = arg else { return Ok(Value::Null) };
+                let Ok(e) = arg.into_object() else { return Ok(Value::NULL) };
                 let started = state(object).0.borrow().started;
                 if !started {
                     // Not started: thrown as if at the start, and not caught there.
@@ -432,7 +434,7 @@ impl Context<'_> {
                     drop(s);
                     return Err(Throw::Object(e));
                 }
-                self.resume(regs, object, Value::Null, Some(e))?;
+                self.resume(regs, object, Value::NULL, Some(e))?;
                 Ok(state(object).0.borrow().current.clone())
             }
         }
@@ -440,7 +442,7 @@ impl Context<'_> {
 
     /// Call method `name` of an object with no arguments (Iterator's).
     pub(crate) fn call_named(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, name: &[u8]) -> Result<Value, Throw> {
-        let m = self.method_frame(&Value::Object(Rc::clone(object)), self.method_key(name), name)?;
+        let m = self.method_frame(&Value::object(Rc::clone(object)), self.method_key(name), name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
             std::mem::swap(&mut self.isolate.regs, regs);
@@ -460,18 +462,18 @@ impl Context<'_> {
         let mut object = if object.lazy.get() != 0 { self.lazy_init(regs, &object)? } else { object };
         loop {
             if gen_of(&object).is_some() {
-                self.generator_op(regs, &object, Op::Rewind, Value::Null)?;
-                let valid = self.generator_op(regs, &object, Op::Valid, Value::Null)?;
-                return Ok(valid.to_bool().then_some(Value::Object(object)));
+                self.generator_op(regs, &object, Op::Rewind, Value::NULL)?;
+                let valid = self.generator_op(regs, &object, Op::Valid, Value::NULL)?;
+                return Ok(valid.to_bool().then_some(Value::object(object)));
             }
             if object.class.is_a(b"iterator") {
                 self.call_named(regs, &object, b"rewind")?;
                 let valid = self.call_named(regs, &object, b"valid")?;
-                return Ok(valid.to_bool().then_some(Value::Object(object)));
+                return Ok(valid.to_bool().then_some(Value::object(object)));
             }
             if object.class.is_a(b"iteratoraggregate") {
-                match self.call_named(regs, &object, b"getIterator")? {
-                    Value::Object(o) if o.class.is_a(b"traversable") => {
+                match self.call_named(regs, &object, b"getIterator")?.into_object() {
+                    Ok(o) if o.class.is_a(b"traversable") => {
                         object = o;
                         continue;
                     }
@@ -487,7 +489,7 @@ impl Context<'_> {
                 }
             }
             let props = self.visible_props(&object);
-            return Ok((!props.is_empty()).then(|| Value::Array(Rc::new(props))));
+            return Ok((!props.is_empty()).then(|| Value::array(props)));
         }
     }
 
@@ -496,13 +498,13 @@ impl Context<'_> {
     pub(crate) fn iter_object_next(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, first: bool) -> Result<Option<(Value, Value)>, Throw> {
         if gen_of(object).is_some() {
             if !first {
-                self.generator_op(regs, object, Op::Next, Value::Null)?;
+                self.generator_op(regs, object, Op::Next, Value::NULL)?;
             }
-            if !self.generator_op(regs, object, Op::Valid, Value::Null)?.to_bool() {
+            if !self.generator_op(regs, object, Op::Valid, Value::NULL)?.to_bool() {
                 return Ok(None);
             }
-            let value = self.generator_op(regs, object, Op::Current, Value::Null)?;
-            let key = self.generator_op(regs, object, Op::Key, Value::Null)?;
+            let value = self.generator_op(regs, object, Op::Current, Value::NULL)?;
+            let key = self.generator_op(regs, object, Op::Key, Value::NULL)?;
             return Ok(Some((value, key)));
         }
         if !first {
@@ -518,15 +520,20 @@ impl Context<'_> {
 
     /// Everything foreach would give for `v`.
     pub(crate) fn iterate_all(&mut self, regs: &mut Vec<Value>, v: &Value) -> Result<Vec<(Value, Value)>, Throw> {
-        let it = match v.deref() {
-            Value::Array(a) => return Ok(a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect()),
-            Value::Object(o) => self.iter_object(regs, o)?,
-            _ => None,
+        let v = v.deref();
+        if let Some(a) = v.as_array() {
+            return Ok(a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect());
+        }
+        let it = match v.into_object() {
+            Ok(o) => self.iter_object(regs, o)?,
+            Err(_) => None,
         };
-        match it {
-            None => Ok(Vec::new()),
-            Some(Value::Array(a)) => Ok(a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect()),
-            Some(Value::Object(o)) => {
+        let Some(it) = it else { return Ok(Vec::new()) };
+        if let Some(a) = it.as_array() {
+            return Ok(a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect());
+        }
+        match it.into_object() {
+            Ok(o) => {
                 let mut out = Vec::new();
                 let mut first = true;
                 while let Some((v, k)) = self.iter_object_next(regs, &o, first)? {
@@ -535,7 +542,7 @@ impl Context<'_> {
                 }
                 Ok(out)
             }
-            Some(_) => Ok(Vec::new()),
+            Err(_) => Ok(Vec::new()),
         }
     }
 
@@ -543,21 +550,21 @@ impl Context<'_> {
     /// its visible properties had at the start): the property at position
     /// `pos` or after that still exists, made a reference.
     pub(crate) fn next_prop_ref(&self, state: &PhpArray, pos: usize) -> Option<(usize, Key, crate::refs::Cell)> {
-        let Some(Value::Object(o)) = state.get(&Key::Int(0)) else { return None };
-        let Some(Value::Array(names)) = state.get(&Key::Int(1)) else { return None };
+        let o = state.get(&Key::Int(0)).and_then(Value::as_object)?;
+        let names = state.get(&Key::Int(1)).and_then(Value::as_array)?;
         let scope = self.scope().0;
         let names: Vec<Value> = names.values().cloned().collect();
         for (p, name) in names.iter().enumerate().skip(pos) {
-            let key = match name {
-                Value::Int(i) => Key::Int(*i),
-                v => Key::from_string(v.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty)),
+            let key = match name.as_int() {
+                Some(i) => Key::Int(i),
+                None => Key::from_string(name.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty)),
             };
             let declared = match &key {
                 Key::Str(n) => o.class.slot(n.as_bytes(), scope.as_ref().map(|c| c.lower.as_slice())),
                 Key::Int(_) => None,
             };
             if let Some(i) = declared
-                && !matches!(o.slots.borrow()[i], Value::Undef)
+                && !o.slots.borrow()[i].is_undef()
             {
                 let cell = crate::refs::make_ref(&mut o.slots.borrow_mut()[i]);
                 return Some((p, key, cell));
@@ -576,7 +583,7 @@ impl Context<'_> {
         let mut out = PhpArray::new();
         let slots = o.slots.borrow();
         for (i, p) in o.class.properties.iter().enumerate() {
-            if matches!(slots[i], Value::Undef) || p.is_internal() {
+            if slots[i].is_undef() || p.is_internal() {
                 continue;
             }
             if o.class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {

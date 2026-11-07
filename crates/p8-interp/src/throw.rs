@@ -49,23 +49,23 @@ impl Context<'_> {
         if let Some(&(_, n)) = natives.last().filter(|(depth, n)| n.top && *depth == frames.len()) {
             let (file, line) = self.location();
             let mut entry = PhpArray::new();
-            entry.insert(key("file"), Value::Str(PhpStr::from(&*file)));
-            entry.insert(key("line"), Value::Int(i64::from(line)));
+            entry.insert(key("file"), Value::str(PhpStr::from(&*file)));
+            entry.insert(key("line"), Value::int(i64::from(line)));
             entry.insert(key("function"), Value::str(n.name));
-            entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
-            let _ = trace.push(Value::Array(Rc::new(entry)));
+            entry.insert(key("args"), Value::array(PhpArray::from_list(n.args.clone())));
+            let _ = trace.push(Value::array(entry));
         }
         // A builtin's entry: called from `caller`, at `line`.
         let native_entry = |n: &NativeCall, caller: &Frame, line: u32| {
             let mut entry = PhpArray::new();
-            entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
-            entry.insert(key("line"), Value::Int(i64::from(line)));
+            entry.insert(key("file"), Value::str(PhpStr::from(&*caller.func.code.file)));
+            entry.insert(key("line"), Value::int(i64::from(line)));
             match &n.method {
                 Some((name, class, this)) => {
-                    entry.insert(key("function"), Value::Str(name.clone()));
-                    entry.insert(key("class"), Value::Str(class.clone()));
+                    entry.insert(key("function"), Value::str(name.clone()));
+                    entry.insert(key("class"), Value::str(class.clone()));
                     if objects && let Some(this) = this {
-                        entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                        entry.insert(key("object"), Value::object(Rc::clone(this)));
                     }
                     entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
                 }
@@ -73,7 +73,7 @@ impl Context<'_> {
                     entry.insert(key("function"), Value::str(n.name));
                 }
             }
-            entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(n.args.clone()))));
+            entry.insert(key("args"), Value::array(PhpArray::from_list(n.args.clone())));
             entry
         };
         for k in (1..frames.len()).rev() {
@@ -91,13 +91,13 @@ impl Context<'_> {
                         Some(&(_, n)) => native_entry(n, caller, line),
                         None => {
                             let mut entry = PhpArray::new();
-                            entry.insert(key("file"), Value::Str(PhpStr::from(&*caller.func.code.file)));
-                            entry.insert(key("line"), Value::Int(i64::from(line)));
+                            entry.insert(key("file"), Value::str(PhpStr::from(&*caller.func.code.file)));
+                            entry.insert(key("line"), Value::int(i64::from(line)));
                             entry.insert(key("function"), Value::str("[constant expression]"));
                             entry
                         }
                     };
-                    let _ = trace.push(Value::Array(Rc::new(entry)));
+                    let _ = trace.push(Value::array(entry));
                 }
                 continue;
             }
@@ -107,8 +107,8 @@ impl Context<'_> {
             // A frame a builtin called (a callback): from no file.
             let native = natives.iter().find(|(depth, _)| *depth == k).map(|&(_, n)| n);
             if native.is_none() {
-                entry.insert(key("file"), Value::Str(PhpStr::from(&*code.file)));
-                entry.insert(key("line"), Value::Int(i64::from(line)));
+                entry.insert(key("file"), Value::str(PhpStr::from(&*code.file)));
+                entry.insert(key("line"), Value::int(i64::from(line)));
             }
             let at = caller.func.code.code.get((caller.pc as usize).saturating_sub(1));
             let code = &frame.func.code;
@@ -131,38 +131,38 @@ impl Context<'_> {
                     _ => ("{main}", false),
                 };
                 if path {
-                    entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(PhpStr::from(&*code.file))]))));
+                    entry.insert(key("args"), Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(&*code.file))])));
                 }
                 entry.insert(key("function"), Value::str(function));
-                let _ = trace.push(Value::Array(Rc::new(entry)));
+                let _ = trace.push(Value::array(entry));
                 continue;
             }
-            entry.insert(key("function"), Value::Str(PhpStr::from(code.name.as_bytes())));
+            entry.insert(key("function"), Value::str(PhpStr::from(code.name.as_bytes())));
             // A closure made in a class shows that class, as a method does.
             if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
                 let class = frame.scope.as_ref().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
-                entry.insert(key("class"), Value::Str(class));
+                entry.insert(key("class"), Value::str(class));
                 if objects && let Some(this) = &frame.this {
-                    entry.insert(key("object"), Value::Object(Rc::clone(this)));
+                    entry.insert(key("object"), Value::object(Rc::clone(this)));
                 }
                 entry.insert(key("type"), Value::str(if frame.this.is_some() { "->" } else { "::" }));
             }
             let mut args = PhpArray::new();
             let base = frame.base as usize;
             for i in 0..(frame.argc as usize).min(code.params.len()) {
-                let v = match frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default()) {
-                    Value::Undef => continue,
-                    v => v.deref(),
-                };
-                let _ = args.push(v);
+                let v = frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default());
+                if v.is_undef() {
+                    continue;
+                }
+                let _ = args.push(v.deref());
             }
             for v in frame.args().iter() {
                 let _ = args.push(v.deref());
             }
-            entry.insert(key("args"), Value::Array(Rc::new(args)));
-            let _ = trace.push(Value::Array(Rc::new(entry)));
+            entry.insert(key("args"), Value::array(args));
+            let _ = trace.push(Value::array(entry));
             if let Some(n) = native {
-                let _ = trace.push(Value::Array(Rc::new(native_entry(n, caller, line))));
+                let _ = trace.push(Value::array(native_entry(n, caller, line)));
             }
         }
         trace
@@ -173,15 +173,15 @@ impl Context<'_> {
     pub(crate) fn failed_call(&mut self, function: &[u8], class: Option<(&PhpStr, bool)>, args: &[Value]) {
         let (file, line) = self.location();
         let mut entry = PhpArray::new();
-        entry.insert(key("file"), Value::Str(PhpStr::from(&*file)));
-        entry.insert(key("line"), Value::Int(i64::from(line)));
-        entry.insert(key("function"), Value::Str(PhpStr::from(function)));
+        entry.insert(key("file"), Value::str(PhpStr::from(&*file)));
+        entry.insert(key("line"), Value::int(i64::from(line)));
+        entry.insert(key("function"), Value::str(PhpStr::from(function)));
         if let Some((class, this)) = class {
-            entry.insert(key("class"), Value::Str(class.clone()));
+            entry.insert(key("class"), Value::str(class.clone()));
             entry.insert(key("type"), Value::str(if this { "->" } else { "::" }));
         }
-        let args: Vec<Value> = args.iter().filter(|v| !matches!(v, Value::Undef)).map(Value::deref).collect();
-        entry.insert(key("args"), Value::Array(Rc::new(PhpArray::from_list(args))));
+        let args: Vec<Value> = args.iter().filter(|v| !v.is_undef()).map(Value::deref).collect();
+        entry.insert(key("args"), Value::array(PhpArray::from_list(args)));
         self.failed_call = Some(entry);
     }
 
@@ -191,7 +191,7 @@ impl Context<'_> {
             // A fatal error, where it was raised: its trace, for showing with
             // it (fatal_error_backtraces; zend_error_impl fetches it then).
             if matches!(t, Throw::Fatal { .. }) && self.fatal_trace.borrow().is_none() && self.fatal_error_backtraces() {
-                let trace = p8_runtime::trace::trace_string(&Value::Array(Rc::new(self.raised_trace(regs))));
+                let trace = p8_runtime::trace::trace_string(&Value::array(self.raised_trace(regs)));
                 *self.fatal_trace.borrow_mut() = Some(trace);
             }
             return t;
@@ -211,7 +211,7 @@ impl Context<'_> {
     fn raised_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
         let trace = self.trace(regs);
         let Some(top) = self.failed_call.take() else { return trace };
-        let mut with = PhpArray::from_list(vec![Value::Array(Rc::new(top))]);
+        let mut with = PhpArray::from_list(vec![Value::array(top)]);
         for (_, v) in trace.iter() {
             let _ = with.push(v.clone());
         }
@@ -227,11 +227,11 @@ impl Context<'_> {
         };
         let object = Object::new(Rc::clone(&class), &self.ids);
         let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };
-        class.write(&object, b"message", root, Value::Str(PhpStr::from(message)));
-        class.write(&object, b"file", root, Value::Str(PhpStr::from(&*file)));
-        class.write(&object, b"line", root, Value::Int(i64::from(line)));
+        class.write(&object, b"message", root, Value::str(PhpStr::from(message)));
+        class.write(&object, b"file", root, Value::str(PhpStr::from(&*file)));
+        class.write(&object, b"line", root, Value::int(i64::from(line)));
         let trace = self.raised_trace(regs);
-        class.write(&object, b"trace", root, Value::Array(Rc::new(trace)));
+        class.write(&object, b"trace", root, Value::array(trace));
         for (name, value) in props {
             class.write(&object, name.as_bytes(), &class.lower, value);
         }
@@ -255,7 +255,7 @@ impl Context<'_> {
             silences.sort_by_key(|s| std::cmp::Reverse(s.0));
             for s in silences {
                 if self.error_level & !4437 == 0
-                    && let Value::Int(level) = regs[base + s.2 as usize]
+                    && let Some(level) = regs[base + s.2 as usize].as_int()
                 {
                     self.error_level = level;
                 }
@@ -269,7 +269,7 @@ impl Context<'_> {
                 .max_by_key(|h| h.depth)
                 .copied();
             if let Some(h) = handler {
-                regs[base + h.slot as usize] = Value::Object(object);
+                regs[base + h.slot as usize] = Value::object(object);
                 return Ok(h.target as usize);
             }
             // The bottom frame of this `execute`: the exception goes to

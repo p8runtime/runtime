@@ -76,13 +76,13 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
             Origin::Var(name) => {
                 let vars = &mut frames.slots[n - 2].vars_mut().0;
                 let at = vars.iter().position(|(n, _)| n == name);
-                match (v, at) {
-                    (Value::Ref(cell), Some(at)) => vars[at].1 = cell,
-                    (Value::Ref(cell), None) => vars.push((name.clone(), cell)),
-                    (_, Some(at)) => {
+                match (v.into_reference(), at) {
+                    (Ok(cell), Some(at)) => vars[at].1 = cell,
+                    (Ok(cell), None) => vars.push((name.clone(), cell)),
+                    (Err(_), Some(at)) => {
                         vars.remove(at);
                     }
-                    (_, None) => {}
+                    (Err(_), None) => {}
                 }
             }
         }
@@ -93,7 +93,7 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
     for (name, cell) in made {
         let below = &mut frames.slots[n - 2];
         match below.func.code.cv_names.iter().position(|c| c.as_bytes() == name.as_slice()) {
-            Some(r) => regs[below.base as usize + r] = Value::Ref(cell),
+            Some(r) => regs[below.base as usize + r] = Value::reference(cell),
             None => {
                 let vars = &mut below.vars_mut().0;
                 match vars.iter().position(|(n, _)| *n == name) {
@@ -140,7 +140,7 @@ impl Vars {
         if let Some(c) = self.get(name) {
             return Rc::clone(c);
         }
-        let c = Rc::new(RefCell::new(Value::Null));
+        let c = Rc::new(RefCell::new(Value::NULL));
         self.0.push((name.to_vec(), Rc::clone(&c)));
         c
     }

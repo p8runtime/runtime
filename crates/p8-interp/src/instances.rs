@@ -135,7 +135,7 @@ mod tests {
         assert!(Rc::ptr_eq(&ib.ctor.as_ref().expect("inherited").declaring, &a));
         assert_eq!(ib.defaults.len(), 3);
         // The defaults were copied, never changed by an object's writes.
-        assert!(matches!(&ia.defaults[0], p8_runtime::value::Value::Array(l) if l.len() == 2));
+        assert!(ia.defaults[0].as_array().is_some_and(|l| l.len() == 2));
         // make()'s two `new` sites hold their classes' NewInfo.
         let make = cx.closures.iter().find(|c| c.code.name.as_bytes() == b"make").expect("make");
         let held: Vec<_> = make.news.iter().filter_map(|s| s.borrow().upgrade()).collect();

@@ -7,8 +7,7 @@ use crate::unicode::{self, Mode, Turkish};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
-use std::rc::Rc;
+use p8_runtime::value::{Kind as ValueKind, Value};
 
 pub type R = Result<Value, Throw>;
 
@@ -84,25 +83,28 @@ pub fn arg_error(ctx: &dyn Ctx, n: usize, message: &str) -> Throw {
 
 pub fn str_arg(args: &[Value], i: usize) -> Vec<u8> {
     match args.get(i) {
-        Some(v) => match v.deref() {
-            Value::Str(s) => s.as_bytes().to_vec(),
-            other => other.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
-        },
+        Some(v) => {
+            let v = v.deref();
+            match v.as_str() {
+                Some(s) => s.as_bytes().to_vec(),
+                None => v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+            }
+        }
         None => Vec::new(),
     }
 }
 
 pub fn opt_str(args: &[Value], i: usize) -> Option<Vec<u8>> {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) | Some(Value::Undef) => None,
-        Some(v) => Some(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()),
+        Some(v) if !v.is_null_or_undef() => Some(v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default()),
+        _ => None,
     }
 }
 
 pub fn int_arg(args: &[Value], i: usize, default: i64) -> i64 {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) | Some(Value::Undef) => default,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null_or_undef() => v.to_int(),
+        _ => default,
     }
 }
 
@@ -117,7 +119,7 @@ pub fn text(b: &[u8]) -> String {
 }
 
 pub fn out(bytes: Vec<u8>) -> R {
-    Ok(Value::Str(PhpStr::new(bytes)))
+    Ok(Value::str(PhpStr::new(bytes)))
 }
 
 pub fn strict_detection(ctx: &dyn Ctx) -> bool {
@@ -125,8 +127,8 @@ pub fn strict_detection(ctx: &dyn Ctx) -> bool {
 }
 
 fn ini_text(ctx: &dyn Ctx, name: &str) -> Option<String> {
-    match ctx.ini_get(name.as_bytes())? {
-        Value::Str(s) if !s.is_empty() => Some(text(s.as_bytes())),
+    match ctx.ini_get(name.as_bytes())?.as_str() {
+        Some(s) if !s.is_empty() => Some(text(s.as_bytes())),
         _ => None,
     }
 }
@@ -134,7 +136,7 @@ fn ini_text(ctx: &dyn Ctx, name: &str) -> Option<String> {
 /// The internal encoding: mb_internal_encoding()'s, else the ini setting,
 /// else default_charset.
 pub fn internal(ctx: &mut dyn Ctx) -> &'static Enc {
-    if let Value::Str(s) = ctx.state("mb_internal")
+    if let Some(s) = ctx.state("mb_internal").as_str()
         && let Some(e) = enc::lookup(&text(s.as_bytes())) {
             return e;
         }
@@ -177,10 +179,10 @@ pub fn encoding_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize) -> Result<&'sta
 /// How characters an encoding can't have are replaced.
 pub fn subst(ctx: &mut dyn Ctx) -> Subst {
     let mode = ctx.state("mb_mode").clone();
-    if let Value::Int(m) = mode {
-        let ch = match ctx.state("mb_char") {
-            Value::Int(c) => *c as u32,
-            _ => b'?' as u32,
+    if let Some(m) = mode.as_int() {
+        let ch = match ctx.state("mb_char").as_int() {
+            Some(c) => c as u32,
+            None => b'?' as u32,
         };
         return Subst { mode: m as u8, ch };
     }
@@ -202,7 +204,7 @@ pub fn subst(ctx: &mut dyn Ctx) -> Subst {
 fn count_illegal(ctx: &mut dyn Ctx, n: usize) {
     if n > 0 {
         let c = ctx.state("mb_illegal");
-        *c = Value::Int(c.to_int() + n as i64);
+        *c = Value::int(c.to_int() + n as i64);
     }
 }
 
@@ -259,7 +261,7 @@ fn language_named(name: &str) -> Option<&'static str> {
 }
 
 pub fn current_language(ctx: &mut dyn Ctx) -> &'static str {
-    if let Value::Str(s) = ctx.state("mb_language")
+    if let Some(s) = ctx.state("mb_language").as_str()
         && let Some(l) = language_named(&text(s.as_bytes())) {
             return l;
         }
@@ -279,7 +281,7 @@ fn mb_language(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 }
                 Some(l) => {
                     *ctx.state("mb_language") = Value::str(l);
-                    Ok(Value::Bool(true))
+                    Ok(Value::TRUE)
                 }
             }
         }
@@ -295,7 +297,7 @@ fn mb_internal_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 None => Err(arg_error(ctx, 1, &format!("must be a valid encoding, \"{n}\" given"))),
                 Some(e) => {
                     *ctx.state("mb_internal") = Value::str(e.name);
-                    Ok(Value::Bool(true))
+                    Ok(Value::TRUE)
                 }
             }
         }
@@ -316,9 +318,9 @@ pub fn http_input_list(ctx: &mut dyn Ctx) -> Vec<&'static Enc> {
 
 fn mb_http_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let list = http_input_list(ctx);
-    let identified = |ctx: &mut dyn Ctx, key: &'static str| match ctx.state(key) {
-        Value::Str(s) => Value::Str(s.clone()),
-        _ => Value::Bool(false),
+    let identified = |ctx: &mut dyn Ctx, key: &'static str| match ctx.state(key).cloned_str() {
+        Some(s) => Value::str(s),
+        None => Value::FALSE,
     };
     match opt_str(args, 0) {
         None => Ok(identified(ctx, "mb_http_identify")),
@@ -332,11 +334,11 @@ fn mb_http_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 for e in list {
                     let _ = a.push(Value::str(e.name));
                 }
-                Ok(Value::Array(Rc::new(a)))
+                Ok(Value::array(a))
             }
             b'L' => {
                 if list.is_empty() {
-                    Ok(Value::Bool(false))
+                    Ok(Value::FALSE)
                 } else {
                     Ok(Value::str(list.iter().map(|e| e.name).collect::<Vec<_>>().join(",")))
                 }
@@ -349,7 +351,7 @@ fn mb_http_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 /// The output encoding: "pass" or an encoding's name.
 pub fn http_output(ctx: &mut dyn Ctx) -> String {
-    if let Value::Str(s) = ctx.state("mb_http_output") {
+    if let Some(s) = ctx.state("mb_http_output").as_str() {
         return text(s.as_bytes());
     }
     let configured = ini_text(ctx, "mbstring.http_output").or_else(|| ini_text(ctx, "output_encoding"));
@@ -369,7 +371,7 @@ fn mb_http_output(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 None => Err(arg_error(ctx, 1, &format!("must be a valid encoding, \"{n}\" given"))),
                 Some(name) => {
                     *ctx.state("mb_http_output") = Value::str(name);
-                    Ok(Value::Bool(true))
+                    Ok(Value::TRUE)
                 }
             }
         }
@@ -415,17 +417,17 @@ pub fn parse_array(ctx: &mut dyn Ctx, a: &PhpArray, argn: usize) -> Result<Vec<&
     let mut auto = false;
     for v in a.values() {
         let v = v.deref();
-        if matches!(v, Value::Array(_)) {
+        if v.is_array() {
             ctx.warn("Array to string conversion");
         }
-        let s = match &v {
-            Value::Array(_) => "Array".to_string(),
-            Value::Object(_) => {
-                let callable = Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), Value::str("__toString")])));
-                let r = ctx.call(&callable, &mut [])?;
-                text(r.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())
-            }
-            other => text(other.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+        let s = if v.is_array() {
+            "Array".to_string()
+        } else if v.is_object() {
+            let callable = Value::array(PhpArray::from_list(vec![v.clone(), Value::str("__toString")]));
+            let r = ctx.call(&callable, &mut [])?;
+            text(r.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())
+        } else {
+            text(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())
         };
         if s.eq_ignore_ascii_case("auto") {
             if !auto {
@@ -448,7 +450,7 @@ fn default_detect_order(_ctx: &mut dyn Ctx) -> Vec<&'static Enc> {
 }
 
 pub fn detect_order(ctx: &mut dyn Ctx) -> Vec<&'static Enc> {
-    if let Value::Str(s) = ctx.state("mb_detect") {
+    if let Some(s) = ctx.state("mb_detect").as_str() {
         let names = text(s.as_bytes());
         return names.split(',').filter_map(enc::lookup).collect();
     }
@@ -461,10 +463,11 @@ pub fn detect_order(ctx: &mut dyn Ctx) -> Vec<&'static Enc> {
 }
 
 fn encoding_list_arg(ctx: &mut dyn Ctx, v: &Value, argn: usize) -> Result<Vec<&'static Enc>, Throw> {
-    match v.deref() {
-        Value::Array(a) => parse_array(ctx, &a, argn),
-        other => {
-            let s = other.to_php_string().unwrap_or_else(PhpStr::empty);
+    let v = v.deref();
+    match v.as_array() {
+        Some(a) => parse_array(ctx, a, argn),
+        None => {
+            let s = v.to_php_string().unwrap_or_else(PhpStr::empty);
             parse_list(ctx, s.as_bytes(), argn)
         }
     }
@@ -472,36 +475,28 @@ fn encoding_list_arg(ctx: &mut dyn Ctx, v: &Value, argn: usize) -> Result<Vec<&'
 
 fn mb_detect_order(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => {
-            let mut a = PhpArray::new();
-            for e in detect_order(ctx) {
-                let _ = a.push(Value::str(e.name));
-            }
-            Ok(Value::Array(Rc::new(a)))
-        }
-        Some(v) => {
+        Some(v) if !v.is_null() => {
             let list = encoding_list_arg(ctx, &v, 1)?;
             if list.is_empty() {
                 return Err(arg_error(ctx, 1, "must specify at least one encoding"));
             }
             *ctx.state("mb_detect") = Value::str(list.iter().map(|e| e.name).collect::<Vec<_>>().join(","));
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
+        }
+        _ => {
+            let mut a = PhpArray::new();
+            for e in detect_order(ctx) {
+                let _ = a.push(Value::str(e.name));
+            }
+            Ok(Value::array(a))
         }
     }
 }
 
 fn mb_substitute_character(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => {
-            let s = subst(ctx);
-            Ok(match s.mode {
-                1 => Value::str("none"),
-                2 => Value::str("long"),
-                3 => Value::str("entity"),
-                _ => Value::Int(s.ch as i64),
-            })
-        }
-        Some(Value::Str(s)) => {
+        Some(v) if v.is_str() => {
+            let s = v.as_str().expect("a string");
             let t = text(s.as_bytes()).to_ascii_lowercase();
             let mode = match t.as_str() {
                 "none" => 1,
@@ -509,22 +504,31 @@ fn mb_substitute_character(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 "entity" => 3,
                 _ => return Err(arg_error(ctx, 1, "must be \"none\", \"long\", \"entity\" or a valid codepoint")),
             };
-            *ctx.state("mb_mode") = Value::Int(mode);
-            Ok(Value::Bool(true))
+            *ctx.state("mb_mode") = Value::int(mode);
+            Ok(Value::TRUE)
         }
-        Some(v) => {
-            if let Value::Float(f) = v
+        Some(v) if !v.is_null() => {
+            if let Some(f) = v.as_float()
                 && f.fract() != 0.0 {
-                    let shown = Value::Float(f).to_php_string().map(|s| text(s.as_bytes())).unwrap_or_default();
+                    let shown = Value::float(f).to_php_string().map(|s| text(s.as_bytes())).unwrap_or_default();
                     ctx.deprecated(&format!("Implicit conversion from float {shown} to int loses precision"));
                 }
             let cp = v.to_int();
             if !(0..0x110000).contains(&cp) || (0xD800..=0xDFFF).contains(&cp) {
                 return Err(arg_error(ctx, 1, "is not a valid codepoint"));
             }
-            *ctx.state("mb_mode") = Value::Int(0);
-            *ctx.state("mb_char") = Value::Int(cp);
-            Ok(Value::Bool(true))
+            *ctx.state("mb_mode") = Value::int(0);
+            *ctx.state("mb_char") = Value::int(cp);
+            Ok(Value::TRUE)
+        }
+        _ => {
+            let s = subst(ctx);
+            Ok(match s.mode {
+                1 => Value::str("none"),
+                2 => Value::str("long"),
+                3 => Value::str("entity"),
+                _ => Value::int(s.ch as i64),
+            })
         }
     }
 }
@@ -537,7 +541,7 @@ fn mb_preferred_mime_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             Some(m) if !m.is_empty() => Ok(Value::str(m)),
             _ => {
                 ctx.warn(&format!("mb_preferred_mime_name(): No MIME preferred name corresponding to \"{n}\""));
-                Ok(Value::Bool(false))
+                Ok(Value::FALSE)
             }
         },
     }
@@ -545,9 +549,9 @@ fn mb_preferred_mime_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn mb_regex_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match opt_str(args, 0) {
-        None => Ok(match ctx.state("mb_regex_enc") {
-            Value::Str(s) => Value::Str(s.clone()),
-            _ => Value::str("UTF-8"),
+        None => Ok(match ctx.state("mb_regex_enc").cloned_str() {
+            Some(s) => Value::str(s),
+            None => Value::str("UTF-8"),
         }),
         Some(n) => {
             let n = text(&n);
@@ -555,7 +559,7 @@ fn mb_regex_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 None => Err(arg_error(ctx, 1, &format!("must be a valid encoding, \"{n}\" given"))),
                 Some(e) => {
                     *ctx.state("mb_regex_enc") = Value::str(e.name);
-                    Ok(Value::Bool(true))
+                    Ok(Value::TRUE)
                 }
             }
         }
@@ -593,13 +597,10 @@ fn regex_option_string(bits: i64, syntax: u8) -> String {
 }
 
 fn mb_regex_set_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let bits = match ctx.state("mb_regex_bits") {
-        Value::Int(b) => *b,
-        _ => 12,
-    };
-    let syntax = match ctx.state("mb_regex_syntax") {
-        Value::Int(c) => *c as u8,
-        _ => b'r',
+    let bits = ctx.state("mb_regex_bits").as_int().unwrap_or(12);
+    let syntax = match ctx.state("mb_regex_syntax").as_int() {
+        Some(c) => c as u8,
+        None => b'r',
     };
     match opt_str(args, 0) {
         None => Ok(Value::str(regex_option_string(bits, syntax))),
@@ -619,8 +620,8 @@ fn mb_regex_set_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                     _ => return Err(ctx.throw("ValueError", format!("Option \"{}\" is not supported", c as char))),
                 }
             }
-            *ctx.state("mb_regex_bits") = Value::Int(nb);
-            *ctx.state("mb_regex_syntax") = Value::Int(ns as i64);
+            *ctx.state("mb_regex_bits") = Value::int(nb);
+            *ctx.state("mb_regex_syntax") = Value::int(ns as i64);
             Ok(Value::str(regex_option_string(bits, syntax)))
         }
     }
@@ -695,7 +696,7 @@ pub fn substr(sb: &Subst, e: &Enc, s: &[u8], from: usize, len: Option<usize>) ->
 
 fn mb_strlen(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let e = encoding_arg(ctx, args, 1)?;
-    Ok(Value::Int(strlen(e, &str_arg(args, 0)) as i64))
+    Ok(Value::int(strlen(e, &str_arg(args, 0)) as i64))
 }
 
 fn mb_substr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -736,8 +737,8 @@ fn mb_substr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 
 fn opt_int(args: &[Value], i: usize) -> Option<i64> {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) | Some(Value::Undef) => None,
-        Some(v) => Some(v.to_int()),
+        Some(v) if !v.is_null_or_undef() => Some(v.to_int()),
+        _ => None,
     }
 }
 
@@ -809,21 +810,21 @@ fn mb_str_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let e = encoding_arg(ctx, args, 2)?;
     let mut a = PhpArray::new();
     if s.is_empty() {
-        return Ok(Value::Array(Rc::new(a)));
+        return Ok(Value::array(a));
     }
     let n = n as usize;
     if let Some(sp) = spans(e, &s) {
         for chunk in sp.chunks(n) {
-            let _ = a.push(Value::Str(PhpStr::new(s[chunk[0].0..chunk[chunk.len() - 1].1].to_vec())));
+            let _ = a.push(Value::str(PhpStr::new(s[chunk[0].0..chunk[chunk.len() - 1].1].to_vec())));
         }
     } else {
         let cps = enc::decode(e, &s);
         for chunk in cps.chunks(n) {
             let bytes = encode_out(ctx, e, chunk);
-            let _ = a.push(Value::Str(PhpStr::new(bytes)));
+            let _ = a.push(Value::str(PhpStr::new(bytes)));
         }
     }
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 // ---- searching ----
@@ -952,8 +953,8 @@ fn strpos_impl(ctx: &mut dyn Ctx, args: &[Value], reverse: bool, fold: bool) -> 
     let e = encoding_arg(ctx, args, 3)?;
     let (h, n) = search_texts(e, &str_arg(args, 0), &str_arg(args, 1), fold);
     match find(&h, &n, int_arg(args, 2, 0), reverse) {
-        Found::At(i) => Ok(Value::Int(i as i64)),
-        Found::Missing => Ok(Value::Bool(false)),
+        Found::At(i) => Ok(Value::int(i as i64)),
+        Found::Missing => Ok(Value::FALSE),
         Found::BadOffset => Err(arg_error(ctx, 3, "must be contained in argument #1 ($haystack)")),
     }
 }
@@ -983,7 +984,7 @@ fn strstr_impl(ctx: &mut dyn Ctx, args: &[Value], reverse: bool, fold: bool) -> 
                 out(substr(&subst(ctx), e, &hay, i, None))
             }
         }
-        _ => Ok(Value::Bool(false)),
+        _ => Ok(Value::FALSE),
     }
 }
 
@@ -1020,7 +1021,7 @@ fn mb_substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             i += 1;
         }
     }
-    Ok(Value::Int(count))
+    Ok(Value::int(count))
 }
 
 // ---- widths ----
@@ -1050,7 +1051,7 @@ fn strwidth(cps: &[u32]) -> usize {
 
 fn mb_strwidth(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let e = encoding_arg(ctx, args, 1)?;
-    Ok(Value::Int(strwidth(&enc::decode(e, &str_arg(args, 0))) as i64))
+    Ok(Value::int(strwidth(&enc::decode(e, &str_arg(args, 0))) as i64))
 }
 
 fn mb_strimwidth(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1107,34 +1108,36 @@ fn mb_strimwidth(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 // ---- conversion ----
 
 fn convert_value(ctx: &mut dyn Ctx, v: &Value, to: &'static Enc, from: &[&'static Enc]) -> Option<Value> {
-    match v.deref() {
-        Value::Str(s) => convert_str(ctx, s.as_bytes(), to, from).map(|b| Value::Str(PhpStr::new(b))),
-        Value::Array(a) => {
-            let mut res = PhpArray::new();
-            for (k, val) in a.iter() {
-                let key = match &k {
-                    Key::Str(s) => match convert_str(ctx, s.as_bytes(), to, from) {
-                        Some(b) => Key::from_string(PhpStr::new(b)),
-                        None => continue,
-                    },
-                    Key::Int(i) => Key::Int(*i),
-                };
-                let nv = match val.deref() {
-                    Value::Str(_) | Value::Array(_) => match convert_value(ctx, val, to, from) {
-                        Some(x) => x,
-                        None => continue,
-                    },
-                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => val.deref(),
-                    _ => {
-                        ctx.warn(&format!("{}(): Object is not supported", ctx.builtin_name()));
-                        continue;
-                    }
-                };
-                res.insert(key, nv);
-            }
-            Some(Value::Array(Rc::new(res)))
+    let v = v.deref();
+    if let Some(s) = v.as_str() {
+        convert_str(ctx, s.as_bytes(), to, from).map(|b| Value::str(PhpStr::new(b)))
+    } else if let Some(a) = v.as_array() {
+        let mut res = PhpArray::new();
+        for (k, val) in a.iter() {
+            let key = match &k {
+                Key::Str(s) => match convert_str(ctx, s.as_bytes(), to, from) {
+                    Some(b) => Key::from_string(PhpStr::new(b)),
+                    None => continue,
+                },
+                Key::Int(i) => Key::Int(*i),
+            };
+            let inner = val.deref();
+            let nv = if inner.is_str() || inner.is_array() {
+                match convert_value(ctx, val, to, from) {
+                    Some(x) => x,
+                    None => continue,
+                }
+            } else if inner.is_null() || inner.is_bool() || inner.is_number() {
+                inner
+            } else {
+                ctx.warn(&format!("{}(): Object is not supported", ctx.builtin_name()));
+                continue;
+            };
+            res.insert(key, nv);
         }
-        _ => None,
+        Some(Value::array(res))
+    } else {
+        None
     }
 }
 
@@ -1160,8 +1163,8 @@ fn remove_non_encodings(list: &mut Vec<&'static Enc>) {
 fn mb_convert_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let to = encoding_arg(ctx, args, 1)?;
     let mut from = match args.get(2).map(Value::deref) {
-        None | Some(Value::Null) => vec![internal(ctx)],
-        Some(v) => encoding_list_arg(ctx, &v, 3)?,
+        Some(v) if !v.is_null() => encoding_list_arg(ctx, &v, 3)?,
+        _ => vec![internal(ctx)],
     };
     if from.len() > 1 {
         remove_non_encodings(&mut from);
@@ -1170,12 +1173,12 @@ fn mb_convert_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return Err(arg_error(ctx, 3, "must specify at least one encoding"));
     }
     let input = args[0].deref();
-    match input {
-        Value::Str(s) => match convert_str(ctx, s.as_bytes(), to, &from) {
+    match input.as_str() {
+        Some(s) => match convert_str(ctx, s.as_bytes(), to, &from) {
             Some(b) => out(b),
-            None => Ok(Value::Bool(false)),
+            None => Ok(Value::FALSE),
         },
-        v => Ok(convert_value(ctx, &v, to, &from).unwrap_or(Value::Array(Rc::new(PhpArray::new())))),
+        None => Ok(convert_value(ctx, &input, to, &from).unwrap_or(Value::array(PhpArray::new()))),
     }
 }
 
@@ -1269,22 +1272,28 @@ pub fn guess(strings: &[&[u8]], list: &[&'static Enc], strict: bool, order_signi
 fn mb_detect_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = str_arg(args, 0);
     let mut list = match args.get(1).map(Value::deref) {
-        None | Some(Value::Null) => detect_order(ctx),
-        Some(v) => encoding_list_arg(ctx, &v, 2)?,
+        Some(v) if !v.is_null() => encoding_list_arg(ctx, &v, 2)?,
+        _ => detect_order(ctx),
     };
-    let order_significant = list.len() != enc::list().len() || true;
     if list.is_empty() {
         return Err(arg_error(ctx, 2, "must specify at least one encoding"));
     }
     remove_non_encodings(&mut list);
     if list.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let strict = if args.len() >= 3 { bool_arg(args, 2) } else { strict_detection(ctx) };
-    let order_significant = order_significant && !(matches!(args.get(1).map(Value::deref), Some(Value::Array(a)) if a.len() == enc::list().len() && a.values().zip(enc::list()).all(|(v, e)| v.to_php_string().is_some_and(|x| x.as_bytes() == e.name.as_bytes()))));
+    // The order given is not significant when it is the full list in its
+    // default order (mb_list_encodings()).
+    let order_significant = !args
+            .get(1)
+            .map(Value::deref)
+            .as_ref()
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.len() == enc::list().len() && a.values().zip(enc::list()).all(|(v, e)| v.to_php_string().is_some_and(|x| x.as_bytes() == e.name.as_bytes())));
     match guess(&[&s], &list, strict, order_significant) {
         Some(e) => Ok(Value::str(e.name)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -1293,7 +1302,7 @@ fn mb_list_encodings(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     for e in enc::list() {
         let _ = a.push(Value::str(e.name));
     }
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 fn mb_encoding_aliases(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1302,46 +1311,46 @@ fn mb_encoding_aliases(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     for al in e.aliases {
         let _ = a.push(Value::str(*al));
     }
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 fn check_value(ctx: &mut dyn Ctx, v: &Value, e: &Enc, depth: usize) -> bool {
-    match v.deref() {
-        Value::Str(s) => !enc::decode(e, s.as_bytes()).contains(&BAD),
-        Value::Array(a) => {
-            if depth > 64 {
-                ctx.warn("mb_check_encoding(): Cannot not handle circular references");
+    let v = v.deref();
+    if let Some(s) = v.as_str() {
+        !enc::decode(e, s.as_bytes()).contains(&BAD)
+    } else if let Some(a) = v.as_array() {
+        if depth > 64 {
+            ctx.warn("mb_check_encoding(): Cannot not handle circular references");
+            return false;
+        }
+        for (k, val) in a.iter() {
+            if let Key::Str(s) = &k
+                && enc::decode(e, s.as_bytes()).contains(&BAD) {
+                    return false;
+                }
+            let inner = val.deref();
+            if inner.is_str() || inner.is_array() {
+                if !check_value(ctx, val, e, depth + 1) {
+                    return false;
+                }
+            } else if !(inner.is_null() || inner.is_bool() || inner.is_number()) {
                 return false;
             }
-            for (k, val) in a.iter() {
-                if let Key::Str(s) = &k
-                    && enc::decode(e, s.as_bytes()).contains(&BAD) {
-                        return false;
-                    }
-                match val.deref() {
-                    Value::Str(_) | Value::Array(_) => {
-                        if !check_value(ctx, val, e, depth + 1) {
-                            return false;
-                        }
-                    }
-                    Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {}
-                    _ => return false,
-                }
-            }
-            true
         }
-        _ => true,
+        true
+    } else {
+        true
     }
 }
 
 fn mb_check_encoding(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let e = encoding_arg(ctx, args, 1)?;
     match args.first().map(Value::deref) {
-        None | Some(Value::Null) => {
+        Some(v) if !v.is_null() => Ok(Value::bool(check_value(ctx, &v, e, 0))),
+        _ => {
             ctx.deprecated("mb_check_encoding(): Calling mb_check_encoding() without argument is deprecated");
-            Ok(Value::Bool(ctx.state("mb_illegal").to_int() == 0))
+            Ok(Value::bool(ctx.state("mb_illegal").to_int() == 0))
         }
-        Some(v) => Ok(Value::Bool(check_value(ctx, &v, e, 0))),
     }
 }
 
@@ -1364,8 +1373,8 @@ fn mb_ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return Err(ctx.throw("ValueError", format!("mb_ord() does not support the \"{}\" encoding", e.name)));
     }
     match enc::decode(e, &s).first() {
-        Some(&c) if c != BAD => Ok(Value::Int(c as i64)),
-        _ => Ok(Value::Bool(false)),
+        Some(&c) if c != BAD => Ok(Value::int(c as i64)),
+        _ => Ok(Value::FALSE),
     }
 }
 
@@ -1376,12 +1385,12 @@ fn mb_chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return Err(ctx.throw("ValueError", format!("mb_chr() does not support the \"{}\" encoding", e.name)));
     }
     if !(0..=0x10FFFF).contains(&cp) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let cp = cp as u32;
     if e.is_utf8() {
         if (0xD800..0xE000).contains(&cp) {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         let mut v = Vec::new();
         enc::push_utf8(cp, &mut v);
@@ -1389,7 +1398,7 @@ fn mb_chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let mut errs = 0;
     let bytes = enc::encode(e, &[cp], &subst(ctx), &mut errs);
-    if errs > 0 { Ok(Value::Bool(false)) } else { out(bytes) }
+    if errs > 0 { Ok(Value::FALSE) } else { out(bytes) }
 }
 
 // ---- case ----
@@ -1530,18 +1539,19 @@ fn mb_str_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 // ---- numeric entities ----
 
 fn convmap(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u32>, Throw> {
-    let Value::Array(a) = v.deref() else { return Ok(Vec::new()) };
+    let Ok(a) = v.deref().into_array() else { return Ok(Vec::new()) };
     if a.len() % 4 != 0 {
         return Err(arg_error(ctx, 2, "must have a multiple of 4 elements"));
     }
     let mut m = Vec::new();
     for x in a.values() {
-        match x.deref() {
-            Value::Int(i) => m.push(i as u32),
-            Value::Float(f) => m.push(f as i64 as u32),
-            Value::Bool(b) => m.push(b as u32),
-            Value::Null => m.push(0),
-            Value::Str(s) => match std::str::from_utf8(s.as_bytes()).ok().and_then(|t| t.trim().parse::<i64>().ok()) {
+        let x = x.deref();
+        match x.kind() {
+            ValueKind::Int => m.push(x.as_int().expect("an int") as u32),
+            ValueKind::Float => m.push(x.as_float().expect("a float") as i64 as u32),
+            ValueKind::Bool => m.push(x.as_bool().expect("a bool") as u32),
+            ValueKind::Null => m.push(0),
+            ValueKind::Str => match std::str::from_utf8(x.as_str().expect("a string").as_bytes()).ok().and_then(|t| t.trim().parse::<i64>().ok()) {
                 Some(i) => m.push(i as u32),
                 None => return Err(arg_error(ctx, 2, "must only be composed of values of type int")),
             },
@@ -1663,44 +1673,44 @@ fn mb_decode_numericentity(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 // ---- mb_convert_variables ----
 
 fn collect_strings(v: &Value, out: &mut Vec<Vec<u8>>, depth: usize) -> bool {
-    match v.deref() {
-        Value::Str(s) => out.push(s.as_bytes().to_vec()),
-        Value::Array(a) => {
-            if depth > 64 {
+    let v = v.deref();
+    if let Some(s) = v.as_str() {
+        out.push(s.as_bytes().to_vec());
+    } else if let Some(a) = v.as_array() {
+        if depth > 64 {
+            return true;
+        }
+        for (k, val) in a.iter() {
+            if let Key::Str(s) = &k {
+                out.push(s.as_bytes().to_vec());
+            }
+            if collect_strings(val, out, depth + 1) {
                 return true;
             }
-            for (k, val) in a.iter() {
-                if let Key::Str(s) = &k {
-                    out.push(s.as_bytes().to_vec());
-                }
-                if collect_strings(val, out, depth + 1) {
-                    return true;
-                }
-            }
         }
-        _ => {}
     }
     false
 }
 
 pub fn convert_var(ctx: &mut dyn Ctx, v: &Value, from: &'static Enc, to: &'static Enc, depth: usize) -> Option<Value> {
-    match v.deref() {
-        Value::Str(s) => Some(Value::Str(PhpStr::new(convert(ctx, s.as_bytes(), to, from)))),
-        Value::Array(a) => {
-            if depth > 64 {
-                return None;
-            }
-            let mut res = PhpArray::new();
-            for (k, val) in a.iter() {
-                let key = match &k {
-                    Key::Str(s) => Key::from_string(PhpStr::new(convert(ctx, s.as_bytes(), to, from))),
-                    Key::Int(i) => Key::Int(*i),
-                };
-                res.insert(key, convert_var(ctx, val, from, to, depth + 1)?);
-            }
-            Some(Value::Array(Rc::new(res)))
+    let v = v.deref();
+    if let Some(s) = v.as_str() {
+        Some(Value::str(PhpStr::new(convert(ctx, s.as_bytes(), to, from))))
+    } else if let Some(a) = v.as_array() {
+        if depth > 64 {
+            return None;
         }
-        other => Some(other),
+        let mut res = PhpArray::new();
+        for (k, val) in a.iter() {
+            let key = match &k {
+                Key::Str(s) => Key::from_string(PhpStr::new(convert(ctx, s.as_bytes(), to, from))),
+                Key::Int(i) => Key::Int(*i),
+            };
+            res.insert(key, convert_var(ctx, val, from, to, depth + 1)?);
+        }
+        Some(Value::array(res))
+    } else {
+        Some(v)
     }
 }
 
@@ -1717,7 +1727,7 @@ fn mb_convert_variables(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         for a in &args[2..] {
             if collect_strings(a, &mut strings, 0) {
                 ctx.warn("mb_convert_variables(): Cannot handle recursive references");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
         let refs: Vec<&[u8]> = strings.iter().map(|s| s.as_slice()).collect();
@@ -1726,20 +1736,20 @@ fn mb_convert_variables(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             Some(e) => e,
             None => {
                 ctx.warn("mb_convert_variables(): Unable to detect encoding");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     };
     for arg in args.iter_mut().skip(2) {
         let cur = arg.deref();
         match convert_var(ctx, &cur, from, to, 0) {
-            Some(nv) => match arg {
-                Value::Ref(r) => *r.borrow_mut() = nv,
-                _ => *arg = nv,
+            Some(nv) => match arg.as_reference() {
+                Some(r) => *r.borrow_mut() = nv,
+                None => *arg = nv,
             },
             None => {
                 ctx.warn("mb_convert_variables(): Cannot handle recursive references");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
@@ -1756,16 +1766,16 @@ fn mb_get_info(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let strict = strict_detection(ctx);
     let detect: Vec<Value> = detect_order(ctx).iter().map(|e| Value::str(e.name)).collect();
     let http_in: Value = {
-        match ctx.state("mb_http_identify") {
-            Value::Str(s) => Value::Str(s.clone()),
-            _ => Value::Null,
+        match ctx.state("mb_http_identify").cloned_str() {
+            Some(s) => Value::str(s),
+            None => Value::NULL,
         }
     };
     let subst_value = match sub.mode {
         1 => Value::str("none"),
         2 => Value::str("long"),
         3 => Value::str("entity"),
-        _ => Value::Int(sub.ch as i64),
+        _ => Value::int(sub.ch as i64),
     };
     let http_out = http_output(ctx);
     let conv = ini_text(ctx, "mbstring.http_output_conv_mimetypes").unwrap_or_default();
@@ -1778,10 +1788,10 @@ fn mb_get_info(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         ("mail_charset", Value::str("UTF-8")),
         ("mail_header_encoding", Value::str("BASE64")),
         ("mail_body_encoding", Value::str("BASE64")),
-        ("illegal_chars", Value::Int(ctx.state("mb_illegal").to_int())),
+        ("illegal_chars", Value::int(ctx.state("mb_illegal").to_int())),
         ("encoding_translation", Value::str(if translation { "On" } else { "Off" })),
         ("language", Value::str(language)),
-        ("detect_order", Value::Array(Rc::new(PhpArray::from_list(detect)))),
+        ("detect_order", Value::array(PhpArray::from_list(detect))),
         ("substitute_character", subst_value),
         ("strict_detection", Value::str(if strict { "On" } else { "Off" })),
     ];
@@ -1790,13 +1800,13 @@ fn mb_get_info(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         for (k, v) in entries {
             a.insert(Key::Str(PhpStr::from(k)), v);
         }
-        return Ok(Value::Array(Rc::new(a)));
+        return Ok(Value::array(a));
     }
     match entries.into_iter().find(|(k, _)| *k == t) {
         Some((_, v)) => Ok(v),
         None => {
             ctx.warn("mb_get_info(): argument #1 ($type) must be a valid type");
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }

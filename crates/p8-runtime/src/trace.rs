@@ -7,7 +7,7 @@
 use crate::array::Key;
 use crate::number::{Precision, float_to_string};
 use crate::string::PhpStr;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 
 fn text(v: &Value) -> String {
     String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned()
@@ -17,9 +17,10 @@ fn text(v: &Value) -> String {
 pub fn trace_string(trace: &Value) -> String {
     let mut out = String::new();
     let mut n = 0;
-    if let Value::Array(frames) = trace {
+    if let Some(frames) = trace.as_array() {
         for (_, frame) in frames.iter() {
-            let Value::Array(f) = frame.deref() else { continue };
+            let frame = frame.deref();
+            let Some(f) = frame.as_array() else { continue };
             let get = |k: &str| f.get(&Key::from_string(PhpStr::from(k))).map(Value::deref);
             out.push_str(&format!("#{n} "));
             match (get("file"), get("line")) {
@@ -32,7 +33,7 @@ pub fn trace_string(trace: &Value) -> String {
             }
             out.push_str(&get("function").map(|f| text(&f)).unwrap_or_default());
             out.push('(');
-            if let Some(Value::Array(args)) = get("args") {
+            if let Some(args) = get("args").as_ref().and_then(Value::as_array) {
                 let shown: Vec<String> = args.iter().map(|(_, a)| trace_arg(&a.deref())).collect();
                 out.push_str(&shown.join(", "));
             }
@@ -47,13 +48,13 @@ pub fn trace_string(trace: &Value) -> String {
 /// An argument as a trace shows it (_build_trace_args): strings cut at
 /// 15 bytes.
 pub fn trace_arg(v: &Value) -> String {
-    match v {
-        Value::Null | Value::Undef => "NULL".into(),
-        Value::Bool(b) => if *b { "true" } else { "false" }.into(),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) => float_to_string(*f, Precision::ECHO, 'E'),
-        Value::Str(s) => {
-            let bytes = s.as_bytes();
+    match v.kind() {
+        Kind::Null | Kind::Undef => "NULL".into(),
+        Kind::Bool => if v.as_bool().expect("a bool") { "true" } else { "false" }.into(),
+        Kind::Int => v.as_int().expect("an int").to_string(),
+        Kind::Float => float_to_string(v.as_float().expect("a float"), Precision::ECHO, 'E'),
+        Kind::Str => {
+            let bytes = v.as_str().expect("a string").as_bytes();
             let mut out = String::from("'");
             for &c in &bytes[..bytes.len().min(15)] {
                 match c {
@@ -71,8 +72,8 @@ pub fn trace_arg(v: &Value) -> String {
             out.push_str(if bytes.len() > 15 { "...'" } else { "'" });
             out
         }
-        Value::Array(_) => "Array".into(),
-        Value::Object(o) => format!("Object({})", String::from_utf8_lossy(o.class.name.as_bytes())),
-        Value::Ref(cell) => trace_arg(&cell.borrow()),
+        Kind::Array => "Array".into(),
+        Kind::Object => format!("Object({})", String::from_utf8_lossy(v.as_object().expect("an object").class.name.as_bytes())),
+        Kind::Ref => trace_arg(&v.as_reference().expect("a reference").borrow()),
     }
 }

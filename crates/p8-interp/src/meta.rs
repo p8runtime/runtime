@@ -159,7 +159,7 @@ impl Context<'_> {
 
     pub(crate) fn attr_arguments(&mut self, subject: &Subject, index: usize) -> Result<PhpArray, Throw> {
         if let Some(flags) = Self::builtin_attribute_flags(subject) {
-            return Ok(PhpArray::from_list(if index == 0 { vec![Value::Int(flags)] } else { Vec::new() }));
+            return Ok(PhpArray::from_list(if index == 0 { vec![Value::int(flags)] } else { Vec::new() }));
         }
         let code = self.subject_code(subject);
         let Some(found) = self.find_meta(subject, code.as_ref()) else { return Ok(PhpArray::new()) };

@@ -5,7 +5,7 @@
 //! (`Rc::make_mut`). Key rules follow zend_hash.c / zend_operators.c.
 
 use crate::string::PhpStr;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 use crate::number::dval_to_lval;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -128,37 +128,38 @@ impl Key {
 
     /// The key a value names (null is "", bools and floats are ints).
     pub fn from_value(value: &Value) -> Result<(Key, Option<KeyIssue>), KeyIssue> {
-        Ok(match value {
-            Value::Int(i) => (Key::Int(*i), None),
-            Value::Str(s) => (Key::from_string(s.clone()), None),
-            Value::Null | Value::Undef => (Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset)),
-            Value::Bool(b) => (Key::Int(i64::from(*b)), None),
-            Value::Float(f) => {
+        Ok(match value.kind() {
+            Kind::Int => (Key::Int(value.as_int().expect("an int")), None),
+            Kind::Str => (Key::from_string(value.cloned_str().expect("a string")), None),
+            Kind::Null | Kind::Undef => (Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset)),
+            Kind::Bool => (Key::Int(i64::from(value.as_bool().expect("a bool"))), None),
+            Kind::Float => {
+                let f = value.as_float().expect("a float");
                 // Not an int as it is: a fraction, NaN/INF, or out of the
                 // int range (zend_dval_to_lval_safe's deprecation).
-                let fits = (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(f);
-                let issue = (f.fract() != 0.0 || !fits).then_some(KeyIssue::LosesPrecision(*f));
-                (Key::Int(dval_to_lval(*f)), issue)
+                let fits = (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f);
+                let issue = (f.fract() != 0.0 || !fits).then_some(KeyIssue::LosesPrecision(f));
+                (Key::Int(dval_to_lval(f)), issue)
             }
-            Value::Array(_) => return Err(KeyIssue::Illegal("array")),
-            Value::Object(_) => return Err(KeyIssue::Illegal("object")),
-            Value::Ref(cell) => return Key::from_value(&cell.borrow()),
+            Kind::Array => return Err(KeyIssue::Illegal("array")),
+            Kind::Object => return Err(KeyIssue::Illegal("object")),
+            Kind::Ref => return Key::from_value(&value.as_reference().expect("a reference").borrow()),
         })
     }
 
     /// The key as a value, without a copy of a string key's handle.
     pub fn into_value(self) -> Value {
         match self {
-            Key::Int(i) => Value::Int(i),
-            Key::Str(s) => Value::Str(s),
+            Key::Int(i) => Value::int(i),
+            Key::Str(s) => Value::str(s),
         }
     }
 
     /// The key as a value (what foreach and array_keys give).
     pub fn to_value(&self) -> Value {
         match self {
-            Key::Int(i) => Value::Int(*i),
-            Key::Str(s) => Value::Str(s.clone()),
+            Key::Int(i) => Value::int(*i),
+            Key::Str(s) => Value::str(s.clone()),
         }
     }
 }
@@ -183,7 +184,7 @@ pub struct NextKeyOccupied;
 #[derive(Debug, Clone)]
 enum Storage {
     /// Int keys in increasing order, each at its own index, as PHP's packed
-    /// arrays: `slots[k]` is key `k`, `Value::Undef` where there is no such
+    /// arrays: `slots[k]` is key `k`, undefined where there is no such
     /// key (a hole: `[1 => x]`, or an unset). A key that would break the
     /// order (filling a hole), a string key, or a far-off int key turns
     /// the array into a hash.
@@ -201,18 +202,12 @@ struct Packed {
 impl Packed {
     #[inline]
     fn get(&self, i: i64) -> Option<&Value> {
-        match usize::try_from(i).ok().and_then(|i| self.slots.get(i)) {
-            Some(Value::Undef) | None => None,
-            v => v,
-        }
+        usize::try_from(i).ok().and_then(|i| self.slots.get(i)).filter(|v| !v.is_undef())
     }
 
     #[inline]
     fn get_mut(&mut self, i: i64) -> Option<&mut Value> {
-        match usize::try_from(i).ok().and_then(|i| self.slots.get_mut(i)) {
-            Some(Value::Undef) | None => None,
-            v => v,
-        }
+        usize::try_from(i).ok().and_then(|i| self.slots.get_mut(i)).filter(|v| !v.is_undef())
     }
 
     /// Whether key `i`, past the end, still fits a packed array: no more
@@ -285,7 +280,7 @@ struct Bucket {
 impl Bucket {
     /// Room for an entry.
     fn empty() -> Bucket {
-        Bucket { h: 0, key: None, value: Value::Null, next: NONE, head: NONE }
+        Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: NONE }
     }
 }
 
@@ -313,9 +308,9 @@ impl Bucket {
 /// holds (its variable gone) is a plain value.
 #[inline]
 pub(crate) fn dup(v: &Value) -> Value {
-    match v {
-        Value::Ref(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
-        v => v.clone(),
+    match v.as_reference() {
+        Some(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+        _ => v.clone(),
     }
 }
 
@@ -505,7 +500,7 @@ impl Hashed {
         let b = &mut self.buckets[i];
         b.next = UNSET;
         b.key = None;
-        let value = std::mem::replace(&mut b.value, Value::Null);
+        let value = std::mem::replace(&mut b.value, Value::NULL);
         self.live -= 1;
         // Compact when more than half the entries are unset.
         if self.len() > SMALL && self.live * 2 < self.len() {
@@ -726,7 +721,7 @@ impl PhpArray {
                         more.append(&mut p.slots);
                         give(&VALUES, std::mem::replace(&mut p.slots, more));
                     }
-                    p.slots.resize(i as usize, Value::Undef);
+                    p.slots.resize(i as usize, Value::UNDEF);
                     p.holes += gap;
                     p.slots.push(value);
                 }
@@ -751,7 +746,7 @@ impl PhpArray {
             Storage::Hashed(h) => h.find(hash_of(key), key),
         };
         let Some(i) = at else {
-            self.insert(key.clone(), Value::Null);
+            self.insert(key.clone(), Value::NULL);
             return self.get_mut(key).expect("just inserted");
         };
         match &mut self.storage {
@@ -788,9 +783,9 @@ impl PhpArray {
             Storage::Packed(p) => {
                 let Key::Int(i) = *key else { return None };
                 p.get(i)?;
-                let old = std::mem::replace(&mut p.slots[i as usize], Value::Undef);
+                let old = std::mem::replace(&mut p.slots[i as usize], Value::UNDEF);
                 p.holes += 1;
-                while matches!(p.slots.last(), Some(Value::Undef)) {
+                while p.slots.last().is_some_and(Value::is_undef) {
                     p.slots.pop();
                     p.holes -= 1;
                 }
@@ -805,7 +800,7 @@ impl PhpArray {
             // Room for one more: the insert that made it a hash.
             let mut h = Hashed::with_capacity(p.slots.len() - p.holes + 1);
             for (i, value) in std::mem::take(&mut p.slots).into_iter().enumerate() {
-                if !matches!(value, Value::Undef) {
+                if !value.is_undef() {
                     h.insert_new(i as u64, None, value);
                 }
             }
@@ -818,7 +813,7 @@ impl PhpArray {
     pub fn entry_at(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
             Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| {
-                (!matches!(x, Value::Undef)).then(|| (pos + i, Key::Int((pos + i) as i64), x))
+                (!x.is_undef()).then(|| (pos + i, Key::Int((pos + i) as i64), x))
             }),
             Storage::Hashed(h) => h.buckets[..h.used].get(pos..)?.iter().enumerate().find_map(|(i, b)| {
                 (b.next != UNSET).then(|| (pos + i, b.key(), &b.value))
@@ -831,7 +826,7 @@ impl PhpArray {
     #[inline]
     pub fn value_at(&self, pos: usize) -> Option<(usize, &Value)> {
         match &self.storage {
-            Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| (!matches!(x, Value::Undef)).then_some((pos + i, x))),
+            Storage::Packed(p) => p.slots.get(pos..)?.iter().enumerate().find_map(|(i, x)| (!x.is_undef()).then_some((pos + i, x))),
             Storage::Hashed(h) => h.buckets[..h.used].get(pos..)?.iter().enumerate().find_map(|(i, b)| (b.next != UNSET).then_some((pos + i, &b.value))),
         }
     }
@@ -840,7 +835,7 @@ impl PhpArray {
     pub fn entry_before(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
             Storage::Packed(p) => p.slots.get(..pos.min(p.slots.len()))?.iter().enumerate().rev().find_map(|(i, x)| {
-                (!matches!(x, Value::Undef)).then_some((i, Key::Int(i as i64), x))
+                (!x.is_undef()).then_some((i, Key::Int(i as i64), x))
             }),
             Storage::Hashed(h) => h.buckets.get(..pos.min(h.len()))?.iter().enumerate().rev().find_map(|(i, b)| {
                 (b.next != UNSET).then(|| (i, b.key(), &b.value))
@@ -872,7 +867,7 @@ impl PhpArray {
             Storage::Hashed(h) => (None, Some(h)),
         };
         let packed = packed.into_iter().flat_map(|v| {
-            v.iter().enumerate().filter(|(_, x)| !matches!(x, Value::Undef)).map(|(i, x)| (Key::Int(i as i64), x))
+            v.iter().enumerate().filter(|(_, x)| !x.is_undef()).map(|(i, x)| (Key::Int(i as i64), x))
         });
         let hashed = hashed
             .into_iter()
@@ -913,7 +908,7 @@ mod tests {
     use super::*;
 
     fn int(i: i64) -> Value {
-        Value::Int(i)
+        Value::int(i)
     }
 
     #[test]
@@ -925,9 +920,9 @@ mod tests {
         assert_eq!(k("012"), Key::Str(PhpStr::from("012")));
         assert_eq!(k("-0"), Key::Str(PhpStr::from("-0")));
         assert_eq!(k("9223372036854775808"), Key::Str(PhpStr::from("9223372036854775808")));
-        assert_eq!(Key::from_value(&Value::Float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
-        assert_eq!(Key::from_value(&Value::Bool(true)), Ok((Key::Int(1), None)));
-        assert_eq!(Key::from_value(&Value::Null), Ok((Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset))));
+        assert_eq!(Key::from_value(&Value::float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
+        assert_eq!(Key::from_value(&Value::TRUE), Ok((Key::Int(1), None)));
+        assert_eq!(Key::from_value(&Value::NULL), Ok((Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset))));
     }
 
     #[test]
@@ -1066,12 +1061,12 @@ mod tests {
         for n in [3, 8, 9, 40] {
             let mut a = PhpArray::new();
             for i in 0..n {
-                let v = if i % 3 == 0 { Value::Undef } else { int(i) };
+                let v = if i % 3 == 0 { Value::UNDEF } else { int(i) };
                 a.insert(Key::Str(PhpStr::from(format!("p{i}"))), v);
             }
             let count = |a: &PhpArray| a.iter().count();
             assert_eq!((a.len(), count(&a)), (n as usize, n as usize), "{n}");
-            assert!(matches!(a.get(&Key::Str(PhpStr::from("p0"))), Some(Value::Undef)), "{n}");
+            assert!(a.get(&Key::Str(PhpStr::from("p0"))).is_some_and(Value::is_undef), "{n}");
             let b = a.clone();
             assert_eq!(count(&b), n as usize);
             for i in (1..n).filter(|i| i % 3 != 0) {
@@ -1081,7 +1076,7 @@ mod tests {
             let undefs: Vec<Key> = (0..n).filter(|i| i % 3 == 0).map(|i| Key::Str(PhpStr::from(format!("p{i}")))).collect();
             assert_eq!(left, undefs, "{n}");
             assert_eq!(a.len(), undefs.len());
-            a.insert(Key::Str(PhpStr::from("after")), Value::Undef);
+            a.insert(Key::Str(PhpStr::from("after")), Value::UNDEF);
             assert_eq!(a.iter().last().map(|(k, _)| k), Some(Key::Str(PhpStr::from("after"))));
             assert_eq!(count(&b), n as usize, "the copy is untouched");
         }

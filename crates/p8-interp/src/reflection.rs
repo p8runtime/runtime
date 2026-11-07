@@ -18,7 +18,7 @@ use p8_runtime::object::{
 use p8_runtime::reflect::{Callee, FnInfo, ParamInfo, Subject};
 use p8_runtime::string::PhpStr;
 use p8_runtime::types::TypeDecl;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::rc::Rc;
 
 const PUBLIC: Visibility = Visibility::Public;
@@ -29,7 +29,7 @@ const PUBLIC: Visibility = Visibility::Public;
 fn get(o: &Object, name: &str) -> Value {
     match o.class.slot(name.as_bytes(), None) {
         Some(i) => o.slots.borrow()[i].clone(),
-        None => Value::Null,
+        None => Value::NULL,
     }
 }
 
@@ -40,7 +40,7 @@ fn set(o: &Object, name: &str, v: Value) {
 }
 
 fn s(text: &[u8]) -> Value {
-    Value::Str(PhpStr::from(text))
+    Value::str(PhpStr::from(text))
 }
 
 fn text(v: &Value) -> String {
@@ -48,7 +48,7 @@ fn text(v: &Value) -> String {
 }
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn fail(ctx: &mut dyn Ctx, message: String) -> Throw {
@@ -61,7 +61,7 @@ fn make(ctx: &mut dyn Ctx, class: &[u8]) -> Rc<Object> {
 }
 
 fn list(items: Vec<Value>) -> Value {
-    Value::Array(Rc::new(PhpArray::from_list(items)))
+    Value::array(PhpArray::from_list(items))
 }
 
 fn shown_class(c: &Class) -> PhpStr {
@@ -71,10 +71,10 @@ fn shown_class(c: &Class) -> PhpStr {
 /// The class a ReflectionClass-like argument names: an object's, or a name
 /// (after autoloading).
 fn class_arg(ctx: &mut dyn Ctx, v: &Value) -> Result<Rc<Class>, Throw> {
-    match v {
-        Value::Object(o) => Ok(Rc::clone(&o.class)),
-        other => {
-            let name = text(other);
+    match v.as_object() {
+        Some(o) => Ok(Rc::clone(&o.class)),
+        None => {
+            let name = text(v);
             match ctx.class_load(name.as_bytes())? {
                 Some(c) => Ok(c),
                 None => Err(fail(ctx, format!("Class \"{name}\" does not exist"))),
@@ -94,29 +94,29 @@ fn held_class(ctx: &mut dyn Ctx, o: &Object) -> Result<Rc<Class>, Throw> {
 
 fn new_class_reflection(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Value {
     let o = make(ctx, if class.flags & CLASS_ENUM != 0 { b"ReflectionEnum" } else { b"ReflectionClass" });
-    set(&o, "name", Value::Str(shown_class(class)));
-    set(&o, "\0class", Value::Str(class.name.clone()));
-    Value::Object(o)
+    set(&o, "name", Value::str(shown_class(class)));
+    set(&o, "\0class", Value::str(class.name.clone()));
+    Value::object(o)
 }
 
 // Callees kept in a value: a name, [class, method], or a Closure.
 fn encode(c: &Callee) -> Value {
     match c {
-        Callee::Function(n) => Value::Str(n.clone()),
-        Callee::Method(class, m) => list(vec![Value::Str(class.name.clone()), Value::Str(m.clone())]),
-        Callee::Closure(o) => Value::Object(Rc::clone(o)),
+        Callee::Function(n) => Value::str(n.clone()),
+        Callee::Method(class, m) => list(vec![Value::str(class.name.clone()), Value::str(m.clone())]),
+        Callee::Closure(o) => Value::object(Rc::clone(o)),
     }
 }
 
 fn decode(ctx: &mut dyn Ctx, v: &Value) -> Result<Callee, Throw> {
-    Ok(match v {
-        Value::Object(o) => Callee::Closure(Rc::clone(o)),
-        Value::Array(a) => {
-            let parts: Vec<Value> = a.values().cloned().collect();
-            let class = class_arg(ctx, &parts[0])?;
-            Callee::Method(class, parts[1].to_php_string().unwrap_or_else(PhpStr::empty))
-        }
-        other => Callee::Function(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+    Ok(if let Some(o) = v.as_object() {
+        Callee::Closure(Rc::clone(o))
+    } else if let Some(a) = v.as_array() {
+        let parts: Vec<Value> = a.values().cloned().collect();
+        let class = class_arg(ctx, &parts[0])?;
+        Callee::Method(class, parts[1].to_php_string().unwrap_or_else(PhpStr::empty))
+    } else {
+        Callee::Function(v.to_php_string().unwrap_or_else(PhpStr::empty))
     })
 }
 
@@ -167,9 +167,9 @@ fn atoms(t: &TypeDecl) -> (Vec<String>, bool) {
 fn named_type(ctx: &mut dyn Ctx, name: &str, nullable: bool, builtin: bool) -> Value {
     let o = make(ctx, b"ReflectionNamedType");
     set(&o, "\0name", s(name.as_bytes()));
-    set(&o, "\0null", Value::Bool(nullable));
-    set(&o, "\0builtin", Value::Bool(builtin));
-    Value::Object(o)
+    set(&o, "\0null", Value::bool(nullable));
+    set(&o, "\0builtin", Value::bool(builtin));
+    Value::object(o)
 }
 
 fn is_builtin(name: &str) -> bool {
@@ -181,14 +181,14 @@ fn is_builtin(name: &str) -> bool {
 
 /// A ReflectionType for a declared type (None: untyped).
 fn type_value(ctx: &mut dyn Ctx, t: &Option<TypeDecl>) -> Value {
-    let Some(t) = t else { return Value::Null };
+    let Some(t) = t else { return Value::NULL };
     let (atoms, null) = atoms(t);
     if t.intersection {
         let o = make(ctx, b"ReflectionIntersectionType");
         let types: Vec<Value> = atoms.iter().map(|a| named_type(ctx, a, false, false)).collect();
         set(&o, "\0types", list(types));
         set(&o, "\0shown", s(t.shown().as_bytes()));
-        return Value::Object(o);
+        return Value::object(o);
     }
     if atoms.len() == 1 {
         let name = &atoms[0];
@@ -203,9 +203,9 @@ fn type_value(ctx: &mut dyn Ctx, t: &Option<TypeDecl>) -> Value {
         types.push(named_type(ctx, "null", true, true));
     }
     set(&o, "\0types", list(types));
-    set(&o, "\0null", Value::Bool(null));
+    set(&o, "\0null", Value::bool(null));
     set(&o, "\0shown", s(t.shown().as_bytes()));
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn nt_get_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -239,9 +239,9 @@ fn ut_to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 
 fn rc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = class_arg(ctx, &arg(args, 0))?;
-    set(this, "name", Value::Str(shown_class(&class)));
-    set(this, "\0class", Value::Str(class.name.clone()));
-    Ok(Value::Null)
+    set(this, "name", Value::str(shown_class(&class)));
+    set(this, "\0class", Value::str(class.name.clone()));
+    Ok(Value::NULL)
 }
 
 macro_rules! class_method {
@@ -254,7 +254,7 @@ macro_rules! class_method {
     };
 }
 
-class_method!(rc_get_name, |ctx, class, this, args| Ok(Value::Str(shown_class(&class))));
+class_method!(rc_get_name, |ctx, class, this, args| Ok(Value::str(shown_class(&class))));
 class_method!(rc_get_short_name, |ctx, class, this, args| {
     let n = class.name.as_bytes();
     Ok(s(n.iter().rposition(|&c| c == b'\\').map_or(n, |i| &n[i + 1..])))
@@ -263,48 +263,50 @@ class_method!(rc_get_namespace_name, |ctx, class, this, args| {
     let n = class.name.as_bytes();
     Ok(s(n.iter().rposition(|&c| c == b'\\').map_or(&b""[..], |i| &n[..i])))
 });
-class_method!(rc_in_namespace, |ctx, class, this, args| Ok(Value::Bool(class.name.as_bytes().contains(&b'\\'))));
-class_method!(rc_is_interface, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_INTERFACE != 0)));
-class_method!(rc_is_trait, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_TRAIT != 0)));
-class_method!(rc_is_enum, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_ENUM != 0)));
-class_method!(rc_is_abstract, |ctx, class, this, args| Ok(Value::Bool(
+class_method!(rc_in_namespace, |ctx, class, this, args| Ok(Value::bool(class.name.as_bytes().contains(&b'\\'))));
+class_method!(rc_is_interface, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_INTERFACE != 0)));
+class_method!(rc_is_trait, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_TRAIT != 0)));
+class_method!(rc_is_enum, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_ENUM != 0)));
+class_method!(rc_is_abstract, |ctx, class, this, args| Ok(Value::bool(
     class.flags & CLASS_ABSTRACT != 0 || class.flags & CLASS_INTERFACE != 0 && !class.methods.is_empty() || class.methods.values().any(|m| m.is_abstract)
 )));
-class_method!(rc_is_final, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_FINAL != 0)));
-class_method!(rc_is_readonly, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_READONLY != 0)));
-class_method!(rc_is_internal, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_INTERNAL != 0)));
-class_method!(rc_is_user_defined, |ctx, class, this, args| Ok(Value::Bool(class.flags & CLASS_INTERNAL == 0)));
-class_method!(rc_is_anonymous, |ctx, class, this, args| Ok(Value::Bool(class.name.as_bytes().windows(10).any(|w| w == b"@anonymous"))));
+class_method!(rc_is_final, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_FINAL != 0)));
+class_method!(rc_is_readonly, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_READONLY != 0)));
+class_method!(rc_is_internal, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_INTERNAL != 0)));
+class_method!(rc_is_user_defined, |ctx, class, this, args| Ok(Value::bool(class.flags & CLASS_INTERNAL == 0)));
+class_method!(rc_is_anonymous, |ctx, class, this, args| Ok(Value::bool(class.name.as_bytes().windows(10).any(|w| w == b"@anonymous"))));
 class_method!(rc_is_instantiable, |ctx, class, this, args| {
     if class.flags & (CLASS_INTERFACE | CLASS_TRAIT | CLASS_ABSTRACT | CLASS_ENUM) != 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(class.method(b"__construct").is_none_or(|m| m.visibility == PUBLIC)))
+    Ok(Value::bool(class.method(b"__construct").is_none_or(|m| m.visibility == PUBLIC)))
 });
 class_method!(rc_is_cloneable, |ctx, class, this, args| {
     if class.flags & (CLASS_INTERFACE | CLASS_TRAIT | CLASS_ABSTRACT | CLASS_ENUM) != 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(class.method(b"__clone").is_none_or(|m| m.visibility == PUBLIC)))
+    Ok(Value::bool(class.method(b"__clone").is_none_or(|m| m.visibility == PUBLIC)))
 });
-class_method!(rc_is_iterable, |ctx, class, this, args| Ok(Value::Bool(
+class_method!(rc_is_iterable, |ctx, class, this, args| Ok(Value::bool(
     class.flags & (CLASS_INTERFACE | CLASS_TRAIT | CLASS_ABSTRACT) == 0 && class.is_a(b"traversable")
 )));
-class_method!(rc_is_instance, |ctx, class, this, args| match arg(args, 0) {
-    Value::Object(o) => Ok(Value::Bool(o.class.is_a(&class.lower))),
-    _ => Err(ctx.throw("TypeError", "ReflectionClass::isInstance(): Argument #1 ($object) must be of type object".into())),
+class_method!(rc_is_instance, |ctx, class, this, args| match arg(args, 0).as_object() {
+    Some(o) => Ok(Value::bool(o.class.is_a(&class.lower))),
+    None => Err(ctx.throw("TypeError", "ReflectionClass::isInstance(): Argument #1 ($object) must be of type object".into())),
 });
 class_method!(rc_is_subclass_of, |ctx, class, this, args| {
-    let other = match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"reflectionclass") => held_class(ctx, &o)?,
-        v => class_arg(ctx, &v)?,
+    let v = arg(args, 0);
+    let other = match v.as_object() {
+        Some(o) if o.class.is_a(b"reflectionclass") => held_class(ctx, o)?,
+        _ => class_arg(ctx, &v)?,
     };
-    Ok(Value::Bool(class.lower != other.lower && class.is_a(&other.lower)))
+    Ok(Value::bool(class.lower != other.lower && class.is_a(&other.lower)))
 });
 class_method!(rc_implements_interface, |ctx, class, this, args| {
-    let other = match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"reflectionclass") => held_class(ctx, &o)?,
-        v => match class_arg(ctx, &v) {
+    let v = arg(args, 0);
+    let other = match v.as_object() {
+        Some(o) if o.class.is_a(b"reflectionclass") => held_class(ctx, o)?,
+        _ => match class_arg(ctx, &v) {
             Ok(c) => c,
             Err(_) => return Err(fail(ctx, format!("Interface \"{}\" does not exist", text(&v)))),
         },
@@ -312,14 +314,14 @@ class_method!(rc_implements_interface, |ctx, class, this, args| {
     if other.flags & CLASS_INTERFACE == 0 {
         return Err(fail(ctx, format!("{} is not an interface", String::from_utf8_lossy(other.name.as_bytes()))));
     }
-    Ok(Value::Bool(class.is_a(&other.lower)))
+    Ok(Value::bool(class.is_a(&other.lower)))
 });
 class_method!(rc_get_parent_class, |ctx, class, this, args| Ok(match &class.parent {
     Some(p) => new_class_reflection(ctx, p),
-    None => Value::Bool(false),
+    None => Value::FALSE,
 }));
 class_method!(rc_get_interface_names, |ctx, class, this, args| {
-    let names: Vec<Value> = class.interfaces.iter().map(|i| ctx.class(i).map_or_else(|| s(i), |c| Value::Str(c.name.clone()))).collect();
+    let names: Vec<Value> = class.interfaces.iter().map(|i| ctx.class(i).map_or_else(|| s(i), |c| Value::str(c.name.clone()))).collect();
     Ok(list(names))
 });
 class_method!(rc_get_interfaces, |ctx, class, this, args| {
@@ -330,7 +332,7 @@ class_method!(rc_get_interfaces, |ctx, class, this, args| {
             out.insert(Key::from_string(c.name.clone()), r);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 });
 class_method!(rc_get_modifiers, |ctx, class, this, args| {
     let mut m = 0;
@@ -343,11 +345,11 @@ class_method!(rc_get_modifiers, |ctx, class, this, args| {
     if class.flags & CLASS_READONLY != 0 {
         m |= 65536;
     }
-    Ok(Value::Int(m))
+    Ok(Value::int(m))
 });
 class_method!(rc_has_method, |ctx, class, this, args| {
     let name = text(&arg(args, 0)).to_ascii_lowercase();
-    Ok(Value::Bool(!name.starts_with('$') && class.method(name.as_bytes()).is_some()))
+    Ok(Value::bool(!name.starts_with('$') && class.method(name.as_bytes()).is_some()))
 });
 class_method!(rc_get_method, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
@@ -358,7 +360,7 @@ class_method!(rc_get_method, |ctx, class, this, args| {
 });
 class_method!(rc_get_methods, |ctx, class, this, args| {
     // `null` (PHPUnit passes it) means no filter, like no argument.
-    let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
+    let filter = args.first().map(Value::deref).filter(|v| !v.is_null_or_undef()).map(|v| v.to_int());
     let mut out = Vec::new();
     for m in class.methods.values() {
         if m.name.as_bytes().starts_with(b"$") {
@@ -376,25 +378,25 @@ class_method!(rc_get_methods, |ctx, class, this, args| {
 class_method!(rc_get_constructor, |ctx, class, this, args| Ok(if class.method(b"__construct").is_some() {
     new_method(ctx, &class, b"__construct")
 } else {
-    Value::Null
+    Value::NULL
 }));
 class_method!(rc_has_property, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     if class.slots.contains_key(name.as_bytes()) || class.statics.contains_key(name.as_bytes()) {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     // A dynamic property of the object it reflects (ReflectionObject).
-    Ok(Value::Bool(match get(this, "\0object") {
-        Value::Object(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
-        _ => false,
+    Ok(Value::bool(match get(this, "\0object").as_object() {
+        Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+        None => false,
     }))
 });
 class_method!(rc_get_property, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     if !class.slots.contains_key(name.as_bytes()) && !class.statics.contains_key(name.as_bytes()) {
-        let dynamic = match get(this, "\0object") {
-            Value::Object(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
-            _ => false,
+        let dynamic = match get(this, "\0object").as_object() {
+            Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+            None => false,
         };
         if !dynamic {
             return Err(fail(ctx, format!("Property {}::${} does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
@@ -404,7 +406,7 @@ class_method!(rc_get_property, |ctx, class, this, args| {
 });
 class_method!(rc_get_properties, |ctx, class, this, args| {
     // `null` (PHPUnit passes it) means no filter, like no argument.
-    let filter = args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null | Value::Undef)).map(|v| v.to_int());
+    let filter = args.first().map(Value::deref).filter(|v| !v.is_null_or_undef()).map(|v| v.to_int());
     // In declaration order, static and instance properties together (the
     // class's own, then its traits', then its parents' (8.5); no parent's
     // private one).
@@ -422,11 +424,11 @@ class_method!(rc_get_properties, |ctx, class, this, args| {
     }
     Ok(list(out))
 });
-class_method!(rc_has_constant, |ctx, class, this, args| Ok(Value::Bool(class.constants.contains_key(text(&arg(args, 0)).as_bytes()))));
+class_method!(rc_has_constant, |ctx, class, this, args| Ok(Value::bool(class.constants.contains_key(text(&arg(args, 0)).as_bytes()))));
 class_method!(rc_get_constant, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     if !class.constants.contains_key(name.as_bytes()) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     class_constant(ctx, &class, &name)
 });
@@ -440,25 +442,23 @@ class_method!(rc_get_constants, |ctx, class, this, args| {
         let v = class_constant(ctx, &class, &String::from_utf8_lossy(&n))?;
         out.insert(Key::from_string(PhpStr::from(n.as_slice())), v);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 });
 fn new_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
     let o = make(ctx, b"ReflectionClassConstant");
     set(&o, "name", s(name));
-    set(&o, "class", class.constants.get(name).map_or_else(|| Value::Str(class.name.clone()), |c| Value::Str(c.declaring_name.clone())));
-    set(&o, "\0class", Value::Str(class.name.clone()));
-    Value::Object(o)
+    set(&o, "class", class.constants.get(name).map_or_else(|| Value::str(class.name.clone()), |c| Value::str(c.declaring_name.clone())));
+    set(&o, "\0class", Value::str(class.name.clone()));
+    Value::object(o)
 }
 
 class_method!(rc_get_reflection_constant, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
-    Ok(if class.constants.contains_key(name.as_bytes()) { new_constant(ctx, &class, name.as_bytes()) } else { Value::Bool(false) })
+    Ok(if class.constants.contains_key(name.as_bytes()) { new_constant(ctx, &class, name.as_bytes()) } else { Value::FALSE })
 });
 class_method!(rc_get_reflection_constants, |ctx, class, this, args| {
-    let filter = match arg(args, 0) {
-        Value::Null | Value::Undef => None,
-        v => Some(v.to_int()),
-    };
+    let v = arg(args, 0);
+    let filter = if v.is_null_or_undef() { None } else { Some(v.to_int()) };
     let own = class.constants.iter().filter(|(_, c)| c.declaring_name == class.name);
     let inherited = class.constants.iter().filter(|(_, c)| c.declaring_name != class.name);
     let names: Vec<Vec<u8>> = own.chain(inherited).filter(|(_, c)| filter.is_none_or(|f| vis_bits(c.visibility) & f != 0)).map(|(k, _)| k.clone()).collect();
@@ -467,21 +467,21 @@ class_method!(rc_get_reflection_constants, |ctx, class, this, args| {
 class_method!(rc_new_instance, |ctx, class, this, args| {
     check_constructor(ctx, &class)?;
     let mut list: Vec<Value> = args.iter().map(Value::deref).collect();
-    Ok(Value::Object(ctx.new_instance(&class, &mut list, true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut list, true)?))
 });
 class_method!(rc_new_instance_args, |ctx, class, this, args| {
     check_constructor(ctx, &class)?;
-    let mut list: Vec<Value> = match arg(args, 0) {
-        Value::Array(a) => a.values().map(Value::deref).collect(),
-        _ => Vec::new(),
+    let mut list: Vec<Value> = match arg(args, 0).as_array() {
+        Some(a) => a.values().map(Value::deref).collect(),
+        None => Vec::new(),
     };
-    Ok(Value::Object(ctx.new_instance(&class, &mut list, true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut list, true)?))
 });
 class_method!(rc_new_instance_without_constructor, |ctx, class, this, args| {
     if class.flags & CLASS_INTERNAL != 0 && class.flags & CLASS_FINAL != 0 {
         return Err(fail(ctx, format!("Class {} is an internal class marked as final that cannot be instantiated without invoking its constructor", String::from_utf8_lossy(class.name.as_bytes()))));
     }
-    Ok(Value::Object(ctx.new_instance(&class, &mut [], false)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut [], false)?))
 });
 class_method!(rc_get_static_property_value, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
@@ -497,11 +497,11 @@ class_method!(rc_set_static_property_value, |ctx, class, this, args| {
         Some((cell, _, _)) => {
             let v = arg(args, 1);
             let inner = cell.borrow().clone();
-            match inner {
-                Value::Ref(r) => *r.borrow_mut() = v,
-                _ => *cell.borrow_mut() = v,
+            match inner.as_reference() {
+                Some(r) => *r.borrow_mut() = v,
+                None => *cell.borrow_mut() = v,
             }
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
         None => Err(fail(ctx, format!("Class {} does not have a property named {}", String::from_utf8_lossy(class.name.as_bytes()), name))),
     }
@@ -511,7 +511,7 @@ class_method!(rc_get_static_properties, |ctx, class, this, args| {
     for (n, (cell, _, _)) in listed_statics(&class) {
         out.insert(Key::from_string(PhpStr::from(n.as_slice())), cell.borrow().deref());
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 });
 class_method!(rc_get_default_properties, |ctx, class, this, args| {
     // The statics, then the instance properties, each in declaration order.
@@ -521,12 +521,12 @@ class_method!(rc_get_default_properties, |ctx, class, this, args| {
     }
     for n in &class.property_order {
         if let Some(p) = instance_property(&class, n.as_bytes())
-            && !matches!(p.default, Value::Undef)
+            && !p.default.is_undef()
         {
             out.insert(Key::from_string(p.name.clone()), p.default.clone());
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 });
 
 /// The static properties reflection lists, in declaration order: all but
@@ -543,19 +543,19 @@ fn instance_property<'c>(class: &'c Class, name: &[u8]) -> Option<&'c p8_runtime
     }
     class.slot(name, Some(&class.lower)).map(|i| &class.properties[i]).filter(|p| !p.is_internal())
 }
-class_method!(rc_get_file_name, |ctx, class, this, args| Ok(ctx.reflect_meta(&Subject::Class(class)).file.map_or(Value::Bool(false), Value::Str)));
+class_method!(rc_get_file_name, |ctx, class, this, args| Ok(ctx.reflect_meta(&Subject::Class(class)).file.map_or(Value::FALSE, Value::str)));
 class_method!(rc_get_start_line, |ctx, class, this, args| {
     let m = ctx.reflect_meta(&Subject::Class(class));
-    Ok(if m.file.is_some() { Value::Int(i64::from(m.line)) } else { Value::Bool(false) })
+    Ok(if m.file.is_some() { Value::int(i64::from(m.line)) } else { Value::FALSE })
 });
 class_method!(rc_get_end_line, |ctx, class, this, args| {
     let m = ctx.reflect_meta(&Subject::Class(class));
-    Ok(if m.file.is_some() { Value::Int(i64::from(m.end_line)) } else { Value::Bool(false) })
+    Ok(if m.file.is_some() { Value::int(i64::from(m.end_line)) } else { Value::FALSE })
 });
 class_method!(rc_get_doc_comment, |ctx, class, this, args| Ok(doc_value(ctx, Subject::Class(class))));
 class_method!(rc_get_attributes, |ctx, class, this, args| attributes_of(ctx, Subject::Class(class), args, "ReflectionClass"));
 class_method!(rc_get_trait_names, |ctx, class, this, args| {
-    let names: Vec<Value> = ctx.reflect_meta(&Subject::Class(class)).traits.iter().map(|t| ctx.class(t.as_bytes()).map_or_else(|| Value::Str(t.clone()), |c| Value::Str(c.name.clone()))).collect();
+    let names: Vec<Value> = ctx.reflect_meta(&Subject::Class(class)).traits.iter().map(|t| ctx.class(t.as_bytes()).map_or_else(|| Value::str(t.clone()), |c| Value::str(c.name.clone()))).collect();
     Ok(list(names))
 });
 class_method!(rc_get_traits, |ctx, class, this, args| {
@@ -566,22 +566,22 @@ class_method!(rc_get_traits, |ctx, class, this, args| {
             out.insert(Key::from_string(c.name.clone()), r);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 });
 class_method!(rc_get_extension_name, |ctx, class, this, args| Ok(match class_extension(&class) {
     Some(m) => s(m.as_bytes()),
-    None => Value::Bool(false),
+    None => Value::FALSE,
 }));
 class_method!(rc_get_extension, |ctx, class, this, args| Ok(extension_value(ctx, class_extension(&class))));
 
 fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else {
+    let Ok(o) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "ReflectionObject::__construct(): Argument #1 ($object) must be of type object".into()));
     };
-    set(this, "name", Value::Str(o.class.name.clone()));
-    set(this, "\0class", Value::Str(o.class.name.clone()));
-    set(this, "\0object", Value::Object(o));
-    Ok(Value::Null)
+    set(this, "name", Value::str(o.class.name.clone()));
+    set(this, "\0class", Value::str(o.class.name.clone()));
+    set(this, "\0object", Value::object(o));
+    Ok(Value::NULL)
 }
 
 fn check_constructor(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<(), Throw> {
@@ -595,7 +595,7 @@ fn check_constructor(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<(), Throw> 
 
 /// A class constant's value (its code run first, if needed); null for none.
 fn class_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Result<Value, Throw> {
-    Ok(ctx.class_constant(class, name.as_bytes())?.unwrap_or(Value::Null))
+    Ok(ctx.class_constant(class, name.as_bytes())?.unwrap_or(Value::NULL))
 }
 
 fn vis_bits(v: Visibility) -> i64 {
@@ -625,7 +625,7 @@ fn method_modifiers(m: &p8_runtime::object::Method) -> i64 {
 fn new_method(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
     let o = make(ctx, b"ReflectionMethod");
     fill_method(ctx, &o, class, name);
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn fill_method(ctx: &mut dyn Ctx, o: &Rc<Object>, class: &Rc<Class>, name: &[u8]) {
@@ -635,43 +635,45 @@ fn fill_method(ctx: &mut dyn Ctx, o: &Rc<Object>, class: &Rc<Class>, name: &[u8]
         None => (PhpStr::from(name), class.name.clone()),
     };
     let _ = ctx;
-    set(o, "name", Value::Str(shown.clone()));
-    set(o, "class", Value::Str(declaring));
+    set(o, "name", Value::str(shown.clone()));
+    set(o, "class", Value::str(declaring));
     set(o, "\0callee", encode(&Callee::Method(Rc::clone(class), shown)));
 }
 
 fn rm_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let (target, name) = match (arg(args, 0), args.len()) {
-        (Value::Str(s), 1) => {
+    let first = arg(args, 0);
+    let (target, name) = match (first.as_str(), args.len()) {
+        (Some(s), 1) => {
             let t = String::from_utf8_lossy(s.as_bytes()).into_owned();
             match t.split_once("::") {
-                Some((c, m)) => (Value::Str(PhpStr::from(c)), m.to_string()),
+                Some((c, m)) => (Value::str(PhpStr::from(c)), m.to_string()),
                 None => {
                     return Err(fail(ctx, "ReflectionMethod::__construct(): Argument #1 ($objectOrMethod) must be a valid method name".to_string()));
                 }
             }
         }
-        (t, _) => (t, text(&arg(args, 1))),
+        _ => (first, text(&arg(args, 1))),
     };
     let class = class_arg(ctx, &target)?;
     if class.method(name.to_ascii_lowercase().as_bytes()).is_none() || name.starts_with('$') {
         return Err(fail(ctx, format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
     }
     fill_method(ctx, this, &class, name.as_bytes());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rm_create_from_method_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = make(ctx, b"ReflectionMethod");
     let n = args.len().min(1);
     rm_construct(ctx, &o, &mut args[..n])?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn rf_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let callee = match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"closure") => Callee::Closure(o),
-        v => {
+    let v = arg(args, 0);
+    let callee = match v.as_object() {
+        Some(o) if o.class.is_a(b"closure") => Callee::Closure(Rc::clone(o)),
+        _ => {
             let name = text(&v);
             let c = Callee::Function(PhpStr::from(name.as_str()));
             if ctx.function_info(&c).is_none() {
@@ -685,9 +687,9 @@ fn rf_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     // keeps the builtin's name.
     let shown = if info.is_closure && info.user { PhpStr::from("{closure}") } else { info.name.clone() };
     let shown = if info.is_closure && info.name.as_bytes().starts_with(b"{closure") { info.name.clone() } else { shown };
-    set(this, "name", Value::Str(shown));
+    set(this, "name", Value::str(shown));
     set(this, "\0callee", encode(&callee));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 macro_rules! fn_method {
@@ -709,7 +711,7 @@ fn_method!(fa_get_namespace_name, |ctx, info, this, args| {
     let n = text(&get(this, "name"));
     Ok(s(n.rsplit_once('\\').map_or("", |(a, _)| a).as_bytes()))
 });
-fn_method!(fa_in_namespace, |ctx, info, this, args| Ok(Value::Bool(text(&get(this, "name")).contains('\\'))));
+fn_method!(fa_in_namespace, |ctx, info, this, args| Ok(Value::bool(text(&get(this, "name")).contains('\\'))));
 fn_method!(fa_get_parameters, |ctx, info, this, args| {
     let callee = get(this, "\0callee");
     let mut out = Vec::new();
@@ -718,27 +720,27 @@ fn_method!(fa_get_parameters, |ctx, info, this, args| {
     }
     Ok(list(out))
 });
-fn_method!(fa_get_number_of_parameters, |ctx, info, this, args| Ok(Value::Int(info.params.len() as i64)));
-fn_method!(fa_get_number_of_required_parameters, |ctx, info, this, args| Ok(Value::Int(
+fn_method!(fa_get_number_of_parameters, |ctx, info, this, args| Ok(Value::int(info.params.len() as i64)));
+fn_method!(fa_get_number_of_required_parameters, |ctx, info, this, args| Ok(Value::int(
     info.params.iter().rposition(|p| !p.optional).map_or(0, |i| i + 1) as i64
 )));
 fn_method!(fa_get_return_type, |ctx, info, this, args| Ok(type_value(ctx, &info.ret)));
-fn_method!(fa_has_return_type, |ctx, info, this, args| Ok(Value::Bool(info.ret.is_some())));
+fn_method!(fa_has_return_type, |ctx, info, this, args| Ok(Value::bool(info.ret.is_some())));
 fn_method!(fa_get_tentative_return_type, |ctx, info, this, args| Ok(type_value(ctx, &info.tentative_ret)));
-fn_method!(fa_has_tentative_return_type, |ctx, info, this, args| Ok(Value::Bool(info.tentative_ret.is_some())));
-fn_method!(fa_is_variadic, |ctx, info, this, args| Ok(Value::Bool(info.params.last().is_some_and(|p| p.variadic))));
-fn_method!(fa_returns_reference, |ctx, info, this, args| Ok(Value::Bool(info.returns_ref)));
-fn_method!(fa_is_user_defined, |ctx, info, this, args| Ok(Value::Bool(info.user)));
-fn_method!(fa_is_internal, |ctx, info, this, args| Ok(Value::Bool(!info.user)));
-fn_method!(fa_is_closure, |ctx, info, this, args| Ok(Value::Bool(info.is_closure)));
-fn_method!(fa_is_generator, |ctx, info, this, args| Ok(Value::Bool(info.is_generator)));
-fn_method!(fa_is_static, |ctx, info, this, args| Ok(Value::Bool(info.is_static)));
-fn_method!(fa_is_deprecated, |ctx, info, this, args| Ok(Value::Bool(false)));
-fn_method!(fa_get_file_name, |ctx, info, this, args| Ok(info.file.clone().map_or(Value::Bool(false), Value::Str)));
-fn_method!(fa_get_start_line, |ctx, info, this, args| Ok(if info.user { Value::Int(i64::from(info.line)) } else { Value::Bool(false) }));
+fn_method!(fa_has_tentative_return_type, |ctx, info, this, args| Ok(Value::bool(info.tentative_ret.is_some())));
+fn_method!(fa_is_variadic, |ctx, info, this, args| Ok(Value::bool(info.params.last().is_some_and(|p| p.variadic))));
+fn_method!(fa_returns_reference, |ctx, info, this, args| Ok(Value::bool(info.returns_ref)));
+fn_method!(fa_is_user_defined, |ctx, info, this, args| Ok(Value::bool(info.user)));
+fn_method!(fa_is_internal, |ctx, info, this, args| Ok(Value::bool(!info.user)));
+fn_method!(fa_is_closure, |ctx, info, this, args| Ok(Value::bool(info.is_closure)));
+fn_method!(fa_is_generator, |ctx, info, this, args| Ok(Value::bool(info.is_generator)));
+fn_method!(fa_is_static, |ctx, info, this, args| Ok(Value::bool(info.is_static)));
+fn_method!(fa_is_deprecated, |ctx, info, this, args| Ok(Value::FALSE));
+fn_method!(fa_get_file_name, |ctx, info, this, args| Ok(info.file.clone().map_or(Value::FALSE, Value::str)));
+fn_method!(fa_get_start_line, |ctx, info, this, args| Ok(if info.user { Value::int(i64::from(info.line)) } else { Value::FALSE }));
 fn_method!(fa_get_end_line, |ctx, info, this, args| {
     let subject = Subject::Function(callee_of(ctx, this)?);
-    Ok(if info.user { Value::Int(i64::from(ctx.reflect_meta(&subject).end_line)) } else { Value::Bool(false) })
+    Ok(if info.user { Value::int(i64::from(ctx.reflect_meta(&subject).end_line)) } else { Value::FALSE })
 });
 fn_method!(fa_get_doc_comment, |ctx, info, this, args| {
     let subject = Subject::Function(callee_of(ctx, this)?);
@@ -750,20 +752,20 @@ fn_method!(fa_get_attributes, |ctx, info, this, args| {
 });
 fn_method!(fa_get_static_variables, |ctx, info, this, args| {
     let callee = callee_of(ctx, this)?;
-    Ok(Value::Array(Rc::new(ctx.static_variables(&callee))))
+    Ok(Value::array(ctx.static_variables(&callee)))
 });
 fn_method!(fa_get_closure_used_variables, |ctx, info, this, args| {
     let callee = callee_of(ctx, this)?;
-    Ok(Value::Array(Rc::new(ctx.closure_used_variables(&callee))))
+    Ok(Value::array(ctx.closure_used_variables(&callee)))
 });
-fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::Null, Value::Object)));
+fn_method!(fa_get_closure_this, |ctx, info, this, args| Ok(info.closure_this.clone().map_or(Value::NULL, Value::object)));
 fn_method!(fa_get_closure_scope_class, |ctx, info, this, args| Ok(match &info.closure_scope {
     Some(c) => new_class_reflection(ctx, c),
-    None => Value::Null,
+    None => Value::NULL,
 }));
 fn_method!(fa_get_closure_called_class, |ctx, info, this, args| Ok(match &info.closure_called {
     Some(c) => new_class_reflection(ctx, c),
-    None => Value::Null,
+    None => Value::NULL,
 }));
 
 fn rf_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -774,9 +776,9 @@ fn rf_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 
 fn rf_invoke_args(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let c = callee_of(ctx, this)?;
-    let mut list: Vec<Value> = match arg(args, 0) {
-        Value::Array(a) => a.values().cloned().collect(),
-        _ => Vec::new(),
+    let mut list: Vec<Value> = match arg(args, 0).as_array() {
+        Some(a) => a.values().cloned().collect(),
+        None => Vec::new(),
     };
     ctx.invoke(&c, None, &mut list)
 }
@@ -788,7 +790,7 @@ fn rf_get_closure(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resu
 
 fn rf_is_anonymous(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let info = info_of(ctx, this)?;
-    Ok(Value::Bool(info.is_closure && info.name.as_bytes().starts_with(b"{closure")))
+    Ok(Value::bool(info.is_closure && info.name.as_bytes().starts_with(b"{closure")))
 }
 
 /// The method a ReflectionMethod holds.
@@ -806,7 +808,7 @@ macro_rules! method_flag {
     ($fname:ident, |$m:ident| $body:expr) => {
         fn $fname(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
             let (_, $m) = held_method(ctx, this)?;
-            Ok(Value::Bool($body))
+            Ok(Value::bool($body))
         }
     };
 }
@@ -822,7 +824,7 @@ method_flag!(rm_is_destructor, |m| m.name.as_bytes().eq_ignore_ascii_case(b"__de
 
 fn rm_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (_, m) = held_method(ctx, this)?;
-    Ok(Value::Int(method_modifiers(&m)))
+    Ok(Value::int(method_modifiers(&m)))
 }
 
 fn rm_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -867,15 +869,15 @@ fn rm_get_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
 fn rm_has_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
     let declaring = ctx.class(&m.declaring).unwrap_or(class);
-    Ok(Value::Bool(prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()).is_some()))
+    Ok(Value::bool(prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()).is_some()))
 }
 
 fn rm_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
-    let target = match arg(args, 0) {
-        Value::Object(o) => Some(o),
-        _ if m.is_static => None,
-        _ => {
+    let target = match arg(args, 0).into_object() {
+        Ok(o) => Some(o),
+        Err(_) if m.is_static => None,
+        Err(_) => {
             return Err(fail(ctx, format!("Trying to invoke non static method {}::{}() without an object", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()))));
         }
     };
@@ -888,7 +890,7 @@ fn rm_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 
 fn rm_invoke_args(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut all = vec![arg(args, 0)];
-    if let Value::Array(a) = arg(args, 1) {
+    if let Some(a) = arg(args, 1).as_array() {
         all.extend(a.values().cloned());
     }
     rm_invoke(ctx, this, &mut all)
@@ -896,15 +898,12 @@ fn rm_invoke_args(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 fn rm_get_closure(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
-    let target = match arg(args, 0) {
-        Value::Object(o) => Some(o),
-        _ => None,
-    };
+    let target = arg(args, 0).into_object().ok();
     ctx.closure_of(&Callee::Method(class, m.name.clone()), target)
 }
 
 fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
@@ -912,29 +911,33 @@ fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Thro
 
 fn new_parameter(ctx: &mut dyn Ctx, callee: &Value, info: &FnInfo, i: usize) -> Value {
     let o = make(ctx, b"ReflectionParameter");
-    set(&o, "name", Value::Str(info.params[i].name.clone()));
+    set(&o, "name", Value::str(info.params[i].name.clone()));
     set(&o, "\0callee", callee.clone());
-    set(&o, "\0pos", Value::Int(i as i64));
-    Value::Object(o)
+    set(&o, "\0pos", Value::int(i as i64));
+    Value::object(o)
 }
 
 fn rp_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let callee = match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"closure") => Callee::Closure(o),
-        Value::Array(a) => {
-            let parts: Vec<Value> = a.values().map(Value::deref).collect();
-            let class = class_arg(ctx, &parts.first().cloned().unwrap_or(Value::Null))?;
-            Callee::Method(class, parts.get(1).cloned().unwrap_or(Value::Null).to_php_string().unwrap_or_else(PhpStr::empty))
-        }
-        v => Callee::Function(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+    let v = arg(args, 0);
+    let callee = if let Some(o) = v.as_object()
+        && o.class.is_a(b"closure")
+    {
+        Callee::Closure(Rc::clone(o))
+    } else if let Some(a) = v.as_array() {
+        let parts: Vec<Value> = a.values().map(Value::deref).collect();
+        let class = class_arg(ctx, &parts.first().cloned().unwrap_or(Value::NULL))?;
+        Callee::Method(class, parts.get(1).cloned().unwrap_or(Value::NULL).to_php_string().unwrap_or_else(PhpStr::empty))
+    } else {
+        Callee::Function(v.to_php_string().unwrap_or_else(PhpStr::empty))
     };
     let Some(info) = ctx.function_info(&callee) else {
         return Err(fail(ctx, "The parameter specified by its name could not be found".into()));
     };
-    let pos = match arg(args, 1) {
-        Value::Int(i) if (i as usize) < info.params.len() && i >= 0 => i as usize,
-        Value::Int(_) => return Err(fail(ctx, "The parameter specified by its offset could not be found".into())),
-        v => {
+    let v = arg(args, 1);
+    let pos = match v.as_int() {
+        Some(i) if (i as usize) < info.params.len() && i >= 0 => i as usize,
+        Some(_) => return Err(fail(ctx, "The parameter specified by its offset could not be found".into())),
+        None => {
             let name = text(&v);
             match info.params.iter().position(|p| p.name.as_bytes() == name.as_bytes()) {
                 Some(i) => i,
@@ -942,10 +945,10 @@ fn rp_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
             }
         }
     };
-    set(this, "name", Value::Str(info.params[pos].name.clone()));
+    set(this, "name", Value::str(info.params[pos].name.clone()));
     set(this, "\0callee", encode(&callee));
-    set(this, "\0pos", Value::Int(pos as i64));
-    Ok(Value::Null)
+    set(this, "\0pos", Value::int(pos as i64));
+    Ok(Value::NULL)
 }
 
 fn param_of(ctx: &mut dyn Ctx, this: &Object) -> Result<(FnInfo, usize), Throw> {
@@ -965,12 +968,12 @@ macro_rules! param_method {
     };
 }
 
-param_method!(rp_get_name, |ctx, p, pos, info, this| Ok(Value::Str(p.name.clone())));
-param_method!(rp_get_position, |ctx, p, pos, info, this| Ok(Value::Int(pos as i64)));
-param_method!(rp_is_optional, |ctx, p, pos, info, this| Ok(Value::Bool(
+param_method!(rp_get_name, |ctx, p, pos, info, this| Ok(Value::str(p.name.clone())));
+param_method!(rp_get_position, |ctx, p, pos, info, this| Ok(Value::int(pos as i64)));
+param_method!(rp_is_optional, |ctx, p, pos, info, this| Ok(Value::bool(
     p.optional && info.params[pos..].iter().all(|q| q.optional)
 )));
-param_method!(rp_is_default_value_available, |ctx, p, pos, info, this| Ok(Value::Bool(p.optional && !p.variadic)));
+param_method!(rp_is_default_value_available, |ctx, p, pos, info, this| Ok(Value::bool(p.optional && !p.variadic)));
 param_method!(rp_get_default_value, |ctx, p, pos, info, this| {
     if !p.optional || p.variadic {
         return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
@@ -980,19 +983,19 @@ param_method!(rp_get_default_value, |ctx, p, pos, info, this| {
     {
         return default_constant_value(ctx, info.class.as_ref(), name.as_bytes());
     }
-    Ok(p.default.clone().unwrap_or(Value::Null))
+    Ok(p.default.clone().unwrap_or(Value::NULL))
 });
 param_method!(rp_is_default_value_constant, |ctx, p, pos, info, this| {
     if !p.optional || p.variadic {
         return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
     }
-    Ok(Value::Bool(p.default_const.is_some()))
+    Ok(Value::bool(p.default_const.is_some()))
 });
 param_method!(rp_get_default_value_constant_name, |ctx, p, pos, info, this| {
     if !p.optional || p.variadic {
         return Err(fail(ctx, "Internal error: Failed to retrieve the default value".into()));
     }
-    Ok(p.default_const.clone().map_or(Value::Null, Value::Str))
+    Ok(p.default_const.clone().map_or(Value::NULL, Value::str))
 });
 
 /// The value of a parameter default that is the constant `name`
@@ -1022,17 +1025,17 @@ fn default_constant_value(ctx: &mut dyn Ctx, class: Option<&Rc<Class>>, name: &[
     }
 }
 param_method!(rp_get_type, |ctx, p, pos, info, this| Ok(type_value(ctx, &p.ty)));
-param_method!(rp_has_type, |ctx, p, pos, info, this| Ok(Value::Bool(p.ty.is_some())));
-param_method!(rp_allows_null, |ctx, p, pos, info, this| Ok(Value::Bool(
+param_method!(rp_has_type, |ctx, p, pos, info, this| Ok(Value::bool(p.ty.is_some())));
+param_method!(rp_allows_null, |ctx, p, pos, info, this| Ok(Value::bool(
     p.ty.as_ref().is_none_or(|t| t.mask & (p8_runtime::types::T_NULL | p8_runtime::types::T_MIXED) != 0)
 )));
-param_method!(rp_is_variadic, |ctx, p, pos, info, this| Ok(Value::Bool(p.variadic)));
-param_method!(rp_is_passed_by_reference, |ctx, p, pos, info, this| Ok(Value::Bool(p.by_ref)));
-param_method!(rp_can_be_passed_by_value, |ctx, p, pos, info, this| Ok(Value::Bool(!p.by_ref)));
-param_method!(rp_is_promoted, |ctx, p, pos, info, this| Ok(Value::Bool(p.promoted)));
+param_method!(rp_is_variadic, |ctx, p, pos, info, this| Ok(Value::bool(p.variadic)));
+param_method!(rp_is_passed_by_reference, |ctx, p, pos, info, this| Ok(Value::bool(p.by_ref)));
+param_method!(rp_can_be_passed_by_value, |ctx, p, pos, info, this| Ok(Value::bool(!p.by_ref)));
+param_method!(rp_is_promoted, |ctx, p, pos, info, this| Ok(Value::bool(p.promoted)));
 param_method!(rp_get_declaring_class, |ctx, p, pos, info, this| Ok(match &info.class {
     Some(c) => new_class_reflection(ctx, c),
-    None => Value::Null,
+    None => Value::NULL,
 }));
 // ReflectionParameter::__toString(): "Parameter #0 [ <optional> ?int $a = NULL ]"
 // (php_reflection.c _parameter_string).
@@ -1096,7 +1099,7 @@ fn function_extension(info: &FnInfo) -> Option<&'static str> {
 
 fn_method!(fa_get_extension_name, |ctx, info, this, args| Ok(match function_extension(&info) {
     Some(m) => s(m.as_bytes()),
-    None => Value::Bool(false),
+    None => Value::FALSE,
 }));
 fn_method!(fa_get_extension, |ctx, info, this, args| Ok(extension_value(ctx, function_extension(&info))));
 
@@ -1127,14 +1130,14 @@ fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
         let lower = m.name.as_bytes().to_ascii_lowercase();
         let declaring = ctx.class(&m.declaring).unwrap_or_else(|| Rc::clone(class));
         if !m.declaring.eq_ignore_ascii_case(class.name.as_bytes()) {
-            out.push_str(&format!(", inherits {}", text(&Value::Str(m.declaring_name.clone()))));
+            out.push_str(&format!(", inherits {}", text(&Value::str(m.declaring_name.clone()))));
         } else if let Some(parent) = &declaring.parent
             && let Some(over) = parent.method(&lower).filter(|o| o.visibility != Visibility::Private)
         {
-            out.push_str(&format!(", overwrites {}", text(&Value::Str(over.declaring_name.clone()))));
+            out.push_str(&format!(", overwrites {}", text(&Value::str(over.declaring_name.clone()))));
         }
         if let Some((owner, _)) = prototype_of(ctx, &declaring, &lower) {
-            out.push_str(&format!(", prototype {}", text(&Value::Str(owner.name.clone()))));
+            out.push_str(&format!(", prototype {}", text(&Value::str(owner.name.clone()))));
         }
         if lower == b"__construct" {
             out.push_str(", ctor");
@@ -1200,10 +1203,11 @@ fn fa_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
 
 /// A default value as reflection prints it (format_default_value).
 fn default_text(out: &mut String, v: &Value) {
-    match v {
-        Value::Null => out.push_str("NULL"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Str(t) => {
+    match v.kind() {
+        Kind::Null => out.push_str("NULL"),
+        Kind::Bool => out.push_str(if v.as_bool().expect("a bool") { "true" } else { "false" }),
+        Kind::Str => {
+            let t = v.as_str().expect("a string");
             out.push('\'');
             for &c in t.as_bytes() {
                 match c {
@@ -1220,7 +1224,8 @@ fn default_text(out: &mut String, v: &Value) {
             }
             out.push('\'');
         }
-        Value::Array(a) => {
+        Kind::Array => {
+            let a = v.as_array().expect("an array");
             let is_list = a.iter().enumerate().all(|(i, (k, _))| matches!(k, Key::Int(n) if n == i as i64));
             out.push('[');
             for (i, (k, v)) in a.iter().enumerate() {
@@ -1242,9 +1247,9 @@ fn default_text(out: &mut String, v: &Value) {
             }
             out.push(']');
         }
-        Value::Object(o) => out.push_str(&format!("object({})", String::from_utf8_lossy(o.class.name.as_bytes()))),
-        Value::Ref(r) => default_text(out, &r.borrow()),
-        v => out.push_str(&String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())),
+        Kind::Object => out.push_str(&format!("object({})", String::from_utf8_lossy(v.as_object().expect("an object").class.name.as_bytes()))),
+        Kind::Ref => default_text(out, &v.as_reference().expect("a reference").borrow()),
+        _ => out.push_str(&String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())),
     }
 }
 
@@ -1260,12 +1265,12 @@ fn rp_get_declaring_function(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Valu
         other => {
             let o = make(ctx, b"ReflectionFunction");
             let mut a = [match &other {
-                Callee::Closure(c) => Value::Object(Rc::clone(c)),
-                Callee::Function(n) => Value::Str(n.clone()),
+                Callee::Closure(c) => Value::object(Rc::clone(c)),
+                Callee::Function(n) => Value::str(n.clone()),
                 Callee::Method(..) => unreachable!("matched above"),
             }];
             rf_construct(ctx, &o, &mut a)?;
-            Value::Object(o)
+            Value::object(o)
         }
     })
 }
@@ -1276,7 +1281,7 @@ fn rp_get_declaring_function(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Valu
 fn new_property(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
     let o = make(ctx, b"ReflectionProperty");
     fill_property(&o, class, name);
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn fill_property(o: &Object, class: &Rc<Class>, name: &[u8]) {
@@ -1297,23 +1302,23 @@ fn fill_property(o: &Object, class: &Rc<Class>, name: &[u8]) {
         })
         .unwrap_or_else(|| class.name.clone());
     set(o, "name", s(name));
-    set(o, "class", Value::Str(declaring));
-    set(o, "\0class", Value::Str(class.name.clone()));
+    set(o, "class", Value::str(declaring));
+    set(o, "\0class", Value::str(class.name.clone()));
 }
 
 fn rpr_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let target = arg(args, 0);
     let class = class_arg(ctx, &target)?;
     let name = text(&arg(args, 1));
-    let dynamic = match &target {
-        Value::Object(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
-        _ => false,
+    let dynamic = match target.as_object() {
+        Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+        None => false,
     };
     if class.slot(name.as_bytes(), None).is_none() && !class.statics.contains_key(name.as_bytes()) && !dynamic {
         return Err(fail(ctx, format!("Property {}::${} does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
     }
     fill_property(this, &class, name.as_bytes());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The property a ReflectionProperty holds: (class, name, declared slot).
@@ -1333,22 +1338,24 @@ fn rpr_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     if let Some((cell, _, _)) = class.statics.get(name.as_bytes()) {
         return Ok(cell.borrow().deref());
     }
-    let Value::Object(o) = arg(args, 0) else {
+    let Ok(o) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "ReflectionProperty::getValue(): Argument #1 ($object) must be provided for instance properties".into()));
     };
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
-        Some(i) => match o.slots.borrow()[i].deref() {
-            Value::Undef => {
+        Some(i) => {
+            let v = o.slots.borrow()[i].deref();
+            if v.is_undef() {
                 let p = &o.class.properties[i];
                 if p.ty.is_some() {
                     Err(ctx.throw("Error", format!("Typed property {}::${} must not be accessed before initialization", String::from_utf8_lossy(p.declaring_name.as_bytes()), name)))
                 } else {
-                    Ok(Value::Null)
+                    Ok(Value::NULL)
                 }
+            } else {
+                Ok(v)
             }
-            v => Ok(v),
-        },
-        None => Ok(o.dynamic.borrow().get(&Key::from_string(PhpStr::from(name.as_str()))).map_or(Value::Null, Value::deref)),
+        }
+        None => Ok(o.dynamic.borrow().get(&Key::from_string(PhpStr::from(name.as_str()))).map_or(Value::NULL, Value::deref)),
     }
 }
 
@@ -1357,29 +1364,29 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     if let Some((cell, _, _)) = class.statics.get(name.as_bytes()) {
         let v = if args.len() > 1 { arg(args, 1) } else { arg(args, 0) };
         let inner = cell.borrow().clone();
-        match inner {
-            Value::Ref(r) => *r.borrow_mut() = v,
-            _ => *cell.borrow_mut() = v,
+        match inner.as_reference() {
+            Some(r) => *r.borrow_mut() = v,
+            None => *cell.borrow_mut() = v,
         }
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    let Value::Object(o) = arg(args, 0) else {
+    let Ok(o) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "ReflectionProperty::setValue(): Argument #1 ($objectOrValue) must be of type object".into()));
     };
     let v = arg(args, 1);
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
         Some(i) => {
             let mut slots = o.slots.borrow_mut();
-            match &slots[i] {
-                Value::Ref(cell) => *cell.borrow_mut() = v,
-                _ => slots[i] = v,
+            match slots[i].as_reference() {
+                Some(cell) => *cell.borrow_mut() = v,
+                None => slots[i] = v,
             }
         }
         None => {
             o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name.as_str())), v);
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// ReflectionProperty::getRawValue / setRawValue: the stored value,
@@ -1405,9 +1412,10 @@ fn rpr_set_raw_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 
 /// `$object` argument `i` of a lazy-object method: an instance of the class.
 fn lazy_object_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize, class: &Rc<Class>, method: &str) -> Result<Rc<Object>, Throw> {
-    match arg(args, i) {
-        Value::Object(o) if o.class.is_a(&class.lower) => Ok(o),
-        v => Err(ctx.throw(
+    let v = arg(args, i);
+    match v.as_object() {
+        Some(o) if o.class.is_a(&class.lower) => Ok(Rc::clone(o)),
+        _ => Err(ctx.throw(
             "TypeError",
             format!(
                 "{method}(): Argument #{} ($object) must be of type {}, {} given",
@@ -1421,10 +1429,7 @@ fn lazy_object_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize, class: &Rc<Class
 
 /// The options newLazy*/resetAsLazy* take, checked.
 fn lazy_options(ctx: &mut dyn Ctx, v: &Value, method: &str, argn: usize, reset: bool) -> Result<i64, Throw> {
-    let options = match v {
-        Value::Null | Value::Undef => 0,
-        v => v.to_int(),
-    };
+    let options = if v.is_null_or_undef() { 0 } else { v.to_int() };
     if options & !(crate::lazy::SKIP_INITIALIZATION_ON_SERIALIZE | crate::lazy::SKIP_DESTRUCTOR) != 0 {
         return Err(fail(ctx, format!("{method}(): Argument #{argn} ($options) contains invalid flags")));
     }
@@ -1439,7 +1444,7 @@ fn new_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], proxy: boo
     let method = if proxy { "ReflectionClass::newLazyProxy" } else { "ReflectionClass::newLazyGhost" };
     let options = lazy_options(ctx, &arg(args, 1), method, 2, false)?;
     let o = ctx.lazy_make(&class, None, arg(args, 0), options, proxy)?;
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn rc_new_lazy_ghost(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1459,7 +1464,7 @@ fn reset_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], proxy: b
         return Err(fail(ctx, "Object is already lazy".into()));
     }
     ctx.lazy_make(&class, Some(o), arg(args, 1), options, proxy)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rc_reset_as_lazy_ghost(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1473,13 +1478,13 @@ fn rc_reset_as_lazy_proxy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Valu
 fn rc_is_uninitialized_lazy_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = held_class(ctx, this)?;
     let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::isUninitializedLazyObject")?;
-    Ok(Value::Bool(o.is_uninit_lazy()))
+    Ok(Value::bool(o.is_uninit_lazy()))
 }
 
 fn rc_initialize_lazy_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = held_class(ctx, this)?;
     let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::initializeLazyObject")?;
-    Ok(Value::Object(ctx.lazy_initialize(&o)?))
+    Ok(Value::object(ctx.lazy_initialize(&o)?))
 }
 
 fn rc_mark_lazy_object_as_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1488,16 +1493,16 @@ fn rc_mark_lazy_object_as_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args
     if o.is_uninit_lazy() {
         ctx.lazy_mark_initialized(&o)?;
     }
-    Ok(Value::Object(o.proxy_instance().unwrap_or(o)))
+    Ok(Value::object(o.proxy_instance().unwrap_or(o)))
 }
 
 fn rc_get_lazy_initializer(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = held_class(ctx, this)?;
     let o = lazy_object_arg(ctx, args, 0, &class, "ReflectionClass::getLazyInitializer")?;
     if !o.is_uninit_lazy() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    Ok(o.lazy_info.borrow().as_ref().map_or(Value::Null, |l| l.initializer.clone()))
+    Ok(o.lazy_info.borrow().as_ref().map_or(Value::NULL, |l| l.initializer.clone()))
 }
 
 /// The object a ReflectionProperty lazy method works on (through
@@ -1523,12 +1528,12 @@ fn lazy_property_target(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], me
 fn rpr_skip_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (o, slot) = lazy_property_target(ctx, this, args, "skipLazyInitialization")?;
     if !o.lazy_slot(slot) {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let defaults = ctx.class_defaults(&o.class)?;
-    o.slots.borrow_mut()[slot] = defaults.get(slot).cloned().unwrap_or(Value::Undef);
+    o.slots.borrow_mut()[slot] = defaults.get(slot).cloned().unwrap_or(Value::UNDEF);
     ctx.lazy_slot_done(&o, slot);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rpr_set_raw_value_without_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1538,7 +1543,7 @@ fn rpr_set_raw_value_without_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Ob
     if was_lazy {
         ctx.lazy_slot_done(&o, slot);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rpr_is_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1548,19 +1553,19 @@ fn rpr_is_lazy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resu
         o = inst;
     }
     if class.statics.contains_key(name.as_bytes()) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(o.class.slot(name.as_bytes(), Some(&class.lower)).is_some_and(|i| o.lazy_slot(i))))
+    Ok(Value::bool(o.class.slot(name.as_bytes(), Some(&class.lower)).is_some_and(|i| o.lazy_slot(i))))
 }
 
 fn rpr_is_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (class, name, slot) = held_property(ctx, this)?;
     if class.statics.contains_key(name.as_bytes()) {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
-        Some(i) => !matches!(o.slots.borrow()[i], Value::Undef),
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
+    Ok(Value::bool(match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
+        Some(i) => !o.slots.borrow()[i].is_undef(),
         None => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
     }))
 }
@@ -1577,7 +1582,7 @@ fn prop_facts(ctx: &mut dyn Ctx, this: &Object) -> Result<PropFacts, Throw> {
     Ok(match slot {
         Some(i) => {
             let p = &class.properties[i];
-            let default = (!matches!(p.default, Value::Undef)).then(|| p.default.clone());
+            let default = (!p.default.is_undef()).then(|| p.default.clone());
             (p.visibility, false, p.readonly, default, p.ty_decl.as_deref().cloned(), true)
         }
         None => (Visibility::Public, false, false, None, None, false),
@@ -1594,25 +1599,25 @@ macro_rules! prop_flag {
     };
 }
 
-prop_flag!(rpr_is_public, |v, st, ro, def, ty, declared| Ok(Value::Bool(v == Visibility::Public)));
-prop_flag!(rpr_is_private, |v, st, ro, def, ty, declared| Ok(Value::Bool(v == Visibility::Private)));
-prop_flag!(rpr_is_protected, |v, st, ro, def, ty, declared| Ok(Value::Bool(v == Visibility::Protected)));
-prop_flag!(rpr_is_static, |v, st, ro, def, ty, declared| Ok(Value::Bool(st)));
-prop_flag!(rpr_is_readonly, |v, st, ro, def, ty, declared| Ok(Value::Bool(ro)));
-prop_flag!(rpr_is_default, |v, st, ro, def, ty, declared| Ok(Value::Bool(declared)));
-prop_flag!(rpr_has_default_value, |v, st, ro, def, ty, declared| Ok(Value::Bool(declared && (def.is_some() || ty.is_none()))));
-prop_flag!(rpr_get_default_value, |v, st, ro, def, ty, declared| Ok(def.unwrap_or(Value::Null)));
+prop_flag!(rpr_is_public, |v, st, ro, def, ty, declared| Ok(Value::bool(v == Visibility::Public)));
+prop_flag!(rpr_is_private, |v, st, ro, def, ty, declared| Ok(Value::bool(v == Visibility::Private)));
+prop_flag!(rpr_is_protected, |v, st, ro, def, ty, declared| Ok(Value::bool(v == Visibility::Protected)));
+prop_flag!(rpr_is_static, |v, st, ro, def, ty, declared| Ok(Value::bool(st)));
+prop_flag!(rpr_is_readonly, |v, st, ro, def, ty, declared| Ok(Value::bool(ro)));
+prop_flag!(rpr_is_default, |v, st, ro, def, ty, declared| Ok(Value::bool(declared)));
+prop_flag!(rpr_has_default_value, |v, st, ro, def, ty, declared| Ok(Value::bool(declared && (def.is_some() || ty.is_none()))));
+prop_flag!(rpr_get_default_value, |v, st, ro, def, ty, declared| Ok(def.unwrap_or(Value::NULL)));
 fn rpr_get_type(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (_, _, _, _, ty, _) = prop_facts(ctx, this)?;
     Ok(type_value(ctx, &ty))
 }
-prop_flag!(rpr_has_type, |v, st, ro, def, ty, declared| Ok(Value::Bool(ty.is_some())));
+prop_flag!(rpr_has_type, |v, st, ro, def, ty, declared| Ok(Value::bool(ty.is_some())));
 fn rpr_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (v, st, ro, _, _, _) = prop_facts(ctx, this)?;
     let h = prop_hooks(ctx, this)?;
     let mut bits = vis_bits(v) | set_bits(prop_set_visibility(ctx, this)?) | if st { 16 } else { 0 } | if ro { 128 } else { 0 };
     bits |= if h.is_final { 32 } else { 0 } | if h.is_abstract { 64 } else { 0 } | if h.virtual_ { 512 } else { 0 };
-    Ok(Value::Int(bits))
+    Ok(Value::int(bits))
 }
 
 /// Who may write a property, when narrower than its visibility.
@@ -1622,11 +1627,11 @@ fn prop_set_visibility(ctx: &mut dyn Ctx, this: &Object) -> Result<Option<Visibi
 }
 
 fn rpr_is_private_set(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(prop_set_visibility(ctx, this)? == Some(Visibility::Private)))
+    Ok(Value::bool(prop_set_visibility(ctx, this)? == Some(Visibility::Private)))
 }
 
 fn rpr_is_protected_set(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(prop_set_visibility(ctx, this)? == Some(Visibility::Protected)))
+    Ok(Value::bool(prop_set_visibility(ctx, this)? == Some(Visibility::Protected)))
 }
 
 /// What a property declares beyond its visibility: final, its hooks.
@@ -1659,19 +1664,19 @@ fn prop_hooks(ctx: &mut dyn Ctx, this: &Object) -> Result<PropHooks, Throw> {
 }
 
 fn rpr_is_final(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(prop_hooks(ctx, this)?.is_final))
+    Ok(Value::bool(prop_hooks(ctx, this)?.is_final))
 }
 
 fn rpr_is_abstract(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(prop_hooks(ctx, this)?.is_abstract))
+    Ok(Value::bool(prop_hooks(ctx, this)?.is_abstract))
 }
 
 fn rpr_is_virtual(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(prop_hooks(ctx, this)?.virtual_))
+    Ok(Value::bool(prop_hooks(ctx, this)?.virtual_))
 }
 
 fn rpr_has_hooks(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(!prop_hooks(ctx, this)?.hooks.is_empty()))
+    Ok(Value::bool(!prop_hooks(ctx, this)?.hooks.is_empty()))
 }
 
 /// getHooks(): ["get" => ReflectionMethod, "set" => ...].
@@ -1682,7 +1687,7 @@ fn rpr_get_hooks(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resul
         let m = new_method(ctx, &h.class, method);
         out.insert(Key::Str(PhpStr::from(*kind)), m);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn rpr_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1693,8 +1698,8 @@ fn rpr_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]
 
 fn rpr_is_promoted(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (class, name, _) = held_property(ctx, this)?;
-    let Some(info) = ctx.function_info(&Callee::Method(Rc::clone(&class), PhpStr::from("__construct"))) else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(info.params.iter().any(|p| p.promoted && p.name.as_bytes() == name.as_bytes())))
+    let Some(info) = ctx.function_info(&Callee::Method(Rc::clone(&class), PhpStr::from("__construct"))) else { return Ok(Value::FALSE) };
+    Ok(Value::bool(info.params.iter().any(|p| p.promoted && p.name.as_bytes() == name.as_bytes())))
 }
 
 fn property_subject(ctx: &mut dyn Ctx, this: &Object) -> Result<Subject, Throw> {
@@ -1717,25 +1722,25 @@ fn rpr_get_attributes(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
 
 /// getDocComment: the `/** ... */` before a declaration, or false.
 fn doc_value(ctx: &mut dyn Ctx, subject: Subject) -> Value {
-    ctx.reflect_meta(&subject).doc.map_or(Value::Bool(false), Value::Str)
+    ctx.reflect_meta(&subject).doc.map_or(Value::FALSE, Value::str)
 }
 
 /// A hidden-property form of a Subject (a ReflectionAttribute keeps the
 /// declaration it came from).
 fn encode_subject(s: &Subject) -> Value {
     match s {
-        Subject::Class(c) => list(vec![Value::Int(0), Value::Str(c.name.clone())]),
-        Subject::Function(c) => list(vec![Value::Int(1), encode(c)]),
-        Subject::Property(c, n) => list(vec![Value::Int(2), Value::Str(c.name.clone()), Value::Str(n.clone())]),
-        Subject::Constant(c, n) => list(vec![Value::Int(3), Value::Str(c.name.clone()), Value::Str(n.clone())]),
-        Subject::Param(c, pos) => list(vec![Value::Int(4), encode(c), Value::Int(*pos as i64)]),
+        Subject::Class(c) => list(vec![Value::int(0), Value::str(c.name.clone())]),
+        Subject::Function(c) => list(vec![Value::int(1), encode(c)]),
+        Subject::Property(c, n) => list(vec![Value::int(2), Value::str(c.name.clone()), Value::str(n.clone())]),
+        Subject::Constant(c, n) => list(vec![Value::int(3), Value::str(c.name.clone()), Value::str(n.clone())]),
+        Subject::Param(c, pos) => list(vec![Value::int(4), encode(c), Value::int(*pos as i64)]),
     }
 }
 
 fn decode_subject(ctx: &mut dyn Ctx, v: &Value) -> Result<Subject, Throw> {
-    let parts: Vec<Value> = match v {
-        Value::Array(a) => a.values().cloned().collect(),
-        _ => Vec::new(),
+    let parts: Vec<Value> = match v.as_array() {
+        Some(a) => a.values().cloned().collect(),
+        None => Vec::new(),
     };
     let name = |i: usize| parts.get(i).and_then(Value::to_php_string).unwrap_or_else(PhpStr::empty);
     Ok(match parts.first().map(Value::to_int) {
@@ -1773,10 +1778,8 @@ fn target_of(s: &Subject) -> i64 {
 /// ReflectionAttribute for each attribute of `subject` (filtered by name,
 /// or with IS_INSTANCEOF by the class they are or extend).
 fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &str) -> Result<Value, Throw> {
-    let name = match arg(args, 0) {
-        Value::Null | Value::Undef => None,
-        v => Some(text(&v)),
-    };
+    let v = arg(args, 0);
+    let name = if v.is_null_or_undef() { None } else { Some(text(&v)) };
     let flags = arg(args, 1).to_int();
     if flags & !2 != 0 {
         return Err(ctx.throw("ValueError", format!("{method}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag")));
@@ -1808,12 +1811,12 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
         }
         let repeated = names.iter().filter(|o| o.as_bytes().eq_ignore_ascii_case(attr.as_bytes())).count() > 1;
         let o = make(ctx, b"ReflectionAttribute");
-        set(&o, "name", Value::Str(attr.clone()));
+        set(&o, "name", Value::str(attr.clone()));
         set(&o, "\0subject", encoded.clone());
-        set(&o, "\0index", Value::Int(i as i64));
-        set(&o, "\0target", Value::Int(target));
-        set(&o, "\0repeated", Value::Bool(repeated));
-        out.push(Value::Object(o));
+        set(&o, "\0index", Value::int(i as i64));
+        set(&o, "\0target", Value::int(target));
+        set(&o, "\0repeated", Value::bool(repeated));
+        out.push(Value::object(o));
     }
     Ok(list(out))
 }
@@ -1821,26 +1824,26 @@ fn attributes_of(ctx: &mut dyn Ctx, subject: Subject, args: &[Value], method: &s
 /// ReflectionReference::fromArrayElement(array $array, int|string $key):
 /// the element's reference, or null when the element is not one.
 fn rr_from_array_element(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(array) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(array) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let key = match Key::from_value(&arg(args, 1)) {
         Ok((key, _)) => key,
         Err(_) => return Err(fail(ctx, "Array key not found".into())),
     };
     match array.get(&key) {
         None => Err(fail(ctx, "Array key not found".into())),
-        Some(r @ Value::Ref(_)) => {
+        Some(r) if r.is_reference() => {
             let o = make(ctx, b"ReflectionReference");
             set(&o, "\0ref", r.clone());
-            Ok(Value::Object(o))
+            Ok(Value::object(o))
         }
-        Some(_) => Ok(Value::Null),
+        Some(_) => Ok(Value::NULL),
     }
 }
 
 /// ReflectionReference::getId(): 20 bytes that are the same for every
 /// ReflectionReference of one reference while it lives.
 fn rr_get_id(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Ref(r) = get(this, "\0ref") else { return Ok(Value::Str(PhpStr::empty())) };
+    let Ok(r) = get(this, "\0ref").into_reference() else { return Ok(Value::str(PhpStr::empty())) };
     let mut x = Rc::as_ptr(&r) as usize as u64 ^ 0x9e37_79b9_7f4a_7c15;
     let mut id = Vec::with_capacity(20);
     while id.len() < 20 {
@@ -1850,7 +1853,7 @@ fn rr_get_id(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Valu
         id.extend_from_slice(&x.to_le_bytes());
     }
     id.truncate(20);
-    Ok(Value::Str(PhpStr::from(&id[..])))
+    Ok(Value::str(PhpStr::from(&id[..])))
 }
 
 fn rr_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1879,7 +1882,7 @@ fn ra_is_repeated(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
 
 fn ra_get_arguments(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let subject = decode_subject(ctx, &get(this, "\0subject"))?;
-    Ok(Value::Array(Rc::new(ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?)))
+    Ok(Value::array(ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?))
 }
 
 /// ReflectionAttribute::__toString(): "Attribute [ Name ]" and its
@@ -1929,7 +1932,7 @@ fn attribute_flags(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Result<Result<Option
     let Some(at) = ctx.reflect_meta(&subject).attrs.iter().position(|a| a.as_bytes().eq_ignore_ascii_case(b"attribute")) else { return Ok(Err(())) };
     let args = ctx.reflect_attr_args(&subject, at)?;
     let Some(flags) = args.get_int(0).or_else(|| args.get(&Key::from_string(PhpStr::from("flags")))).map(Value::deref) else { return Ok(Ok(Some(TARGET_ALL))) };
-    let Value::Int(flags) = flags else {
+    let Some(flags) = flags.as_int() else {
         return Err(ctx.throw("Error", format!("Attribute::__construct(): Argument #1 ($flags) must be of type int, {} given", p8_runtime::args::value_name(&flags))));
     };
     if flags & !(TARGET_ALL | IS_REPEATABLE) != 0 {
@@ -1958,7 +1961,7 @@ fn ra_new_instance(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
     }
     let subject = decode_subject(ctx, &get(this, "\0subject"))?;
     let args = ctx.reflect_attr_args(&subject, get(this, "\0index").to_int() as usize)?;
-    Ok(Value::Object(ctx.new_instance_named(&class, &args)?))
+    Ok(Value::object(ctx.new_instance_named(&class, &args)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1971,9 +1974,9 @@ fn rcc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
         return Err(fail(ctx, format!("Constant {}::{} does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
     };
     set(this, "name", s(name.as_bytes()));
-    set(this, "class", Value::Str(c.declaring_name.clone()));
-    set(this, "\0class", Value::Str(class.name.clone()));
-    Ok(Value::Null)
+    set(this, "class", Value::str(c.declaring_name.clone()));
+    set(this, "\0class", Value::str(class.name.clone()));
+    Ok(Value::NULL)
 }
 
 fn rcc_get_name(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1996,19 +1999,19 @@ fn rcc_visibility(ctx: &mut dyn Ctx, this: &Object) -> Result<Visibility, Throw>
 }
 
 fn rcc_is_public(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(rcc_visibility(ctx, this)? == Visibility::Public))
+    Ok(Value::bool(rcc_visibility(ctx, this)? == Visibility::Public))
 }
 
 fn rcc_is_private(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(rcc_visibility(ctx, this)? == Visibility::Private))
+    Ok(Value::bool(rcc_visibility(ctx, this)? == Visibility::Private))
 }
 
 fn rcc_is_protected(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(rcc_visibility(ctx, this)? == Visibility::Protected))
+    Ok(Value::bool(rcc_visibility(ctx, this)? == Visibility::Protected))
 }
 
 fn rcc_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(vis_bits(rcc_visibility(ctx, this)?)))
+    Ok(Value::int(vis_bits(rcc_visibility(ctx, this)?)))
 }
 
 fn constant_subject(ctx: &mut dyn Ctx, this: &Object) -> Result<Subject, Throw> {
@@ -2034,7 +2037,7 @@ fn re_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     if class.flags & CLASS_ENUM == 0 {
         return Err(fail(ctx, format!("Class \"{}\" is not an enum", String::from_utf8_lossy(class.name.as_bytes()))));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn is_case(class: &Class, name: &str) -> bool {
@@ -2044,12 +2047,12 @@ fn is_case(class: &Class, name: &str) -> bool {
 fn new_case(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Value {
     let o = make(ctx, if class.enum_backing.is_some() { b"ReflectionEnumBackedCase" } else { b"ReflectionEnumUnitCase" });
     set(&o, "name", s(name.as_bytes()));
-    set(&o, "class", Value::Str(class.name.clone()));
-    set(&o, "\0class", Value::Str(class.name.clone()));
-    Value::Object(o)
+    set(&o, "class", Value::str(class.name.clone()));
+    set(&o, "\0class", Value::str(class.name.clone()));
+    Value::object(o)
 }
 
-class_method!(re_has_case, |ctx, class, this, args| Ok(Value::Bool(is_case(&class, &text(&arg(args, 0))))));
+class_method!(re_has_case, |ctx, class, this, args| Ok(Value::bool(is_case(&class, &text(&arg(args, 0))))));
 class_method!(re_get_case, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     let shown = String::from_utf8_lossy(class.name.as_bytes()).into_owned();
@@ -2063,10 +2066,10 @@ class_method!(re_get_cases, |ctx, class, this, args| {
     let names: Vec<Vec<u8>> = class.constants.iter().filter(|(_, c)| c.is_case).map(|(k, _)| k.clone()).collect();
     Ok(list(names.iter().map(|n| new_case(ctx, &class, &String::from_utf8_lossy(n))).collect()))
 });
-class_method!(re_is_backed, |ctx, class, this, args| Ok(Value::Bool(class.enum_backing.is_some())));
+class_method!(re_is_backed, |ctx, class, this, args| Ok(Value::bool(class.enum_backing.is_some())));
 class_method!(re_get_backing_type, |ctx, class, this, args| Ok(match &class.enum_backing {
     Some(t) => named_type(ctx, &String::from_utf8_lossy(t.as_bytes()), false, true),
-    None => Value::Null,
+    None => Value::NULL,
 }));
 
 fn reuc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -2076,7 +2079,7 @@ fn reuc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     if !is_case(&class, &name) {
         return Err(fail(ctx, format!("Constant {}::{} is not a case", String::from_utf8_lossy(class.name.as_bytes()), name)));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn reuc_get_enum(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -2091,21 +2094,21 @@ fn reuc_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resu
 
 fn rebc_get_backing_value(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let class = held_class(ctx, this)?;
-    Ok(class.constants.get(text(&get(this, "name")).as_bytes()).map_or(Value::Null, |c| c.value.clone()))
+    Ok(class.constants.get(text(&get(this, "name")).as_bytes()).map_or(Value::NULL, |c| c.value.clone()))
 }
 
 // ---------------------------------------------------------------------------
 // Attribute, Deprecated
 
 fn attribute_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "flags", Value::Int(if args.is_empty() { TARGET_ALL } else { arg(args, 0).to_int() }));
-    Ok(Value::Null)
+    set(this, "flags", Value::int(if args.is_empty() { TARGET_ALL } else { arg(args, 0).to_int() }));
+    Ok(Value::NULL)
 }
 
 fn deprecated_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     set(this, "message", arg(args, 0));
     set(this, "since", arg(args, 1));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
@@ -2166,7 +2169,7 @@ fn new_extension_reflection(ctx: &mut dyn Ctx, module: &'static str) -> Value {
     let o = make(ctx, b"ReflectionExtension");
     set(&o, "name", s(module.as_bytes()));
     set(&o, "\0module", s(module.as_bytes()));
-    Value::Object(o)
+    Value::object(o)
 }
 
 /// The ReflectionExtension of `module`, if p8 provides it (getExtension());
@@ -2174,7 +2177,7 @@ fn new_extension_reflection(ctx: &mut dyn Ctx, module: &'static str) -> Value {
 fn extension_value(ctx: &mut dyn Ctx, module: Option<&'static str>) -> Value {
     match module.and_then(|m| p8_runtime::info::loaded_module(ctx, m.as_bytes())) {
         Some(m) => new_extension_reflection(ctx, m),
-        None => Value::Null,
+        None => Value::NULL,
     }
 }
 
@@ -2185,7 +2188,7 @@ fn rex_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     };
     set(this, "name", s(module.as_bytes()));
     set(this, "\0module", s(module.as_bytes()));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The module a ReflectionExtension holds, with what PHP knows of it.
@@ -2203,7 +2206,7 @@ fn rex_get_name(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
 
 fn rex_get_version(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (module, _) = held_module(ctx, this)?;
-    Ok(p8_runtime::info::module_version(module).map_or(Value::Null, |v| s(v.as_bytes())))
+    Ok(p8_runtime::info::module_version(module).map_or(Value::NULL, |v| s(v.as_bytes())))
 }
 
 /// The module's functions p8 has, in PHP's order.
@@ -2223,9 +2226,9 @@ fn rex_get_functions(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R
     let mut out = PhpArray::new();
     for f in module_functions(ctx, spec) {
         let o = new_function_reflection(ctx, f)?;
-        out.insert(Key::from_string(PhpStr::from(f)), Value::Object(o));
+        out.insert(Key::from_string(PhpStr::from(f)), Value::object(o));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// The module's constants, in the order they were defined.
@@ -2239,7 +2242,7 @@ fn rex_get_constants(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R
     for (name, v) in module_constants(ctx, module) {
         out.insert(Key::from_string(name), v);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn rex_get_ini_entries(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -2247,11 +2250,11 @@ fn rex_get_ini_entries(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) ->
     let mut out = PhpArray::new();
     if let Some(spec) = spec {
         for (name, _, _) in p8_runtime::info::ini_entries(ctx, spec) {
-            let v = ctx.ini_get(name.as_bytes()).unwrap_or(Value::Null);
+            let v = ctx.ini_get(name.as_bytes()).unwrap_or(Value::NULL);
             out.insert(Key::from_string(PhpStr::from(name)), v);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// The module's classes p8 has (built-in ones), in PHP's order.
@@ -2267,12 +2270,12 @@ fn rex_get_classes(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
         let r = new_class_reflection(ctx, &c);
         out.insert(Key::from_string(c.name.clone()), r);
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn rex_get_class_names(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (_, spec) = held_module(ctx, this)?;
-    Ok(list(module_classes(ctx, spec).iter().map(|c| Value::Str(c.name.clone())).collect()))
+    Ok(list(module_classes(ctx, spec).iter().map(|c| Value::str(c.name.clone())).collect()))
 }
 
 fn rex_get_dependencies(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -2281,24 +2284,24 @@ fn rex_get_dependencies(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -
     for (dep, relation) in spec.map_or(&[][..], |s| s.deps) {
         out.insert(Key::from_string(PhpStr::from(*dep)), s(relation.as_bytes()));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn rex_info(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (module, _) = held_module(ctx, this)?;
     p8_runtime::info::print_module(ctx, module)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Every module p8 has is compiled in: persistent, never temporary (dl()).
 fn rex_is_persistent(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     held_module(ctx, this)?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn rex_is_temporary(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     held_module(ctx, this)?;
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// `text` with `indent` before each line that is not empty.
@@ -2357,9 +2360,10 @@ fn rex_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resul
         for (name, v) in &constants {
             let flags = p8_stubs::constant_flags(name.as_bytes());
             out.extend_from_slice(format!("    Constant [ <{flags}> {} {} ] {{ ", v.type_name(), String::from_utf8_lossy(name.as_bytes())).as_bytes());
-            match v {
-                Value::Array(_) => out.extend_from_slice(b"Array"),
-                v => out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+            if v.is_array() {
+                out.extend_from_slice(b"Array");
+            } else {
+                out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
             }
             out.extend_from_slice(b" }\n");
         }
@@ -2376,7 +2380,7 @@ fn rex_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resul
         out.extend_from_slice(b"  }\n");
     }
     out.extend_from_slice(b"}\n");
-    Ok(Value::Str(PhpStr::from(&out[..])))
+    Ok(Value::str(PhpStr::from(&out[..])))
 }
 
 /// p8 has no Zend extensions (no OPcache, no Xdebug): none to reflect.

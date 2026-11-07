@@ -1,7 +1,7 @@
 //! Resources, and the one kind there is so far: streams (files, the
 //! standard streams, php://memory and php://temp).
 //!
-//! A resource is a Value::Object of a resource class (CLASS_RESOURCE),
+//! A resource is an object value of a resource class (CLASS_RESOURCE),
 //! numbered by its own counter as PHP numbers resources, holding a
 //! [`Resource`] as its data.
 //!
@@ -24,10 +24,7 @@ pub struct Resource {
 
 /// The resource a value is, if it is one.
 pub fn resource_of(v: &Value) -> Option<std::rc::Rc<Object>> {
-    match v.deref() {
-        Value::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => Some(o),
-        _ => None,
-    }
+    v.deref().into_object().ok().filter(|o| o.class.flags & crate::object::CLASS_RESOURCE != 0)
 }
 
 /// The host's MAXPATHLEN (PHP_MAXPATHLEN): realpath() and friends fail

@@ -3220,9 +3220,9 @@ impl<'src> Compiler<'src> {
                 let (a, b) = (self.const_value(left)?.to_value(), self.const_value(right)?.to_value());
                 let mut diags = Vec::new();
                 match p8_runtime::ops::binary(op, &a, &b, &mut diags) {
-                    Ok(p8_runtime::value::Value::Int(i)) if diags.is_empty() => Ok(Frozen::Int(i)),
-                    Ok(p8_runtime::value::Value::Float(x)) if diags.is_empty() => Ok(Frozen::Float(x)),
-                    Ok(p8_runtime::value::Value::Str(s)) if diags.is_empty() => Ok(Frozen::Str(Text::from(s.as_bytes()))),
+                    Ok(v) if diags.is_empty() && v.is_int() => Ok(Frozen::Int(v.as_int().expect("an int"))),
+                    Ok(v) if diags.is_empty() && v.is_float() => Ok(Frozen::Float(v.as_float().expect("a float"))),
+                    Ok(v) if diags.is_empty() && v.is_str() => Ok(Frozen::Str(Text::from(v.as_str().expect("a string").as_bytes()))),
                     _ => Err(self.unsupported(e.span(), "this constant expression")),
                 }
             }
