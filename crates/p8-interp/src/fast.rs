@@ -33,46 +33,65 @@ impl Context<'_> {
             // `step` then raises it.
             let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
         // A compare-and-branch on two numbers (anything else goes to `step`).
+        // A compare-and-branch: two ints inline, anything else (floats,
+        // references, strings, null) through `test`; an undefined
+        // variable (its warning) is `step`'s.
         macro_rules! jump_if {
-            ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {
-                match num_test($cmp, &w[$a as usize], &w[$b as usize]) {
-                    Some(t) if t == $when => {
-                        if back($target, pc) {
-                            break Switch::Slow;
-                        }
-                        pc = $target as usize;
+            ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {{
+                let t = match (&w[$a as usize], &w[$b as usize]) {
+                    (Value::Int(x), Value::Int(y)) => int_test($cmp, *x, *y),
+                    _ => match test(w, $cmp, $a, $b) {
+                        Some(t) => t,
+                        None => break Switch::Slow,
+                    },
+                };
+                if t == $when {
+                    if back($target, pc) {
+                        break Switch::Slow;
                     }
-                    Some(_) => pc += 1,
-                    None => break Switch::Slow,
+                    pc = $target as usize;
+                } else {
+                    pc += 1;
                 }
-            };
+            }};
         }
-        // `dst = a op b` on numbers (and `.` on strings).
+        // `dst = a op b`: two ints inline, the rest (floats, references,
+        // `.` on strings) through `arith`; what may warn or throw is `step`'s.
         macro_rules! arith {
-            ($op:expr, $dst:expr, $a:expr, $b:expr) => {
-                match num_op($op, &w[$a as usize], &w[$b as usize]) {
-                    // A variable holding a reference is written through it (`step`).
-                    Some(_) if matches!(w[$dst as usize], Value::Ref(_)) => break Switch::Slow,
-                    Some(r) => {
-                        w[$dst as usize] = r;
-                        pc += 1;
-                    }
-                    None if $op == BinOp::Concat && concat(w, $dst, $a, $b) => pc += 1,
-                    None => break Switch::Slow,
+            ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
+                if let (Value::Int(x), Value::Int(y)) = (&w[$a as usize], &w[$b as usize])
+                    && let Some(n) = $int(*x, *y)
+                {
+                    put_var(&mut w[$dst as usize], Value::Int(n));
+                } else if !arith(w, $op, $dst, $a, $b) {
+                    break Switch::Slow;
                 }
-            };
+                pc += 1;
+            }};
         }
-        // A fused step and test (`IncJumpLt` and co.) on ints: step, then
-        // jump or go past the test. A non-int bound leaves the test to the
-        // next instruction; a non-int variable leaves both to `step`.
+        // A fused step and test (`IncJumpLt` and co.) on ints (through a
+        // reference too): step, then jump or go past the test. A non-int
+        // bound leaves the test to the next instruction; a non-int
+        // variable (or an overflow) leaves both to `step`.
         macro_rules! step_jump {
             ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
-                // Written in place: no drop of the old value to compile.
-                let Value::Int(i) = &mut w[$var as usize] else { break Switch::Slow };
-                let Some(n) = $step(*i, 1) else { break Switch::Slow };
-                *i = n;
-                match w[$b as usize] {
-                    Value::Int(b) if $holds(n, b) => {
+                let n = match &mut w[$var as usize] {
+                    // Written in place: no drop of the old value to compile.
+                    Value::Int(i) => match $step(*i, 1) {
+                        Some(n) => {
+                            *i = n;
+                            n
+                        }
+                        None => break Switch::Slow,
+                    },
+                    Value::Ref(cell) => match step_ref(cell, $step) {
+                        Some(n) => n,
+                        None => break Switch::Slow,
+                    },
+                    _ => break Switch::Slow,
+                };
+                match int_of(&w[$b as usize]) {
+                    Some(b) if $holds(n, b) => {
                         if back($target, pc) {
                             // The step is done: the test (next) sees the interrupt.
                             pc += 1;
@@ -80,8 +99,8 @@ impl Context<'_> {
                         }
                         pc = $target as usize;
                     }
-                    Value::Int(_) => pc += 2,
-                    _ => pc += 1,
+                    Some(_) => pc += 2,
+                    None => pc += 1,
                 }
             }};
         }
@@ -90,7 +109,8 @@ impl Context<'_> {
                 // `$this`, in a method that has one (else `step` raises).
                 Instr::This { dst } => match &top.this {
                     Some(this) => {
-                        w[dst as usize] = Value::Object(Rc::clone(this));
+                        let this = Value::Object(Rc::clone(this));
+                        put(&mut w[dst as usize], this);
                         pc += 1;
                     }
                     None => break Switch::Slow,
@@ -98,19 +118,18 @@ impl Context<'_> {
                 // A property read the name's cache entry answers (anything
                 // else, `step`: a miss, an unset slot, a reference operand).
                 Instr::FetchProp { dst, obj, name, .. } => {
-                    let site = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i));
-                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { break Switch::Slow };
                     // THIS: the method's own `$this`, from the frame.
-                    let hit = match site {
-                        Some(site) if obj == p8_bytecode::THIS => top.this.as_ref().and_then(|o| cached_prop(site.get(), o, scope)),
-                        Some(site) => match &w[obj as usize] {
-                            Value::Object(o) => cached_prop(site.get(), o, scope),
-                            _ => None,
-                        },
-                        None => None,
+                    let o = if obj == p8_bytecode::THIS {
+                        let Some(o) = &top.this else { break Switch::Slow };
+                        o
+                    } else {
+                        let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
+                        o
                     };
-                    let Some(v) = hit else { break Switch::Slow };
-                    w[dst as usize] = v;
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let Some(v) = cached_prop(site.get(), o, scope) else { break Switch::Slow };
+                    put(&mut w[dst as usize], v);
                     pc += 1;
                 }
                 // Function entry, when every passed argument is plainly of
@@ -144,7 +163,7 @@ impl Context<'_> {
                         break Switch::Slow;
                     }
                     let Some(v) = copied(&w[var as usize]) else { break Switch::Slow };
-                    w[arg as usize] = v;
+                    put(&mut w[arg as usize], v);
                     pc += 1;
                     if ids.has_pending() {
                         break Switch::Pending;
@@ -164,18 +183,26 @@ impl Context<'_> {
                 Instr::JumpNotEq { a, b, target } => jump_if!(Cmp::Eq, false, a, b, target),
                 Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
                 Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
-                Instr::Compare { cmp, dst, a, b } => match num_test(cmp, &w[a as usize], &w[b as usize]) {
-                    Some(t) if cmp != Cmp::Spaceship && !matches!(w[dst as usize], Value::Ref(_)) => {
-                        w[dst as usize] = Value::Bool(t);
-                        pc += 1;
-                    }
-                    _ => break Switch::Slow,
-                },
+                // A comparison (`<=>` is `step`'s): two ints inline, the
+                // rest through `test`.
+                Instr::Compare { cmp, dst, a, b } => {
+                    let t = match (&w[a as usize], &w[b as usize]) {
+                        (Value::Int(x), Value::Int(y)) if cmp != Cmp::Spaceship => int_test(cmp, *x, *y),
+                        _ if cmp == Cmp::Spaceship => break Switch::Slow,
+                        _ => match test(w, cmp, a, b) {
+                            Some(t) => t,
+                            None => break Switch::Slow,
+                        },
+                    };
+                    put_var(&mut w[dst as usize], Value::Bool(t));
+                    pc += 1;
+                }
                 Instr::IncVar { var } => match &mut w[var as usize] {
                     Value::Int(i) if *i != i64::MAX => {
                         *i += 1;
                         pc += 1;
                     }
+                    Value::Ref(cell) if step_ref(cell, i64::checked_add).is_some() => pc += 1,
                     _ => break Switch::Slow,
                 },
                 Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
@@ -187,54 +214,78 @@ impl Context<'_> {
                         *i -= 1;
                         pc += 1;
                     }
+                    Value::Ref(cell) if step_ref(cell, i64::checked_sub).is_some() => pc += 1,
                     _ => break Switch::Slow,
                 },
-                Instr::Binary { op, dst, a, b } => arith!(op, dst, a, b),
-                Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b),
-                Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b),
-                Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b),
+                Instr::Binary { op, dst, a, b } => {
+                    if !arith(w, op, dst, a, b) {
+                        break Switch::Slow;
+                    }
+                    pc += 1;
+                }
+                Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b, i64::checked_add),
+                Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b, i64::checked_sub),
+                Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b, i64::checked_mul),
                 Instr::ConcatN { dst, start, n } => {
                     if !concat_n(w, dst, start, n) {
                         break Switch::Slow;
                     }
                     pc += 1;
                 }
-                // A write that freed an object with a destructor stops here:
-                // `execute` runs it before the next instruction.
-                Instr::Move { dst, src } => match copied(&w[src as usize]) {
-                    Some(v) => {
-                        w[dst as usize] = v;
-                        pc += 1;
-                        if ids.has_pending() {
-                            break Switch::Pending;
-                        }
+                // A copy of a register (a reference's value read through
+                // it; undefined: `step` warns). A write that freed an object
+                // with a destructor stops here: it runs before the next
+                // instruction.
+                Instr::Move { dst, src } => {
+                    let v = match &w[src as usize] {
+                        Value::Undef => break Switch::Slow,
+                        Value::Ref(cell) => match read_ref(cell) {
+                            Some(v) => v,
+                            None => break Switch::Slow,
+                        },
+                        v => v.clone(),
+                    };
+                    put(&mut w[dst as usize], v);
+                    pc += 1;
+                    if ids.has_pending() {
+                        break Switch::Pending;
                     }
-                    None => break Switch::Slow,
-                },
-                Instr::Assign { var, src } => match copied(&w[src as usize]) {
-                    Some(v) => {
-                        assign(w, var, v);
-                        pc += 1;
-                        if ids.has_pending() {
-                            break Switch::Pending;
-                        }
+                }
+                Instr::Assign { var, src } => {
+                    let v = match &w[src as usize] {
+                        Value::Undef => break Switch::Slow,
+                        Value::Ref(cell) => match read_ref(cell) {
+                            Some(v) => v,
+                            None => break Switch::Slow,
+                        },
+                        v => v.clone(),
+                    };
+                    put_var(&mut w[var as usize], v);
+                    pc += 1;
+                    if ids.has_pending() {
+                        break Switch::Pending;
                     }
-                    None => break Switch::Slow,
-                },
-                Instr::AssignTake { var, src } => match std::mem::replace(&mut w[src as usize], Value::Undef) {
-                    // Through a reference, or undefined: `step`'s.
-                    v @ (Value::Ref(_) | Value::Undef) => {
-                        w[src as usize] = v;
-                        break Switch::Slow;
+                }
+                Instr::AssignTake { var, src } => {
+                    match std::mem::replace(&mut w[src as usize], Value::Undef) {
+                        // Undefined: `step`'s (the warning).
+                        Value::Undef => break Switch::Slow,
+                        // A reference's value, and the temporary lets go of
+                        // the reference.
+                        Value::Ref(cell) => match read_ref(&cell) {
+                            Some(v) => put_var(&mut w[var as usize], v),
+                            None => {
+                                w[src as usize] = Value::Ref(cell);
+                                break Switch::Slow;
+                            }
+                        },
+                        v => put_var(&mut w[var as usize], v),
                     }
-                    v => {
-                        assign(w, var, v);
-                        pc += 1;
-                        if ids.has_pending() {
-                            break Switch::Pending;
-                        }
+                    pc += 1;
+                    if ids.has_pending() {
+                        break Switch::Pending;
                     }
-                },
+                }
                 Instr::Free { reg } => {
                     clear(&mut w[reg as usize]);
                     pc += 1;
@@ -242,41 +293,75 @@ impl Context<'_> {
                         break Switch::Pending;
                     }
                 }
-                Instr::JumpIf { cond, target } => match w[cond as usize] {
-                    Value::Bool(true) if back(target, pc) => break Switch::Slow,
-                    Value::Bool(c) => pc = if c { target as usize } else { pc + 1 },
-                    _ => break Switch::Slow,
-                },
-                Instr::JumpIfNot { cond, target } => match w[cond as usize] {
-                    Value::Bool(false) if back(target, pc) => break Switch::Slow,
-                    Value::Bool(c) => pc = if c { pc + 1 } else { target as usize },
-                    _ => break Switch::Slow,
-                },
-                // $a[int] on an array (or a reference to one) holding a plain
-                // value at that key
-                Instr::FetchDim { dst, arr, key, .. } => {
-                    let v = match w[key as usize] {
-                        Value::Int(k) => match &w[arr as usize] {
-                            Value::Array(a) => int_elem(a, k),
-                            Value::Ref(cell) => match &*cell.borrow() {
-                                Value::Array(a) => int_elem(a, k),
-                                _ => None,
-                            },
-                            _ => None,
+                // A condition: a bool inline, anything else through `truth`
+                // (what may warn, NAN and an undefined variable, is `step`'s).
+                Instr::JumpIf { cond, target } => {
+                    let c = match &w[cond as usize] {
+                        Value::Bool(c) => *c,
+                        v => match truth(v) {
+                            Some(c) => c,
+                            None => break Switch::Slow,
                         },
-                        Value::Str(_) => str_elem(w, arr, key),
-                        _ => None,
                     };
-                    match v {
-                        Some(v) => {
-                            w[dst as usize] = v;
-                            pc += 1;
-                            if ids.has_pending() {
-                                break Switch::Pending;
-                            }
+                    if c {
+                        if back(target, pc) {
+                            break Switch::Slow;
                         }
-                        None => break Switch::Slow,
+                        pc = target as usize;
+                    } else {
+                        pc += 1;
                     }
+                }
+                Instr::JumpIfNot { cond, target } => {
+                    let c = match &w[cond as usize] {
+                        Value::Bool(c) => *c,
+                        v => match truth(v) {
+                            Some(c) => c,
+                            None => break Switch::Slow,
+                        },
+                    };
+                    if c {
+                        pc += 1;
+                    } else {
+                        if back(target, pc) {
+                            break Switch::Slow;
+                        }
+                        pc = target as usize;
+                    }
+                }
+                // $a[k] on an array (or a reference to one) holding a plain
+                // value at that key: an int key inline, a string key (and
+                // a reference) through `elem`.
+                Instr::FetchDim { dst, arr, key, .. } => {
+                    let v = match (&w[arr as usize], &w[key as usize]) {
+                        (Value::Array(a), Value::Int(k)) => match a.get_int(*k) {
+                            Some(Value::Ref(_)) | None => break Switch::Slow,
+                            Some(v) => v.clone(),
+                        },
+                        _ => match elem(w, arr, key) {
+                            Some(v) => v,
+                            None => break Switch::Slow,
+                        },
+                    };
+                    put(&mut w[dst as usize], v);
+                    pc += 1;
+                    if ids.has_pending() {
+                        break Switch::Pending;
+                    }
+                }
+                // isset($a[k]) on an array (or a reference to one), k an int
+                // or a string; the rest (an object, a string's offset, a
+                // key of another type) is `step`'s.
+                Instr::IssetDim { dst, var, keys, n: 1 } => {
+                    let set = match (&w[var as usize], &w[keys as usize]) {
+                        (Value::Array(a), Value::Int(k)) => a.get_int(*k).is_some_and(is_set),
+                        _ => match isset_elem(w, var, keys) {
+                            Some(set) => set,
+                            None => break Switch::Slow,
+                        },
+                    };
+                    put(&mut w[dst as usize], Value::Bool(set));
+                    pc += 1;
                 }
                 // $a[int] = int|float|bool|null, $a an array (or a reference to one)
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
@@ -300,7 +385,7 @@ impl Context<'_> {
                     if !done {
                         break Switch::Slow;
                     }
-                    w[dst as usize] = v;
+                    put(&mut w[dst as usize], v);
                     pc += 1;
                     if ids.has_pending() {
                         break Switch::Pending;
@@ -321,23 +406,25 @@ impl Context<'_> {
                     }
                     pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
-                // $var op= number, $var holding a number
-                Instr::AssignOp { op, var, src } => match num_op(op, &w[var as usize], &w[src as usize]) {
-                    Some(r) => {
-                        w[var as usize] = r;
-                        pc += 1;
+                // $var op= number, $var holding a number (two ints inline,
+                // the rest through `assign_op`); $str .= string
+                Instr::AssignOp { op, var, src } => {
+                    if let (Value::Int(x), Value::Int(y)) = (&w[var as usize], &w[src as usize])
+                        && let Some(n) = int_op(op, *x, *y)
+                    {
+                        put(&mut w[var as usize], Value::Int(n));
+                    } else if !assign_op(w, op, var, src) {
+                        break Switch::Slow;
                     }
-                    // $str .= string
-                    None if op == BinOp::Concat && append_str(w, var, src) => pc += 1,
-                    None => break Switch::Slow,
-                },
+                    pc += 1;
+                }
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
                     let Value::Int(slot) = &mut w[var as usize] else { break Switch::Slow };
                     let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { break Switch::Slow };
                     *slot = n;
-                    w[dst as usize] = Value::Int(if post { i } else { n });
+                    put(&mut w[dst as usize], Value::Int(if post { i } else { n }));
                     pc += 1;
                 }
                 // Every other instruction (listed, so dispatch needs no range check).
@@ -664,25 +751,247 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     }
 }
 
-/// Make a register undefined, releasing what it held. Scalars hold
-/// nothing to release, so they are only re-tagged.
+/// Whether a value holds nothing to release (a scalar, null, undefined):
+/// overwriting it is a store. (The scalars are listed, so any value
+/// holding memory is released.)
 #[inline(always)]
-pub(crate) fn clear(r: &mut Value) {
-    if matches!(r, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Undef) {
-        // Nothing to drop: `forget` skips the drop check entirely. (The
-        // scalars are listed, so any value holding memory is dropped.)
-        std::mem::forget(std::mem::replace(r, Value::Undef));
+pub(crate) fn is_plain(v: &Value) -> bool {
+    matches!(v, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Undef)
+}
+
+/// Release what a value holds (a string, an array, a reference, an
+/// object): the one call an overwrite makes, and only for those.
+#[cold]
+#[inline(never)]
+pub(crate) fn release(v: Value) {
+    drop(v);
+}
+
+/// Write `v` over a register's value: the old value's tag is tested
+/// here, and only one holding memory is released, out of line (PHP's
+/// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then a call).
+#[inline(always)]
+pub(crate) fn put(slot: &mut Value, v: Value) {
+    let old = std::mem::replace(slot, v);
+    if is_plain(&old) {
+        std::mem::forget(old);
     } else {
-        *r = Value::Undef;
+        release(old);
     }
 }
 
-/// Element `k` of an array if it is there and not a reference.
+/// `put` into a variable: through the reference it holds, if it is one.
 #[inline(always)]
-pub(crate) fn int_elem(a: &PhpArray, k: i64) -> Option<Value> {
-    match a.get_int(k) {
+pub(crate) fn put_var(slot: &mut Value, v: Value) {
+    match slot {
+        Value::Ref(cell) => write_ref(cell, v),
+        _ => put(slot, v),
+    }
+}
+
+/// Write through a reference. Out of line: common (`global $x`), not hot.
+#[inline(never)]
+pub(crate) fn write_ref(cell: &RefCell<Value>, v: Value) {
+    put(&mut cell.borrow_mut(), v);
+}
+
+/// A reference's value, for a read: None when it is undefined (a global
+/// another file unset: `step` warns).
+#[inline(never)]
+pub(crate) fn read_ref(cell: &RefCell<Value>) -> Option<Value> {
+    match &*cell.borrow() {
+        Value::Undef => None,
+        v => Some(v.clone()),
+    }
+}
+
+/// Make a register undefined, releasing what it held.
+#[inline(always)]
+pub(crate) fn clear(r: &mut Value) {
+    put(r, Value::Undef);
+}
+
+/// isset's test of an element: there and not null (through a reference).
+#[inline(always)]
+fn is_set(v: &Value) -> bool {
+    match v {
+        Value::Null | Value::Undef => false,
+        Value::Ref(cell) => !matches!(*cell.borrow(), Value::Null | Value::Undef),
+        _ => true,
+    }
+}
+
+/// An int, through a reference.
+#[inline(always)]
+fn int_of(v: &Value) -> Option<i64> {
+    match v {
+        Value::Int(i) => Some(*i),
+        Value::Ref(cell) => int_in(cell),
+        _ => None,
+    }
+}
+
+#[inline(never)]
+fn int_in(cell: &RefCell<Value>) -> Option<i64> {
+    match *cell.borrow() {
+        Value::Int(i) => Some(i),
+        _ => None,
+    }
+}
+
+/// A number (an int or a float), through a reference.
+#[inline(always)]
+fn num_of(v: &Value) -> Option<Value> {
+    match v {
+        Value::Int(_) | Value::Float(_) => Some(v.clone()),
+        Value::Ref(cell) => match &*cell.borrow() {
+            n @ (Value::Int(_) | Value::Float(_)) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `++`/`--` of an int through a reference: the new value (None: not an
+/// int there, or it overflows: `step`).
+#[inline(never)]
+fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<i64> {
+    let mut v = cell.borrow_mut();
+    let Value::Int(i) = &mut *v else { return None };
+    let n = step(*i, 1)?;
+    *i = n;
+    Some(n)
+}
+
+/// `a cmp b` for anything but two ints: through references, numbers as
+/// `num_test`, and every other pair of defined values as `step` compares
+/// them (`test_values`: nothing there warns). None for an undefined
+/// variable (`step` warns) or `<=>`.
+#[inline(never)]
+fn test(w: &[Value], cmp: Cmp, a: Reg, b: Reg) -> Option<bool> {
+    if cmp == Cmp::Spaceship {
+        return None;
+    }
+    let (x, y) = (&w[a as usize], &w[b as usize]);
+    match (x, y) {
+        (Value::Undef, _) | (_, Value::Undef) => None,
+        (Value::Ref(_), _) | (_, Value::Ref(_)) => {
+            let (x, y) = (deref_defined(x)?, deref_defined(y)?);
+            Some(num_test(cmp, &x, &y).unwrap_or_else(|| test_values(cmp, &x, &y)))
+        }
+        _ => Some(num_test(cmp, x, y).unwrap_or_else(|| test_values(cmp, x, y))),
+    }
+}
+
+/// A value read through its reference (if it is one); None when undefined.
+#[inline(always)]
+fn deref_defined(v: &Value) -> Option<Value> {
+    match v {
+        Value::Ref(cell) => read_ref(cell),
+        Value::Undef => None,
+        v => Some(v.clone()),
+    }
+}
+
+/// `dst = a op b` beyond two ints: floats, operands through references,
+/// `.` on strings. False (nothing done) when `step` must run it: a
+/// warning, an error, a conversion with side effects, an overflow.
+#[inline(never)]
+fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
+    let (x, y) = (&w[a as usize], &w[b as usize]);
+    let r = match (x, y) {
+        (Value::Ref(_), _) | (_, Value::Ref(_)) => match (num_of(x), num_of(y)) {
+            (Some(x), Some(y)) => num_op(op, &x, &y),
+            _ => None,
+        },
+        _ => num_op(op, x, y),
+    };
+    match r {
+        Some(r) => {
+            put_var(&mut w[dst as usize], r);
+            true
+        }
+        None => op == BinOp::Concat && concat(w, dst, a, b),
+    }
+}
+
+/// `var op= src` beyond two ints: numbers (through references), `.=` on
+/// strings. False when `step` must run it.
+#[inline(never)]
+fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
+    let (x, y) = (&w[var as usize], &w[src as usize]);
+    let r = match (x, y) {
+        (Value::Ref(_), _) | (_, Value::Ref(_)) => match (num_of(x), num_of(y)) {
+            (Some(x), Some(y)) => num_op(op, &x, &y),
+            _ => None,
+        },
+        _ => num_op(op, x, y),
+    };
+    match r {
+        Some(r) => {
+            put_var(&mut w[var as usize], r);
+            true
+        }
+        None => op == BinOp::Concat && append_str(w, var, src),
+    }
+}
+
+/// A condition that is not a bool: what i_zend_is_true says, when
+/// nothing can warn (NAN, an undefined variable: None, `step`'s).
+#[inline(never)]
+fn truth(v: &Value) -> Option<bool> {
+    match v {
+        Value::Undef => None,
+        Value::Float(f) if f.is_nan() => None,
+        Value::Ref(cell) => match &*cell.borrow() {
+            Value::Undef => None,
+            Value::Float(f) if f.is_nan() => None,
+            v => Some(v.to_bool()),
+        },
+        v => Some(v.to_bool()),
+    }
+}
+
+/// `$a[k]` beyond an array and an int key: a string key, an array held
+/// through a reference; None (`step`: a warning, an object, a string's
+/// offset) otherwise. The element must not be a reference.
+#[inline(never)]
+fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
+    let at = |a: &PhpArray| match &w[key as usize] {
+        Value::Int(k) => a.get_int(*k).cloned(),
+        Value::Str(s) => a.get(&Key::from_string(s.clone())).cloned(),
+        _ => None,
+    };
+    let v = match &w[arr as usize] {
+        Value::Array(a) => at(a),
+        Value::Ref(cell) => match &*cell.borrow() {
+            Value::Array(a) => at(a),
+            _ => None,
+        },
+        _ => None,
+    };
+    match v {
         Some(Value::Ref(_)) | None => None,
-        Some(v) => Some(v.clone()),
+        v => v,
+    }
+}
+
+/// isset($a[k]) beyond an array and an int key: a string key, an array
+/// held through a reference; None (`step`) otherwise.
+#[inline(never)]
+fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
+    let at = |a: &PhpArray| match &w[keys as usize] {
+        Value::Int(k) => Some(a.get_int(*k).is_some_and(is_set)),
+        Value::Str(s) => Some(a.get(&Key::from_string(s.clone())).is_some_and(is_set)),
+        _ => None,
+    };
+    match &w[var as usize] {
+        Value::Array(a) => at(a),
+        Value::Ref(cell) => match &*cell.borrow() {
+            Value::Array(a) => at(a),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -701,16 +1010,14 @@ pub(crate) fn set_int_elem(a: &mut Rc<PhpArray>, k: i64, v: &Value) -> bool {
 }
 
 /// A copy of a register's value, as `step` makes one (strings and arrays
-/// are shared until written), unless it is undefined (a warning) or a
-/// reference (read through its cell).
+/// are shared until written; a reference's value is read through it),
+/// unless it is undefined (a warning: `step`'s).
 #[inline(always)]
 pub(crate) fn copied(v: &Value) -> Option<Value> {
-    match *v {
-        // The commonest cases first, without the general clone's dispatch.
-        Value::Int(i) => Some(Value::Int(i)),
-        Value::Float(f) => Some(Value::Float(f)),
-        Value::Undef | Value::Ref(_) => None,
-        ref v => Some(v.clone()),
+    match v {
+        Value::Undef => None,
+        Value::Ref(cell) => read_ref(cell),
+        v => Some(v.clone()),
     }
 }
 

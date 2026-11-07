@@ -5662,27 +5662,6 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
     true
 }
 
-/// `$a[string]` on an array (or a reference to one) holding a value that is
-/// not a reference at that key; None for anything else (a missing key
-/// warns, in `step`).
-#[inline(never)]
-fn str_elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
-    let Value::Str(s) = &w[key as usize] else { return None };
-    let key = Key::from_string(s.clone());
-    let elem = |a: &PhpArray| match a.get(&key) {
-        Some(Value::Ref(_)) | None => None,
-        Some(v) => Some(v.clone()),
-    };
-    match &w[arr as usize] {
-        Value::Array(a) => elem(a),
-        Value::Ref(cell) => match &*cell.borrow() {
-            Value::Array(a) => elem(a),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// `$a[string] = v`, `$a` an array whose element there (if any) is not a
 /// reference, `v` defined and not a reference; false (nothing done) for
 /// anything else.
@@ -5842,25 +5821,32 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
 #[inline(always)]
 fn num_op(op: BinOp, a: &Value, b: &Value) -> Option<Value> {
     match (a, b) {
-        (&Value::Int(x), &Value::Int(y)) => match op {
-            BinOp::Add => x.checked_add(y).map(Value::Int),
-            BinOp::Sub => x.checked_sub(y).map(Value::Int),
-            BinOp::Mul => x.checked_mul(y).map(Value::Int),
-            // % by zero throws and PHP_INT_MIN % -1 is 0: both take `step`.
-            BinOp::Mod => x.checked_rem(y).filter(|_| y != 0).map(Value::Int),
-            BinOp::BitAnd => Some(Value::Int(x & y)),
-            BinOp::BitOr => Some(Value::Int(x | y)),
-            BinOp::BitXor => Some(Value::Int(x ^ y)),
-            // A negative shift throws (`step`); 64 or more shifts every bit out.
-            BinOp::Shl if (0..64).contains(&y) => Some(Value::Int(x << y)),
-            BinOp::Shl if y >= 64 => Some(Value::Int(0)),
-            BinOp::Shr if (0..64).contains(&y) => Some(Value::Int(x >> y)),
-            BinOp::Shr if y >= 64 => Some(Value::Int(if x < 0 { -1 } else { 0 })),
-            _ => None,
-        },
+        (&Value::Int(x), &Value::Int(y)) => int_op(op, x, y).map(Value::Int),
         (Value::Float(x), Value::Float(y)) => float_op(op, *x, *y),
         (Value::Int(x), Value::Float(y)) => float_op(op, *x as f64, *y),
         (Value::Float(x), Value::Int(y)) => float_op(op, *x, *y as f64),
+        _ => None,
+    }
+}
+
+/// Arithmetic and the bit operators on two ints, when no warning, error
+/// or overflow is involved (anything else takes the slow path).
+#[inline(always)]
+fn int_op(op: BinOp, x: i64, y: i64) -> Option<i64> {
+    match op {
+        BinOp::Add => x.checked_add(y),
+        BinOp::Sub => x.checked_sub(y),
+        BinOp::Mul => x.checked_mul(y),
+        // % by zero throws and PHP_INT_MIN % -1 is 0: both take `step`.
+        BinOp::Mod => x.checked_rem(y).filter(|_| y != 0),
+        BinOp::BitAnd => Some(x & y),
+        BinOp::BitOr => Some(x | y),
+        BinOp::BitXor => Some(x ^ y),
+        // A negative shift throws (`step`); 64 or more shifts every bit out.
+        BinOp::Shl if (0..64).contains(&y) => Some(x << y),
+        BinOp::Shl if y >= 64 => Some(0),
+        BinOp::Shr if (0..64).contains(&y) => Some(x >> y),
+        BinOp::Shr if y >= 64 => Some(if x < 0 { -1 } else { 0 }),
         _ => None,
     }
 }
