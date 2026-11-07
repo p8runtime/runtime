@@ -132,6 +132,47 @@ impl Context<'_> {
                     put(&mut w[dst as usize], v);
                     pc += 1;
                 }
+                // `$o->name = v` the name's cache entry answers, on a
+                // property with nothing to check (`plain_slot`): the slots
+                // borrowed once, nothing cloned but the value, and that
+                // once when the result is freed next (a statement's is).
+                // An unset slot of a class with __set and its kin, and
+                // anything `plain_slot` declines, is `step`'s.
+                Instr::AssignProp { obj, name, val, dst, take } => {
+                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { break Switch::Slow };
+                    // THIS: the method's own `$this`, from the frame.
+                    let o = if obj == p8_bytecode::THIS {
+                        let Some(o) = &top.this else { break Switch::Slow };
+                        o
+                    } else {
+                        let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
+                        o
+                    };
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let Some(slot) = plain_slot(site.get(), o, scope, &w[val as usize]) else { break Switch::Slow };
+                    let unused = matches!(code.get(pc + 1), Some(Instr::Free { reg }) if *reg == dst);
+                    {
+                        let mut slots = o.slots.borrow_mut();
+                        let Some(s) = slots.get_mut(slot) else { break Switch::Slow };
+                        if matches!(s, Value::Undef) && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0 {
+                            break Switch::Slow;
+                        }
+                        put_var(s, w[val as usize].clone());
+                    }
+                    if unused {
+                        pc += 2;
+                    } else {
+                        let v = w[val as usize].clone();
+                        put(&mut w[dst as usize], v);
+                        pc += 1;
+                    }
+                    if take {
+                        clear(&mut w[val as usize]);
+                    }
+                    if ids.has_pending() {
+                        break Switch::Pending;
+                    }
+                }
                 // Function entry, when every passed argument is plainly of
                 // its declared type (`verify_args` would accept each as it
                 // is); a conversion, a class check or a variadic: `step`.
@@ -483,7 +524,6 @@ impl Context<'_> {
                 | Instr::Construct { .. }
                 | Instr::Rare { .. }
                 | Instr::ConstructSpread { .. }
-                | Instr::AssignProp { .. }
                 | Instr::AssignPropOp { .. }
                 | Instr::PropIncDec { .. }
                 | Instr::AssignPropDim { .. }
