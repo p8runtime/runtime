@@ -30,7 +30,6 @@ impl Context<'_> {
             let top = self.frames.last().expect("a frame");
             let (clo, base) = (&*top.func, top.base as usize);
             let code = &clo.code.code[..];
-            let w = &mut regs[base..base + clo.code.nregs as usize];
             let (stop, ids) = (&self.stop, &self.ids);
             // A loop's backward branch is where an interrupt is noticed:
             // `step` then raises it.
@@ -47,9 +46,7 @@ impl Context<'_> {
                 }};
             }
             // A write freed an object with a destructor: it runs before
-            // the next instruction, at the writing instruction's pc (the
-            // one before `pc`, which already moved on), so that what it
-            // throws unwinds from there, as in PHP.
+            // the next instruction.
             macro_rules! pending {
                 () => {{
                     pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
@@ -66,7 +63,9 @@ impl Context<'_> {
             }
             // The straight-line instruction at `pc` is done; `$released`
             // says whether its write released memory (`put`), which is
-            // when a destructor may be due. A plain overwrite tests nothing.
+            // when a destructor may be due (it runs at this instruction's
+            // pc, as PHP runs it where the value went). A plain overwrite
+            // tests nothing.
             macro_rules! done {
                 ($released:expr) => {{
                     let released: bool = $released;
@@ -81,10 +80,10 @@ impl Context<'_> {
         // references, strings, null) through `test`; an undefined
         // variable (its warning) is `step`'s.
         macro_rules! jump_if {
-            ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {{
-                let t = match (&w[$a as usize], &w[$b as usize]) {
+            ($w:ident, $cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {{
+                let t = match (&$w[rx!($a as usize)], &$w[rx!($b as usize)]) {
                     (Value::Int(x), Value::Int(y)) => int_test($cmp, *x, *y),
-                    _ => match test(w, $cmp, $a, $b) {
+                    _ => match test(&$w[..],$cmp, $a, $b) {
                         Some(t) => t,
                         None => slow!(),
                     },
@@ -102,12 +101,12 @@ impl Context<'_> {
         // `dst = a op b`: two ints inline, the rest (floats, references,
         // `.` on strings) through `arith`; what may warn or throw is `step`'s.
         macro_rules! arith {
-            ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
-                let released = if let (Value::Int(x), Value::Int(y)) = (&w[$a as usize], &w[$b as usize])
+            ($w:ident, $op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
+                let released = if let (Value::Int(x), Value::Int(y)) = (&$w[rx!($a as usize)], &$w[rx!($b as usize)])
                     && let Some(n) = $int(*x, *y)
                 {
-                    put_var(&mut w[$dst as usize], Value::Int(n))
-                } else if arith(w, $op, $dst, $a, $b) {
+                    put_var(&mut $w[rx!($dst as usize)], Value::Int(n))
+                } else if arith(&mut $w[..], $op, $dst, $a, $b) {
                     true
                 } else {
                     slow!()
@@ -120,8 +119,8 @@ impl Context<'_> {
         // bound leaves the test to the next instruction; a non-int
         // variable (or an overflow) leaves both to `step`.
         macro_rules! step_jump {
-            ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
-                let n = match &mut w[$var as usize] {
+            ($w:ident, $var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
+                let n = match &mut $w[rx!($var as usize)] {
                     // Written in place: no drop of the old value to compile.
                     Value::Int(i) => match $step(*i, 1) {
                         Some(n) => {
@@ -136,7 +135,7 @@ impl Context<'_> {
                     },
                     _ => slow!(),
                 };
-                match int_of(&w[$b as usize]) {
+                match int_of(&$w[rx!($b as usize)]) {
                     Some(b) if $holds(n, b) => {
                         if back($target, pc) {
                             // The step is done: the test (next) sees the interrupt.
@@ -150,13 +149,20 @@ impl Context<'_> {
                 }
             }};
         }
+        // The inner loop, over the frame's window `$w`: a `[Value; 256]`
+        // for a function with at most 256 registers (every register
+        // operand is then in range by construction, so `rx!` masks the
+        // index and the compiler emits no bounds check), else the
+        // registers as a slice, checked. One text, two instantiations.
+        macro_rules! inner {
+            ($w:ident) => {
         loop {
             match code[pc] {
                 // `$this`, in a method that has one (else `step` raises).
                 Instr::This { dst } => match &top.this {
                     Some(this) => {
                         let this = Value::Object(Rc::clone(this));
-                        done!(put(&mut w[dst as usize], this));
+                        done!(put(&mut $w[rx!(dst as usize)], this));
                     }
                     None => slow!(),
                 },
@@ -169,12 +175,12 @@ impl Context<'_> {
                         let Some(o) = &top.this else { slow!() };
                         o
                     } else {
-                        let Value::Object(o) = &w[obj as usize] else { slow!() };
+                        let Value::Object(o) = &$w[rx!(obj as usize)] else { slow!() };
                         o
                     };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let Some(v) = cached_prop(site.get(), o, scope) else { slow!() };
-                    done!(put(&mut w[dst as usize], v));
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                 }
                 // `$o->name = v` the name's cache entry answers, on a
                 // property with nothing to check (`plain_slot`): the slots
@@ -189,17 +195,17 @@ impl Context<'_> {
                         let Some(o) = &top.this else { slow!() };
                         o
                     } else {
-                        let Value::Object(o) = &w[obj as usize] else { slow!() };
+                        let Value::Object(o) = &$w[rx!(obj as usize)] else { slow!() };
                         o
                     };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let Some(slot) = plain_slot(site.get(), o, scope, &w[val as usize]) else { slow!() };
+                    let Some(slot) = plain_slot(site.get(), o, scope, &$w[rx!(val as usize)]) else { slow!() };
                     let unused = matches!(code.get(pc + 1), Some(Instr::Free { reg }) if *reg == dst);
                     let written = {
                         let mut slots = o.slots.borrow_mut();
                         match slots.get_mut(slot) {
                             Some(s) if !(matches!(s, Value::Undef) && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0) => {
-                                let _ = put_var(s, w[val as usize].clone());
+                                put_var(s, $w[rx!(val as usize)].clone());
                                 true
                             }
                             _ => false,
@@ -212,12 +218,12 @@ impl Context<'_> {
                     if unused {
                         pc += 2;
                     } else {
-                        let v = w[val as usize].clone();
-                        let _ = put(&mut w[dst as usize], v);
+                        let v = $w[rx!(val as usize)].clone();
+                        let _ = put(&mut $w[rx!(dst as usize)], v);
                         pc += 1;
                     }
                     if take {
-                        let _ = clear(&mut w[val as usize]);
+                        let _ = clear(&mut $w[rx!(val as usize)]);
                     }
                     // (The slot's old value may have been the last holder.)
                     if ids.has_pending() {
@@ -228,7 +234,7 @@ impl Context<'_> {
                 // its declared type (`verify_args` would accept each as it
                 // is); a conversion, a class check or a variadic: `step`.
                 Instr::Rare { op: Rare::VerifyArgs, .. } => {
-                    if !args_plain(&clo.code.params, w, top.argc as usize) {
+                    if !args_plain(&clo.code.params, &$w[..],top.argc as usize) {
                         slow!();
                     }
                     pc += 1;
@@ -236,17 +242,60 @@ impl Context<'_> {
                 // A return value plainly of the declared type (anything
                 // else, a generator's included: `step`).
                 Instr::Rare { op: Rare::VerifyReturn, a, .. } => match &clo.code.ret_type {
-                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => slow!(),
+                    Some(ty) if clo.code.is_generator || !ty.quick(&$w[rx!(a as usize)]) => slow!(),
                     _ => pc += 1,
                 },
+                // A builtin PHP compiles to an opcode (strlen, count, the
+                // type tests, array_key_exists): the plain case here, once
+                // the site resolved to the builtin (the first run, and a
+                // disabled function, are `step`'s); the arguments are
+                // consumed as a call's are. Anything else is the call.
+                Instr::Rare { op, a: dst, b: args, c: argc, class: site } if op.is_intrinsic() => {
+                    if !matches!(clo.sites[usize::from(site)].get(), Some(Callee::Builtin(_))) {
+                        slow!();
+                    }
+                    let x = &$w[rx!(args as usize)];
+                    let r = match op {
+                        Rare::Strlen => match x {
+                            Value::Str(s) => Value::Int(s.len() as i64),
+                            _ => slow!(),
+                        },
+                        Rare::Count => match x {
+                            Value::Array(arr) => Value::Int(arr.len() as i64),
+                            _ => slow!(),
+                        },
+                        Rare::ArrayKeyExists => match (x, &$w[rx!(args as usize + 1)]) {
+                            (Value::Int(k), Value::Array(arr)) => Value::Bool(arr.contains_key(&Key::Int(*k))),
+                            (Value::Str(s), Value::Array(arr)) => Value::Bool(arr.contains_key(&Key::from_string(s.clone()))),
+                            _ => slow!(),
+                        },
+                        _ if matches!(x, Value::Undef | Value::Ref(_)) => slow!(),
+                        Rare::IsNull => Value::Bool(matches!(x, Value::Null)),
+                        Rare::IsBool => Value::Bool(matches!(x, Value::Bool(_))),
+                        Rare::IsInt => Value::Bool(matches!(x, Value::Int(_))),
+                        Rare::IsFloat => Value::Bool(matches!(x, Value::Float(_))),
+                        Rare::IsString => Value::Bool(matches!(x, Value::Str(_))),
+                        Rare::IsArray => Value::Bool(matches!(x, Value::Array(_))),
+                        Rare::IsObject => Value::Bool(matches!(x, Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
+                        _ => slow!(),
+                    };
+                    // The arguments consumed may have been an object's last
+                    // holder (`count([new D])`): a destructor due runs here.
+                    let mut released = false;
+                    for i in 0..usize::from(argc) {
+                        released |= clear(&mut $w[rx!(args as usize + i)]);
+                    }
+                    released |= put(&mut $w[rx!(dst as usize)], r);
+                    done!(released);
+                }
                 // `$o->m($v)`: an argument the method the call site's cache
                 // names for this class and scope takes by value is copied
                 // (by reference, a miss, or an undefined or reference
                 // variable: `step`, which looks the method up by name).
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
-                    let Value::Object(o) = &w[obj as usize] else { slow!() };
+                    let Value::Object(o) = &$w[rx!(obj as usize)] else { slow!() };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let by_value = clo.methods[method as usize].borrow().as_ref().is_some_and(|s| {
+                    let by_value = clo.methods[usize::from(method)].borrow().as_ref().is_some_and(|s| {
                         s.class == Rc::as_ptr(&o.class) as usize
                             && s.scope == scope
                             && matches!(&s.code, MethodCode::User(code) if code.upgrade().is_some_and(|c| !c.code.param_by_ref(n as usize)))
@@ -254,8 +303,8 @@ impl Context<'_> {
                     if !by_value {
                         slow!();
                     }
-                    let Some(v) = copied(&w[var as usize]) else { slow!() };
-                    done!(put(&mut w[arg as usize], v));
+                    let Some(v) = copied(&$w[rx!(var as usize)]) else { slow!() };
+                    done!(put(&mut $w[rx!(arg as usize)], v));
                 }
                 Instr::Jump { target } => {
                     if back(target, pc) {
@@ -263,28 +312,28 @@ impl Context<'_> {
                     }
                     pc = target as usize;
                 }
-                Instr::JumpLt { a, b, target } => jump_if!(Cmp::Lt, true, a, b, target),
-                Instr::JumpNotLt { a, b, target } => jump_if!(Cmp::Lt, false, a, b, target),
-                Instr::JumpLe { a, b, target } => jump_if!(Cmp::Le, true, a, b, target),
-                Instr::JumpNotLe { a, b, target } => jump_if!(Cmp::Le, false, a, b, target),
-                Instr::JumpEq { a, b, target } => jump_if!(Cmp::Eq, true, a, b, target),
-                Instr::JumpNotEq { a, b, target } => jump_if!(Cmp::Eq, false, a, b, target),
-                Instr::JumpIdentical { a, b, target } => jump_if!(Cmp::Identical, true, a, b, target),
-                Instr::JumpNotIdentical { a, b, target } => jump_if!(Cmp::Identical, false, a, b, target),
+                Instr::JumpLt { a, b, target } => jump_if!($w,Cmp::Lt, true, a, b, target),
+                Instr::JumpNotLt { a, b, target } => jump_if!($w,Cmp::Lt, false, a, b, target),
+                Instr::JumpLe { a, b, target } => jump_if!($w,Cmp::Le, true, a, b, target),
+                Instr::JumpNotLe { a, b, target } => jump_if!($w,Cmp::Le, false, a, b, target),
+                Instr::JumpEq { a, b, target } => jump_if!($w,Cmp::Eq, true, a, b, target),
+                Instr::JumpNotEq { a, b, target } => jump_if!($w,Cmp::Eq, false, a, b, target),
+                Instr::JumpIdentical { a, b, target } => jump_if!($w,Cmp::Identical, true, a, b, target),
+                Instr::JumpNotIdentical { a, b, target } => jump_if!($w,Cmp::Identical, false, a, b, target),
                 // A comparison (`<=>` is `step`'s): two ints inline, the
                 // rest through `test`.
                 Instr::Compare { cmp, dst, a, b } => {
-                    let t = match (&w[a as usize], &w[b as usize]) {
+                    let t = match (&$w[rx!(a as usize)], &$w[rx!(b as usize)]) {
                         (Value::Int(x), Value::Int(y)) if cmp != Cmp::Spaceship => int_test(cmp, *x, *y),
                         _ if cmp == Cmp::Spaceship => slow!(),
-                        _ => match test(w, cmp, a, b) {
+                        _ => match test(&$w[..],cmp, a, b) {
                             Some(t) => t,
                             None => slow!(),
                         },
                     };
-                    done!(put_var(&mut w[dst as usize], Value::Bool(t)));
+                    done!(put_var(&mut $w[rx!(dst as usize)], Value::Bool(t)));
                 }
-                Instr::IncVar { var } => match &mut w[var as usize] {
+                Instr::IncVar { var } => match &mut $w[rx!(var as usize)] {
                     Value::Int(i) if *i != i64::MAX => {
                         *i += 1;
                         pc += 1;
@@ -292,11 +341,11 @@ impl Context<'_> {
                     Value::Ref(cell) if step_ref(cell, i64::checked_add).is_some() => pc += 1,
                     _ => slow!(),
                 },
-                Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
-                Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
-                Instr::DecJumpGt { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n > b),
-                Instr::DecJumpGe { var, b, target } => step_jump!(var, b, target, i64::checked_sub, |n, b| n >= b),
-                Instr::DecVar { var } => match &mut w[var as usize] {
+                Instr::IncJumpLt { var, b, target } => step_jump!($w,var, b, target, i64::checked_add, |n, b| n < b),
+                Instr::IncJumpLe { var, b, target } => step_jump!($w,var, b, target, i64::checked_add, |n, b| n <= b),
+                Instr::DecJumpGt { var, b, target } => step_jump!($w,var, b, target, i64::checked_sub, |n, b| n > b),
+                Instr::DecJumpGe { var, b, target } => step_jump!($w,var, b, target, i64::checked_sub, |n, b| n >= b),
+                Instr::DecVar { var } => match &mut $w[rx!(var as usize)] {
                     Value::Int(i) if *i != i64::MIN => {
                         *i -= 1;
                         pc += 1;
@@ -305,16 +354,16 @@ impl Context<'_> {
                     _ => slow!(),
                 },
                 Instr::Binary { op, dst, a, b } => {
-                    if !arith(w, op, dst, a, b) {
+                    if !arith(&mut $w[..], op, dst, a, b) {
                         slow!();
                     }
                     done!(true);
                 }
-                Instr::Add { dst, a, b } => arith!(BinOp::Add, dst, a, b, i64::checked_add),
-                Instr::Sub { dst, a, b } => arith!(BinOp::Sub, dst, a, b, i64::checked_sub),
-                Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b, i64::checked_mul),
+                Instr::Add { dst, a, b } => arith!($w,BinOp::Add, dst, a, b, i64::checked_add),
+                Instr::Sub { dst, a, b } => arith!($w,BinOp::Sub, dst, a, b, i64::checked_sub),
+                Instr::Mul { dst, a, b } => arith!($w,BinOp::Mul, dst, a, b, i64::checked_mul),
                 Instr::ConcatN { dst, start, n } => {
-                    if !concat_n(w, dst, start, n) {
+                    if !concat_n(&mut $w[..], dst, start, n) {
                         slow!();
                     }
                     done!(true);
@@ -324,7 +373,7 @@ impl Context<'_> {
                 // with a destructor stops here: it runs before the next
                 // instruction.
                 Instr::Move { dst, src } => {
-                    let v = match &w[src as usize] {
+                    let v = match &$w[rx!(src as usize)] {
                         Value::Undef => slow!(),
                         Value::Ref(cell) => match read_ref(cell) {
                             Some(v) => v,
@@ -332,10 +381,13 @@ impl Context<'_> {
                         },
                         v => v.clone(),
                     };
-                    done!(put(&mut w[dst as usize], v));
+                    done!(put(&mut $w[rx!(dst as usize)], v));
+                    if ids.has_pending() {
+                        pending!();
+                    }
                 }
                 Instr::Assign { var, src } => {
-                    let v = match &w[src as usize] {
+                    let v = match &$w[rx!(src as usize)] {
                         Value::Undef => slow!(),
                         Value::Ref(cell) => match read_ref(cell) {
                             Some(v) => v,
@@ -343,33 +395,35 @@ impl Context<'_> {
                         },
                         v => v.clone(),
                     };
-                    done!(put_var(&mut w[var as usize], v));
+                    done!(put_var(&mut $w[rx!(var as usize)], v));
                 }
                 Instr::AssignTake { var, src } => {
-                    let released = match std::mem::replace(&mut w[src as usize], Value::Undef) {
+                    let released = match std::mem::replace(&mut $w[rx!(src as usize)], Value::Undef) {
                         // Undefined: `step`'s (the warning).
                         Value::Undef => slow!(),
                         // A reference's value, and the temporary lets go of
                         // the reference (which may have been its last holder).
                         Value::Ref(cell) => match read_ref(&cell) {
                             Some(v) => {
-                                let _ = put_var(&mut w[var as usize], v);
+                                let _ = put_var(&mut $w[rx!(var as usize)], v);
                                 true
                             }
                             None => {
-                                w[src as usize] = Value::Ref(cell);
+                                $w[rx!(src as usize)] = Value::Ref(cell);
                                 slow!();
                             }
                         },
-                        v => put_var(&mut w[var as usize], v),
+                        v => put_var(&mut $w[rx!(var as usize)], v),
                     };
                     done!(released);
                 }
-                Instr::Free { reg } => done!(clear(&mut w[reg as usize])),
+                Instr::Free { reg } => {
+                    done!(clear(&mut $w[rx!(reg as usize)]));
+                }
                 // A condition: a bool inline, anything else through `truth`
                 // (what may warn, NAN and an undefined variable, is `step`'s).
                 Instr::JumpIf { cond, target } => {
-                    let c = match &w[cond as usize] {
+                    let c = match &$w[rx!(cond as usize)] {
                         Value::Bool(c) => *c,
                         v => match truth(v) {
                             Some(c) => c,
@@ -386,7 +440,7 @@ impl Context<'_> {
                     }
                 }
                 Instr::JumpIfNot { cond, target } => {
-                    let c = match &w[cond as usize] {
+                    let c = match &$w[rx!(cond as usize)] {
                         Value::Bool(c) => *c,
                         v => match truth(v) {
                             Some(c) => c,
@@ -406,44 +460,48 @@ impl Context<'_> {
                 // value at that key: an int key inline, a string key (and
                 // a reference) through `elem`.
                 Instr::FetchDim { dst, arr, key, .. } => {
-                    let v = match (&w[arr as usize], &w[key as usize]) {
+                    let v = match (&$w[rx!(arr as usize)], &$w[rx!(key as usize)]) {
                         (Value::Array(a), Value::Int(k)) => match a.get_int(*k) {
                             Some(Value::Ref(_)) | None => slow!(),
                             Some(v) => v.clone(),
                         },
-                        _ => match elem(w, arr, key) {
+                        _ => match elem(&$w[..], arr, key) {
                             Some(v) => v,
                             None => slow!(),
                         },
                     };
-                    done!(put(&mut w[dst as usize], v));
+                    done!(put(&mut $w[rx!(dst as usize)], v));
+                    if ids.has_pending() {
+                        pending!();
+                    }
                 }
                 // isset($a[k]) on an array (or a reference to one), k an int
                 // or a string; the rest (an object, a string's offset, a
                 // key of another type) is `step`'s.
                 Instr::IssetDim { dst, var, keys, n: 1 } => {
-                    let set = match (&w[var as usize], &w[keys as usize]) {
+                    let set = match (&$w[rx!(var as usize)], &$w[rx!(keys as usize)]) {
                         (Value::Array(a), Value::Int(k)) => a.get_int(*k).is_some_and(is_set),
-                        _ => match isset_elem(w, var, keys) {
+                        _ => match isset_elem(&$w[..],var, keys) {
                             Some(set) => set,
                             None => slow!(),
                         },
                     };
-                    done!(put(&mut w[dst as usize], Value::Bool(set)));
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(set)));
                 }
+                // $a[int] = int|float|bool|null, $a an array (or a reference to one)
                 // $a[k] = v, $a an array (or a reference to one): a string
                 // key with any defined, non-reference value; an int key
                 // with a plain value. The element replaced may have been
                 // an object's last holder: tested as for any write.
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
-                    if let Value::Str(_) = w[keys as usize] {
-                        if !set_str_elem(w, var, keys, val, dst) {
+                    if let Value::Str(_) = $w[rx!(keys as usize)] {
+                        if !set_str_elem(&mut $w[..], var, keys, val, dst) {
                             slow!();
                         }
                     } else {
-                        let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { slow!() };
+                        let (Value::Int(k), Some(v)) = (&$w[rx!(keys as usize)], plain(&$w[rx!(val as usize)])) else { slow!() };
                         let k = *k;
-                        let done = match &mut w[var as usize] {
+                        let done = match &mut $w[rx!(var as usize)] {
                             Value::Array(a) => set_int_elem(a, k, &v),
                             Value::Ref(cell) => match &mut *cell.borrow_mut() {
                                 Value::Array(a) => set_int_elem(a, k, &v),
@@ -454,14 +512,14 @@ impl Context<'_> {
                         if !done {
                             slow!();
                         }
-                        let _ = put(&mut w[dst as usize], v);
+                        let _ = put(&mut $w[rx!(dst as usize)], v);
                     }
                     done!(true);
                 }
                 // $a[int] op= number, $a an array holding a number at
                 // that key
                 Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
-                    if !dim_op(w, op, var, keys, val, dst) {
+                    if !dim_op(&mut $w[..], op, var, keys, val, dst) {
                         slow!();
                     }
                     done!(true);
@@ -471,10 +529,10 @@ impl Context<'_> {
                 // this instruction.
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     // An object (a generator, an Iterator) is `step`'s.
-                    if !matches!(w[iter as usize], Value::Array(_)) {
+                    if !matches!($w[rx!(iter as usize)], Value::Array(_)) {
                         slow!();
                     }
-                    let next = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
+                    let next = if iter_next(&mut $w[..], iter, val, key, has_key) { pc + 1 } else { end as usize };
                     if ids.has_pending() {
                         pending_at!(next, pc);
                     }
@@ -483,11 +541,11 @@ impl Context<'_> {
                 // $var op= number, $var holding a number (two ints inline,
                 // the rest through `assign_op`); $str .= string
                 Instr::AssignOp { op, var, src } => {
-                    let released = if let (Value::Int(x), Value::Int(y)) = (&w[var as usize], &w[src as usize])
+                    let released = if let (Value::Int(x), Value::Int(y)) = (&$w[rx!(var as usize)], &$w[rx!(src as usize)])
                         && let Some(n) = int_op(op, *x, *y)
                     {
-                        put(&mut w[var as usize], Value::Int(n))
-                    } else if assign_op(w, op, var, src) {
+                        put(&mut $w[rx!(var as usize)], Value::Int(n))
+                    } else if assign_op(&mut $w[..], op, var, src) {
                         true
                     } else {
                         slow!()
@@ -496,42 +554,44 @@ impl Context<'_> {
                 }
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
-                    let Value::Int(slot) = &mut w[var as usize] else { slow!() };
+                    let Value::Int(slot) = &mut $w[rx!(var as usize)] else { slow!() };
                     let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
                     *slot = n;
-                    done!(put(&mut w[dst as usize], Value::Int(if post { i } else { n })));
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Int(if post { i } else { n })));
                 }
-                Instr::LoadNull { dst } => done!(put(&mut w[dst as usize], Value::Null)),
+                Instr::LoadNull { dst } => {
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Null));
+                }
                 // `!x` and a condition made a value: as `truth` decides
                 // (NAN and an undefined variable warn: `step`).
                 Instr::Not { dst, src } => {
-                    let t = match &w[src as usize] {
+                    let t = match &$w[rx!(src as usize)] {
                         Value::Bool(b) => *b,
                         v => match truth(v) {
                             Some(t) => t,
                             None => slow!(),
                         },
                     };
-                    done!(put(&mut w[dst as usize], Value::Bool(!t)));
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(!t)));
                 }
                 Instr::ToBool { dst, src } => {
-                    let t = match &w[src as usize] {
+                    let t = match &$w[rx!(src as usize)] {
                         Value::Bool(b) => *b,
                         v => match truth(v) {
                             Some(t) => t,
                             None => slow!(),
                         },
                     };
-                    done!(put(&mut w[dst as usize], Value::Bool(t)));
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(t)));
                 }
                 Instr::IssetVar { dst, var } => {
-                    let set = is_set(&w[var as usize]);
-                    done!(put(&mut w[dst as usize], Value::Bool(set)));
+                    let set = is_set(&$w[rx!(var as usize)]);
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(set)));
                 }
                 // `a ?? b`: a set and not null goes to dst and jumps.
                 Instr::JumpIfSet { src, dst, target } => {
-                    let v = match &w[src as usize] {
+                    let v = match &$w[rx!(src as usize)] {
                         Value::Undef | Value::Null => None,
                         Value::Ref(cell) => match read_ref(cell) {
                             Some(Value::Null) | None => None,
@@ -541,7 +601,7 @@ impl Context<'_> {
                     };
                     match v {
                         Some(v) => {
-                            if put(&mut w[dst as usize], v) && ids.has_pending() {
+                            if put(&mut $w[rx!(dst as usize)], v) && ids.has_pending() {
                                 pending_at!(target as usize, pc);
                             }
                             pc = target as usize;
@@ -555,26 +615,27 @@ impl Context<'_> {
                 // occupied included, is `step`'s).
                 Instr::NewArray { dst, n } => {
                     let a = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize)));
-                    done!(put(&mut w[dst as usize], a));
+                    done!(put(&mut $w[rx!(dst as usize)], a));
                 }
                 Instr::ArrayPush { arr, val, take } => {
-                    let Value::Array(a) = &w[arr as usize] else { slow!() };
+                    let Value::Array(a) = &$w[rx!(arr as usize)] else { slow!() };
                     if a.next_key().is_none() {
                         slow!();
                     }
-                    let Some(v) = taken(w, val, take) else { slow!() };
-                    let Value::Array(a) = &mut w[arr as usize] else { unreachable!("checked above") };
+                    let Some(v) = taken(&mut $w[..],val, take) else { slow!() };
+                    let Value::Array(a) = &mut $w[rx!(arr as usize)] else { unreachable!("checked above") };
                     let _ = Rc::make_mut(a).push(v);
-                    pc += 1;
+                    // (A taken temporary that held a reference let go of it.)
+                    done!(true);
                 }
                 Instr::ArraySet { arr, key, val, take } => {
-                    let k = match (&w[arr as usize], &w[key as usize]) {
+                    let k = match (&$w[rx!(arr as usize)], &$w[rx!(key as usize)]) {
                         (Value::Array(_), Value::Int(k)) => Key::Int(*k),
                         (Value::Array(_), Value::Str(s)) => Key::from_string(s.clone()),
                         _ => slow!(),
                     };
-                    let Some(v) = taken(w, val, take) else { slow!() };
-                    let Value::Array(a) = &mut w[arr as usize] else { unreachable!("checked above") };
+                    let Some(v) = taken(&mut $w[..],val, take) else { slow!() };
+                    let Value::Array(a) = &mut $w[rx!(arr as usize)] else { unreachable!("checked above") };
                     // (A key written twice in one literal replaces the first value.)
                     Rc::make_mut(a).insert(k, v);
                     done!(true);
@@ -582,9 +643,9 @@ impl Context<'_> {
                 // A constant the site resolved (a deprecated one is never
                 // cached: it warns on every fetch).
                 Instr::FetchConst { site, dst } => {
-                    let Some(Callee::Constant(v)) = clo.sites[site as usize].get() else { slow!() };
+                    let Some(Callee::Constant(v)) = clo.sites[usize::from(site)].get() else { slow!() };
                     let v = v.clone();
-                    done!(put(&mut w[dst as usize], v));
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                 }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
@@ -651,7 +712,7 @@ impl Context<'_> {
                 // its required arguments, and no interrupt pending: its
                 // frame pushed here. A builtin it resolved: called out of
                 // line. Anything else (a miss, a generator) is `step`'s.
-                Instr::Call { site, base: args, argc: n, dst } => match clo.sites[site as usize].get() {
+                Instr::Call { site, base: args, argc: n, dst } => match clo.sites[usize::from(site)].get() {
                     Some(&Callee::User(target)) => {
                         let target = &self.closures[target as usize];
                         if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
@@ -675,10 +736,10 @@ impl Context<'_> {
                 // and scope, on an object, with its required arguments, and
                 // no interrupt pending: anything else is `step`'s.
                 Instr::MethodCall { dst, obj, method, base: args, argc: n } => {
-                    let Value::Object(o) = &w[obj as usize] else { slow!() };
+                    let Value::Object(o) = &$w[rx!(obj as usize)] else { slow!() };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let found = {
-                        let site = clo.methods[method as usize].borrow();
+                        let site = clo.methods[usize::from(method)].borrow();
                         match site.as_ref() {
                             Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
                                 MethodCode::User(code) => code.upgrade().zip(s.declaring.upgrade()),
@@ -695,7 +756,7 @@ impl Context<'_> {
                     // A temporary (`(new A)->f()`) is released as it is used:
                     // the call's `$this` holds the object.
                     if is_temp(&clo.code, obj) {
-                        clear(&mut w[obj as usize]);
+                        clear(&mut $w[rx!(obj as usize)]);
                     }
                     if let Some(caller) = self.frames.last_mut() {
                         caller.pc = (pc + 1) as u32;
@@ -737,9 +798,39 @@ impl Context<'_> {
                 }
             }
         }
+            };
+        }
+        let nregs = usize::from(clo.code.nregs);
+        if nregs <= WINDOW {
+            // The register file is kept a window ahead of every frame
+            // (`enter`), so the frame's fixed window always exists.
+            if regs.len() < base + WINDOW {
+                regs.resize(base + WINDOW, Value::Undef);
+            }
+            let w: &mut [Value; WINDOW] = (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers");
+            macro_rules! rx {
+                ($e:expr) => {
+                    ($e) & (WINDOW - 1)
+                };
+            }
+            inner!(w);
+        } else {
+            let w = &mut regs[base..base + nregs];
+            macro_rules! rx {
+                ($e:expr) => {
+                    $e
+                };
+            }
+            inner!(w);
+        }
         }
     }
 }
+
+/// The fixed window: a function with up to this many registers runs with
+/// no register bounds checks (`Context::execute`). The register file is
+/// kept this far ahead of every frame's base.
+pub(crate) const WINDOW: usize = 256;
 
 /// What `slow` leaves the loop to do: go on at a pc, or the run is over
 /// (the bottom frame returned, or a fiber suspended).
@@ -770,7 +861,8 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     let frame = &mut slots[top];
     let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
     let code = &*func.code;
-    let need = base + code.nregs as usize;
+    // A window's worth at least: the loop's fixed window (WINDOW) must exist.
+    let need = base + usize::from(code.nregs).max(WINDOW);
     if regs.len() < need {
         regs.resize(need, Value::Undef);
     }
@@ -860,7 +952,7 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     for r in &mut regs[base..consts.start] {
         clear(r);
     }
-    for r in &mut regs[consts.end..base + code.nregs as usize] {
+    for r in &mut regs[consts.end..base + usize::from(code.nregs)] {
         clear(r);
     }
     // `$this` goes after the arguments, as in PHP (it decides which
@@ -876,7 +968,8 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
         frame.owner = None;
     }
     if frame.ret != NO_RET {
-        regs[frame.ret as usize] = value;
+        // (The Return arm tests pending after `leave`.)
+        let _ = put(&mut regs[frame.ret as usize], value);
     }
 }
 
@@ -962,14 +1055,14 @@ pub(crate) fn clear(r: &mut Value) -> bool {
 /// reference). None when undefined (`step` warns).
 #[inline(always)]
 fn taken(w: &mut [Value], r: Reg, take: bool) -> Option<Value> {
-    let v = match &w[r as usize] {
+    let v = match &w[usize::from(r)] {
         Value::Undef => return None,
         Value::Ref(cell) => read_ref(cell)?,
-        _ if take => return Some(std::mem::take(&mut w[r as usize])),
+        _ if take => return Some(std::mem::take(&mut w[usize::from(r)])),
         v => return Some(v.clone()),
     };
     if take {
-        clear(&mut w[r as usize]);
+        clear(&mut w[usize::from(r)]);
     }
     Some(v)
 }
@@ -1038,7 +1131,7 @@ fn test(w: &[Value], cmp: Cmp, a: Reg, b: Reg) -> Option<bool> {
     if cmp == Cmp::Spaceship {
         return None;
     }
-    let (x, y) = (&w[a as usize], &w[b as usize]);
+    let (x, y) = (&w[usize::from(a)], &w[usize::from(b)]);
     match (x, y) {
         (Value::Undef, _) | (_, Value::Undef) => None,
         (Value::Ref(_), _) | (_, Value::Ref(_)) => {
@@ -1065,7 +1158,7 @@ fn deref_defined(v: &Value) -> Option<Value> {
 #[cold]
 #[inline(never)]
 fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
-    let (x, y) = (&w[a as usize], &w[b as usize]);
+    let (x, y) = (&w[usize::from(a)], &w[usize::from(b)]);
     let r = match (x, y) {
         (Value::Ref(_), _) | (_, Value::Ref(_)) => match (num_of(x), num_of(y)) {
             (Some(x), Some(y)) => num_op(op, &x, &y),
@@ -1076,7 +1169,7 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
     match r {
         Some(r) => {
             // (Reported as released whatever the old value: the arm tests pending.)
-            let _ = put_var(&mut w[dst as usize], r);
+            let _ = put_var(&mut w[usize::from(dst)], r);
             true
         }
         None => op == BinOp::Concat && concat(w, dst, a, b),
@@ -1088,7 +1181,7 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
 #[cold]
 #[inline(never)]
 fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
-    let (x, y) = (&w[var as usize], &w[src as usize]);
+    let (x, y) = (&w[usize::from(var)], &w[usize::from(src)]);
     let r = match (x, y) {
         (Value::Ref(_), _) | (_, Value::Ref(_)) => match (num_of(x), num_of(y)) {
             (Some(x), Some(y)) => num_op(op, &x, &y),
@@ -1098,7 +1191,7 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
     };
     match r {
         Some(r) => {
-            let _ = put_var(&mut w[var as usize], r);
+            let _ = put_var(&mut w[usize::from(var)], r);
             true
         }
         None => op == BinOp::Concat && append_str(w, var, src),
@@ -1128,12 +1221,12 @@ fn truth(v: &Value) -> Option<bool> {
 #[cold]
 #[inline(never)]
 fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
-    let at = |a: &PhpArray| match &w[key as usize] {
+    let at = |a: &PhpArray| match &w[usize::from(key)] {
         Value::Int(k) => a.get_int(*k).cloned(),
         Value::Str(s) => a.get(&Key::from_string(s.clone())).cloned(),
         _ => None,
     };
-    let v = match &w[arr as usize] {
+    let v = match &w[usize::from(arr)] {
         Value::Array(a) => at(a),
         Value::Ref(cell) => match &*cell.borrow() {
             Value::Array(a) => at(a),
@@ -1152,12 +1245,12 @@ fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
 #[cold]
 #[inline(never)]
 fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
-    let at = |a: &PhpArray| match &w[keys as usize] {
+    let at = |a: &PhpArray| match &w[usize::from(keys)] {
         Value::Int(k) => Some(a.get_int(*k).is_some_and(is_set)),
         Value::Str(s) => Some(a.get(&Key::from_string(s.clone())).is_some_and(is_set)),
         _ => None,
     };
-    match &w[var as usize] {
+    match &w[usize::from(var)] {
         Value::Array(a) => at(a),
         Value::Ref(cell) => match &*cell.borrow() {
             Value::Array(a) => at(a),

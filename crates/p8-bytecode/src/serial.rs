@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 16;
+pub const FORMAT: u32 = 17;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -657,6 +657,16 @@ impl Code for Rare {
             Rare::PipeArgByRef => 22,
             Rare::Partial => 23,
             Rare::ConstCallable => 24,
+            Rare::Strlen => 25,
+            Rare::Count => 26,
+            Rare::IsNull => 27,
+            Rare::IsBool => 28,
+            Rare::IsInt => 29,
+            Rare::IsFloat => 30,
+            Rare::IsString => 31,
+            Rare::IsArray => 32,
+            Rare::IsObject => 33,
+            Rare::ArrayKeyExists => 34,
         });
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -686,6 +696,16 @@ impl Code for Rare {
             22 => Rare::PipeArgByRef,
             23 => Rare::Partial,
             24 => Rare::ConstCallable,
+            25 => Rare::Strlen,
+            26 => Rare::Count,
+            27 => Rare::IsNull,
+            28 => Rare::IsBool,
+            29 => Rare::IsInt,
+            30 => Rare::IsFloat,
+            31 => Rare::IsString,
+            32 => Rare::IsArray,
+            33 => Rare::IsObject,
+            34 => Rare::ArrayKeyExists,
             _ => return Err(Bad),
         })
     }

@@ -2178,6 +2178,11 @@ impl Context<'_> {
                         let v = self.operand(w, func, b);
                         reg!(a) = self.object_cast(v);
                     }
+                    // An intrinsic the loop did not run (a conversion, an
+                    // object, a warning): the builtin's call, as a Call's.
+                    Rare::Strlen | Rare::Count | Rare::IsNull | Rare::IsBool | Rare::IsInt | Rare::IsFloat | Rare::IsString | Rare::IsArray | Rare::IsObject | Rare::ArrayKeyExists => {
+                        return self.call_site(regs, clo, base, class, (b, c as u8, a), pc);
+                    }
                     Rare::VerifyArgs => self.verify_args(regs, base, argc)?,
                     Rare::VerifyReturn => {
                         if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
@@ -3336,32 +3341,7 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::Call { site, base: args, argc, dst } => {
-                    match self.resolve(clo, site)? {
-                        Callee::User(target) => {
-                            let target = self.closure_at(target);
-                            if (argc as usize) < target.code.required {
-                                let passed = &w[args as usize..args as usize + argc as usize];
-                                return Err(self.missing_args(&target.code, passed, None));
-                            }
-                            if target.code.is_generator {
-                                let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, trampoline: None, closure: None };
-                                let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
-                                regs[base + dst as usize] = Value::Object(g);
-                                return Ok(Next::Go(pc));
-                            }
-                            if let Some(caller) = self.frames.last_mut() {
-                                caller.pc = pc as u32;
-                            }
-                            // Missing optional arguments are filled by the callee's defaults.
-                            self.frames.push(&target, base + args as usize, argc as usize, (base + dst as usize) as u32);
-                            enter(&mut self.frames, regs);
-                            return Ok(Next::Switch);
-                        }
-                        Callee::Builtin(i) => self.call_builtin(regs, base, i, args, argc, dst)?,
-                        Callee::Constant(_) => unreachable!("a call site resolves to a function"),
-                    }
-                }
+                Instr::Call { site, base: args, argc, dst } => return self.call_site(regs, clo, base, site, (args, argc, dst), pc),
                 Instr::Return { src } => {
                     // The main frame's variables are the globals, which the
                     // script's end still sees: copied. Elsewhere moved out
@@ -3416,6 +3396,40 @@ impl Context<'_> {
                 }
         }
         Ok(Next::Go(pc))
+    }
+
+    /// A call of what call site `site` names: a user function's frame
+    /// pushed on its arguments (`call`: their start, count and the result
+    /// register, frame-relative), a builtin called.
+    fn call_site(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, site: u16, call: (Reg, u8, Reg), pc: usize) -> Result<Next, Throw> {
+        let (args, argc, dst) = call;
+        match self.resolve(clo, site)? {
+            Callee::User(target) => {
+                let target = self.closure_at(target);
+                if (argc as usize) < target.code.required {
+                    let passed = &regs[base + args as usize..base + args as usize + argc as usize];
+                    return Err(self.missing_args(&target.code, passed, None));
+                }
+                if target.code.is_generator {
+                    let m = classes::MethodFrame { func: classes::Code::User(Rc::clone(&target)), this: None, scope: None, called: None, trampoline: None, closure: None };
+                    let g = self.make_generator(regs, m, target, base + args as usize, argc as usize);
+                    regs[base + dst as usize] = Value::Object(g);
+                    return Ok(Next::Go(pc));
+                }
+                if let Some(caller) = self.frames.last_mut() {
+                    caller.pc = pc as u32;
+                }
+                // Missing optional arguments are filled by the callee's defaults.
+                self.frames.push(&target, base + args as usize, argc as usize, (base + dst as usize) as u32);
+                enter(&mut self.frames, regs);
+                Ok(Next::Switch)
+            }
+            Callee::Builtin(i) => {
+                self.call_builtin(regs, base, i, args, argc, dst)?;
+                Ok(Next::Go(pc))
+            }
+            Callee::Constant(_) => unreachable!("a call site resolves to a function"),
+        }
     }
 
     /// Push the frame of a method call: its arguments at `args`
