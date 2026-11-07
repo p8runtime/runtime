@@ -1172,12 +1172,15 @@ impl Context<'_> {
     }
 
     /// Call builtin `i` from the loop (`Instr::Call` at `pc` of the frame
-    /// at `base`, its call site resolved to the builtin): the call, then
-    /// what it raised (an exception unwound to its handler, errors to the
-    /// error handler, the destructors due). Returns the pc to go on at.
+    /// at `base`, its call site resolved to the builtin; `call` is the
+    /// instruction's arguments' start, count and result register): the
+    /// call, then what it raised (an exception unwound to its handler,
+    /// errors to the error handler, the destructors due). Returns the pc
+    /// to go on at.
     #[cold]
     #[inline(never)]
-    fn builtin_call(&mut self, regs: &mut Vec<Value>, pc: usize, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<usize, Throw> {
+    fn builtin_call(&mut self, regs: &mut Vec<Value>, pc: usize, base: usize, i: usize, call: (Reg, u8, Reg)) -> Result<usize, Throw> {
+        let (args, argc, dst) = call;
         self.pc = pc + 1;
         let next = match self.call_builtin(regs, base, i, args, argc, dst) {
             Ok(()) => pc + 1,

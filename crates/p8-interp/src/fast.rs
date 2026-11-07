@@ -664,7 +664,7 @@ impl Context<'_> {
                         continue 'frame;
                     }
                     Some(&Callee::Builtin(i)) => {
-                        pc = self.builtin_call(regs, pc, base, i, args, n, dst)?;
+                        pc = self.builtin_call(regs, pc, base, i, (args, n, dst))?;
                         continue 'frame;
                     }
                     _ => slow!(),
