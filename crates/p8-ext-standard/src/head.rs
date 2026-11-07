@@ -164,42 +164,42 @@ fn header(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let replace = args.len() < 2 || arg(args, 1).to_bool();
     let code = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
     header_op(ctx, str_arg(args, 0).as_bytes(), code, replace);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn header_remove(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if too_late(ctx) {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
-    match args.first().map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
+    match args.first().map(Value::deref).filter(|v| !v.is_null()) {
         // header_remove(): every header goes.
         None => ctx.response().headers.clear(),
         Some(name) => {
             let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
             if name.is_empty() {
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             let name = trim_end(name.as_bytes());
             if name.contains(&b':') {
                 ctx.warn("Header to delete may not contain colon.");
-                return Ok(Value::Null);
+                return Ok(Value::NULL);
             }
             remove_header(&mut ctx.response().headers, name);
         }
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn headers_sent(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let started = ctx.output_started();
     let (file, line) = started.clone().unwrap_or_else(|| (Rc::from(""), 0));
-    if let Some(Value::Ref(r)) = args.first() {
-        *r.borrow_mut() = Value::Str(PhpStr::from(&*file));
+    if let Some(r) = args.first().and_then(Value::as_reference) {
+        *r.borrow_mut() = Value::str(PhpStr::from(&*file));
     }
-    if let Some(Value::Ref(r)) = args.get(1) {
-        *r.borrow_mut() = Value::Int(line as i64);
+    if let Some(r) = args.get(1).and_then(Value::as_reference) {
+        *r.borrow_mut() = Value::int(line as i64);
     }
-    Ok(Value::Bool(started.is_some()))
+    Ok(Value::bool(started.is_some()))
 }
 
 /// header_register_callback(): the engine calls it just before the
@@ -211,30 +211,30 @@ fn header_register_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Val
         return Err(ctx.throw("TypeError", format!("header_register_callback(): Argument #1 ($callback) must be a valid callback, {why}")));
     }
     *ctx.state("header_callback") = callback;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn headers_list(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let mut list = PhpArray::new();
     for h in ctx.response().headers.iter().filter(|h| !h.is_empty()) {
-        let _ = list.push(Value::Str(PhpStr::from(h.as_slice())));
+        let _ = list.push(Value::str(PhpStr::from(h.as_slice())));
     }
-    Ok(Value::Array(Rc::new(list)))
+    Ok(Value::array(list))
 }
 
 fn http_response_code(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let code = if args.is_empty() { 0 } else { arg(args, 0).to_int() };
     let old = response_code(ctx);
     if code == 0 {
-        return Ok(if old == 0 { Value::Bool(false) } else { Value::Int(old) });
+        return Ok(if old == 0 { Value::FALSE } else { Value::int(old) });
     }
     if let Some((file, line)) = ctx.output_started() {
         ctx.warn(&format!("http_response_code(): Cannot set response code - headers already sent{}", started_at(&file, line)));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     // Set directly: a status line the script gave stays.
     ctx.response().status = code;
-    Ok(if old == 0 { Value::Bool(true) } else { Value::Int(old) })
+    Ok(if old == 0 { Value::TRUE } else { Value::int(old) })
 }
 
 fn setcookie(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -292,7 +292,8 @@ fn cookie(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, raw: bool) -> Resul
     let (mut path, mut domain, mut samesite) = (None, None, None);
     let (mut secure, mut httponly) = (false, false);
     match args.get(2).map(Value::deref) {
-        Some(Value::Array(options)) => {
+        Some(options) if options.is_array() => {
+            let options = options.as_array().expect("an array");
             if args.len() > 3 {
                 return Err(ctx.throw("ArgumentCountError", format!("{func}(): Expects exactly 3 arguments when argument #3 ($expires_or_options) is an array")));
             }
@@ -377,5 +378,5 @@ fn cookie(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, raw: bool) -> Resul
         line.extend_from_slice(b"; SameSite=");
         line.extend_from_slice(v.as_bytes());
     }
-    Ok(Value::Bool(header_op(ctx, &line, 0, false)))
+    Ok(Value::bool(header_op(ctx, &line, 0, false)))
 }

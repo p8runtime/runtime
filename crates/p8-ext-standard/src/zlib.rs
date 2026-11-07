@@ -277,7 +277,7 @@ fn encode_func(ctx: &mut dyn Ctx, args: &[Value], func: &str, default_encoding: 
             format!("{func}(): Argument #{encoding_arg} ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE"),
         ));
     }
-    Ok(Value::Str(PhpStr::new(encode(data.as_bytes(), encoding, level))))
+    Ok(Value::str(PhpStr::new(encode(data.as_bytes(), encoding, level))))
 }
 
 fn gzcompress(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -303,10 +303,10 @@ fn decode_func(ctx: &mut dyn Ctx, args: &[Value], func: &str, encoding: i64) -> 
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #2 ($max_length) must be greater than or equal to 0")));
     }
     match decode(data.as_bytes(), encoding, max as usize) {
-        Ok(out) => Ok(Value::Str(PhpStr::new(out))),
+        Ok(out) => Ok(Value::str(PhpStr::new(out))),
         Err(status) => {
             ctx.warn(&format!("{func}(): {}", z_error(status)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -363,10 +363,7 @@ pub(crate) fn make_inflate() -> Rc<dyn std::any::Any> {
 }
 
 fn option(options: &Value, name: &str) -> Option<i64> {
-    match options.deref() {
-        Value::Array(a) => a.get(&p8_runtime::array::Key::from_string(PhpStr::from(name))).map(|v| v.deref().to_int()),
-        _ => None,
-    }
+    options.deref().as_array().and_then(|a| a.get(&p8_runtime::array::Key::from_string(PhpStr::from(name))).map(|v| v.deref().to_int()))
 }
 
 fn deflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -401,7 +398,7 @@ fn deflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = ctx.new_object(&class);
     let state = o.native::<DeflateState>().expect("a DeflateContext");
     *state.0.borrow_mut() = Some(Deflater { c: Compress::new(compression(level), false), encoding, level, started: false, crc: flate2::Crc::new(), adler: 1 });
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// A ZLIB_* flush mode.
@@ -417,11 +414,13 @@ fn flush_mode(ctx: &mut dyn Ctx, func: &str, mode: i64) -> Result<i64, Throw> {
 
 fn context_arg(ctx: &mut dyn Ctx, args: &[Value], func: &str, class: &str) -> Result<Rc<Object>, Throw> {
     match args.first().map(Value::deref) {
-        Some(Value::Object(o)) if o.class.name.as_bytes() == class.as_bytes() => Ok(o),
+        Some(v) if v.as_object().is_some_and(|o| o.class.name.as_bytes() == class.as_bytes()) => Ok(v.cloned_object().expect("an object")),
         v => {
             let given = match &v {
-                Some(Value::Object(o)) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
-                Some(v) => v.type_name().into_owned(),
+                Some(v) => match v.as_object() {
+                    Some(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
+                    None => v.type_name().into_owned(),
+                },
                 None => "null".into(),
             };
             Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($context) must be of type {class}, {given} given")))
@@ -477,7 +476,7 @@ fn deflate_add(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         // A finished context starts over.
         *d = Deflater { c: Compress::new(compression(d.level), false), encoding: d.encoding, level: d.level, started: false, crc: flate2::Crc::new(), adler: 1 };
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn inflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -502,7 +501,7 @@ fn inflate_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         read_len: 0,
         done: false,
     });
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn inflate_add(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -529,7 +528,7 @@ fn inflate_add(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             None => {
                 drop(guard);
                 ctx.warn("inflate_add(): data error");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
@@ -558,7 +557,7 @@ fn inflate_add(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             Err(_) => {
                 drop(guard);
                 ctx.warn("inflate_add(): data error");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
@@ -566,19 +565,19 @@ fn inflate_add(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if mode == 4 && !inf.done {
         inf.status = -5;
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn inflate_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, "inflate_get_status", "InflateContext")?;
     let state = o.native::<InflateState>().expect("an InflateContext");
-    Ok(Value::Int(state.0.borrow().as_ref().map_or(0, |i| i.status)))
+    Ok(Value::int(state.0.borrow().as_ref().map_or(0, |i| i.status)))
 }
 
 fn inflate_get_read_len(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, "inflate_get_read_len", "InflateContext")?;
     let state = o.native::<InflateState>().expect("an InflateContext");
-    Ok(Value::Int(state.0.borrow().as_ref().map_or(0, |i| i.read_len)))
+    Ok(Value::int(state.0.borrow().as_ref().map_or(0, |i| i.read_len)))
 }
 
 fn no_construct(class: &'static str, func: &'static str) -> impl Fn(&mut dyn Ctx) -> Throw {
@@ -696,7 +695,7 @@ fn gzopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let path = path.strip_prefix("compress.zlib://").unwrap_or(&path).to_string();
     match open_gz(ctx, "gzopen", &path, &mode) {
         Some(s) => Ok(crate::file::new_stream(ctx, s)),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -713,34 +712,34 @@ fn read_gz(ctx: &mut dyn Ctx, func: &str, path: &str) -> Option<Vec<u8>> {
 
 fn gzfile(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let path = path_arg(args, 0);
-    let Some(text) = read_gz(ctx, "gzfile", &path) else { return Ok(Value::Bool(false)) };
+    let Some(text) = read_gz(ctx, "gzfile", &path) else { return Ok(Value::FALSE) };
     let mut lines = Vec::new();
     let mut start = 0;
     for (i, &c) in text.iter().enumerate() {
         if c == b'\n' {
-            lines.push(Value::Str(PhpStr::from(&text[start..=i])));
+            lines.push(Value::str(PhpStr::from(&text[start..=i])));
             start = i + 1;
         }
     }
     if start < text.len() {
-        lines.push(Value::Str(PhpStr::from(&text[start..])));
+        lines.push(Value::str(PhpStr::from(&text[start..])));
     }
-    Ok(Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(lines))))
+    Ok(Value::array(p8_runtime::array::PhpArray::from_list(lines)))
 }
 
 fn readgzfile(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let path = path_arg(args, 0);
-    let Some(text) = read_gz(ctx, "readgzfile", &path) else { return Ok(Value::Bool(false)) };
+    let Some(text) = read_gz(ctx, "readgzfile", &path) else { return Ok(Value::FALSE) };
     ctx.echo(&text);
-    Ok(Value::Int(text.len() as i64))
+    Ok(Value::int(text.len() as i64))
 }
 
 fn zlib_get_coding_type(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// ob_gzhandler(string $data, int $flags): without an Accept-Encoding
 /// header (the CLI) the output passes as it is.
 fn ob_gzhandler(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }

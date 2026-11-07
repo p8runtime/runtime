@@ -35,31 +35,25 @@ fn key(k: &[u8]) -> Key {
 }
 
 fn options(o: &Object) -> PhpArray {
-    match o.dynamic.borrow().get(&key(OPTIONS)) {
-        Some(Value::Array(a)) => (**a).clone(),
-        _ => PhpArray::new(),
-    }
+    o.dynamic.borrow().get(&key(OPTIONS)).and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 fn store(o: &Object, options: PhpArray) {
-    o.dynamic.borrow_mut().insert(key(OPTIONS), Value::Array(Rc::new(options)));
+    o.dynamic.borrow_mut().insert(key(OPTIONS), Value::array(options));
 }
 
 /// `wrapper => [option => value]` merged into the context's options.
 fn merge(ctx: &mut dyn Ctx, o: &Object, given: &PhpArray) -> Result<(), Throw> {
     let mut all = options(o);
     for (wrapper, opts) in given.iter() {
-        let Value::Array(opts) = opts.deref() else {
+        let Ok(opts) = opts.deref().into_array() else {
             return Err(ctx.throw("ValueError", "Options should have the form [\"wrappername\"][\"optionname\"] = $value".into()));
         };
-        let mut w = match all.get(&wrapper) {
-            Some(Value::Array(a)) => (**a).clone(),
-            _ => PhpArray::new(),
-        };
+        let mut w = all.get(&wrapper).and_then(Value::as_array).cloned().unwrap_or_default();
         for (k, v) in opts.iter() {
             w.insert(k, v.deref());
         }
-        all.insert(wrapper, Value::Array(Rc::new(w)));
+        all.insert(wrapper, Value::array(w));
     }
     store(o, all);
     Ok(())
@@ -80,7 +74,7 @@ fn set_params_on(ctx: &mut dyn Ctx, o: &Object, params: &PhpArray) -> Result<(),
     if let Some(n) = params.get(&key(b"notification")) {
         o.dynamic.borrow_mut().insert(key(NOTIFICATION), n.deref());
     }
-    if let Some(Value::Array(opts)) = params.get(&key(b"options")).map(Value::deref) {
+    if let Some(opts) = params.get(&key(b"options")).map(Value::deref).and_then(|v| v.into_array().ok()) {
         merge(ctx, o, &opts)?;
     }
     Ok(())
@@ -90,10 +84,10 @@ fn set_params_on(ctx: &mut dyn Ctx, o: &Object, params: &PhpArray) -> Result<(),
 fn create(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = new_context(ctx);
     let o = resource_of(&v).expect("a resource");
-    if let Value::Array(opts) = arg(args, 0) {
+    if let Ok(opts) = arg(args, 0).into_array() {
         merge(ctx, &o, &opts)?;
     }
-    if let Value::Array(params) = arg(args, 1) {
+    if let Ok(params) = arg(args, 1).into_array() {
         set_params_on(ctx, &o, &params)?;
     }
     Ok(v)
@@ -101,22 +95,22 @@ fn create(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn get_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, 0, "stream_context_get_options", true)?;
-    Ok(Value::Array(Rc::new(options(&o))))
+    Ok(Value::array(options(&o)))
 }
 
 /// stream_context_set_option($context, string $wrapper, string $option, $value),
 /// or (deprecated) with an array of options in place of the last three.
 fn set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, 0, "stream_context_set_option", true)?;
-    match arg(args, 1) {
-        Value::Array(opts) => {
+    match arg(args, 1).into_array() {
+        Ok(opts) => {
             if args.len() > 2 {
                 return Err(ctx.throw("ArgumentCountError", "stream_context_set_option(): Argument #3 ($option_name) must be null when argument #2 ($wrapper_or_options) is an array".into()));
             }
             merge(ctx, &o, &opts)?;
         }
-        wrapper => {
-            if args.len() < 3 || matches!(arg(args, 2), Value::Null) {
+        Err(wrapper) => {
+            if args.len() < 3 || arg(args, 2).is_null() {
                 return Err(ctx.throw("ValueError", "stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string".into()));
             }
             if args.len() < 4 {
@@ -125,19 +119,19 @@ fn set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             let mut opt = PhpArray::new();
             opt.insert(Key::from_value(&arg(args, 2)).map(|(k, _)| k).unwrap_or_else(|_| key(b"")), arg(args, 3));
             let mut given = PhpArray::new();
-            given.insert(Key::from_value(&wrapper).map(|(k, _)| k).unwrap_or_else(|_| key(b"")), Value::Array(Rc::new(opt)));
+            given.insert(Key::from_value(&wrapper).map(|(k, _)| k).unwrap_or_else(|_| key(b"")), Value::array(opt));
             merge(ctx, &o, &given)?;
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn set_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, 0, "stream_context_set_options", false)?;
-    if let Value::Array(opts) = arg(args, 1) {
+    if let Ok(opts) = arg(args, 1).into_array() {
         merge(ctx, &o, &opts)?;
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// The params: its notification callback, if any, and its options.
@@ -147,22 +141,22 @@ fn get_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(n) = o.dynamic.borrow().get(&key(NOTIFICATION)) {
         out.insert(key(b"notification"), n.clone());
     }
-    out.insert(key(b"options"), Value::Array(Rc::new(options(&o))));
-    Ok(Value::Array(Rc::new(out)))
+    out.insert(key(b"options"), Value::array(options(&o)));
+    Ok(Value::array(out))
 }
 
 fn set_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, 0, "stream_context_set_params", true)?;
-    if let Value::Array(params) = arg(args, 1) {
+    if let Ok(params) = arg(args, 1).into_array() {
         set_params_on(ctx, &o, &params)?;
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// stream_context_get_default(?array $options = null)
 fn get_default(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = default_context(ctx);
-    if let Value::Array(opts) = arg(args, 0) {
+    if let Ok(opts) = arg(args, 0).into_array() {
         merge(ctx, &resource_of(&v).expect("a resource"), &opts)?;
     }
     Ok(v)
@@ -170,7 +164,7 @@ fn get_default(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn set_default(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = default_context(ctx);
-    if let Value::Array(opts) = arg(args, 0) {
+    if let Ok(opts) = arg(args, 0).into_array() {
         merge(ctx, &resource_of(&v).expect("a resource"), &opts)?;
     }
     Ok(v)
