@@ -13,7 +13,6 @@ use p8_runtime::array::PhpArray;
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     b!("grapheme_strlen", grapheme_strlen),
@@ -61,10 +60,10 @@ fn utf8<'a>(ctx: &mut dyn Ctx, b: &'a [u8], msg: &str) -> Result<Option<&'a str>
 fn grapheme_strlen(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let b = bytes(args, 0);
     if ascii(&b) {
-        return Ok(Value::Int(b.len() as i64));
+        return Ok(Value::int(b.len() as i64));
     }
-    let Some(t) = utf8(ctx, &b, "Error converting input string to UTF-16")? else { return Ok(Value::Null) };
-    Ok(Value::Int(boundaries(t).len() as i64 - 1))
+    let Some(t) = utf8(ctx, &b, "Error converting input string to UTF-16")? else { return Ok(Value::NULL) };
+    Ok(Value::int(boundaries(t).len() as i64 - 1))
 }
 
 fn outside(offset: i64, len: usize) -> bool {
@@ -154,25 +153,25 @@ fn strpos_common(ctx: &mut dyn Ctx, args: &[Value], ignore_case: bool, last: boo
         let (hh, nn) = if ignore_case { (h.to_ascii_lowercase(), n.to_ascii_lowercase()) } else { (h.clone(), n.clone()) };
         if last {
             if let Some(p) = strrpos_ascii(&hh, &nn, offset) {
-                return Ok(Value::Int(p));
+                return Ok(Value::int(p));
             }
             if n_ascii {
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         } else if offset >= 0 {
             if let Some(p) = memfind(&hh, &nn, offset as usize) {
-                return Ok(Value::Int(p as i64));
+                return Ok(Value::int(p as i64));
             }
             if n_ascii {
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
-    let Some(ht) = utf8(ctx, &h, "Error converting input string to UTF-16")? else { return Ok(Value::Bool(false)) };
-    let Some(nt) = utf8(ctx, &n, "Error converting needle string to UTF-16")? else { return Ok(Value::Bool(false)) };
+    let Some(ht) = utf8(ctx, &h, "Error converting input string to UTF-16")? else { return Ok(Value::FALSE) };
+    let Some(nt) = utf8(ctx, &n, "Error converting needle string to UTF-16")? else { return Ok(Value::FALSE) };
     Ok(match search(ctx, ht, nt, offset, ignore_case, last)? {
-        Some((i, _)) => Value::Int(i as i64),
-        None => Value::Bool(false),
+        Some((i, _)) => Value::int(i as i64),
+        None => Value::FALSE,
     })
 }
 
@@ -214,13 +213,13 @@ fn grapheme_strripos(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn bstr(b: &[u8]) -> Value {
-    Value::Str(PhpStr::new(b.to_vec()))
+    Value::str(PhpStr::new(b.to_vec()))
 }
 
 fn grapheme_substr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let b = bytes(args, 0);
     let start = arg(args, 1).to_int();
-    let no_length = args.len() < 3 || matches!(arg(args, 2), Value::Null);
+    let no_length = args.len() < 3 || arg(args, 2).is_null();
     let length = if no_length { b.len() as i64 } else { arg(args, 2).to_int() };
     let name = ctx.builtin_name();
     if !(i32::MIN as i64..=i32::MAX as i64).contains(&start) {
@@ -245,7 +244,7 @@ fn grapheme_substr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         return Ok(bstr(&b[f as usize..(f + l) as usize]));
     }
-    let Some(t) = utf8(ctx, &b, "Error converting input string to UTF-16")? else { return Ok(Value::Bool(false)) };
+    let Some(t) = utf8(ctx, &b, "Error converting input string to UTF-16")? else { return Ok(Value::FALSE) };
     let bounds = boundaries(t);
     let n = bounds.len() as i64 - 1;
     // the start boundary
@@ -309,14 +308,14 @@ fn strstr_common(ctx: &mut dyn Ctx, args: &[Value], ignore_case: bool) -> R {
     if !ignore_case && ascii(&h) && ascii(&n) {
         return Ok(match memfind(&h, &n, 0) {
             Some(p) => bstr(if before { &h[..p] } else { &h[p..] }),
-            None => Value::Bool(false),
+            None => Value::FALSE,
         });
     }
-    let Some(ht) = utf8(ctx, &h, "Error converting input string to UTF-16")? else { return Ok(Value::Bool(false)) };
-    let Some(nt) = utf8(ctx, &n, "Error converting needle string to UTF-16")? else { return Ok(Value::Bool(false)) };
+    let Some(ht) = utf8(ctx, &h, "Error converting input string to UTF-16")? else { return Ok(Value::FALSE) };
+    let Some(nt) = utf8(ctx, &n, "Error converting needle string to UTF-16")? else { return Ok(Value::FALSE) };
     Ok(match search(ctx, ht, nt, 0, ignore_case, false)? {
         Some((_, p)) => bstr(if before { &h[..p] } else { &h[p..] }),
-        None => Value::Bool(false),
+        None => Value::FALSE,
     })
 }
 
@@ -329,7 +328,7 @@ fn grapheme_stristr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn set_ref(args: &mut [Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -342,13 +341,13 @@ fn grapheme_extract(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if start < 0 {
         start += b.len() as i64;
     }
-    set_ref(args, 4, Value::Int(start));
+    set_ref(args, 4, Value::int(start));
     if !(0..=2).contains(&ty) {
         return Err(ctx.throw("ValueError", "grapheme_extract(): Argument #3 ($type) must be one of GRAPHEME_EXTR_COUNT, GRAPHEME_EXTR_MAXBYTES, or GRAPHEME_EXTR_MAXCHARS".into()));
     }
     if start > i32::MAX as i64 || start < 0 || start as usize >= b.len() {
         crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "grapheme_extract: start not contained in string")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if size < 0 {
         return Err(ctx.throw("ValueError", "grapheme_extract(): Argument #2 ($size) must be greater than or equal to 0".into()));
@@ -364,21 +363,21 @@ fn grapheme_extract(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         p += 1;
         if p >= b.len() {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "grapheme_extract: invalid input string")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     let rest = &b[p..];
     let probe = &rest[..rest.len().min(size as usize + 1)];
     if ascii(probe) {
         let n = (size as usize).min(rest.len());
-        set_ref(args, 4, Value::Int((start as usize + n) as i64));
+        set_ref(args, 4, Value::int((start as usize + n) as i64));
         return Ok(bstr(&rest[..n]));
     }
     // ICU reads the text leniently (UText): invalid bytes are characters of their own
     let text = String::from_utf8_lossy(rest).into_owned();
     if text.len() != rest.len() {
         crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "Error opening UTF-8 text")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let bounds = boundaries(&text);
     let ret = match ty {
@@ -397,7 +396,7 @@ fn grapheme_extract(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             ret
         }
     };
-    set_ref(args, 4, Value::Int((p + ret) as i64));
+    set_ref(args, 4, Value::int((p + ret) as i64));
     Ok(bstr(&rest[..ret]))
 }
 
@@ -408,9 +407,9 @@ fn grapheme_str_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         return Err(ctx.throw("ValueError", format!("grapheme_str_split(): Argument #2 ($length) must be greater than 0 and less than or equal to {}", u32::MAX / 4)));
     }
     if b.is_empty() {
-        return Ok(Value::Array(Rc::new(PhpArray::new())));
+        return Ok(Value::array(PhpArray::new()));
     }
-    let Some(t) = utf8(ctx, &b, "Error opening UTF-8 text")? else { return Ok(Value::Bool(false)) };
+    let Some(t) = utf8(ctx, &b, "Error opening UTF-8 text")? else { return Ok(Value::FALSE) };
     let bounds = boundaries(t);
     let mut out = Vec::new();
     let mut i = 0;
@@ -419,5 +418,5 @@ fn grapheme_str_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         out.push(bstr(&b[bounds[i]..bounds[j]]));
         i = j;
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
+    Ok(Value::array(PhpArray::from_list(out)))
 }

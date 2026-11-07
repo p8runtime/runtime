@@ -25,7 +25,7 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassHooks, ClassSpec, Ctx, Registry, Throw};
 use p8_runtime::object::Object;
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -136,24 +136,22 @@ fn php_default_zone(ctx: &mut dyn Ctx) -> Zone {
 /// timezone_process_timezone_argument: null (the default), an ID, a
 /// DateTimeZone or an IntlTimeZone.
 fn zone_arg(ctx: &mut dyn Ctx, v: &Value, func: &str) -> Result<Result<Zone, String>, Throw> {
-    match v {
-        Value::Null | Value::Undef => Ok(Ok(php_default_zone(ctx))),
-        Value::Object(o) => {
-            let class = lossy(o.class.name.as_bytes()).to_ascii_lowercase();
-            if class == "intltimezone" {
-                return Ok(Ok(crate::timezone::zone_of(o)));
-            }
-            let mut none: [Value; 0] = [];
-            let name = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), s("getName")]))), &mut none)?;
-            let name = name.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
-            let id = if name.starts_with(['+', '-']) { format!("GMT{name}") } else { name };
-            Ok(zone_from_id(&id).ok_or_else(|| format!("{func}: No such time zone: '{id}'")))
-        }
-        other => {
-            let id = other.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
-            Ok(zone_from_id(&id).ok_or_else(|| format!("{func}: No such time zone: '{id}'")))
-        }
+    if v.is_null_or_undef() {
+        return Ok(Ok(php_default_zone(ctx)));
     }
+    if let Some(o) = v.as_object() {
+        let class = lossy(o.class.name.as_bytes()).to_ascii_lowercase();
+        if class == "intltimezone" {
+            return Ok(Ok(crate::timezone::zone_of(o)));
+        }
+        let mut none: [Value; 0] = [];
+        let name = ctx.call(&Value::array(PhpArray::from_list(vec![v.clone(), s("getName")])), &mut none)?;
+        let name = name.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
+        let id = if name.starts_with(['+', '-']) { format!("GMT{name}") } else { name };
+        return Ok(zone_from_id(&id).ok_or_else(|| format!("{func}: No such time zone: '{id}'")));
+    }
+    let id = v.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
+    Ok(zone_from_id(&id).ok_or_else(|| format!("{func}: No such time zone: '{id}'")))
 }
 
 // ---- the calendar fields of an instant ----
@@ -1015,10 +1013,10 @@ fn construct(ctx: &mut dyn Ctx, st: &State, args: &[Value]) -> Result<Result<(),
     }
     let canonical = crate::uloc::canonicalize(&locale);
     let locale = if canonical.is_empty() { locale } else { canonical };
-    let calendar = match cal {
-        Value::Null | Value::Undef => GREGORIAN,
-        Value::Int(c) if c == GREGORIAN || c == TRADITIONAL => c,
-        Value::Int(_) => {
+    let calendar = match cal.as_int() {
+        _ if cal.is_null_or_undef() => GREGORIAN,
+        Some(c) if c == GREGORIAN || c == TRADITIONAL => c,
+        Some(_) => {
             return fail(
                 ctx,
                 U_ILLEGAL_ARGUMENT_ERROR,
@@ -1056,15 +1054,15 @@ fn f_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = ctx.class(b"IntlDateFormatter").expect("IntlDateFormatter");
     let o = ctx.new_object(&class);
     match construct(ctx, state(&o), args)? {
-        Ok(()) => Ok(Value::Object(o)),
-        Err(()) => Ok(Value::Null),
+        Ok(()) => Ok(Value::object(o)),
+        Err(()) => Ok(Value::NULL),
     }
 }
 
 fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(this) = arg(args, 0) else { unreachable!() };
+    let Ok(this) = arg(args, 0).into_object() else { unreachable!() };
     match construct(ctx, state(&this), &args[1..])? {
-        Ok(()) => Ok(Value::Null),
+        Ok(()) => Ok(Value::NULL),
         Err(()) => {
             let msg = crate::global_message(ctx);
             Err(ctx.throw("IntlException", msg))
@@ -1073,7 +1071,7 @@ fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn obj(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
     if state(&o).fmt.borrow().is_none() {
         return Err(ctx.throw("Error", "Found unconstructed IntlDateFormatter".into()));
     }
@@ -1099,50 +1097,51 @@ fn with<T>(o: &Object, f: impl FnOnce(&mut Formatter) -> T) -> T {
 
 fn f_get_datetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(with(&o, |f| f.date_type)))
+    Ok(Value::int(with(&o, |f| f.date_type)))
 }
 
 fn f_get_timetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(with(&o, |f| f.time_type)))
+    Ok(Value::int(with(&o, |f| f.time_type)))
 }
 
 fn f_get_calendar(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(with(&o, |f| f.calendar)))
+    Ok(Value::int(with(&o, |f| f.calendar)))
 }
 
 fn f_set_calendar(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let st = state(&o);
-    match arg(args, 1) {
-        Value::Null => {
+    let cal = arg(args, 1);
+    match cal.as_int() {
+        _ if cal.is_null() => {
             with(&o, |f| f.calendar = GREGORIAN);
         }
-        Value::Int(c) if c == GREGORIAN || (c == TRADITIONAL && with(&o, |f| gregorian_locale(&f.locale))) => {
+        Some(c) if c == GREGORIAN || (c == TRADITIONAL && with(&o, |f| gregorian_locale(&f.locale))) => {
             with(&o, |f| f.calendar = c);
         }
-        Value::Int(c) if c == TRADITIONAL => {
+        Some(c) if c == TRADITIONAL => {
             st.err.code.set(U_UNSUPPORTED_ERROR);
             check(ctx, st, "datefmt_set_calendar: error creating ICU Calendar object")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
-        Value::Int(_) => {
+        Some(_) => {
             st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
             check(
                 ctx,
                 st,
                 "datefmt_set_calendar: Invalid value for calendar type; it must be one of IntlDateFormatter::TRADITIONAL (locale's default calendar) or IntlDateFormatter::GREGORIAN. Alternatively, it can be an IntlCalendar object",
             )?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         _ => {
             st.err.code.set(U_UNSUPPORTED_ERROR);
             check(ctx, st, "datefmt_set_calendar: IntlCalendar arguments are not supported")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_timezone_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1162,12 +1161,12 @@ fn f_set_timezone(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match zone_arg(ctx, &arg(args, 1), "datefmt_set_timezone")? {
         Ok(z) => {
             with(&o, |f| f.zone = z);
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(msg) => {
             st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
             check(ctx, st, &msg)?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1181,7 +1180,7 @@ fn f_set_pattern(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let p = str_arg(args, 1);
     with(&o, |f| f.set_pattern(&p));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -1191,7 +1190,7 @@ fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if ty != 0 && ty != 1 {
         st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
         check(ctx, st, "Error getting locale")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let loc = with(&o, |f| crate::valid_locale(&f.locale));
     // ICU's actual locale for date formats is the language data's
@@ -1203,30 +1202,31 @@ fn f_set_lenient(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let l = arg(args, 1).to_bool();
     with(&o, |f| f.lenient = l);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn f_is_lenient(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Bool(with(&o, |f| f.lenient)))
+    Ok(Value::bool(with(&o, |f| f.lenient)))
 }
 
 /// The instant a format() argument stands for, in ms; Err(message) when it is not one.
 fn instant(ctx: &mut dyn Ctx, v: &Value, func: &str) -> Result<Result<i64, String>, Throw> {
-    match v {
-        Value::Int(i) => Ok(Ok(i.saturating_mul(1000))),
-        Value::Float(f) => Ok(Ok((f * 1000.0) as i64)),
-        Value::Str(st) => {
+    match v.kind() {
+        Kind::Int => Ok(Ok(v.as_int().expect("an int").saturating_mul(1000))),
+        Kind::Float => Ok(Ok((v.as_float().expect("a float") * 1000.0) as i64)),
+        Kind::Str => {
+            let st = v.as_str().expect("a string");
             let t = lossy(st.as_bytes());
             match t.trim().parse::<f64>() {
                 Ok(f) if p8_runtime::numeric::numeric_string(st.as_bytes()).is_some() => Ok(Ok((f * 1000.0) as i64)),
                 _ => Ok(Err(format!("{func}: string '{t}' is not numeric, which would be required for it to be a valid date"))),
             }
         }
-        Value::Array(a) => Ok(array_instant(a).ok_or_else(|| format!("{func}: date format failed"))),
-        Value::Object(_) => {
+        Kind::Array => Ok(array_instant(v.as_array().expect("an array")).ok_or_else(|| format!("{func}: date format failed"))),
+        Kind::Object => {
             let mut fmt = [s("U.v")];
-            let r = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), s("format")]))), &mut fmt)?;
+            let r = ctx.call(&Value::array(PhpArray::from_list(vec![v.clone(), s("format")])), &mut fmt)?;
             let t = r.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
             Ok(t.parse::<f64>().map(|f| (f * 1000.0).round() as i64).map_err(|_| format!("{func}: error getting time from object")))
         }
@@ -1249,8 +1249,8 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let st = state(&o);
     let v = arg(args, 1);
-    let ms = match &v {
-        Value::Array(a) => {
+    let ms = match v.as_array() {
+        Some(a) => {
             // the array's fields are local to the formatter's zone
             match array_instant(a) {
                 Some(local) => {
@@ -1261,16 +1261,16 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 None => {
                     st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
                     check(ctx, st, "datefmt_format: date format failed")?;
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE);
                 }
             }
         }
-        _ => match instant(ctx, &v, "datefmt_format")? {
+        None => match instant(ctx, &v, "datefmt_format")? {
             Ok(ms) => ms,
             Err(msg) => {
                 st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
                 check(ctx, st, &msg)?;
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         },
     };
@@ -1287,7 +1287,7 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         None => {
             st.err.code.set(U_ILLEGAL_ARGUMENT_ERROR);
             check(ctx, st, "datefmt_format: date format failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1329,23 +1329,23 @@ fn f_format_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let locale = crate::opt_str(args, 2).filter(|l| !l.is_empty()).unwrap_or_else(|| default_locale(ctx));
     let fail = |ctx: &mut dyn Ctx, msg: &str| -> R {
         crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &format!("datefmt_format_object: {msg}"))?;
-        Ok(Value::Bool(false))
+        Ok(Value::FALSE)
     };
-    match &object {
-        Value::Object(o) if crate::msgfmt::is_datetime(o) => {}
-        _ => return fail(ctx, "the passed object must be an instance of either IntlCalendar or DateTimeInterface"),
+    if !object.as_object().is_some_and(|o| crate::msgfmt::is_datetime(o)) {
+        return fail(ctx, "the passed object must be an instance of either IntlCalendar or DateTimeInterface");
     }
     let ok = |s: i64| matches!(s, FULL | LONG | MEDIUM | SHORT | NONE) || (RELATIVE..=RELATIVE + 3).contains(&s);
-    let (date_type, time_type, pattern) = match &format {
-        Value::Null | Value::Undef => (MEDIUM, MEDIUM, None),
-        Value::Int(i) => {
-            if !ok(*i) {
+    let (date_type, time_type, pattern) = match format.kind() {
+        Kind::Null | Kind::Undef => (MEDIUM, MEDIUM, None),
+        Kind::Int => {
+            let i = format.as_int().expect("an int");
+            if !ok(i) {
                 return fail(ctx, "the date/time format type is invalid");
             }
-            (*i, *i, None)
+            (i, i, None)
         }
-        Value::Array(a) => {
-            let vals: Vec<Value> = a.values().map(Value::deref).collect();
+        Kind::Array => {
+            let vals: Vec<Value> = format.as_array().expect("an array").values().map(Value::deref).collect();
             if vals.len() != 2 {
                 return fail(ctx, "bad format; if array, it must have two elements");
             }
@@ -1357,8 +1357,8 @@ fn f_format_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             }
             (vals[0].to_int(), vals[1].to_int(), None)
         }
-        v => {
-            let p = v.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
+        _ => {
+            let p = format.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
             if p.is_empty() {
                 return fail(ctx, "the format is empty");
             }
@@ -1367,23 +1367,24 @@ fn f_format_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     };
     // the object's own time zone
     let zone = {
-        let tz = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![object.clone(), s("getTimezone")]))), &mut [])?;
-        match tz {
-            Value::Object(_) => match zone_arg(ctx, &tz, "datefmt_format_object")? {
+        let tz = ctx.call(&Value::array(PhpArray::from_list(vec![object.clone(), s("getTimezone")])), &mut [])?;
+        if tz.is_object() {
+            match zone_arg(ctx, &tz, "datefmt_format_object")? {
                 Ok(z) => z,
                 Err(msg) => {
                     crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &msg)?;
-                    return Ok(Value::Bool(false));
+                    return Ok(Value::FALSE);
                 }
-            },
-            _ => php_default_zone(ctx),
+            }
+        } else {
+            php_default_zone(ctx)
         }
     };
     let ms = match instant(ctx, &object, "datefmt_format_object")? {
         Ok(ms) => ms,
         Err(msg) => {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &msg)?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let canonical = crate::uloc::canonicalize(&locale);
@@ -1391,20 +1392,20 @@ fn f_format_object(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Ok(f) => f,
         Err(code) => {
             crate::set_error(ctx, None, code, "datefmt_format_object: date formatter creation failed")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     match f.format_ms(ms) {
         Some(t) => Ok(s(t)),
         None => {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "datefmt_format_object: error formatting date")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 fn set_ref(args: &mut [Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -1418,7 +1419,7 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if has_pos && !text.is_char_boundary(start) {
         st.err.code.set(crate::U_PARSE_ERROR);
         check(ctx, st, "Date parsing failed")?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let r = with(&o, |f| f.parse(&text, start));
     match r {
@@ -1426,22 +1427,22 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             let _ = (ms, end);
             st.err.code.set(crate::U_PARSE_ERROR);
             check(ctx, st, "Date parsing failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         Ok((ms, end, _)) => {
             if has_pos {
-                set_ref(args, 2, Value::Int(end as i64));
+                set_ref(args, 2, Value::int(end as i64));
             }
             let secs = ms.div_euclid(1000);
-            if ms % 1000 != 0 { Ok(Value::Float(ms as f64 / 1000.0)) } else { Ok(Value::Int(secs)) }
+            if ms % 1000 != 0 { Ok(Value::float(ms as f64 / 1000.0)) } else { Ok(Value::int(secs)) }
         }
         Err(at) => {
             if has_pos {
-                set_ref(args, 2, Value::Int(at as i64));
+                set_ref(args, 2, Value::int(at as i64));
             }
             st.err.code.set(crate::U_PARSE_ERROR);
             check(ctx, st, "Date parsing failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1456,10 +1457,10 @@ fn f_localtime(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match r {
         Ok((_, end, Some(fl))) => {
             if has_pos {
-                set_ref(args, 2, Value::Int(end as i64));
+                set_ref(args, 2, Value::int(end as i64));
             }
             let mut a = PhpArray::new();
-            let mut put = |k: &str, v: i64| a.insert(Key::from_string(PhpStr::from(k.as_bytes())), Value::Int(v));
+            let mut put = |k: &str, v: i64| a.insert(Key::from_string(PhpStr::from(k.as_bytes())), Value::int(v));
             put("tm_sec", fl.second as i64);
             put("tm_min", fl.minute as i64);
             put("tm_hour", fl.hour as i64);
@@ -1469,23 +1470,23 @@ fn f_localtime(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             put("tm_yday", fl.yday as i64);
             put("tm_mon", fl.month as i64 - 1);
             put("tm_isdst", (fl.dst != 0) as i64);
-            Ok(Value::Array(Rc::new(a)))
+            Ok(Value::array(a))
         }
         _ => {
             st.err.code.set(crate::U_PARSE_ERROR);
             check(ctx, st, "Date parsing failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
 
 fn f_get_error_code(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
-    Ok(Value::Int(state(&o).err.code.get()))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
+    Ok(Value::int(state(&o).err.code.get()))
 }
 
 fn f_get_error_message(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
     Ok(s(state(&o).err.message()))
 }
 

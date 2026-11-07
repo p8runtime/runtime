@@ -12,7 +12,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "idn_to_ascii", run: idn_to_ascii, by_ref: &[3] },
@@ -157,17 +156,17 @@ fn convert(ctx: &mut dyn Ctx, args: &mut [Value], to_ascii: bool) -> R {
     if too_long {
         crate::set_global_code(ctx, 15);
         crate::set_message(ctx, None, &format!("{name}: failed to convert name"))?;
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    if let Some(Value::Ref(cell)) = args.get(3) {
+    if let Some(cell) = args.get(3).and_then(Value::as_reference) {
         let mut info = PhpArray::new();
         let put = |a: &mut PhpArray, k: &str, v: Value| a.insert(Key::from_string(PhpStr::from(k.as_bytes())), v);
         put(&mut info, "result", s(out.clone()));
-        put(&mut info, "isTransitionalDifferent", Value::Bool(different));
-        put(&mut info, "errors", Value::Int(errors));
-        *cell.borrow_mut() = Value::Array(Rc::new(info));
+        put(&mut info, "isTransitionalDifferent", Value::bool(different));
+        put(&mut info, "errors", Value::int(errors));
+        *cell.borrow_mut() = Value::array(info);
     }
-    Ok(if errors == 0 { s(out) } else { Value::Bool(false) })
+    Ok(if errors == 0 { s(out) } else { Value::FALSE })
 }
 
 #[cfg(test)]

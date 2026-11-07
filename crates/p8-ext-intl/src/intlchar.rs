@@ -103,8 +103,8 @@ pub static CLASSES: &[ClassSpec] = &[ClassSpec {
 /// (the global error set) otherwise. The flag says whether it was a string.
 fn cp(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<(u32, bool)>, Throw> {
     crate::reset_global(ctx);
-    let (n, is_str) = match v {
-        Value::Str(st) => {
+    let (n, is_str) = match v.as_str() {
+        Some(st) => {
             let b = st.as_bytes();
             let text = std::str::from_utf8(b).ok();
             let mut chars = text.map(|t| t.chars());
@@ -117,7 +117,7 @@ fn cp(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<(u32, bool)>, Throw> {
                 }
             }
         }
-        other => (other.to_int(), false),
+        None => (v.to_int(), false),
     };
     if !(0..=0x10FFFF).contains(&n) {
         crate::set_global_code(ctx, U_ILLEGAL_ARGUMENT_ERROR);
@@ -158,8 +158,8 @@ fn is_id_ignorable_cp(c: u32) -> bool {
 macro_rules! bool_methods {
     ($($name:ident => |$c:ident| $body:expr;)*) => {
         $(fn $name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-            let Some(($c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-            Ok(Value::Bool($body))
+            let Some(($c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+            Ok(Value::bool($body))
         })*
     };
 }
@@ -196,8 +196,8 @@ bool_methods! {
 }
 
 fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Str(p8_runtime::string::PhpStr::new(encode(c))))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::str(p8_runtime::string::PhpStr::new(encode(c))))
 }
 
 /// UTF-8 for any code point (surrogates included, as U8_APPEND_UNSAFE writes them).
@@ -209,17 +209,17 @@ fn encode(c: u32) -> Vec<u8> {
 }
 
 fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(c as i64))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(c as i64))
 }
 
 /// A mapped code point: a string when the input was one.
 fn char_result(c: u32, as_str: bool) -> Value {
-    if as_str { Value::Str(p8_runtime::string::PhpStr::new(encode(c))) } else { Value::Int(c as i64) }
+    if as_str { Value::str(p8_runtime::string::PhpStr::new(encode(c))) } else { Value::int(c as i64) }
 }
 
 fn map_char(ctx: &mut dyn Ctx, args: &[Value], f: impl Fn(char) -> char) -> R {
-    let Some((c, as_str)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
+    let Some((c, as_str)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
     let out = char::from_u32(c).map_or(c, |ch| f(ch) as u32);
     Ok(char_result(out, as_str))
 }
@@ -257,23 +257,23 @@ fn get_bidi_paired_bracket(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn char_type(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(gc(c).to_u32() as i64))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(gc(c).to_u32() as i64))
 }
 
 fn char_direction(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(CodePointMapData::<props::BidiClass>::new().get32(c).to_u32() as i64))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(CodePointMapData::<props::BidiClass>::new().get32(c).to_u32() as i64))
 }
 
 fn get_combining_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(CodePointMapData::<props::CanonicalCombiningClass>::new().get32(c).to_u32() as i64))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(CodePointMapData::<props::CanonicalCombiningClass>::new().get32(c).to_u32() as i64))
 }
 
 fn get_block_code(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(CodePointMapData::<props::Block>::new().get32(c).to_u32() as i64))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(CodePointMapData::<props::Block>::new().get32(c).to_u32() as i64))
 }
 
 /// A decimal digit's value: its place in its run of Nd characters.
@@ -289,21 +289,21 @@ fn decimal_value(c: u32) -> Option<u32> {
 }
 
 fn char_digit_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Int(decimal_value(c).map_or(-1, |d| d as i64)))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::int(decimal_value(c).map_or(-1, |d| d as i64)))
 }
 
 fn get_numeric_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
     if let Some(d) = decimal_value(c) {
-        return Ok(Value::Float(d as f64));
+        return Ok(Value::float(d as f64));
     }
     if CodePointMapData::<props::NumericType>::new().get32(c) == props::NumericType::None {
         // U_NO_NUMERIC_VALUE
-        return Ok(Value::Float(-123456789.0));
+        return Ok(Value::float(-123456789.0));
     }
     crate::set_error(ctx, None, U_UNSUPPORTED_ERROR, "IntlChar::getNumericValue: the numeric value of this character is not available")?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// u_digit: the value in `radix`, decimal digits and Latin letters (ASCII and fullwidth).
@@ -326,14 +326,14 @@ fn digit_value(c: u32, radix: i64) -> Option<i64> {
 }
 
 fn digit(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
     let radix = if args.len() > 1 { arg(args, 1).to_int() } else { 10 };
     match digit_value(c, radix) {
-        Some(v) => Ok(Value::Int(v)),
+        Some(v) => Ok(Value::int(v)),
         None => {
             crate::set_global_code(ctx, U_ILLEGAL_ARGUMENT_ERROR);
             crate::set_message(ctx, None, "Invalid digit")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -343,19 +343,19 @@ fn for_digit(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let d = arg(args, 0).to_int();
     let radix = if args.len() > 1 { arg(args, 1).to_int() } else { 10 };
     if !(2..=36).contains(&radix) || d < 0 || d >= radix {
-        return Ok(Value::Int(0));
+        return Ok(Value::int(0));
     }
-    Ok(Value::Int(if d < 10 { 0x30 + d } else { 0x61 + d - 10 }))
+    Ok(Value::int(if d < 10 { 0x30 + d } else { 0x61 + d - 10 }))
 }
 
 fn enum_char_types(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let callback = arg(args, 0);
     let map = CodePointMapData::<G>::new();
     for r in map.iter_ranges() {
-        let mut a = [Value::Int(*r.range.start() as i64), Value::Int(*r.range.end() as i64 + 1), Value::Int(r.value.to_u32() as i64)];
+        let mut a = [Value::int(*r.range.start() as i64), Value::int(*r.range.end() as i64 + 1), Value::int(r.value.to_u32() as i64)];
         ctx.call(&callback, &mut a)?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// u_hasBinaryProperty by ICU's UProperty number.
@@ -437,8 +437,8 @@ fn binary(prop: i64, c: u32) -> Option<bool> {
 }
 
 fn has_binary_property(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
-    Ok(Value::Bool(binary(arg(args, 1).to_int(), c).unwrap_or(false)))
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
+    Ok(Value::bool(binary(arg(args, 1).to_int(), c).unwrap_or(false)))
 }
 
 /// u_getIntPropertyValue by UProperty number; None for a property not available here.
@@ -475,18 +475,18 @@ fn int_value(prop: i64, c: u32) -> Option<i64> {
 }
 
 fn get_int_property_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::Null) };
+    let Some((c, _)) = cp(ctx, &arg(args, 0))? else { return Ok(Value::NULL) };
     match int_value(arg(args, 1).to_int(), c) {
-        Some(v) => Ok(Value::Int(v)),
+        Some(v) => Ok(Value::int(v)),
         None => {
             crate::set_error(ctx, None, U_UNSUPPORTED_ERROR, "IntlChar::getIntPropertyValue: this property is not available")?;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
 
 fn get_int_property_min_value(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(0))
+    Ok(Value::int(0))
 }
 
 fn get_int_property_max_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -504,10 +504,10 @@ fn get_int_property_max_value(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         0x1015 => 2,
         _ => {
             crate::set_error(ctx, None, U_UNSUPPORTED_ERROR, "IntlChar::getIntPropertyMaxValue: this property is not available")?;
-            return Ok(Value::Null);
+            return Ok(Value::NULL);
         }
     };
-    Ok(Value::Int(max))
+    Ok(Value::int(max))
 }
 
 /// IntlChar::getUnicodeVersion() (u_getUnicodeVersion): the version of the
@@ -518,9 +518,9 @@ fn get_unicode_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
         ("UNICODE_VERSION", p8_runtime::ext::Constant::Str(v)) => Some(*v),
         _ => None,
     });
-    let mut parts: Vec<Value> = version.unwrap_or_default().split(|&b| b == b'.').map(|n| Value::Int(String::from_utf8_lossy(n).parse().unwrap_or(0))).collect();
-    parts.resize(4, Value::Int(0));
-    Ok(Value::Array(std::rc::Rc::new(p8_runtime::array::PhpArray::from_list(parts))))
+    let mut parts: Vec<Value> = version.unwrap_or_default().split(|&b| b == b'.').map(|n| Value::int(String::from_utf8_lossy(n).parse().unwrap_or(0))).collect();
+    parts.resize(4, Value::int(0));
+    Ok(Value::array(p8_runtime::array::PhpArray::from_list(parts)))
 }
 
 fn unsupported(ctx: &mut dyn Ctx, ret: Value) -> R {
@@ -530,14 +530,14 @@ fn unsupported(ctx: &mut dyn Ctx, ret: Value) -> R {
 }
 
 fn unsupported_null(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
-    unsupported(ctx, Value::Null)
+    unsupported(ctx, Value::NULL)
 }
 
 fn unsupported_false(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
-    unsupported(ctx, Value::Bool(false))
+    unsupported(ctx, Value::FALSE)
 }
 
 fn unsupported_int(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     // UCHAR_INVALID_CODE / UCHAR_INVALID_ENUM
-    unsupported(ctx, Value::Int(-1))
+    unsupported(ctx, Value::int(-1))
 }

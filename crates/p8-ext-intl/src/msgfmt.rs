@@ -17,7 +17,7 @@ use icu_plurals::{PluralCategory, PluralRules};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassHooks, ClassSpec, Ctx, Registry, Throw};
 use p8_runtime::object::Object;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind as ValueKind, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -691,19 +691,19 @@ fn f_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match make(ctx, args, Some(&st.err), "msgfmt_create")? {
         Ok(f) => {
             *st.fmt.borrow_mut() = Some(f);
-            Ok(Value::Object(o))
+            Ok(Value::object(o))
         }
-        Err(()) => Ok(Value::Null),
+        Err(()) => Ok(Value::NULL),
     }
 }
 
 fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(this) = arg(args, 0) else { unreachable!() };
+    let Ok(this) = arg(args, 0).into_object() else { unreachable!() };
     let st = state(&this);
     match make(ctx, &args[1..], Some(&st.err), "msgfmt_create")? {
         Ok(f) => {
             *st.fmt.borrow_mut() = Some(f);
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
         Err(()) => {
             let msg = crate::global_message(ctx);
@@ -713,7 +713,7 @@ fn m_construct(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn obj(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
     if state(&o).fmt.borrow().is_none() {
         return Err(ctx.throw("Error", "Found unconstructed MessageFormatter".into()));
     }
@@ -746,39 +746,38 @@ fn convert_args(ctx: &mut dyn Ctx, f: &Fmt, a: &PhpArray) -> Result<Converted, T
         };
         let ty = types.iter().find(|(n, _)| *n == key).map(|(_, t)| *t).unwrap_or(ArgType::Any);
         let as_string = |ctx: &mut dyn Ctx, v: &Value| -> Result<String, Throw> {
-            Ok(match v {
-                Value::Object(_) => {
-                    let r = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), s("__toString")]))), &mut [])?;
-                    r.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default()
-                }
-                v => v.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default(),
+            Ok(if v.is_object() {
+                let r = ctx.call(&Value::array(PhpArray::from_list(vec![v.clone(), s("__toString")])), &mut [])?;
+                r.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default()
+            } else {
+                v.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default()
             })
         };
         let conv = match ty {
             ArgType::Str => Arg::Str(as_string(ctx, &v)?),
             ArgType::Double => Arg::Double(v.to_float()),
-            ArgType::Int64 => Arg::Int(match v {
-                Value::Float(f) => f as i64,
-                v => v.to_int(),
+            ArgType::Int64 => Arg::Int(match v.as_float() {
+                Some(f) => f as i64,
+                None => v.to_int(),
             }),
             ArgType::Date => match date_ms(ctx, &v)? {
                 Some(ms) => Arg::Date(ms),
-                None if matches!(v, Value::Object(_)) => {
+                None if v.is_object() => {
                     return Ok(Err((U_ILLEGAL_ARGUMENT_ERROR, "msgfmt_format: invalid object type for date/time (only IntlCalendar and DateTimeInterface permitted)".into())));
                 }
                 None => return Ok(Err((U_ILLEGAL_ARGUMENT_ERROR, format!("The argument for key '{key}' cannot be used as a date or time")))),
             },
             ArgType::Conflict => unreachable!("refused above"),
-            ArgType::Any => match v {
-                Value::Object(o) if o.class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => {
+            ArgType::Any => match v.kind() {
+                ValueKind::Object if v.as_object().expect("an object").class.flags & p8_runtime::object::CLASS_RESOURCE != 0 => {
                     return Ok(Err((U_ILLEGAL_ARGUMENT_ERROR, format!("No strategy to convert the value given for the argument with key '{key}' is available"))));
                 }
-                Value::Float(f) => Arg::Double(f),
-                Value::Int(i) => Arg::Int(i),
-                Value::Null | Value::Bool(false) => Arg::Int(0),
-                Value::Bool(true) => Arg::Int(1),
-                Value::Str(_) | Value::Object(_) => {
-                    if let Value::Object(o) = &v
+                ValueKind::Float => Arg::Double(v.as_float().expect("a float")),
+                ValueKind::Int => Arg::Int(v.as_int().expect("an int")),
+                ValueKind::Null => Arg::Int(0),
+                ValueKind::Bool => Arg::Int(i64::from(v.as_bool().expect("a bool"))),
+                ValueKind::Str | ValueKind::Object => {
+                    if let Some(o) = v.as_object()
                         && is_datetime(o)
                     {
                         match date_ms(ctx, &v)? {
@@ -809,16 +808,16 @@ fn is_datetime_class(c: &p8_runtime::object::Class) -> bool {
 
 /// intl_zval_to_millis: seconds (int, float, numeric string) or a DateTimeInterface.
 fn date_ms(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<f64>, Throw> {
-    Ok(match v {
-        Value::Int(i) => Some(*i as f64 * 1000.0),
-        Value::Float(f) => Some(f * 1000.0),
-        Value::Str(st) => p8_runtime::numeric::numeric_string(st.as_bytes()).map(|n| match n {
+    Ok(match v.kind() {
+        ValueKind::Int => Some(v.as_int().expect("an int") as f64 * 1000.0),
+        ValueKind::Float => Some(v.as_float().expect("a float") * 1000.0),
+        ValueKind::Str => p8_runtime::numeric::numeric_string(v.as_str().expect("a string").as_bytes()).map(|n| match n {
             p8_runtime::numeric::Number::Int(i) => i as f64 * 1000.0,
             p8_runtime::numeric::Number::Float(f) => f * 1000.0,
         }),
-        Value::Object(o) if is_datetime(o) => {
+        ValueKind::Object if is_datetime(v.as_object().expect("an object")) => {
             let mut a = [s("U.v")];
-            let r = ctx.call(&Value::Array(Rc::new(PhpArray::from_list(vec![v.clone(), s("format")]))), &mut a)?;
+            let r = ctx.call(&Value::array(PhpArray::from_list(vec![v.clone(), s("format")])), &mut a)?;
             r.to_php_string().and_then(|s| lossy(s.as_bytes()).parse::<f64>().ok()).map(|f| (f * 1000.0).round())
         }
         _ => None,
@@ -839,7 +838,7 @@ fn do_format(ctx: &mut dyn Ctx, f: &Fmt, a: &PhpArray, err: Option<&IntlError>) 
             }
             crate::set_global_code(ctx, code);
             crate::set_message(ctx, err, &msg)?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let cx = Ctx2 { locale: &f.locale, zone: php_zone(ctx), args: &args };
@@ -852,7 +851,7 @@ fn do_format(ctx: &mut dyn Ctx, f: &Fmt, a: &PhpArray, err: Option<&IntlError>) 
             }
             crate::set_global_code(ctx, code);
             crate::set_message(ctx, err, "Call to ICU MessageFormat::format() has failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -861,7 +860,7 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
     let st = state(&o);
     let f = st.fmt.borrow().clone().expect("constructed");
-    let Value::Array(a) = arg(args, 1) else { return Ok(Value::Bool(false)) };
+    let Ok(a) = arg(args, 1).into_array() else { return Ok(Value::FALSE) };
     let r = do_format(ctx, &f, &a, Some(&st.err))?;
     if st.err.code.get() == U_ZERO_ERROR {
         crate::set_global_code(ctx, U_ZERO_ERROR);
@@ -872,9 +871,9 @@ fn f_format(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn f_format_message(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let f = match make(ctx, args, None, "msgfmt_format_message")? {
         Ok(f) => f,
-        Err(()) => return Ok(Value::Bool(false)),
+        Err(()) => return Ok(Value::FALSE),
     };
-    let Value::Array(a) = arg(args, 2) else { return Ok(Value::Bool(false)) };
+    let Ok(a) = arg(args, 2).into_array() else { return Ok(Value::FALSE) };
     do_format(ctx, &f, &a, None)
 }
 
@@ -917,7 +916,7 @@ fn do_parse(f: &Fmt, text: &str) -> Result<Vec<Value>, i64> {
                         .map_err(|(c, _)| c)?;
                         let (num, _, _) = nf.parse(piece, 0).ok_or(crate::U_PARSE_ERROR)?;
                         let fv = num.to_f64();
-                        if fv.fract() == 0.0 && fv.abs() < 9.2e18 { Value::Int(fv as i64) } else { Value::Float(fv) }
+                        if fv.fract() == 0.0 && fv.abs() < 9.2e18 { Value::int(fv as i64) } else { Value::float(fv) }
                     }
                     _ => return Err(U_UNSUPPORTED_ERROR),
                 };
@@ -933,14 +932,14 @@ fn do_parse(f: &Fmt, text: &str) -> Result<Vec<Value>, i64> {
 
 fn parse_result(ctx: &mut dyn Ctx, r: Result<Vec<Value>, i64>, err: Option<&IntlError>) -> R {
     match r {
-        Ok(vals) => Ok(Value::Array(Rc::new(PhpArray::from_list(vals)))),
+        Ok(vals) => Ok(Value::array(PhpArray::from_list(vals))),
         Err(code) => {
             if let Some(e) = err {
                 e.code.set(code);
             }
             crate::set_global_code(ctx, code);
             crate::set_message(ctx, err, "Parsing failed")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -956,7 +955,7 @@ fn f_parse(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn f_parse_message(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let f = match make(ctx, args, None, "msgfmt_parse_message")? {
         Ok(f) => f,
-        Err(()) => return Ok(Value::Bool(false)),
+        Err(()) => return Ok(Value::FALSE),
     };
     let text = str_arg(args, 2);
     parse_result(ctx, do_parse(&f, &text), None)
@@ -972,13 +971,13 @@ fn f_set_pattern(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             let f = b.as_mut().expect("constructed");
             f.pattern = pattern;
             f.nodes = nodes;
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(SyntaxError(at)) => {
             st.err.code.set(U_PATTERN_SYNTAX_ERROR);
             crate::set_global_code(ctx, U_PATTERN_SYNTAX_ERROR);
             crate::set_message(ctx, Some(&st.err), &format!("Error setting symbol value at line 0, offset {at}"))?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -994,12 +993,12 @@ fn f_get_locale(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn f_get_error_code(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
-    Ok(Value::Int(state(&o).err.code.get()))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
+    Ok(Value::int(state(&o).err.code.get()))
 }
 
 fn f_get_error_message(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
     Ok(s(state(&o).err.message()))
 }
 

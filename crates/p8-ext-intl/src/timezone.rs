@@ -40,12 +40,12 @@ pub fn new_object(ctx: &mut dyn Ctx, zone: Zone) -> Value {
     let class = ctx.class(b"IntlTimeZone").expect("IntlTimeZone");
     let o = ctx.new_object(&class);
     *state(&o).zone.borrow_mut() = Some(zone);
-    Value::Object(o)
+    Value::object(o)
 }
 
 fn unknown(ctx: &mut dyn Ctx) -> Value {
     let v = new_object(ctx, Zone::Fixed(0));
-    if let Value::Object(o) = &v {
+    if let Some(o) = v.as_object() {
         state(o).unknown.set(true);
     }
     v
@@ -110,16 +110,16 @@ fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     let put = |a: &mut PhpArray, k: &str, v: Value| a.insert(Key::from_string(p8_runtime::string::PhpStr::from(k.as_bytes())), v);
     let st = state(o);
     let Some(z) = st.zone.borrow().clone() else {
-        put(&mut a, "valid", Value::Bool(false));
+        put(&mut a, "valid", Value::FALSE);
         return a;
     };
-    put(&mut a, "valid", Value::Bool(true));
+    put(&mut a, "valid", Value::TRUE);
     let id = if st.unknown.get() { "Etc/Unknown".to_string() } else { z.id() };
     put(&mut a, "id", s(id));
     let now = now_ms();
     let (raw, dst) = offsets(&z, now);
-    put(&mut a, "rawOffset", Value::Int(raw));
-    put(&mut a, "currentOffset", Value::Int(raw + dst));
+    put(&mut a, "rawOffset", Value::int(raw));
+    put(&mut a, "currentOffset", Value::int(raw + dst));
     a
 }
 
@@ -166,20 +166,20 @@ fn f_get_unknown(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
 fn f_from_date_time_zone(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     crate::reset_global(ctx);
     let tz = arg(args, 0);
-    let name = ctx.call(&Value::Array(Rc::new(p8_runtime::array::PhpArray::from_list(vec![tz, s("getName")]))), &mut [])?;
+    let name = ctx.call(&Value::array(p8_runtime::array::PhpArray::from_list(vec![tz, s("getName")])), &mut [])?;
     let name = name.to_php_string().map(|s| lossy(s.as_bytes())).unwrap_or_default();
     let id = if name.starts_with(['+', '-']) { format!("GMT{name}") } else { name };
     match zone_from_id(&id) {
         Some(z) => Ok(new_object(ctx, z)),
         None => {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, &format!("intltz_from_date_time_zone: time zone id '{id}' extracted from ext/date DateTimeZone not recognized"))?;
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
 
 fn obj(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    let Value::Object(o) = arg(args, 0) else { unreachable!("checked against the stub") };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!("checked against the stub") };
     if state(&o).zone.borrow().is_none() {
         return Err(ctx.throw("Error", "Found unconstructed IntlTimeZone".into()));
     }
@@ -214,21 +214,21 @@ fn uses_dst(z: &Zone) -> Option<i64> {
 
 fn f_get_raw_offset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(offsets(&zone_of(&o), now_ms()).0))
+    Ok(Value::int(offsets(&zone_of(&o), now_ms()).0))
 }
 
 fn f_get_dst_savings(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Int(uses_dst(&zone_of(&o)).unwrap_or(0)))
+    Ok(Value::int(uses_dst(&zone_of(&o)).unwrap_or(0)))
 }
 
 fn f_use_daylight_time(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    Ok(Value::Bool(uses_dst(&zone_of(&o)).is_some()))
+    Ok(Value::bool(uses_dst(&zone_of(&o)).is_some()))
 }
 
 fn set_ref(args: &mut [Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -240,18 +240,18 @@ fn f_get_offset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let local = arg(args, 2).to_bool();
     let at = if local { t - z.offsets_at(t - z.offsets_at(t).0 as i64 * 1000).0 as i64 * 1000 } else { t };
     let (raw, dst) = offsets(&z, at);
-    set_ref(args, 3, Value::Int(raw));
-    set_ref(args, 4, Value::Int(dst));
-    Ok(Value::Bool(true))
+    set_ref(args, 3, Value::int(raw));
+    set_ref(args, 4, Value::int(dst));
+    Ok(Value::TRUE)
 }
 
 fn f_has_same_rules(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = obj(ctx, args)?;
-    let Value::Object(other) = arg(args, 1) else { return Ok(Value::Bool(false)) };
+    let Ok(other) = arg(args, 1).into_object() else { return Ok(Value::FALSE) };
     let (a, b) = (zone_of(&o), zone_of(&other));
     let now = now_ms();
     let day = 86_400_000i64;
-    Ok(Value::Bool((0..800).all(|k| a.offsets_at(now + k * day) == b.offsets_at(now + k * day))))
+    Ok(Value::bool((0..800).all(|k| a.offsets_at(now + k * day) == b.offsets_at(now + k * day))))
 }
 
 fn f_to_date_time_zone(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -266,7 +266,7 @@ fn f_to_date_time_zone(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = ctx.class(b"DateTimeZone").expect("DateTimeZone");
     let mut a = [s(id)];
     let tz = ctx.new_instance(&class, &mut a, true)?;
-    Ok(Value::Object(tz))
+    Ok(Value::object(tz))
 }
 
 fn f_get_display_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -286,7 +286,7 @@ fn f_get_display_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         8 => "VVVV",
         _ => {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "intltz_get_display_name: wrong display type")?;
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     // an instant in this year's standard (or daylight) time
@@ -295,7 +295,7 @@ fn f_get_display_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let at = (0..24).map(|k| now + k * year / 24).find(|&t| (z.offsets_at(t).1 != 0) == dst).unwrap_or(now);
     let f = crate::datefmt::Formatter::new(&crate::uloc::canonicalize(&locale), -2, -2, z.clone(), 1, Some(pattern)).ok();
     let _ = fields_at(at, &z);
-    Ok(f.and_then(|f| f.format_ms(at)).map_or(Value::Bool(false), s))
+    Ok(f.and_then(|f| f.format_ms(at)).map_or(Value::FALSE, s))
 }
 
 fn f_get_canonical_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -303,7 +303,7 @@ fn f_get_canonical_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let id = str_arg(args, 0);
     match zone_from_id(&id) {
         Some(z) => {
-            set_ref(args, 1, Value::Bool(true));
+            set_ref(args, 1, Value::TRUE);
             // the canonical (CLDR) form of an alias is ICU's; chrono-tz keeps the IANA name
             Ok(s(match z {
                 Zone::Iana(tz) => tz.name().to_string(),
@@ -312,7 +312,7 @@ fn f_get_canonical_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         None => {
             crate::set_error(ctx, None, U_ILLEGAL_ARGUMENT_ERROR, "intltz_get_canonical_id: error obtaining canonical ID")?;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -322,11 +322,11 @@ fn f_get_tz_data_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
 }
 
 fn f_get_error_code(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
-    Ok(Value::Int(state(&o).err.code.get()))
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
+    Ok(Value::int(state(&o).err.code.get()))
 }
 
 fn f_get_error_message(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(o) = arg(args, 0) else { unreachable!() };
+    let Ok(o) = arg(args, 0).into_object() else { unreachable!() };
     Ok(s(state(&o).err.message()))
 }
