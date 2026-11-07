@@ -941,7 +941,7 @@ fn set_prop(ctx: &mut dyn Ctx, obj: &Rc<Object>, class: &Rc<Class>, name: &[u8],
             if !scoped && vis != p8_runtime::object::Visibility::Public {
                 return Err(ctx.throw("Error", format!("Cannot access {} property {}::${}", vis.word(), String::from_utf8_lossy(class.shown()), String::from_utf8_lossy(name))));
             }
-            obj.slots.borrow_mut()[i] = value
+            obj.slots()[i].set(value)
         }
         None => {
             let exists = obj.dynamic.borrow().contains_key(&str_key(name));

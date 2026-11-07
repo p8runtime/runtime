@@ -670,9 +670,10 @@ impl Value {
                 if !Rc::ptr_eq(&a.class, &b.class) || a.class.flags & crate::object::CLASS_ENUM != 0 {
                     return None;
                 }
-                let (x, y) = (a.slots.borrow(), b.slots.borrow());
-                for (p, q) in x.iter().zip(y.iter()) {
-                    match p.compare(q)? {
+                // (Copies: a property may lead back to either object.)
+                for (p, q) in a.slots().iter().zip(b.slots().iter()) {
+                    use crate::object::Slot;
+                    match p.cloned().compare(&q.cloned())? {
                         Ordering::Equal => {}
                         o => return Some(o),
                     }

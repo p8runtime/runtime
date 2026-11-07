@@ -876,7 +876,7 @@ fn fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
     let object = ctx.new_instance(&class, &mut [], false)?;
     for (name, value) in row {
         match class.slot(&name, Some(&class.lower)) {
-            Some(i) => object.slots.borrow_mut()[i] = value,
+            Some(i) => object.slots()[i].set(value),
             None => {
                 object.dynamic.borrow_mut().insert(Key::from_string(PhpStr::new(name)), value);
             }

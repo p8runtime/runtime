@@ -390,7 +390,7 @@ fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<Rc<
     // Its destructor runs when the last reference goes, as any object's.
     o.destructed.set(false);
     match o.class.slot(b"context", None) {
-        Some(i) => o.slots.borrow_mut()[i] = context,
+        Some(i) => o.slots()[i].set(context),
         None => {
             let key = Key::Str(PhpStr::from("context"));
             if !o.dynamic.borrow().contains_key(&key) && o.class.flags & CLASS_ALLOW_DYNAMIC == 0 && o.class.lower != b"stdclass" {

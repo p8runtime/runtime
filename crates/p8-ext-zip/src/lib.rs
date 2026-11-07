@@ -301,7 +301,7 @@ fn properties(o: &Object) -> PhpArray {
         set("filename", z.as_ref().map_or_else(|| Value::str(""), |z| Value::str(z.path.clone())));
         set("comment", z.as_ref().map_or_else(|| Value::str(""), |z| string(z.a.comment.clone())));
     }
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if p.hooks != 0 || p.is_internal() || v.is_undef() {
             continue;

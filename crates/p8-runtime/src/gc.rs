@@ -13,7 +13,7 @@
 //! over every live object at once)
 
 use crate::array::PhpArray;
-use crate::object::{Ids, Object};
+use crate::object::{Ids, Object, Slot};
 use crate::value::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -55,8 +55,8 @@ impl Node {
         };
         match self {
             Node::Object(o) => {
-                for v in o.slots.borrow().iter() {
-                    add(v);
+                for c in o.slots() {
+                    c.peek(&mut add);
                 }
                 for v in o.dynamic.borrow().values() {
                     add(v);
@@ -157,7 +157,8 @@ pub fn find_cycles(ids: &Ids) -> Garbage {
 /// Breaks a garbage object's references (its properties go), so the
 /// cycle it is in is freed.
 pub fn clear(o: &Object) {
-    let slots = std::mem::take(&mut *o.slots.borrow_mut());
+    // (The slots stay, Undef: their number is the class's.)
+    let slots: Vec<Value> = o.slots().iter().map(|c| c.replace(Value::UNDEF)).collect();
     let dynamic = std::mem::take(&mut *o.dynamic.borrow_mut());
     let lazy = o.lazy_info.borrow_mut().take();
     drop((slots, dynamic, lazy));

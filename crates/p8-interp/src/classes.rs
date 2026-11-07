@@ -11,8 +11,8 @@ use p8_bytecode::{ClassDef, ClassRef, Function};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_LAZY, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Thunk, Visibility,
-    visible,
+    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_LAZY, CLASS_TRAIT, Class, Constant, Method, Native, Object, Property, Slot, Thunk,
+    Visibility, visible,
 };
 use p8_runtime::string::PhpStr;
 use p8_runtime::symbol::{Sym, known};
@@ -1025,7 +1025,7 @@ impl Context<'_> {
         };
         match self.prop_slot(&object, name.as_bytes())? {
             Some((slot, prop)) => {
-                let value = object.slots.borrow()[slot].clone();
+                let value = object.slots()[slot].cloned();
                 if value.is_undef() {
                     if quiet {
                         Ok(Value::NULL)
@@ -1095,7 +1095,7 @@ impl Context<'_> {
                 // An object is handed out as a copy; anything else is not
                 // to be had (zend_std_read_property for BP_VAR_W).
                 if prop.readonly {
-                    let v = object.slots.borrow()[slot].deref();
+                    let v = object.slots()[slot].peek(Value::deref);
                     if v.is_object() {
                         return Ok(Rc::new(RefCell::new(v)));
                     } else if v.is_undef() && for_unset {
@@ -1106,7 +1106,7 @@ impl Context<'_> {
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     // An object is handed out as a copy (writes through it
                     // change the object, not the property).
-                    let v = object.slots.borrow()[slot].deref();
+                    let v = object.slots()[slot].peek(Value::deref);
                     if v.is_object() {
                         return Ok(Rc::new(RefCell::new(v)));
                     } else if v.is_undef() && for_unset {
@@ -1114,7 +1114,7 @@ impl Context<'_> {
                     }
                     return Err(self.set_visibility_error(prop, "indirectly modify"));
                 }
-                Ok(crate::refs::make_ref(&mut object.slots.borrow_mut()[slot]))
+                Ok(object.slots()[slot].modify(crate::refs::make_ref))
             }
             None if name.as_bytes().first() == Some(&0) => Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
@@ -1146,12 +1146,12 @@ impl Context<'_> {
         }
         match self.prop_slot(&object, pname.as_bytes())? {
             Some((slot, prop)) if prop.set_visibility.is_some() && !self.may_set(&object, prop) => {
-                if object.slots.borrow()[slot].deref().is_object() {
+                if object.slots()[slot].peek(|v| v.deref().is_object()) {
                     return Err(self.throw("Error", "Cannot assign by reference to overloaded object"));
                 }
                 return Err(self.set_visibility_error(prop, "indirectly modify"));
             }
-            Some((slot, _)) => object.slots.borrow_mut()[slot] = Value::reference(cell),
+            Some((slot, _)) => object.slots()[slot].set(Value::reference(cell)),
             None => {
                 self.write_prop(target, name, Value::NULL)?;
                 object.dynamic.borrow_mut().insert(Key::from_string(pname), Value::reference(cell));
@@ -1193,12 +1193,7 @@ impl Context<'_> {
     pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &PhpStr, value: Value) -> Result<(), Throw> {
         let prop = &object.class.properties[slot];
         if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
-            let mut slots = object.slots.borrow_mut();
-            let s = &mut slots[slot];
-            match s.as_reference() {
-                Some(cell) => *cell.borrow_mut() = value,
-                None => *s = value,
-            }
+            object.slots()[slot].assign(value);
             return Ok(());
         }
         self.write_slot(object, slot, prop, name, value)
@@ -1211,7 +1206,7 @@ impl Context<'_> {
         // Who may initialize a readonly property is its set
         // visibility's business (implicitly protected(set)).
         // (In a clone's __clone or clone()'s updates, once more.)
-        if prop.readonly && !object.slots.borrow()[slot].is_undef() && !self.reinitable(object, slot) {
+        if prop.readonly && !object.slots()[slot].peek(Value::is_undef) && !self.reinitable(object, slot) {
             return Err(self.throw("Error", format!("Cannot modify readonly property {}::${}", text(&prop.declaring_name), text(name))));
         }
         if prop.set_visibility.is_some() && !self.may_set(object, prop) {
@@ -1244,11 +1239,7 @@ impl Context<'_> {
         if prop.readonly && !self.reinit.is_empty() {
             self.reinit_done(object, slot);
         }
-        let mut slots = object.slots.borrow_mut();
-        match slots[slot].as_reference() {
-            Some(cell) => *cell.borrow_mut() = value,
-            None => slots[slot] = value,
-        }
+        object.slots()[slot].assign(value);
         Ok(())
     }
 
@@ -1319,7 +1310,7 @@ impl Context<'_> {
         }
         let key = || Key::from_string(pname.clone());
         let mut root = match slot {
-            Some(i) => take(&mut object.slots.borrow_mut()[i]),
+            Some(i) => object.slots()[i].modify(take),
             None => {
                 let v = take(object.dynamic.borrow_mut().slot_mut(&key()));
                 if v.is_undef() { Value::NULL } else { v }
@@ -1329,7 +1320,7 @@ impl Context<'_> {
         // (A destructor the old value's release leaves due runs after the
         // instruction, as every `step` write's does.)
         match slot {
-            Some(i) => put(&mut object.slots.borrow_mut()[i], root),
+            Some(i) => object.slots()[i].modify(|v| put(v, root)),
             None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
         }
         result
@@ -1350,7 +1341,7 @@ impl Context<'_> {
             Err(_) => return Ok(false),
         };
         Ok(match slot {
-            Some((i, _)) => !object.slots.borrow()[i].deref().is_null_or_undef(),
+            Some((i, _)) => !object.slots()[i].peek(|v| v.deref().is_null_or_undef()),
             None => object.dynamic.borrow().get(&Key::from_string(name)).is_some_and(|v| !v.deref().is_null()),
         })
     }
@@ -1373,7 +1364,7 @@ impl Context<'_> {
                 if prop.set_visibility.is_some() && !self.may_set(&object, prop) {
                     return Err(self.set_visibility_error(prop, "unset"));
                 }
-                object.slots.borrow_mut()[i] = Value::UNDEF;
+                object.slots()[i].set(Value::UNDEF);
             }
             None => {
                 object.dynamic.borrow_mut().remove(&Key::from_string(name));
@@ -1526,7 +1517,7 @@ impl Context<'_> {
                 }
                 let prop = &o.class.properties[slot];
                 let declaring = self.declaring(&o.class, &prop.declaring);
-                if visible(prop.visibility, &declaring, scope.as_deref()) && !(prop.ty.is_none() && o.slots.borrow()[slot].is_undef()) {
+                if visible(prop.visibility, &declaring, scope.as_deref()) && !(prop.ty.is_none() && o.slots()[slot].peek(Value::is_undef)) {
                     return None;
                 }
             }
@@ -2042,7 +2033,7 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
     }
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if v.is_undef() || p.is_internal() {

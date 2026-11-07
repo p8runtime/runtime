@@ -8,7 +8,7 @@
 use crate::Context;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
-use p8_runtime::object::{CLASS_ABSTRACT, CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT, Class, LAZY_PROXY, LAZY_UNINIT, Lazy, Object};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT, Class, LAZY_PROXY, LAZY_UNINIT, Lazy, Object, Slot};
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
@@ -121,16 +121,16 @@ impl Context<'_> {
         let mut lazy_slots = vec![false; n];
         let mut count = 0;
         {
-            let mut slots = o.slots.borrow_mut();
+            let slots = o.slots();
             for (i, p) in o.class.properties.iter().enumerate() {
                 if p.is_internal() || p.hooks & p8_runtime::object::HOOK_VIRTUAL != 0 {
                     continue;
                 }
-                let keep = p.readonly && !slots[i].is_undef() && o.class.flags & p8_runtime::object::CLASS_FINAL != 0;
+                let keep = p.readonly && !slots[i].peek(Value::is_undef) && o.class.flags & p8_runtime::object::CLASS_FINAL != 0;
                 if keep {
                     continue;
                 }
-                slots[i] = Value::UNDEF;
+                slots[i].set(Value::UNDEF);
                 lazy_slots[i] = true;
                 count += 1;
             }
@@ -154,10 +154,10 @@ impl Context<'_> {
         let defaults = self.slot_defaults(&o.class)?;
         let lazy = o.lazy_info.borrow_mut().take();
         if let Some(l) = lazy {
-            let mut slots = o.slots.borrow_mut();
+            let slots = o.slots();
             for (i, is_lazy) in l.lazy_slots.iter().enumerate() {
                 if *is_lazy && let Some(d) = defaults.get(i) {
-                    slots[i] = d.clone();
+                    slots[i].set(d.clone());
                 }
             }
         }
@@ -199,22 +199,22 @@ impl Context<'_> {
         // fills them in; a failure puts everything back.
         let flags = o.lazy.get();
         o.lazy.set(0);
-        let snapshot = o.slots.borrow().clone();
+        let snapshot = o.slot_values();
         let dyn_snapshot = o.dynamic.borrow().clone();
         let defaults = self.slot_defaults(&o.class)?;
         {
             let info = o.lazy_info.borrow();
             let lazy_slots = info.as_ref().map(|l| l.lazy_slots.clone()).unwrap_or_default();
-            let mut slots = o.slots.borrow_mut();
+            let slots = o.slots();
             for (i, is_lazy) in lazy_slots.iter().enumerate() {
                 if *is_lazy && let Some(d) = defaults.get(i) {
-                    slots[i] = d.clone();
+                    slots[i].set(d.clone());
                 }
             }
         }
         let r = self.call_with_regs(regs, &initializer, &mut [Value::object(Rc::clone(o))]);
         let revert = |o: &Rc<Object>| {
-            *o.slots.borrow_mut() = snapshot.clone();
+            o.set_slot_values(&snapshot);
             *o.dynamic.borrow_mut() = dyn_snapshot.clone();
             o.lazy.set(flags);
         };
@@ -284,10 +284,10 @@ impl Context<'_> {
         *o.dynamic.borrow_mut() = PhpArray::new();
         let n = o.class.properties.len();
         {
-            let mut slots = o.slots.borrow_mut();
+            let slots = o.slots();
             for (i, p) in o.class.properties.iter().enumerate() {
                 if !p.is_internal() {
-                    slots[i] = Value::UNDEF;
+                    slots[i].set(Value::UNDEF);
                 }
             }
         }

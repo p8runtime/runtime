@@ -465,7 +465,7 @@ fn http_build_query(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
             a.iter().map(|(k, v)| (k, v.deref())).collect()
         } else if let Some(o) = v.as_object() {
             let mut e: Vec<(Key, Value)> = Vec::new();
-            for (p, val) in o.class.properties.iter().zip(o.slots.borrow().iter()) {
+            for (p, val) in o.class.properties.iter().zip(o.slot_values().iter()) {
                 if p.visibility == p8_runtime::object::Visibility::Public && !p.is_internal() && !val.is_undef() {
                     e.push((Key::from_string(p.name.clone()), val.deref()));
                 }

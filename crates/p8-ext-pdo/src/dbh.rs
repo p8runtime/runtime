@@ -374,7 +374,7 @@ fn instantiate(ctx: &mut dyn Ctx, class: Option<StmtClass>) -> Result<(Rc<Object
 /// pdo_stmt_construct(): the queryString property, then the class's constructor.
 fn finish_stmt(ctx: &mut dyn Ctx, obj: &Rc<Object>, query: &PhpStr, class: &Option<StmtClass>) -> Result<(), Throw> {
     if let Some(i) = obj.class.slot(b"querystring", None).or_else(|| obj.class.slot(b"queryString", None)) {
-        obj.slots.borrow_mut()[i] = Value::str(query.clone());
+        obj.slots()[i].set(Value::str(query.clone()));
     }
     if obj.class.method(b"__construct").is_some() {
         stmt::call_ctor(ctx, obj, &class.as_ref().and_then(|c| c.ctor_args.clone()))?;

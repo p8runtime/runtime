@@ -13,7 +13,7 @@ use crate::{Closure, Context, NO_RET, Next};
 use p8_bytecode::Reg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
-use p8_runtime::object::{Class, Object};
+use p8_runtime::object::{Class, Object, Slot};
 use p8_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -564,9 +564,9 @@ impl Context<'_> {
                 Key::Int(_) => None,
             };
             if let Some(i) = declared
-                && !o.slots.borrow()[i].is_undef()
+                && !o.slots()[i].peek(Value::is_undef)
             {
-                let cell = crate::refs::make_ref(&mut o.slots.borrow_mut()[i]);
+                let cell = o.slots()[i].modify(crate::refs::make_ref);
                 return Some((p, key, cell));
             }
             if let Some(slot) = o.dynamic.borrow_mut().get_mut(&key) {
@@ -581,7 +581,7 @@ impl Context<'_> {
     pub(crate) fn visible_props(&self, o: &Object) -> PhpArray {
         let scope = self.scope().0;
         let mut out = PhpArray::new();
-        let slots = o.slots.borrow();
+        let slots = o.slot_values();
         for (i, p) in o.class.properties.iter().enumerate() {
             if slots[i].is_undef() || p.is_internal() {
                 continue;

@@ -265,7 +265,7 @@ fn array_column(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             let slot = o.class.slot(name.as_bytes(), None)?;
             let p = &o.class.properties[slot];
             (p.visibility == p8_runtime::object::Visibility::Public)
-                .then(|| o.slots.borrow()[slot].deref())
+                .then(|| p8_runtime::object::Slot::peek(&o.slots()[slot], Value::deref))
                 .or_else(|| o.dynamic.borrow().get(&key).map(Value::deref))
         } else {
             None

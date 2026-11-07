@@ -498,7 +498,7 @@ impl Class {
     /// (Undef when there is none).
     pub fn read(&self, object: &Object, name: &[u8], scope: &[u8]) -> Value {
         match self.slot(name, Some(scope)) {
-            Some(i) => object.slots.borrow()[i].deref(),
+            Some(i) => object.slots()[i].peek(Value::deref),
             None => Value::UNDEF,
         }
     }
@@ -506,7 +506,7 @@ impl Class {
     /// Set property `name` (as code in class `scope` sees it), if declared.
     pub fn write(&self, object: &Object, name: &[u8], scope: &[u8], value: Value) {
         if let Some(i) = self.slot(name, Some(scope)) {
-            object.slots.borrow_mut()[i] = value;
+            object.slots()[i].set(value);
         }
     }
 }
@@ -786,15 +786,6 @@ impl Props {
             PropsRepr::Heap(v) => v.clear(),
         }
     }
-
-    /// Every value gone, and a buffer of their own kept for the next
-    /// object or array (see [`crate::array::values_buffer`]).
-    pub fn release(&mut self) {
-        match &mut self.0 {
-            PropsRepr::Heap(v) => crate::array::keep_values_buffer(std::mem::take(v)),
-            PropsRepr::Inline { .. } => self.clear(),
-        }
-    }
 }
 
 impl FromIterator<Value> for Props {
@@ -848,13 +839,129 @@ impl std::ops::DerefMut for Props {
     }
 }
 
+/// One declared property's slot: a `Cell`, so reading or writing it is a
+/// move in and out of the object, with no borrow to take and none left
+/// open while a destructor, `__get` or `__set` runs (zend_object's
+/// properties_table is plain zvals; a `RefCell` per object was two borrow
+/// checks per write and a panic on reentry).
+///
+/// A value is looked at by moving it out and back (`peek`): code given
+/// the value must not touch the same slot meanwhile (it would find it
+/// Undef). Writes go through `Cell::set`/`replace`, which put the new
+/// value in before the old one is dropped, as PHP's ASSIGN frees the old
+/// value after the store.
+pub trait Slot {
+    /// `f` of the value in the slot.
+    fn peek<R>(&self, f: impl FnOnce(&Value) -> R) -> R;
+    /// A copy of the value in the slot.
+    fn cloned(&self) -> Value;
+    /// `f` of the value in the slot, which it may change in place.
+    fn modify<R>(&self, f: impl FnOnce(&mut Value) -> R) -> R;
+    /// Store `v` as an assignment does: into the reference the slot
+    /// holds, if it holds one, else into the slot. The old value goes
+    /// after the store.
+    fn assign(&self, v: Value);
+}
+
+impl Slot for Cell<Value> {
+    #[inline(always)]
+    fn peek<R>(&self, f: impl FnOnce(&Value) -> R) -> R {
+        let v = self.replace(Value::UNDEF);
+        let r = f(&v);
+        // (What `set` drops is the Undef put there: nothing.)
+        self.set(v);
+        r
+    }
+
+    #[inline(always)]
+    fn cloned(&self) -> Value {
+        self.peek(Value::clone)
+    }
+
+    #[inline(always)]
+    fn modify<R>(&self, f: impl FnOnce(&mut Value) -> R) -> R {
+        let mut v = self.replace(Value::UNDEF);
+        let r = f(&mut v);
+        self.set(v);
+        r
+    }
+
+    #[inline(always)]
+    fn assign(&self, v: Value) {
+        let old = self.replace(v);
+        if let Some(cell) = old.as_reference() {
+            // (The reference back in the slot, the value into it.)
+            let v = self.replace(Value::UNDEF);
+            let prev = std::mem::replace(&mut *cell.borrow_mut(), v);
+            self.set(old);
+            drop(prev);
+        }
+    }
+}
+
+/// An object's declared property slots: up to INLINE_PROPS inside the
+/// object (one allocation for the object and its properties), more in a
+/// buffer of their own. Fixed in number once made.
+enum SlotCells {
+    Inline { len: u8, cells: [Cell<Value>; INLINE_PROPS] },
+    Heap(Vec<Cell<Value>>),
+}
+
+impl std::fmt::Debug for SlotCells {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // (Ids only: a value's Debug may lead back to this object.)
+        write!(f, "{} slots", self.cells().len())
+    }
+}
+
+impl Default for SlotCells {
+    fn default() -> Self {
+        SlotCells::Inline { len: 0, cells: Default::default() }
+    }
+}
+
+impl From<Props> for SlotCells {
+    #[inline]
+    fn from(p: Props) -> SlotCells {
+        match p.0 {
+            PropsRepr::Inline { len, values } => SlotCells::Inline { len, cells: values.map(Cell::new) },
+            // (Collected in place: the same buffer, the values as cells.)
+            PropsRepr::Heap(v) => SlotCells::Heap(v.into_iter().map(Cell::new).collect()),
+        }
+    }
+}
+
+impl SlotCells {
+    #[inline(always)]
+    fn cells(&self) -> &[Cell<Value>] {
+        match self {
+            SlotCells::Inline { len, cells } => &cells[..*len as usize],
+            SlotCells::Heap(v) => v,
+        }
+    }
+
+    /// Every value gone, and a buffer of their own kept for the next
+    /// object or array (see [`crate::array::keep_values_buffer`]).
+    fn release(&mut self) {
+        match self {
+            SlotCells::Heap(v) => crate::array::keep_values_buffer(std::mem::take(v).into_iter().map(Cell::into_inner).collect()),
+            SlotCells::Inline { len, cells } => {
+                for c in &mut cells[..*len as usize] {
+                    *c.get_mut() = Value::UNDEF;
+                }
+                *len = 0;
+            }
+        }
+    }
+}
+
 /// A PHP object.
 #[derive(Debug)]
 pub struct Object {
     pub class: Rc<Class>,
     pub data: Option<Data>,
     /// Declared properties by slot; Undef where unset or uninitialized.
-    pub slots: RefCell<Props>,
+    slots: SlotCells,
     /// Properties added at run time (`$o->new = 1`), in order.
     pub dynamic: RefCell<PhpArray>,
     pub id: u32,
@@ -868,6 +975,26 @@ pub struct Object {
 }
 
 impl Object {
+    /// The declared property slots, one per declared property in slot
+    /// order (see [`Slot`] for reading and writing one).
+    #[inline(always)]
+    pub fn slots(&self) -> &[Cell<Value>] {
+        self.slots.cells()
+    }
+
+    /// A copy of every declared property's value, in slot order.
+    pub fn slot_values(&self) -> Props {
+        self.slots().iter().map(Slot::cloned).collect()
+    }
+
+    /// Every declared property set from `values` (one per slot, in slot
+    /// order; slots past the end of `values` become Undef). The old
+    /// values go after all the new ones are in.
+    pub fn set_slot_values(&self, values: &[Value]) {
+        let old: Vec<Value> = self.slots().iter().enumerate().map(|(i, c)| c.replace(values.get(i).cloned().unwrap_or(Value::UNDEF))).collect();
+        drop(old);
+    }
+
     /// A new object of `class` with its properties' defaults.
     pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> Rc<Object> {
         let data = class.make_data.map(|make| make());
@@ -898,7 +1025,7 @@ impl Object {
         let o = Rc::new(Object {
             class,
             data: data.map(Data),
-            slots: RefCell::new(slots),
+            slots: SlotCells::from(slots),
             dynamic: RefCell::new(PhpArray::new()),
             id: ids.take(),
             ids: Rc::clone(ids),
@@ -920,7 +1047,7 @@ impl Object {
             },
             // A property once passed by reference (ksort($this->a)) is a
             // plain value again in the clone, not shared with it.
-            slots: RefCell::new(self.slots.borrow().iter().map(crate::array::dup).collect()),
+            slots: SlotCells::from(self.slots().iter().map(|c| c.peek(crate::array::dup)).collect::<Props>()),
             dynamic: RefCell::new(self.dynamic.borrow().clone()),
             id: self.ids.take(),
             ids: Rc::clone(&self.ids),
@@ -943,7 +1070,7 @@ impl Drop for Object {
             let revived = Rc::new(Object {
                 class: Rc::clone(&self.class),
                 data: self.data.take(),
-                slots: RefCell::new(std::mem::take(self.slots.get_mut())),
+                slots: std::mem::take(&mut self.slots),
                 dynamic: RefCell::new(std::mem::take(self.dynamic.get_mut())),
                 id: self.id,
                 ids: Rc::clone(&self.ids),
@@ -964,7 +1091,7 @@ impl Drop for Object {
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
         // (A buffer of their own kept for the next object or array.)
-        self.slots.get_mut().release();
+        self.slots.release();
         let dynamic = self.dynamic.get_mut();
         if !dynamic.is_empty() {
             drop(std::mem::take(dynamic));
@@ -1003,5 +1130,39 @@ mod props_tests {
             p.clear();
             assert_eq!((p.len(), copy.len()), (0, n as usize));
         }
+    }
+
+    #[test]
+    fn slots_are_cells_inline_or_in_a_buffer() {
+        for n in [0usize, 1, 4, 5, 9] {
+            let values: Vec<Value> = (0..n as i64).map(Value::int).collect();
+            let mut s = SlotCells::from(Props::from_slice(&values));
+            assert_eq!((s.cells().len(), matches!(s, SlotCells::Inline { .. })), (n, n <= INLINE_PROPS));
+            assert!(s.cells().iter().map(|c| c.peek(Value::to_int)).eq(0..n as i64));
+            if n > 0 {
+                // A write through a shared view (no borrow to take).
+                let cells = s.cells();
+                let old = cells[n - 1].replace(Value::int(99));
+                assert_eq!((old.to_int(), cells[n - 1].cloned().to_int()), (n as i64 - 1, 99));
+            }
+            s.release();
+            assert_eq!(s.cells().len(), 0);
+        }
+    }
+
+    #[test]
+    fn assign_writes_through_a_reference_and_peek_puts_back() {
+        let r = Rc::new(RefCell::new(Value::int(1)));
+        let slot = Cell::new(Value::reference(Rc::clone(&r)));
+        slot.assign(Value::int(2));
+        // The reference stays in the slot; its value changed.
+        assert!(slot.peek(Value::is_reference));
+        assert_eq!(r.borrow().to_int(), 2);
+        let plain = Cell::new(Value::int(1));
+        plain.assign(Value::int(3));
+        assert_eq!(plain.cloned().to_int(), 3);
+        // A look leaves the value where it was.
+        assert_eq!(plain.modify(|v| std::mem::replace(v, Value::int(4)).to_int()), 3);
+        assert_eq!(plain.peek(Value::to_int), 4);
     }
 }
