@@ -23,7 +23,10 @@ impl Context<'_> {
         if let Some(e) = self.fiber_throw.take() {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
         }
-        loop {
+        // Each round of this loop is one frame's run (the frame's code and
+        // window are read once); the inner loop goes back here whenever
+        // the frame changes or `slow` ran (it may have moved the registers).
+        'frame: loop {
             let top = self.frames.last().expect("a frame");
             let (clo, base) = (&*top.func, top.base as usize);
             let code = &clo.code.code[..];
@@ -32,6 +35,25 @@ impl Context<'_> {
             // A loop's backward branch is where an interrupt is noticed:
             // `step` then raises it.
             let back = |target: u32, pc: usize| target as usize <= pc && stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT;
+            // The instruction at `pc` is `slow`'s (`step`'s): run it there,
+            // then start over with the frame as it left it.
+            macro_rules! slow {
+                () => {{
+                    match self.slow(regs, pc)? {
+                        Flow::Go(next) => pc = next,
+                        Flow::Done => return Ok(()),
+                    }
+                    continue 'frame;
+                }};
+            }
+            // A write freed an object with a destructor: it runs before
+            // the next instruction.
+            macro_rules! pending {
+                () => {{
+                    pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    continue 'frame;
+                }};
+            }
         // A compare-and-branch on two numbers (anything else goes to `step`).
         // A compare-and-branch: two ints inline, anything else (floats,
         // references, strings, null) through `test`; an undefined
@@ -42,12 +64,12 @@ impl Context<'_> {
                     (Value::Int(x), Value::Int(y)) => int_test($cmp, *x, *y),
                     _ => match test(w, $cmp, $a, $b) {
                         Some(t) => t,
-                        None => break Switch::Slow,
+                        None => slow!(),
                     },
                 };
                 if t == $when {
                     if back($target, pc) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc = $target as usize;
                 } else {
@@ -64,7 +86,7 @@ impl Context<'_> {
                 {
                     put_var(&mut w[$dst as usize], Value::Int(n));
                 } else if !arith(w, $op, $dst, $a, $b) {
-                    break Switch::Slow;
+                    slow!();
                 }
                 pc += 1;
             }};
@@ -82,20 +104,20 @@ impl Context<'_> {
                             *i = n;
                             n
                         }
-                        None => break Switch::Slow,
+                        None => slow!(),
                     },
                     Value::Ref(cell) => match step_ref(cell, $step) {
                         Some(n) => n,
-                        None => break Switch::Slow,
+                        None => slow!(),
                     },
-                    _ => break Switch::Slow,
+                    _ => slow!(),
                 };
                 match int_of(&w[$b as usize]) {
                     Some(b) if $holds(n, b) => {
                         if back($target, pc) {
                             // The step is done: the test (next) sees the interrupt.
                             pc += 1;
-                            break Switch::Slow;
+                            slow!();
                         }
                         pc = $target as usize;
                     }
@@ -104,7 +126,7 @@ impl Context<'_> {
                 }
             }};
         }
-        let switch = loop {
+        loop {
             match code[pc] {
                 // `$this`, in a method that has one (else `step` raises).
                 Instr::This { dst } => match &top.this {
@@ -113,22 +135,22 @@ impl Context<'_> {
                         put(&mut w[dst as usize], this);
                         pc += 1;
                     }
-                    None => break Switch::Slow,
+                    None => slow!(),
                 },
                 // A property read the name's cache entry answers (anything
                 // else, `step`: a miss, an unset slot, a reference operand).
                 Instr::FetchProp { dst, obj, name, .. } => {
-                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { break Switch::Slow };
+                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { slow!() };
                     // THIS: the method's own `$this`, from the frame.
                     let o = if obj == p8_bytecode::THIS {
-                        let Some(o) = &top.this else { break Switch::Slow };
+                        let Some(o) = &top.this else { slow!() };
                         o
                     } else {
-                        let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
+                        let Value::Object(o) = &w[obj as usize] else { slow!() };
                         o
                     };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let Some(v) = cached_prop(site.get(), o, scope) else { break Switch::Slow };
+                    let Some(v) = cached_prop(site.get(), o, scope) else { slow!() };
                     put(&mut w[dst as usize], v);
                     pc += 1;
                 }
@@ -139,25 +161,30 @@ impl Context<'_> {
                 // An unset slot of a class with __set and its kin, and
                 // anything `plain_slot` declines, is `step`'s.
                 Instr::AssignProp { obj, name, val, dst, take } => {
-                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { break Switch::Slow };
+                    let Some(site) = (name as usize).checked_sub(clo.code.consts_at as usize).and_then(|i| clo.props.get(i)) else { slow!() };
                     // THIS: the method's own `$this`, from the frame.
                     let o = if obj == p8_bytecode::THIS {
-                        let Some(o) = &top.this else { break Switch::Slow };
+                        let Some(o) = &top.this else { slow!() };
                         o
                     } else {
-                        let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
+                        let Value::Object(o) = &w[obj as usize] else { slow!() };
                         o
                     };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let Some(slot) = plain_slot(site.get(), o, scope, &w[val as usize]) else { break Switch::Slow };
+                    let Some(slot) = plain_slot(site.get(), o, scope, &w[val as usize]) else { slow!() };
                     let unused = matches!(code.get(pc + 1), Some(Instr::Free { reg }) if *reg == dst);
-                    {
+                    let written = {
                         let mut slots = o.slots.borrow_mut();
-                        let Some(s) = slots.get_mut(slot) else { break Switch::Slow };
-                        if matches!(s, Value::Undef) && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0 {
-                            break Switch::Slow;
+                        match slots.get_mut(slot) {
+                            Some(s) if !(matches!(s, Value::Undef) && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0) => {
+                                put_var(s, w[val as usize].clone());
+                                true
+                            }
+                            _ => false,
                         }
-                        put_var(s, w[val as usize].clone());
+                    };
+                    if !written {
+                        slow!();
                     }
                     if unused {
                         pc += 2;
@@ -170,7 +197,7 @@ impl Context<'_> {
                         clear(&mut w[val as usize]);
                     }
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 // Function entry, when every passed argument is plainly of
@@ -178,14 +205,14 @@ impl Context<'_> {
                 // is); a conversion, a class check or a variadic: `step`.
                 Instr::Rare { op: Rare::VerifyArgs, .. } => {
                     if !args_plain(&clo.code.params, w, top.argc as usize) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc += 1;
                 }
                 // A return value plainly of the declared type (anything
                 // else, a generator's included: `step`).
                 Instr::Rare { op: Rare::VerifyReturn, a, .. } => match &clo.code.ret_type {
-                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => break Switch::Slow,
+                    Some(ty) if clo.code.is_generator || !ty.quick(&w[a as usize]) => slow!(),
                     _ => pc += 1,
                 },
                 // `$o->m($v)`: an argument the method the call site's cache
@@ -193,7 +220,7 @@ impl Context<'_> {
                 // (by reference, a miss, or an undefined or reference
                 // variable: `step`, which looks the method up by name).
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
-                    let Value::Object(o) = &w[obj as usize] else { break Switch::Slow };
+                    let Value::Object(o) = &w[obj as usize] else { slow!() };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let by_value = clo.methods[method as usize].borrow().as_ref().is_some_and(|s| {
                         s.class == Rc::as_ptr(&o.class) as usize
@@ -201,18 +228,18 @@ impl Context<'_> {
                             && matches!(&s.code, MethodCode::User(code) if code.upgrade().is_some_and(|c| !c.code.param_by_ref(n as usize)))
                     });
                     if !by_value {
-                        break Switch::Slow;
+                        slow!();
                     }
-                    let Some(v) = copied(&w[var as usize]) else { break Switch::Slow };
+                    let Some(v) = copied(&w[var as usize]) else { slow!() };
                     put(&mut w[arg as usize], v);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 Instr::Jump { target } => {
                     if back(target, pc) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc = target as usize;
                 }
@@ -229,10 +256,10 @@ impl Context<'_> {
                 Instr::Compare { cmp, dst, a, b } => {
                     let t = match (&w[a as usize], &w[b as usize]) {
                         (Value::Int(x), Value::Int(y)) if cmp != Cmp::Spaceship => int_test(cmp, *x, *y),
-                        _ if cmp == Cmp::Spaceship => break Switch::Slow,
+                        _ if cmp == Cmp::Spaceship => slow!(),
                         _ => match test(w, cmp, a, b) {
                             Some(t) => t,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                     };
                     put_var(&mut w[dst as usize], Value::Bool(t));
@@ -244,7 +271,7 @@ impl Context<'_> {
                         pc += 1;
                     }
                     Value::Ref(cell) if step_ref(cell, i64::checked_add).is_some() => pc += 1,
-                    _ => break Switch::Slow,
+                    _ => slow!(),
                 },
                 Instr::IncJumpLt { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n < b),
                 Instr::IncJumpLe { var, b, target } => step_jump!(var, b, target, i64::checked_add, |n, b| n <= b),
@@ -256,11 +283,11 @@ impl Context<'_> {
                         pc += 1;
                     }
                     Value::Ref(cell) if step_ref(cell, i64::checked_sub).is_some() => pc += 1,
-                    _ => break Switch::Slow,
+                    _ => slow!(),
                 },
                 Instr::Binary { op, dst, a, b } => {
                     if !arith(w, op, dst, a, b) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc += 1;
                 }
@@ -269,7 +296,7 @@ impl Context<'_> {
                 Instr::Mul { dst, a, b } => arith!(BinOp::Mul, dst, a, b, i64::checked_mul),
                 Instr::ConcatN { dst, start, n } => {
                     if !concat_n(w, dst, start, n) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc += 1;
                 }
@@ -279,59 +306,59 @@ impl Context<'_> {
                 // instruction.
                 Instr::Move { dst, src } => {
                     let v = match &w[src as usize] {
-                        Value::Undef => break Switch::Slow,
+                        Value::Undef => slow!(),
                         Value::Ref(cell) => match read_ref(cell) {
                             Some(v) => v,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                         v => v.clone(),
                     };
                     put(&mut w[dst as usize], v);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 Instr::Assign { var, src } => {
                     let v = match &w[src as usize] {
-                        Value::Undef => break Switch::Slow,
+                        Value::Undef => slow!(),
                         Value::Ref(cell) => match read_ref(cell) {
                             Some(v) => v,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                         v => v.clone(),
                     };
                     put_var(&mut w[var as usize], v);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 Instr::AssignTake { var, src } => {
                     match std::mem::replace(&mut w[src as usize], Value::Undef) {
                         // Undefined: `step`'s (the warning).
-                        Value::Undef => break Switch::Slow,
+                        Value::Undef => slow!(),
                         // A reference's value, and the temporary lets go of
                         // the reference.
                         Value::Ref(cell) => match read_ref(&cell) {
                             Some(v) => put_var(&mut w[var as usize], v),
                             None => {
                                 w[src as usize] = Value::Ref(cell);
-                                break Switch::Slow;
+                                slow!();
                             }
                         },
                         v => put_var(&mut w[var as usize], v),
                     }
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 Instr::Free { reg } => {
                     clear(&mut w[reg as usize]);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 // A condition: a bool inline, anything else through `truth`
@@ -341,12 +368,12 @@ impl Context<'_> {
                         Value::Bool(c) => *c,
                         v => match truth(v) {
                             Some(c) => c,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                     };
                     if c {
                         if back(target, pc) {
-                            break Switch::Slow;
+                            slow!();
                         }
                         pc = target as usize;
                     } else {
@@ -358,14 +385,14 @@ impl Context<'_> {
                         Value::Bool(c) => *c,
                         v => match truth(v) {
                             Some(c) => c,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                     };
                     if c {
                         pc += 1;
                     } else {
                         if back(target, pc) {
-                            break Switch::Slow;
+                            slow!();
                         }
                         pc = target as usize;
                     }
@@ -376,18 +403,18 @@ impl Context<'_> {
                 Instr::FetchDim { dst, arr, key, .. } => {
                     let v = match (&w[arr as usize], &w[key as usize]) {
                         (Value::Array(a), Value::Int(k)) => match a.get_int(*k) {
-                            Some(Value::Ref(_)) | None => break Switch::Slow,
+                            Some(Value::Ref(_)) | None => slow!(),
                             Some(v) => v.clone(),
                         },
                         _ => match elem(w, arr, key) {
                             Some(v) => v,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                     };
                     put(&mut w[dst as usize], v);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 // isset($a[k]) on an array (or a reference to one), k an int
@@ -398,7 +425,7 @@ impl Context<'_> {
                         (Value::Array(a), Value::Int(k)) => a.get_int(*k).is_some_and(is_set),
                         _ => match isset_elem(w, var, keys) {
                             Some(set) => set,
-                            None => break Switch::Slow,
+                            None => slow!(),
                         },
                     };
                     put(&mut w[dst as usize], Value::Bool(set));
@@ -408,12 +435,12 @@ impl Context<'_> {
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
                     if let Value::Str(_) = w[keys as usize] {
                         if !set_str_elem(w, var, keys, val, dst) {
-                            break Switch::Slow;
+                            slow!();
                         }
                         pc += 1;
                         continue;
                     }
-                    let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { break Switch::Slow };
+                    let (Value::Int(k), Some(v)) = (&w[keys as usize], plain(&w[val as usize])) else { slow!() };
                     let k = *k;
                     let done = match &mut w[var as usize] {
                         Value::Array(a) => set_int_elem(a, k, &v),
@@ -424,26 +451,26 @@ impl Context<'_> {
                         _ => false,
                     };
                     if !done {
-                        break Switch::Slow;
+                        slow!();
                     }
                     put(&mut w[dst as usize], v);
                     pc += 1;
                     if ids.has_pending() {
-                        break Switch::Pending;
+                        pending!();
                     }
                 }
                 // $a[int] op= number, $a an array holding a number at
                 // that key
                 Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
                     if !dim_op(w, op, var, keys, val, dst) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc += 1;
                 }
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     // An object (a generator, an Iterator) is `step`'s.
                     if !matches!(w[iter as usize], Value::Array(_)) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc = if iter_next(w, iter, val, key, has_key) { pc + 1 } else { end as usize };
                 }
@@ -455,15 +482,15 @@ impl Context<'_> {
                     {
                         put(&mut w[var as usize], Value::Int(n));
                     } else if !assign_op(w, op, var, src) {
-                        break Switch::Slow;
+                        slow!();
                     }
                     pc += 1;
                 }
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
-                    let Value::Int(slot) = &mut w[var as usize] else { break Switch::Slow };
+                    let Value::Int(slot) = &mut w[var as usize] else { slow!() };
                     let i = *slot;
-                    let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { break Switch::Slow };
+                    let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
                     *slot = n;
                     put(&mut w[dst as usize], Value::Int(if post { i } else { n }));
                     pc += 1;
@@ -537,64 +564,56 @@ impl Context<'_> {
                 | Instr::InstanceOf { .. }
                 | Instr::Clone { .. }
                 | Instr::Throw { .. }
-                | Instr::CatchIf { .. } => break Switch::Slow,
-                // Calls and returns leave this loop, so the loop itself
-                // keeps only the code and the registers live.
-                Instr::Call { site, base: args, argc: n, dst } => break Switch::Call(site, args, n, dst),
-                Instr::MethodCall { dst, obj, method, base: args, argc: n } => break Switch::Method(dst, obj, method, args, n),
-                Instr::Return { src } => break Switch::Return(src),
-                Instr::ReturnNull => break Switch::ReturnNull,
-            }
-        };
-            // Whether the instruction at `pc` is `slow`'s after all.
-            let slow = match switch {
-                Switch::Slow => true,
-                // A write freed an object with a destructor: it runs before
-                // the next instruction.
-                Switch::Pending => {
-                    pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-                    false
-                }
-                Switch::Call(site, args, n, dst) => 'call: {
-                    // A user function the call site resolved, with its required
-                    // arguments, and no interrupt pending: anything else is `step`'s.
-                    let Some(&Callee::User(target)) = clo.sites[site as usize].get() else { break 'call true };
-                    let target = &self.closures[target as usize];
-                    if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                        break 'call true;
-                    }
-                    if let Some(caller) = self.frames.last_mut() {
-                        caller.pc = (pc + 1) as u32;
-                    }
-                    self.frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
-                    enter(&mut self.frames, regs);
-                    pc = 0;
-                    false
-                }
-                Switch::Method(dst, obj, method, args, n) => 'method: {
-                    // A user method the call site's cache names for this class
-                    // and scope, on an object, with its required arguments, and
-                    // no interrupt pending: anything else is `step`'s.
-                    let Value::Object(o) = &regs[base + obj as usize] else { break 'method true };
-                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                    let (target, declaring) = {
-                        let site = clo.methods[method as usize].borrow();
-                        let Some(s) = site.as_ref() else { break 'method true };
-                        if s.class != Rc::as_ptr(&o.class) as usize || s.scope != scope || s.is_static {
-                            break 'method true;
+                | Instr::CatchIf { .. } => slow!(),
+                // A call of a user function the call site resolved, with
+                // its required arguments, and no interrupt pending: its
+                // frame pushed here. A builtin it resolved: called out of
+                // line. Anything else (a miss, a generator) is `step`'s.
+                Instr::Call { site, base: args, argc: n, dst } => match clo.sites[site as usize].get() {
+                    Some(&Callee::User(target)) => {
+                        let target = &self.closures[target as usize];
+                        if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            slow!();
                         }
-                        let MethodCode::User(code) = &s.code else { break 'method true };
-                        let (Some(target), Some(declaring)) = (code.upgrade(), s.declaring.upgrade()) else { break 'method true };
-                        (target, declaring)
+                        if let Some(caller) = self.frames.last_mut() {
+                            caller.pc = (pc + 1) as u32;
+                        }
+                        self.frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }
+                    Some(&Callee::Builtin(i)) => {
+                        pc = self.builtin_call(regs, pc, base, i, args, n, dst)?;
+                        continue 'frame;
+                    }
+                    _ => slow!(),
+                },
+                // A user method the call site's cache names for this class
+                // and scope, on an object, with its required arguments, and
+                // no interrupt pending: anything else is `step`'s.
+                Instr::MethodCall { dst, obj, method, base: args, argc: n } => {
+                    let Value::Object(o) = &w[obj as usize] else { slow!() };
+                    let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                    let found = {
+                        let site = clo.methods[method as usize].borrow();
+                        match site.as_ref() {
+                            Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
+                                MethodCode::User(code) => code.upgrade().zip(s.declaring.upgrade()),
+                                MethodCode::Native(..) => None,
+                            },
+                            _ => None,
+                        }
                     };
+                    let Some((target, declaring)) = found else { slow!() };
                     if (n as usize) < target.code.required || target.code.is_generator || stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                        break 'method true;
+                        slow!();
                     }
                     let this = Rc::clone(o);
                     // A temporary (`(new A)->f()`) is released as it is used:
                     // the call's `$this` holds the object.
                     if is_temp(&clo.code, obj) {
-                        clear(&mut regs[base + obj as usize]);
+                        clear(&mut w[obj as usize]);
                     }
                     if let Some(caller) = self.frames.last_mut() {
                         caller.pc = (pc + 1) as u32;
@@ -606,50 +625,38 @@ impl Context<'_> {
                     frame.scope = Some(declaring);
                     enter(&mut self.frames, regs);
                     pc = 0;
-                    false
+                    continue 'frame;
                 }
-                // The main frame's return ends the run: `step` does that.
-                // The bottom frame of this `execute` returns there: `step` does it.
-                Switch::Return(_) | Switch::ReturnNull if self.frames.len() == self.frames.floor + 1 => true,
-                Switch::Return(src) => 'ret: {
-                    let Some(value) = returned(regs, self.frames.last().expect("the returning frame"), base, src) else { break 'ret true };
+                // A return to the calling frame. The main frame's return
+                // ends the run, and the bottom frame of this `execute`
+                // returns to the builtin that called it: `step` does those.
+                Instr::Return { src } => {
+                    if self.frames.len() == self.frames.floor + 1 {
+                        slow!();
+                    }
+                    let Some(value) = returned(regs, top, base, src) else { slow!() };
                     leave(&mut self.frames, regs, value);
                     pc = self.frames.last().expect("the caller's frame").pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
                     }
-                    false
+                    continue 'frame;
                 }
-                Switch::ReturnNull => {
+                Instr::ReturnNull => {
+                    if self.frames.len() == self.frames.floor + 1 {
+                        slow!();
+                    }
                     leave(&mut self.frames, regs, Value::Null);
                     pc = self.frames.last().expect("the caller's frame").pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
                     }
-                    false
-                }
-            };
-            if slow {
-                match self.slow(regs, pc)? {
-                    Flow::Go(next) => pc = next,
-                    Flow::Done => return Ok(()),
+                    continue 'frame;
                 }
             }
         }
+        }
     }
-}
-
-/// Why the inner loop stopped: a call (its site, arguments' start, count
-/// and result register), a return (of a register, or of null), an
-/// instruction (or a case of one) only `step` runs, or a destructor due.
-pub(crate) enum Switch {
-    Call(u16, Reg, u8, Reg),
-    /// A method call: dst, obj, method (cache index), args, argc.
-    Method(Reg, Reg, u16, Reg, u8),
-    Return(Reg),
-    ReturnNull,
-    Slow,
-    Pending,
 }
 
 /// What `slow` leaves the loop to do: go on at a pc, or the run is over

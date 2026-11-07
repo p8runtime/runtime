@@ -1171,12 +1171,29 @@ impl Context<'_> {
         Ok(callee)
     }
 
+    /// Call builtin `i` from the loop (`Instr::Call` at `pc` of the frame
+    /// at `base`, its call site resolved to the builtin): the call, then
+    /// what it raised (an exception unwound to its handler, errors to the
+    /// error handler, the destructors due). Returns the pc to go on at.
+    #[cold]
+    #[inline(never)]
+    fn builtin_call(&mut self, regs: &mut Vec<Value>, pc: usize, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<usize, Throw> {
+        self.pc = pc + 1;
+        let next = match self.call_builtin(regs, base, i, args, argc, dst) {
+            Ok(()) => pc + 1,
+            Err(t) => self.unwind(regs, t, pc)?,
+        };
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            return self.after_errors(regs, next, pc);
+        }
+        Ok(next)
+    }
+
     /// Run the instruction at `pc` of the top frame the way `execute`'s
-    /// loop does not: a builtin the call site already resolved is called
-    /// from here, everything else runs through `step`; then what it raised
-    /// (an exception unwound to its handler, errors to the error handler,
-    /// the destructors due). Called from inside the loop, which goes on
-    /// with the pc this gives back.
+    /// loop does not: through `step`, then what it raised (an exception
+    /// unwound to its handler, errors to the error handler, the
+    /// destructors due). Called from inside the loop, which goes on with
+    /// the pc this gives back.
     #[cold]
     #[inline(never)]
     fn slow(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<Flow, Throw> {
@@ -1185,18 +1202,6 @@ impl Context<'_> {
         let (base, argc) = (frame.base as usize, frame.argc as usize);
         self.pc = pc + 1;
         let at = pc;
-        if let Instr::Call { site, base: args, argc: n, dst } = func.code.code[pc]
-            && let Some(&Callee::Builtin(i)) = func.sites[site as usize].get()
-        {
-            match self.call_builtin(regs, base, i, args, n, dst) {
-                Ok(()) => pc += 1,
-                Err(t) => pc = self.unwind(regs, t, pc)?,
-            }
-            if !self.pending_errors.is_empty() || self.ids.has_pending() {
-                pc = self.after_errors(regs, pc, at)?;
-            }
-            return Ok(Flow::Go(pc));
-        }
         match self.step(regs, &func, base, argc, pc) {
             Ok(Next::Go(next)) => {
                 pc = next;
