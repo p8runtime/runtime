@@ -97,7 +97,7 @@ static BUILTINS: &[Builtin] = &[
 ];
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn str_arg(args: &[Value], i: usize) -> PhpStr {
@@ -106,27 +106,26 @@ fn str_arg(args: &[Value], i: usize) -> PhpStr {
 
 fn int_arg(args: &[Value], i: usize, default: i64) -> i64 {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) => default,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null() => v.to_int(),
+        _ => default,
     }
 }
 
 /// A value as a string the way zval_get_string() makes one: __toString()
 /// for an object, "Array" (with a warning) for an array.
 fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
-    match v.deref() {
-        Value::Object(o) => {
-            if o.class.method(b"__tostring").is_none() {
-                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
-            }
-            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::Str(PhpStr::from("__toString"))])));
-            Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty))
+    let v = v.deref();
+    if let Some(o) = v.as_object() {
+        if o.class.method(b"__tostring").is_none() {
+            return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
         }
-        Value::Array(_) => {
-            ctx.warn("Array to string conversion");
-            Ok(PhpStr::from("Array"))
-        }
-        other => Ok(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+        let method = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str(PhpStr::from("__toString"))]));
+        Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty))
+    } else if v.is_array() {
+        ctx.warn("Array to string conversion");
+        Ok(PhpStr::from("Array"))
+    } else {
+        Ok(v.to_php_string().unwrap_or_else(PhpStr::empty))
     }
 }
 
@@ -516,20 +515,20 @@ fn group_value(subject: &PhpStr, m: &Captures, i: usize, unmatched_as_null: bool
     let s = subject.as_bytes();
     match m.get(i) {
         // The whole subject: the same string, no copy.
-        Some((0, b)) if b == s.len() => Value::Str(subject.clone()),
+        Some((0, b)) if b == s.len() => Value::str(subject.clone()),
         // (From a slice: a short one in the string's own allocation.)
-        Some((a, b)) => Value::Str(PhpStr::from(&s[a..b])),
-        None if unmatched_as_null => Value::Null,
-        None => Value::Str(PhpStr::empty()),
+        Some((a, b)) => Value::str(PhpStr::from(&s[a..b])),
+        None if unmatched_as_null => Value::NULL,
+        None => Value::str(PhpStr::empty()),
     }
 }
 
 fn offset_pair(s: &[u8], m: Option<(usize, usize)>, unmatched_as_null: bool) -> Value {
     let pair = match m {
-        Some((a, b)) => vec![Value::Str(PhpStr::from(&s[a..b])), Value::Int(a as i64)],
-        None => vec![if unmatched_as_null { Value::Null } else { Value::Str(PhpStr::empty()) }, Value::Int(-1)],
+        Some((a, b)) => vec![Value::str(PhpStr::from(&s[a..b])), Value::int(a as i64)],
+        None => vec![if unmatched_as_null { Value::NULL } else { Value::str(PhpStr::empty()) }, Value::int(-1)],
     };
-    Value::Array(Rc::new(PhpArray::from_list(pair)))
+    Value::array(PhpArray::from_list(pair))
 }
 
 /// Inserts a named group's value: a set value replaces one already there
@@ -553,14 +552,14 @@ fn subpat_array(c: &Compiled, subject: &PhpStr, m: &Captures, flags: i64) -> Php
     let mut arr = if c.named { PhpArray::new() } else { PhpArray::list_with_capacity(end) };
     for i in 0..end {
         let g = if i < count { m.get(i) } else { None };
-        let v = if offset_capture { offset_pair(s, g, unmatched_as_null) } else if i < count { group_value(subject, m, i, unmatched_as_null) } else { Value::Null };
+        let v = if offset_capture { offset_pair(s, g, unmatched_as_null) } else if i < count { group_value(subject, m, i, unmatched_as_null) } else { Value::NULL };
         if let Some(name) = &c.names[i] {
             add_named(&mut arr, name, v.clone(), g.is_none());
         }
         let _ = arr.push(v);
     }
     if let Some(mark) = &m.mark {
-        arr.insert(Key::Str(PhpStr::from("MARK")), Value::Str(PhpStr::new(mark.clone())));
+        arr.insert(Key::Str(PhpStr::from("MARK")), Value::str(PhpStr::new(mark.clone())));
     }
     arr
 }
@@ -580,19 +579,16 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
     let s = subject.as_bytes();
     let flags = int_arg(args, 3, 0);
     let offset = int_arg(args, 4, 0);
-    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::FALSE) };
     if offset == i64::MIN {
         return Err(ctx.throw("ValueError", format!("{name}(): Argument #5 ($offset) must be greater than {}", i64::MIN)));
     }
-    let subpats = match args.get(2) {
-        Some(Value::Ref(cell)) => Some(cell.clone()),
-        _ => None,
-    };
+    let subpats = args.get(2).and_then(Value::cloned_reference);
     // The matches argument is an empty array when nothing else goes there
     // (set where the call ends: nothing reads it before).
     let emptied = || {
         if let Some(cell) = &subpats {
-            *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+            *cell.borrow_mut() = Value::array(PhpArray::new());
         }
     };
     let mut order = if global { PATTERN_ORDER } else { 0 };
@@ -613,7 +609,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
     if start > s.len() {
         emptied();
         set_error(ctx, INTERNAL_ERROR);
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     // (preg_last_error() is set where the call ends: nothing between reads it.)
     let num = c.re.groups() + 1;
@@ -641,7 +637,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                 emptied();
                 set_error(ctx, NO_ERROR);
                 warn(ctx, "Get subpatterns list failed");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
             if global {
                 if order == PATTERN_ORDER {
@@ -652,17 +648,17 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                         } else if offset_capture {
                             offset_pair(s, None, unmatched_as_null)
                         } else if unmatched_as_null {
-                            Value::Null
+                            Value::NULL
                         } else {
-                            Value::Str(PhpStr::empty())
+                            Value::str(PhpStr::empty())
                         };
                         let _ = set.push(v);
                     }
                     if let Some(mark) = &m.mark {
-                        marks.get_or_insert_with(PhpArray::new).insert(Key::Int(matched - 1), Value::Str(PhpStr::new(mark.clone())));
+                        marks.get_or_insert_with(PhpArray::new).insert(Key::Int(matched - 1), Value::str(PhpStr::new(mark.clone())));
                     }
                 } else {
-                    let _ = list.push(Value::Array(Rc::new(subpat_array(&c, &subject, &m, flags))));
+                    let _ = list.push(Value::array(subpat_array(&c, &subject, &m, flags)));
                 }
             } else {
                 single = Some(subpat_array(&c, &subject, &m, flags));
@@ -706,14 +702,14 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
             if order == PATTERN_ORDER {
                 let mut out = PhpArray::new();
                 for (i, set) in sets.into_iter().enumerate() {
-                    let v = Value::Array(Rc::new(set));
+                    let v = Value::array(set);
                     if let Some(name) = &c.names[i] {
                         out.insert(name.clone(), v.clone());
                     }
                     let _ = out.push(v);
                 }
                 if let Some(marks) = marks {
-                    out.insert(Key::Str(PhpStr::from("MARK")), Value::Array(Rc::new(marks)));
+                    out.insert(Key::Str(PhpStr::from("MARK")), Value::array(marks));
                 }
                 out
             } else {
@@ -722,10 +718,10 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
         } else {
             single.unwrap_or_default()
         };
-        *cell.borrow_mut() = Value::Array(Rc::new(out));
+        *cell.borrow_mut() = Value::array(out);
     }
     set_error(ctx, error);
-    Ok(if error == NO_ERROR { Value::Int(matched) } else { Value::Bool(false) })
+    Ok(if error == NO_ERROR { Value::int(matched) } else { Value::FALSE })
 }
 
 /// A `\n`, `$n` or `${n}` reference at `at` in a replacement: (group, end).
@@ -822,7 +818,7 @@ fn replace_one(ctx: &mut dyn Ctx, c: &Compiled, subject: &PhpStr, with: &Replace
                 match with {
                     Replacement::Text(r) => expand(&mut out, r, s, &m),
                     Replacement::Callback(f, flags) => {
-                        let arr = Value::Array(Rc::new(subpat_array(c, subject, &m, *flags)));
+                        let arr = Value::array(subpat_array(c, subject, &m, *flags));
                         let v = ctx.call(f, &mut [arr])?;
                         let v = to_str(ctx, &v)?;
                         out.extend_from_slice(v.as_bytes());
@@ -885,8 +881,8 @@ fn limit_arg(args: &[Value], i: usize) -> usize {
 }
 
 fn set_count(args: &[Value], i: usize, count: usize) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
-        *cell.borrow_mut() = Value::Int(count as i64);
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::int(count as i64);
     }
 }
 
@@ -897,20 +893,20 @@ fn each_subject(
     subject: &Value,
     mut f: impl FnMut(&mut dyn Ctx, &PhpStr) -> Result<Option<PhpStr>, Throw>,
 ) -> Result<Value, Throw> {
-    match subject {
-        Value::Array(a) => {
+    match subject.as_array() {
+        Some(a) => {
             let mut out = PhpArray::new();
             for (k, v) in a.iter() {
                 let s = to_str(ctx, v)?;
                 if let Some(r) = f(ctx, &s)? {
-                    out.insert(k, Value::Str(r));
+                    out.insert(k, Value::str(r));
                 }
             }
-            Ok(Value::Array(Rc::new(out)))
+            Ok(Value::array(out))
         }
-        other => {
-            let s = to_str(ctx, other)?;
-            Ok(f(ctx, &s)?.map_or(Value::Null, Value::Str))
+        None => {
+            let s = to_str(ctx, subject)?;
+            Ok(f(ctx, &s)?.map_or(Value::NULL, Value::str))
         }
     }
 }
@@ -926,23 +922,17 @@ fn preg_filter(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn replace_common(ctx: &mut dyn Ctx, args: &mut [Value], filter: bool) -> Result<Value, Throw> {
     let name = ctx.builtin_name();
     let (regex, replacement, subject) = (arg(args, 0), arg(args, 1), arg(args, 2));
-    if matches!(replacement, Value::Array(_)) && !matches!(regex, Value::Array(_)) {
+    if replacement.is_array() && !regex.is_array() {
         return Err(ctx.throw("TypeError", format!("{name}(): Argument #1 ($pattern) must be of type array when argument #2 ($replacement) is an array, string given")));
     }
     let limit = limit_arg(args, 3);
     let mut count = 0usize;
     // The patterns, each with its replacement.
     let mut pairs: Vec<(PhpStr, PhpStr)> = Vec::new();
-    match &regex {
-        Value::Array(patterns) => {
-            let mut reps = match &replacement {
-                Value::Array(r) => Some(r.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into_iter()),
-                _ => None,
-            };
-            let fixed = match &replacement {
-                Value::Array(_) => None,
-                other => Some(to_str(ctx, other)?),
-            };
+    match regex.as_array() {
+        Some(patterns) => {
+            let mut reps = replacement.as_array().map(|r| r.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into_iter());
+            let fixed = if replacement.is_array() { None } else { Some(to_str(ctx, &replacement)?) };
             for (_, p) in patterns.iter() {
                 let p = to_str(ctx, p)?;
                 let r = match (&mut reps, &fixed) {
@@ -956,7 +946,7 @@ fn replace_common(ctx: &mut dyn Ctx, args: &mut [Value], filter: bool) -> Result
                 pairs.push((p, r));
             }
         }
-        other => pairs.push((to_str(ctx, other)?, to_str(ctx, &replacement)?)),
+        None => pairs.push((to_str(ctx, &regex)?, to_str(ctx, &replacement)?)),
     }
     let result = each_subject(ctx, &subject, |ctx, s| {
         let before = count;
@@ -978,15 +968,15 @@ fn preg_replace_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     let limit = limit_arg(args, 3);
     let flags = int_arg(args, 5, 0);
     let mut count = 0usize;
-    let patterns: Vec<PhpStr> = match &regex {
-        Value::Array(a) => {
+    let patterns: Vec<PhpStr> = match regex.as_array() {
+        Some(a) => {
             let mut v = Vec::new();
             for (_, p) in a.iter() {
                 v.push(to_str(ctx, p)?);
             }
             v
         }
-        other => vec![to_str(ctx, other)?],
+        None => vec![to_str(ctx, &regex)?],
     };
     let result = each_subject(ctx, &subject, |ctx, s| {
         let mut cur = s.clone();
@@ -1003,7 +993,7 @@ fn preg_replace_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 }
 
 fn preg_replace_callback_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(map) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(map) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let mut subject = arg(args, 1);
     let limit = limit_arg(args, 2);
     let flags = int_arg(args, 4, 0);
@@ -1017,9 +1007,9 @@ fn preg_replace_callback_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<
         };
         let callback = callback.clone();
         subject = each_subject(ctx, &subject, |ctx, s| replace_with(ctx, &p, s, &Replacement::Callback(&callback, flags), limit, &mut count))?;
-        if matches!(subject, Value::Null) {
+        if subject.is_null() {
             set_count(args, 3, count);
-            return Ok(Value::Null);
+            return Ok(Value::NULL);
         }
     }
     set_count(args, 3, count);
@@ -1032,13 +1022,13 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = subject.as_bytes();
     let mut limit = int_arg(args, 2, -1);
     let flags = int_arg(args, 3, 0);
-    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::FALSE) };
     let no_empty = flags & SPLIT_NO_EMPTY != 0;
     let delim_capture = flags & SPLIT_DELIM_CAPTURE != 0;
     let offset_capture = flags & SPLIT_OFFSET_CAPTURE != 0;
     let mut out = PhpArray::new();
     let piece = |out: &mut PhpArray, a: usize, b: usize| {
-        let v = if offset_capture { offset_pair(s, Some((a, b)), false) } else { Value::Str(PhpStr::from(&s[a..b])) };
+        let v = if offset_capture { offset_pair(s, Some((a, b)), false) } else { Value::str(PhpStr::from(&s[a..b])) };
         let _ = out.push(v);
     };
     set_error(ctx, NO_ERROR);
@@ -1076,7 +1066,7 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                     match m.get(i) {
                         Some((a, b)) if !no_empty || a != b => piece(&mut out, a, b),
                         None if !no_empty => {
-                            let _ = out.push(if offset_capture { offset_pair(s, None, false) } else { Value::Str(PhpStr::empty()) });
+                            let _ = out.push(if offset_capture { offset_pair(s, None, false) } else { Value::str(PhpStr::empty()) });
                         }
                         _ => {}
                     }
@@ -1114,19 +1104,19 @@ fn preg_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         if error != NO_ERROR {
             set_error(ctx, error);
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     if !no_empty || last < s.len() {
         piece(&mut out, last, s.len());
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn preg_quote(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let delim = match arg(args, 1) {
-        Value::Null => None,
+        v if v.is_null() => None,
         v => v.to_php_string().and_then(|d| d.as_bytes().first().copied()),
     };
     let mut out = Vec::with_capacity(s.len());
@@ -1145,14 +1135,14 @@ fn preg_quote(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
         }
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn preg_grep(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let regex = str_arg(args, 0);
-    let Value::Array(input) = arg(args, 1) else { return Ok(Value::Bool(false)) };
+    let Ok(input) = arg(args, 1).into_array() else { return Ok(Value::FALSE) };
     let invert = int_arg(args, 2, 0) & GREP_INVERT != 0;
-    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::Bool(false)) };
+    let Some(c) = compiled_str(ctx, &regex) else { return Ok(Value::FALSE) };
     set_error(ctx, NO_ERROR);
     let mut out = PhpArray::new();
     let mut spare = Spare::of(ctx, &c);
@@ -1173,7 +1163,7 @@ fn preg_grep(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn last_error(_: &mut dyn Ctx) -> i64 {
@@ -1181,7 +1171,7 @@ fn last_error(_: &mut dyn Ctx) -> i64 {
 }
 
 fn preg_last_error(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(last_error(ctx)))
+    Ok(Value::int(last_error(ctx)))
 }
 
 fn preg_last_error_msg(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1195,5 +1185,5 @@ fn preg_last_error_msg(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Thro
         JIT_STACKLIMIT_ERROR => "JIT stack limit exhausted",
         _ => "Unknown error",
     };
-    Ok(Value::Str(PhpStr::from(msg)))
+    Ok(Value::str(PhpStr::from(msg)))
 }

@@ -187,7 +187,7 @@ impl Connection for SqliteConn {
             ATTR_CLIENT_VERSION | ATTR_SERVER_VERSION => {
                 let mut p = self.engine.prepare("SELECT sqlite_version()").ok()?;
                 match p.step().ok()?? .into_iter().next()? {
-                    Val::Text(t) => Some(Value::Str(p8_runtime::string::PhpStr::new(t))),
+                    Val::Text(t) => Some(Value::str(p8_runtime::string::PhpStr::new(t))),
                     _ => None,
                 }
             }
@@ -206,27 +206,31 @@ impl Connection for SqliteConn {
 }
 
 fn int_param(ctx: &mut dyn Ctx, value: &Value) -> Result<i64, Throw> {
-    match value {
-        Value::Int(i) => Ok(*i),
-        Value::Bool(b) => Ok(i64::from(*b)),
-        Value::Str(s) => match p8_runtime::numeric::numeric_string(s.as_bytes()) {
+    if let Some(i) = value.as_int() {
+        Ok(i)
+    } else if let Some(b) = value.as_bool() {
+        Ok(i64::from(b))
+    } else if let Some(s) = value.as_str() {
+        match p8_runtime::numeric::numeric_string(s.as_bytes()) {
             Some(p8_runtime::numeric::Number::Int(i)) => Ok(i),
             _ => Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(value)))),
-        },
-        other => Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(other)))),
+        }
+    } else {
+        Err(ctx.throw("TypeError", format!("Attribute value must be of type int for selected attribute, {} given", p8_runtime::args::value_name(value))))
     }
 }
 
 // ---- user-defined functions (checked, not run: see the crate docs) ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn name_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<String, Throw> {
-    match arg(args, 0) {
-        Value::Str(s) => Ok(String::from_utf8_lossy(s.as_bytes()).into_owned()),
-        other => Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($function_name) must be of type string, {} given", p8_runtime::args::value_name(&other)))),
+    let v = arg(args, 0);
+    match v.as_str() {
+        Some(s) => Ok(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+        None => Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($function_name) must be of type string, {} given", p8_runtime::args::value_name(&v)))),
     }
 }
 
@@ -244,14 +248,14 @@ fn create_function(ctx: &mut dyn Ctx, conn: &mut SqliteConn, func: &str, args: &
     let name = name_arg(ctx, &full, args)?;
     callable_arg(ctx, &full, args, 1, "callback")?;
     let n = arg(args, 2);
-    if let Value::Int(n) = n
+    if let Some(n) = n.as_int()
         && n < -1
     {
         ctx.warn(&format!("{full}(): Argument #3 ($num_args) must be greater than or equal to -1"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     conn.functions.push(name);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn create_aggregate(ctx: &mut dyn Ctx, conn: &mut SqliteConn, func: &str, args: &mut [Value]) -> Result<Value, Throw> {
@@ -260,7 +264,7 @@ fn create_aggregate(ctx: &mut dyn Ctx, conn: &mut SqliteConn, func: &str, args: 
     callable_arg(ctx, &full, args, 1, "step")?;
     callable_arg(ctx, &full, args, 2, "finalize")?;
     conn.functions.push(name);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn create_collation(ctx: &mut dyn Ctx, conn: &mut SqliteConn, func: &str, args: &mut [Value]) -> Result<Value, Throw> {
@@ -268,7 +272,7 @@ fn create_collation(ctx: &mut dyn Ctx, conn: &mut SqliteConn, func: &str, args: 
     let name = name_arg(ctx, &full, args)?;
     callable_arg(ctx, &full, args, 1, "callback")?;
     conn.functions.push(name);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 // ---- statements ----
@@ -424,7 +428,7 @@ impl Statement for SqliteStmt {
 
     fn get_attribute(&mut self, attr: i64) -> Option<Value> {
         match attr {
-            SQLITE_ATTR_READONLY_STATEMENT => Some(Value::Bool(self.p.readonly())),
+            SQLITE_ATTR_READONLY_STATEMENT => Some(Value::bool(self.p.readonly())),
             _ => None,
         }
     }

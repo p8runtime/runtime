@@ -163,7 +163,7 @@ struct Sock {
 // ---- helpers ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn text(v: &Value) -> String {
@@ -171,7 +171,7 @@ fn text(v: &Value) -> String {
 }
 
 fn set_ref(args: &[Value], i: usize, v: Value) {
-    if let Some(Value::Ref(r)) = args.get(i) {
+    if let Some(r) = args.get(i).and_then(Value::as_reference) {
         *r.borrow_mut() = v;
     }
 }
@@ -186,14 +186,15 @@ fn strerror(code: i64) -> String {
 }
 
 fn sock_arg(ctx: &mut dyn Ctx, func: &str, args: &[Value], i: usize) -> Result<Rc<Object>, Throw> {
-    match arg(args, i) {
-        Value::Object(o) if o.native::<Sock>().is_some() => {
+    let v = arg(args, i);
+    match v.as_object() {
+        Some(o) if o.native::<Sock>().is_some() => {
             if matches!(*o.native::<Sock>().expect("a Socket").state.borrow(), State::Closed) {
                 return Err(ctx.throw("Error", format!("{func}(): Argument #{} ($socket) has already been closed", i + 1)));
             }
-            Ok(o)
+            Ok(Rc::clone(o))
         }
-        v => Err(ctx.throw("TypeError", format!("{func}(): Argument #{} ($socket) must be of type Socket, {} given", i + 1, v.type_name()))),
+        _ => Err(ctx.throw("TypeError", format!("{func}(): Argument #{} ($socket) must be of type Socket, {} given", i + 1, v.type_name()))),
     }
 }
 
@@ -208,7 +209,7 @@ fn failed(ctx: &mut dyn Ctx, s: &Sock, what: &str, e: &std::io::Error) -> Value 
     s.error.set(code);
     LAST_ERROR.with(|l| l.set(code));
     ctx.warn(&format!("{what} [{code}]: {}", strerror(code)));
-    Value::Bool(false)
+    Value::FALSE
 }
 
 fn new_socket(ctx: &mut dyn Ctx, domain: i64, kind: i64, state: State) -> Value {
@@ -218,7 +219,7 @@ fn new_socket(ctx: &mut dyn Ctx, domain: i64, kind: i64, state: State) -> Value 
     s.domain.set(domain);
     s.kind.set(kind);
     *s.state.borrow_mut() = state;
-    Value::Object(o.sibling(class, Some(Rc::new(s))))
+    Value::object(o.sibling(class, Some(Rc::new(s))))
 }
 
 fn inet_addr(host: &str, port: i64) -> std::io::Result<SocketAddr> {
@@ -240,7 +241,7 @@ fn socket_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     if kind != SOCK_STREAM {
         ctx.warn("socket_create(): Unable to create socket [43]: Protocol not supported");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     Ok(new_socket(ctx, domain, kind, State::Unbound))
 }
@@ -265,7 +266,7 @@ fn socket_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match bound {
         Ok(state) => {
             *s.state.borrow_mut() = state;
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => Ok(failed(ctx, s, "socket_bind(): Unable to bind address", &e)),
     }
@@ -278,7 +279,7 @@ fn socket_listen(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if !listening {
         return Ok(failed(ctx, s, "socket_listen(): Unable to listen on socket", &std::io::Error::from_raw_os_error(22)));
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn socket_accept(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -293,7 +294,7 @@ fn socket_accept(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Ok(state) => Ok(new_socket(ctx, s.domain.get(), s.kind.get(), state)),
         Err(e) if would_block(&e) => {
             s.error.set(i64::from(e.raw_os_error().unwrap_or(35)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         Err(e) => Ok(failed(ctx, s, "socket_accept(): unable to accept incoming connection", &e)),
     }
@@ -306,7 +307,7 @@ fn socket_connect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let connected = if s.domain.get() == AF_UNIX {
         UnixStream::connect(&address).map(State::Unix)
     } else {
-        if args.len() < 3 || matches!(arg(args, 2), Value::Null) {
+        if args.len() < 3 || arg(args, 2).is_null() {
             return Err(ctx.throw("ValueError", "socket_connect(): Argument #3 ($port) cannot be null when the socket type is AF_INET".into()));
         }
         inet_addr(&address, arg(args, 2).to_int()).and_then(TcpStream::connect).map(State::Tcp)
@@ -317,7 +318,7 @@ fn socket_connect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
                 let _ = t.set_nonblocking(s.nonblocking.get());
             }
             *s.state.borrow_mut() = state;
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => Ok(failed(ctx, s, "socket_connect(): unable to connect", &e)),
     }
@@ -336,11 +337,11 @@ fn name_of(ctx: &mut dyn Ctx, args: &[Value], func: &str, peer: bool) -> R {
     };
     match found {
         Ok((address, port)) => {
-            set_ref(args, 1, Value::Str(PhpStr::from(address.as_str())));
+            set_ref(args, 1, Value::str(PhpStr::from(address.as_str())));
             if let Some(port) = port {
-                set_ref(args, 2, Value::Int(port));
+                set_ref(args, 2, Value::int(port));
             }
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         Err(e) => Ok(failed(ctx, s, &format!("{func}(): unable to retrieve {} name", if peer { "peer" } else { "socket" }), &e)),
     }
@@ -396,10 +397,10 @@ fn socket_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     let line = args.len() > 2 && arg(args, 2).to_int() == PHP_NORMAL_READ;
     match read_some(s, len as usize, line) {
-        Ok(b) => Ok(Value::Str(PhpStr::from(&b[..]))),
+        Ok(b) => Ok(Value::str(PhpStr::from(&b[..]))),
         Err(e) if would_block(&e) => {
             s.error.set(i64::from(e.raw_os_error().unwrap_or(35)));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         Err(e) => Ok(failed(ctx, s, "socket_read(): unable to read from socket", &e)),
     }
@@ -420,12 +421,12 @@ fn send(ctx: &mut dyn Ctx, args: &[Value], func: &str, len_at: usize) -> R {
     let s = sock(&o);
     let data = arg(args, 1).to_php_string().unwrap_or_else(PhpStr::empty);
     let mut bytes = data.as_bytes();
-    if let Some(v) = args.get(len_at).map(Value::deref).filter(|v| !matches!(v, Value::Null)) {
+    if let Some(v) = args.get(len_at).map(Value::deref).filter(|v| !v.is_null()) {
         let n = v.to_int().max(0) as usize;
         bytes = &bytes[..n.min(bytes.len())];
     }
     match write_some(s, bytes) {
-        Ok(n) => Ok(Value::Int(n as i64)),
+        Ok(n) => Ok(Value::int(n as i64)),
         Err(e) => Ok(failed(ctx, s, &format!("{func}(): unable to write to socket"), &e)),
     }
 }
@@ -445,11 +446,11 @@ fn socket_recv(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     match read_some(s, len, false) {
         Ok(b) => {
             let n = b.len() as i64;
-            set_ref(args, 1, if b.is_empty() { Value::Null } else { Value::Str(PhpStr::from(&b[..])) });
-            Ok(Value::Int(n))
+            set_ref(args, 1, if b.is_empty() { Value::NULL } else { Value::str(PhpStr::from(&b[..])) });
+            Ok(Value::int(n))
         }
         Err(e) => {
-            set_ref(args, 1, Value::Null);
+            set_ref(args, 1, Value::NULL);
             Ok(failed(ctx, s, "socket_recv(): unable to read from socket", &e))
         }
     }
@@ -469,7 +470,7 @@ fn socket_shutdown(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         _ => Err(std::io::Error::from_raw_os_error(57)),
     };
     match done {
-        Ok(()) => Ok(Value::Bool(true)),
+        Ok(()) => Ok(Value::TRUE),
         Err(e) => Ok(failed(ctx, s, "socket_shutdown(): Unable to shutdown socket", &e)),
     }
 }
@@ -477,7 +478,7 @@ fn socket_shutdown(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn socket_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = sock_arg(ctx, "socket_close", args, 0)?;
     *sock(&o).state.borrow_mut() = State::Closed;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn socket_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -491,7 +492,7 @@ fn socket_set_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         let _ = t.set_nodelay(arg(args, 3).to_bool());
     }
     s.options.borrow_mut().insert((level, name), arg(args, 3));
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn socket_get_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -501,12 +502,12 @@ fn socket_get_option(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let so_type = if cfg!(target_os = "macos") { 0x1008 } else { 3 };
     let so_error = if cfg!(target_os = "macos") { 0x1007 } else { 4 };
     if name == so_type {
-        return Ok(Value::Int(s.kind.get()));
+        return Ok(Value::int(s.kind.get()));
     }
     if name == so_error {
-        return Ok(Value::Int(s.error.get()));
+        return Ok(Value::int(s.error.get()));
     }
-    Ok(s.options.borrow().get(&(level, name)).cloned().unwrap_or(Value::Int(0)))
+    Ok(s.options.borrow().get(&(level, name)).cloned().unwrap_or(Value::int(0)))
 }
 
 fn blocking(ctx: &mut dyn Ctx, args: &[Value], func: &str, nonblocking: bool) -> R {
@@ -520,7 +521,7 @@ fn blocking(ctx: &mut dyn Ctx, args: &[Value], func: &str, nonblocking: bool) ->
         State::Unix(u) => u.set_nonblocking(nonblocking),
         _ => Ok(()),
     };
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn socket_set_nonblock(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -532,23 +533,23 @@ fn socket_set_block(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn socket_last_error(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    if args.is_empty() || matches!(arg(args, 0), Value::Null) {
-        return Ok(Value::Int(LAST_ERROR.with(Cell::get)));
+    if args.is_empty() || arg(args, 0).is_null() {
+        return Ok(Value::int(LAST_ERROR.with(Cell::get)));
     }
     let o = sock_arg(ctx, "socket_last_error", args, 0)?;
-    Ok(Value::Int(sock(&o).error.get()))
+    Ok(Value::int(sock(&o).error.get()))
 }
 
 fn socket_clear_error(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    if args.is_empty() || matches!(arg(args, 0), Value::Null) {
+    if args.is_empty() || arg(args, 0).is_null() {
         LAST_ERROR.with(|l| l.set(0));
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let o = sock_arg(ctx, "socket_clear_error", args, 0)?;
     sock(&o).error.set(0);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn socket_strerror(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Str(PhpStr::from(strerror(arg(args, 0).to_int()).as_str())))
+    Ok(Value::str(PhpStr::from(strerror(arg(args, 0).to_int()).as_str())))
 }
