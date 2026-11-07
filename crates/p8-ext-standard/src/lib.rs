@@ -243,11 +243,11 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
     for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
-            defaults::ConstValue::int(i) => Constant::Int(*i),
-            defaults::ConstValue::float(bits) => Constant::Float(f64::from_bits(*bits)),
-            defaults::ConstValue::str(s) => Constant::Str(s),
-            defaults::ConstValue::bool(b) => Constant::Bool(*b),
-            defaults::ConstValue::NULL => Constant::Null,
+            defaults::ConstValue::Int(i) => Constant::Int(*i),
+            defaults::ConstValue::Float(bits) => Constant::Float(f64::from_bits(*bits)),
+            defaults::ConstValue::Str(s) => Constant::Str(s),
+            defaults::ConstValue::Bool(b) => Constant::Bool(*b),
+            defaults::ConstValue::Null => Constant::Null,
         };
         registry.add_constant_in(module, name, value);
         if let Some(message) = deprecation {
