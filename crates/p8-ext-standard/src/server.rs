@@ -9,7 +9,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Constant, Ctx, Extension, Registry, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 /// The key the host keeps the request's headers (original case) under.
 pub const REQUEST_HEADERS: &str = "cli_server_request_headers";
@@ -31,10 +30,8 @@ fn register(registry: &mut Registry) {
 
 /// The request's headers, as the client wrote their names.
 fn apache_request_headers(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(match ctx.state(REQUEST_HEADERS).clone() {
-        v @ Value::Array(_) => v,
-        _ => Value::Array(Rc::new(PhpArray::new())),
-    })
+    let v = ctx.state(REQUEST_HEADERS);
+    Ok(if v.is_array() { v.clone() } else { Value::array(PhpArray::new()) })
 }
 
 /// The response headers set so far, by name (a later one of a name wins).
@@ -53,7 +50,7 @@ fn apache_response_headers(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, 
         while value < h.len() && matches!(h[value], b' ' | b'\t') {
             value += 1;
         }
-        out.insert(Key::from_string(PhpStr::from(&h[..end])), Value::Str(PhpStr::from(&h[value..])));
+        out.insert(Key::from_string(PhpStr::from(&h[..end])), Value::str(PhpStr::from(&h[value..])));
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }

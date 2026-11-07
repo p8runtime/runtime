@@ -15,7 +15,6 @@ use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 const FLOAT_PRECISION: usize = 6;
 const MAX_FLOAT_PRECISION: usize = 53;
@@ -203,7 +202,7 @@ impl<'a> Args<'a> {
 fn star(ctx: &mut dyn Ctx, fmt: &[u8], i: &mut usize, args: &mut Args, what: &str, min: i64) -> Result<Option<i64>, Throw> {
     let n = argnum(ctx, fmt, i)?;
     let Some(v) = args.take(n) else { return Ok(None) };
-    let Value::Int(v) = v.deref() else {
+    let Some(v) = v.deref().as_int() else {
         return Err(ctx.throw("ValueError", format!("{what} must be an integer")));
     };
     if v < min || v > INT_MAX {
@@ -215,20 +214,19 @@ fn star(ctx: &mut dyn Ctx, fmt: &[u8], i: &mut usize, args: &mut Args, what: &st
 /// zval_get_tmp_string(): a string, an object's __toString(), or "Array"
 /// with a warning.
 pub(crate) fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
-    match v.deref() {
-        Value::Array(_) => {
-            ctx.warn("Array to string conversion");
-            Ok(PhpStr::from("Array"))
-        }
-        Value::Object(o) => {
-            if o.class.method(b"__tostring").is_none() {
-                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
-            }
-            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::str("__toString")])));
-            Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty))
-        }
-        v => Ok(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+    let v = v.deref();
+    if v.is_array() {
+        ctx.warn("Array to string conversion");
+        return Ok(PhpStr::from("Array"));
     }
+    if let Some(o) = v.as_object() {
+        if o.class.method(b"__tostring").is_none() {
+            return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
+        }
+        let method = Value::array(PhpArray::from_list(vec![Value::object(o.clone()), Value::str("__toString")]));
+        return Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty));
+    }
+    Ok(v.to_php_string().unwrap_or_else(PhpStr::empty))
 }
 
 /// php_formatted_print(): `format` with `args`; `fname` for messages.
@@ -344,8 +342,8 @@ pub fn formatted(ctx: &mut dyn Ctx, fname: &str, format: &[u8], args: &[Value], 
 
 /// The values of a v*printf() array, in order.
 pub fn array_values(v: &Value) -> Vec<Value> {
-    match v {
-        Value::Array(a) => a.values().cloned().collect(),
-        _ => Vec::new(),
+    match v.as_array() {
+        Some(a) => a.values().cloned().collect(),
+        None => Vec::new(),
     }
 }

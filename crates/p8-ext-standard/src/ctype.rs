@@ -25,17 +25,17 @@ pub static BUILTINS: &[Builtin] = &[
 /// int, the deprecated fallback (`digits`/`minus`: the answer for a
 /// number outside -128..255, positive or negative).
 fn ctype(ctx: &mut dyn Ctx, func: &str, args: &[Value], is: fn(u8) -> bool, digits: bool, minus: bool) -> Result<Value, Throw> {
-    let v = args.first().map(Value::deref).unwrap_or(Value::Null);
-    if let Value::Str(s) = &v {
-        return Ok(Value::Bool(!s.is_empty() && s.as_bytes().iter().all(|&c| is(c))));
+    let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
+    if let Some(s) = v.as_str() {
+        return Ok(Value::bool(!s.is_empty() && s.as_bytes().iter().all(|&c| is(c))));
     }
     ctx.report(8192, &format!("{func}(): Argument of type {} will be interpreted as string in the future", v.type_name()));
-    Ok(Value::Bool(match v {
-        Value::Int(n @ 0..=255) => is(n as u8),
-        Value::Int(n @ -128..=-1) => is((n + 256) as u8),
-        Value::Int(n) if n >= 0 => digits,
-        Value::Int(_) => minus,
-        _ => false,
+    Ok(Value::bool(match v.as_int() {
+        Some(n @ 0..=255) => is(n as u8),
+        Some(n @ -128..=-1) => is((n + 256) as u8),
+        Some(n) if n >= 0 => digits,
+        Some(_) => minus,
+        None => false,
     }))
 }
 
