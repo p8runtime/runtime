@@ -863,13 +863,27 @@ pub trait Slot {
     fn assign(&self, v: Value);
 }
 
+/// Put `v` back into a slot that holds the Undef its look left there.
+/// What comes out is that Undef, so it is forgotten rather than dropped:
+/// `Cell::set` would reload the slot and test its tag again, because the
+/// code in between (a clone's count increment, a release) may have
+/// written memory the compiler cannot tell apart from the slot. That
+/// reload and branch were most of what a `Cell` look cost over a borrow.
+/// (Code that broke `peek`'s contract and wrote the slot meanwhile would
+/// only leak that value: still safe.)
+#[inline(always)]
+fn put_back(slot: &Cell<Value>, v: Value) {
+    let undef = slot.replace(v);
+    debug_assert!(undef.is_undef());
+    std::mem::forget(undef);
+}
+
 impl Slot for Cell<Value> {
     #[inline(always)]
     fn peek<R>(&self, f: impl FnOnce(&Value) -> R) -> R {
         let v = self.replace(Value::UNDEF);
         let r = f(&v);
-        // (What `set` drops is the Undef put there: nothing.)
-        self.set(v);
+        put_back(self, v);
         r
     }
 
@@ -882,7 +896,7 @@ impl Slot for Cell<Value> {
     fn modify<R>(&self, f: impl FnOnce(&mut Value) -> R) -> R {
         let mut v = self.replace(Value::UNDEF);
         let r = f(&mut v);
-        self.set(v);
+        put_back(self, v);
         r
     }
 
@@ -893,10 +907,17 @@ impl Slot for Cell<Value> {
             // (The reference back in the slot, the value into it.)
             let v = self.replace(Value::UNDEF);
             let prev = std::mem::replace(&mut *cell.borrow_mut(), v);
-            self.set(old);
+            put_back(self, old);
             drop(prev);
         }
     }
+}
+
+/// [`Slot::modify`]'s put-back, for the interpreter's own write arms
+/// that take a slot's value out themselves (`Cell::replace(Value::UNDEF)`).
+#[inline(always)]
+pub fn put_slot(slot: &Cell<Value>, v: Value) {
+    put_back(slot, v);
 }
 
 /// An object's declared property slots: up to INLINE_PROPS inside the

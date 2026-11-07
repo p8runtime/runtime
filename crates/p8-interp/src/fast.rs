@@ -212,7 +212,7 @@ impl Context<'_> {
                             // whatever this released.)
                             let mut cur = s.replace(Value::UNDEF);
                             let _ = put_var(&mut cur, $w[rx!(val as usize)].clone());
-                            s.set(cur);
+                            p8_runtime::object::put_slot(s, cur);
                             true
                         }
                         _ => false,
