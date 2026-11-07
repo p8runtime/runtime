@@ -9,9 +9,8 @@ use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cmp::Ordering;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "strtok", run: strtok, by_ref: &[] },
@@ -53,15 +52,15 @@ pub static BUILTINS: &[Builtin] = &[
 ];
 
 fn bytes(v: Vec<u8>) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::new(v)))
+    Ok(Value::str(PhpStr::new(v)))
 }
 
 /// strip_tags(string $string, array|string|null $allowed_tags = null)
 fn strip_tags(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let allowed: Vec<Vec<u8>> = match arg(args, 1) {
-        Value::Array(a) => a.values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase()).collect(),
-        Value::Null => Vec::new(),
+        v if v.is_array() => v.as_array().expect("an array").values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase()).collect(),
+        v if v.is_null() => Vec::new(),
         v => {
             let t = v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase();
             t.split(|&c| c == b'<' || c == b'>').filter(|x| !x.is_empty()).map(<[u8]>::to_vec).collect()
@@ -371,16 +370,16 @@ fn parse(url: &[u8]) -> Option<Url> {
 fn parse_url(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let url = str_arg(args, 0);
     let component = if args.len() > 1 { arg(args, 1).to_int() } else { -1 };
-    let Some(mut u) = parse(url.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Some(mut u) = parse(url.as_bytes()) else { return Ok(Value::FALSE) };
     // An empty URL is an empty path (php_url_parse_ex2).
     if url.is_empty() {
         u.path = Some(Vec::new());
     }
-    let s = |v: &Option<Vec<u8>>| v.as_ref().map(|b| Value::Str(PhpStr::from(b.as_slice())));
+    let s = |v: &Option<Vec<u8>>| v.as_ref().map(|b| Value::str(PhpStr::from(b.as_slice())));
     let parts = [
         ("scheme", s(&u.scheme)),
         ("host", s(&u.host)),
-        ("port", u.port.map(Value::Int)),
+        ("port", u.port.map(Value::int)),
         ("user", s(&u.user)),
         ("pass", s(&u.pass)),
         ("path", s(&u.path)),
@@ -391,7 +390,7 @@ fn parse_url(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         if component > 7 {
             return Err(ctx.throw("ValueError", "parse_url(): Argument #2 ($component) must be a valid URL component identifier, ".to_string() + &component.to_string() + " given"));
         }
-        return Ok(parts[component as usize].1.clone().unwrap_or(Value::Null));
+        return Ok(parts[component as usize].1.clone().unwrap_or(Value::NULL));
     }
     let mut out = PhpArray::new();
     for (k, v) in parts {
@@ -399,7 +398,7 @@ fn parse_url(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.insert(Key::from_string(PhpStr::from(k)), v);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// urlencode (`raw` false: space as '+') / rawurlencode (RFC 3986).
@@ -455,25 +454,26 @@ fn rawurldecode(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn http_build_query(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let prefix = str_arg(args, 1);
     let sep = match arg(args, 2) {
-        Value::Null => b"&".to_vec(),
+        v if v.is_null() => b"&".to_vec(),
         v => v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec(),
     };
     let raw = args.len() > 3 && arg(args, 3).to_int() == 2;
     let mut pairs: Vec<Vec<u8>> = Vec::new();
     fn walk(v: &Value, name: Option<Vec<u8>>, prefix: &[u8], raw: bool, pairs: &mut Vec<Vec<u8>>) {
-        let entries: Vec<(Key, Value)> = match v.deref() {
-            Value::Array(a) => a.iter().map(|(k, v)| (k, v.deref())).collect(),
-            Value::Object(o) => {
-                let mut e: Vec<(Key, Value)> = Vec::new();
-                for (p, val) in o.class.properties.iter().zip(o.slots.borrow().iter()) {
-                    if p.visibility == p8_runtime::object::Visibility::Public && !p.is_internal() && !matches!(val, Value::Undef) {
-                        e.push((Key::from_string(p.name.clone()), val.deref()));
-                    }
+        let v = v.deref();
+        let entries: Vec<(Key, Value)> = if let Some(a) = v.as_array() {
+            a.iter().map(|(k, v)| (k, v.deref())).collect()
+        } else if let Some(o) = v.as_object() {
+            let mut e: Vec<(Key, Value)> = Vec::new();
+            for (p, val) in o.class.properties.iter().zip(o.slots.borrow().iter()) {
+                if p.visibility == p8_runtime::object::Visibility::Public && !p.is_internal() && !val.is_undef() {
+                    e.push((Key::from_string(p.name.clone()), val.deref()));
                 }
-                e.extend(o.dynamic.borrow().iter().map(|(k, v)| (k, v.deref())));
-                e
             }
-            _ => return,
+            e.extend(o.dynamic.borrow().iter().map(|(k, v)| (k, v.deref())));
+            e
+        } else {
+            return;
         };
         for (k, v) in entries {
             let key: Vec<u8> = match (&k, &name) {
@@ -485,12 +485,12 @@ fn http_build_query(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
                 Some(n) => [n.as_slice(), b"%5B", &url_encode(&key, raw), b"%5D"].concat(),
                 None => url_encode(&key, raw),
             };
-            match v {
-                Value::Array(_) | Value::Object(_) => walk(&v, Some(full), prefix, raw, pairs),
-                Value::Null => {}
-                Value::Bool(b) => pairs.push([full.as_slice(), b"=", if b { b"1" } else { b"0" }].concat()),
-                other => {
-                    let s = other.to_php_string().unwrap_or_else(PhpStr::empty);
+            match v.kind() {
+                Kind::Array | Kind::Object => walk(&v, Some(full), prefix, raw, pairs),
+                Kind::Null => {}
+                Kind::Bool => pairs.push([full.as_slice(), b"=", if v.as_bool().expect("a bool") { b"1" } else { b"0" }].concat()),
+                _ => {
+                    let s = v.to_php_string().unwrap_or_else(PhpStr::empty);
                     pairs.push([full.as_slice(), b"=", &url_encode(s.as_bytes(), raw)].concat());
                 }
             }
@@ -536,23 +536,23 @@ fn parse_str(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             let k = match key {
                 Some(k) => Key::from_string(PhpStr::new(k)),
                 None => {
-                    let _ = into.push(Value::Array(Rc::new(PhpArray::new())));
+                    let _ = into.push(Value::array(PhpArray::new()));
                     Key::Int(into.len() as i64 - 1)
                 }
             };
-            let mut child = match into.get(&k) {
-                Some(Value::Array(a)) => (**a).clone(),
-                _ => PhpArray::new(),
+            let mut child = match into.get(&k).and_then(Value::as_array) {
+                Some(a) => a.clone(),
+                None => PhpArray::new(),
             };
             set(&mut child, next.clone(), more, value);
-            into.insert(k, Value::Array(Rc::new(child)));
+            into.insert(k, Value::array(child));
         }
-        set(&mut out, Some(base), &path, Value::Str(PhpStr::new(value)));
+        set(&mut out, Some(base), &path, Value::str(PhpStr::new(value)));
     }
-    if let Some(Value::Ref(cell)) = args.get(1) {
-        *cell.borrow_mut() = Value::Array(Rc::new(out));
+    if let Some(cell) = args.get(1).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::array(out);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -587,11 +587,11 @@ fn base64_decode(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                 pad += 1;
                 continue;
             }
-            _ if strict && !c.is_ascii_whitespace() => return Ok(Value::Bool(false)),
+            _ if strict && !c.is_ascii_whitespace() => return Ok(Value::FALSE),
             _ => continue,
         };
         if pad > 0 && strict {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         acc = (acc << 6) | u32::from(v);
         bits += 6;
@@ -601,7 +601,7 @@ fn base64_decode(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
     }
     if strict && (bits >= 6 || pad > 2) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     bytes(out)
 }
@@ -681,23 +681,23 @@ fn span_subject(args: &[Value]) -> Vec<u8> {
     let offset = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
     let start = if offset < 0 { (n + offset).max(0) } else { offset.min(n) } as usize;
     let end = match args.get(3).map(Value::deref) {
-        None | Some(Value::Null) => b.len(),
-        Some(l) => {
+        Some(l) if !l.is_null() => {
             let l = l.to_int();
             if l < 0 { ((n + l).max(start as i64)) as usize } else { (start + l as usize).min(b.len()) }
         }
+        _ => b.len(),
     };
     b[start..end.max(start)].to_vec()
 }
 
 fn strspn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mask = str_arg(args, 1);
-    Ok(Value::Int(span_subject(args).iter().take_while(|c| mask.as_bytes().contains(c)).count() as i64))
+    Ok(Value::int(span_subject(args).iter().take_while(|c| mask.as_bytes().contains(c)).count() as i64))
 }
 
 fn strcspn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mask = str_arg(args, 1);
-    Ok(Value::Int(span_subject(args).iter().take_while(|c| !mask.as_bytes().contains(c)).count() as i64))
+    Ok(Value::int(span_subject(args).iter().take_while(|c| !mask.as_bytes().contains(c)).count() as i64))
 }
 
 fn strpbrk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -707,8 +707,8 @@ fn strpbrk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Err(ctx.throw("ValueError", "strpbrk(): Argument #2 ($characters) must be a non-empty string".into()));
     }
     Ok(match s.as_bytes().iter().position(|c| chars.as_bytes().contains(c)) {
-        Some(i) => Value::Str(PhpStr::from(&s.as_bytes()[i..])),
-        None => Value::Bool(false),
+        Some(i) => Value::str(PhpStr::from(&s.as_bytes()[i..])),
+        None => Value::FALSE,
     })
 }
 
@@ -725,23 +725,23 @@ fn substr_compare(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         return Err(ctx.throw("ValueError", "substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($main_str)".into()));
     }
     let length = match args.get(3).map(Value::deref) {
-        None | Some(Value::Null) => None,
-        Some(v) => {
+        Some(v) if !v.is_null() => {
             let l = v.to_int();
             if l < 0 {
                 return Err(ctx.throw("ValueError", "substr_compare(): Argument #4 ($length) must be greater than or equal to 0".into()));
             }
             Some(l as usize)
         }
+        _ => None,
     };
-    let ci = args.len() > 4 && arg(args, 4).to_bool();
+    let ci =args.len() > 4 && arg(args, 4).to_bool();
     let a = &h.as_bytes()[offset as usize..];
     let (a, b) = match length {
         Some(l) => (&a[..l.min(a.len())], &n.as_bytes()[..l.min(n.len())]),
         None => (a, n.as_bytes()),
     };
     let (a, b) = if ci { (a.to_ascii_lowercase(), b.to_ascii_lowercase()) } else { (a.to_vec(), b.to_vec()) };
-    Ok(Value::Int(compare_bytes(&a, &b)))
+    Ok(Value::int(compare_bytes(&a, &b)))
 }
 
 /// strcmp's result: the first differing bytes' difference, or the length difference.
@@ -779,11 +779,11 @@ fn similar(a: &[u8], b: &[u8]) -> usize {
 fn similar_text(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (a, b) = (str_arg(args, 0), str_arg(args, 1));
     let sim = similar(a.as_bytes(), b.as_bytes());
-    if let Some(Value::Ref(cell)) = args.get(2) {
+    if let Some(cell) = args.get(2).and_then(Value::as_reference) {
         let total = a.len() + b.len();
-        *cell.borrow_mut() = Value::Float(if total == 0 { 0.0 } else { sim as f64 * 2.0 * 100.0 / total as f64 });
+        *cell.borrow_mut() = Value::float(if total == 0 { 0.0 } else { sim as f64 * 2.0 * 100.0 / total as f64 });
     }
-    Ok(Value::Int(sim as i64))
+    Ok(Value::int(sim as i64))
 }
 
 /// levenshtein(string $string1, string $string2, int $insertion_cost = 1, int $replacement_cost = 1, int $deletion_cost = 1)
@@ -793,10 +793,10 @@ fn levenshtein(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (ins, rep, del) = (cost(2), cost(3), cost(4));
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.is_empty() {
-        return Ok(Value::Int(b.len() as i64 * ins));
+        return Ok(Value::int(b.len() as i64 * ins));
     }
     if b.is_empty() {
-        return Ok(Value::Int(a.len() as i64 * del));
+        return Ok(Value::int(a.len() as i64 * del));
     }
     let mut p1: Vec<i64> = (0..=b.len() as i64).map(|i| i * ins).collect();
     let mut p2 = vec![0i64; b.len() + 1];
@@ -811,7 +811,7 @@ fn levenshtein(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         let _ = i;
         std::mem::swap(&mut p1, &mut p2);
     }
-    Ok(Value::Int(p1[b.len()]))
+    Ok(Value::int(p1[b.len()]))
 }
 
 fn soundex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -841,7 +841,7 @@ fn soundex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
     }
     if out.is_empty() {
-        return Ok(Value::Str(PhpStr::empty()));
+        return Ok(Value::str(PhpStr::empty()));
     }
     out.resize(4, b'0');
     bytes(out)
@@ -873,14 +873,14 @@ fn str_word_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
     }
     match format {
-        0 => Ok(Value::Int(words.len() as i64)),
-        1 => Ok(Value::Array(Rc::new(PhpArray::from_list(words.into_iter().map(|(_, w)| Value::Str(PhpStr::from(w))).collect())))),
+        0 => Ok(Value::int(words.len() as i64)),
+        1 => Ok(Value::array(PhpArray::from_list(words.into_iter().map(|(_, w)| Value::str(PhpStr::from(w))).collect()))),
         2 => {
             let mut out = PhpArray::new();
             for (at, w) in words {
-                out.insert(Key::Int(at as i64), Value::Str(PhpStr::from(w)));
+                out.insert(Key::Int(at as i64), Value::str(PhpStr::from(w)));
             }
-            Ok(Value::Array(Rc::new(out)))
+            Ok(Value::array(out))
         }
         _ => Err(ctx.throw("ValueError", "str_word_count(): Argument #2 ($format) must be a valid format value".into())),
     }
@@ -899,10 +899,10 @@ fn count_chars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         0..=2 => {
             for (c, &n) in counts.iter().enumerate() {
                 if mode == 0 || (mode == 1 && n > 0) || (mode == 2 && n == 0) {
-                    out.insert(Key::Int(c as i64), Value::Int(n));
+                    out.insert(Key::Int(c as i64), Value::int(n));
                 }
             }
-            Ok(Value::Array(Rc::new(out)))
+            Ok(Value::array(out))
         }
         3 | 4 => {
             let picked: Vec<u8> = (0..=255u8).filter(|&c| (counts[c as usize] > 0) == (mode == 3)).collect();
@@ -1059,7 +1059,7 @@ fn trim_zeros(d: &[u8]) -> &[u8] {
 }
 
 fn ordering(o: Ordering) -> Value {
-    Value::Int(match o {
+    Value::int(match o {
         Ordering::Less => -1,
         Ordering::Equal => 0,
         Ordering::Greater => 1,
@@ -1075,9 +1075,9 @@ fn strnatcasecmp(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn nat_sort(args: &[Value], fold: bool) -> Result<Value, Throw> {
-    let Some(Value::Ref(cell)) = args.first() else { return Ok(Value::Bool(true)) };
+    let Some(cell) = args.first().and_then(Value::as_reference) else { return Ok(Value::TRUE) };
     let mut value = cell.borrow_mut();
-    if let Value::Array(a) = &*value {
+    if let Some(a) = value.as_array() {
         let mut entries: Vec<(usize, Key, Value)> = a.iter().enumerate().map(|(i, (k, v))| (i, k, v.clone())).collect();
         let text = |v: &Value| v.to_php_string().unwrap_or_else(PhpStr::empty);
         p8_runtime::sort::zend_sort(&mut entries, &mut |x, y| natural(text(&x.2).as_bytes(), text(&y.2).as_bytes(), fold).then(x.0.cmp(&y.0)));
@@ -1085,9 +1085,9 @@ fn nat_sort(args: &[Value], fold: bool) -> Result<Value, Throw> {
         for (_, k, v) in entries {
             out.insert(k, v);
         }
-        *value = Value::Array(Rc::new(out));
+        *value = Value::array(out);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn natsort(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1140,10 +1140,13 @@ pub(crate) fn escape_shell_cmd(b: &[u8]) -> Vec<u8> {
 fn setlocale(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut names: Vec<PhpStr> = Vec::new();
     for v in &args[1.min(args.len())..] {
-        match v.deref() {
-            Value::Array(a) => names.extend(a.values().map(|x| x.to_php_string().unwrap_or_else(PhpStr::empty))),
-            Value::Null => names.push(PhpStr::empty()),
-            other => names.push(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+        let v = v.deref();
+        if let Some(a) = v.as_array() {
+            names.extend(a.values().map(|x| x.to_php_string().unwrap_or_else(PhpStr::empty)));
+        } else if v.is_null() {
+            names.push(PhpStr::empty());
+        } else {
+            names.push(v.to_php_string().unwrap_or_else(PhpStr::empty));
         }
     }
     for n in names {
@@ -1151,7 +1154,7 @@ fn setlocale(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             return Ok(Value::str("C"));
         }
     }
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn localeconv(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -1166,51 +1169,51 @@ fn localeconv(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     put("positive_sign", Value::str(""));
     put("negative_sign", Value::str(""));
     for k in ["int_frac_digits", "frac_digits", "p_cs_precedes", "p_sep_by_space", "n_cs_precedes", "n_sep_by_space", "p_sign_posn", "n_sign_posn"] {
-        put(k, Value::Int(127));
+        put(k, Value::int(127));
     }
-    put("grouping", Value::Array(Rc::new(PhpArray::new())));
-    put("mon_grouping", Value::Array(Rc::new(PhpArray::new())));
-    Ok(Value::Array(Rc::new(out)))
+    put("grouping", Value::array(PhpArray::new()));
+    put("mon_grouping", Value::array(PhpArray::new()));
+    Ok(Value::array(out))
 }
 
 /// strtok($string, $token) starts on a string; strtok($token) goes on with
 /// it: the next run of bytes not in `token` (leading ones skipped), or
 /// false at its end (and the string is forgotten).
 fn strtok(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let token = if args.len() > 1 && !matches!(arg(args, 1), Value::Null) {
+    let token = if args.len() > 1 && !arg(args, 1).is_null() {
         let s = str_arg(args, 0);
-        *ctx.state("strtok") = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(s), Value::Int(0)])));
+        *ctx.state("strtok") = Value::array(PhpArray::from_list(vec![Value::str(s), Value::int(0)]));
         str_arg(args, 1)
     } else {
         str_arg(args, 0)
     };
-    let (s, mut p) = match &*ctx.state("strtok") {
-        Value::Array(a) => match (a.get(&Key::Int(0)), a.get(&Key::Int(1))) {
-            (Some(Value::Str(s)), Some(Value::Int(p))) => (s.clone(), *p as usize),
-            _ => return Ok(Value::Bool(false)),
+    let (s, mut p) = match ctx.state("strtok").as_array() {
+        Some(a) => match (a.get(&Key::Int(0)).and_then(Value::cloned_str), a.get(&Key::Int(1)).and_then(Value::as_int)) {
+            (Some(s), Some(p)) => (s, p as usize),
+            _ => return Ok(Value::FALSE),
         },
-        _ => {
+        None => {
             ctx.warn("strtok(): Both arguments must be provided when starting tokenization");
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let b = s.as_bytes();
     let delim = |c: u8| token.as_bytes().contains(&c);
     if p >= b.len() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     while p < b.len() && delim(b[p]) {
         p += 1;
     }
     if p >= b.len() {
-        *ctx.state("strtok") = Value::Null;
-        return Ok(Value::Bool(false));
+        *ctx.state("strtok") = Value::NULL;
+        return Ok(Value::FALSE);
     }
     let start = p;
     while p < b.len() && !delim(b[p]) {
         p += 1;
     }
     let out = PhpStr::from(&b[start..p]);
-    *ctx.state("strtok") = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Str(s.clone()), Value::Int(p as i64 + 1)])));
-    Ok(Value::Str(out))
+    *ctx.state("strtok") = Value::array(PhpArray::from_list(vec![Value::str(s.clone()), Value::int(p as i64 + 1)]));
+    Ok(Value::str(out))
 }
