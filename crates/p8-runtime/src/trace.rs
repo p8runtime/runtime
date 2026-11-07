@@ -10,7 +10,10 @@ use crate::string::PhpStr;
 use crate::value::{Kind, Value};
 
 fn text(v: &Value) -> String {
-    String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned()
+    match v.to_str_view() {
+        Some(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+        None => String::new(),
+    }
 }
 
 /// getTraceAsString: one line per frame, then {main}.

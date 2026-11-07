@@ -436,7 +436,7 @@ fn array_chunk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// The string forms of a value, for array_diff / array_intersect, which
 /// compare `(string) $a === (string) $b`.
 fn text(v: &Value) -> Vec<u8> {
-    v.deref().to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_else(|| b"Array".to_vec())
+    v.deref().to_str_view().map(|s| s.as_bytes().to_vec()).unwrap_or_else(|| b"Array".to_vec())
 }
 
 fn by_values(args: &[Value], keep_if_found: bool) -> Result<Value, Throw> {

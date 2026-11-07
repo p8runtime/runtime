@@ -499,7 +499,7 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
-    handlers, decls, is_generator, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
+    handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
 });
 record!(CompileDiag { level, message, line });
 record!(PartialSite { args, variadic, name, line });

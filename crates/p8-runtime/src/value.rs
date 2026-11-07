@@ -9,7 +9,7 @@
 
 use crate::array::PhpArray;
 use crate::object::Object;
-use crate::string::{PhpStr, StrHead};
+use crate::string::{IStr, PhpStr, StrHead};
 use crate::numeric::{Number, leading_numeric, numeric_string};
 use crate::number::{Precision, dval_to_lval, float_to_string};
 use std::borrow::Cow;
@@ -23,13 +23,13 @@ use std::rc::Rc;
 pub struct Value(Repr);
 
 /// The representation. The values that hold nothing to release come
-/// first (tags 0..=4) and the ones holding memory after, so "is there
+/// first (tags 0..=5) and the ones holding memory after, so "is there
 /// anything to release" is one compare of the tag (PHP's
 /// `Z_REFCOUNTED`): what `Drop` and `is_plain` test.
 ///
 /// `repr(u8)` with explicit discriminants makes the tag a byte with
 /// exactly these values (the reference's primitive-representation
-/// layout), so `is_plain` is `tag < 5` by definition, not by codegen.
+/// layout), so `is_plain` is `tag < 6` by definition, not by codegen.
 #[derive(Debug)]
 #[repr(u8)]
 enum Repr {
@@ -39,33 +39,45 @@ enum Repr {
     Float(f64) = 3,
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef = 4,
-    Str(PhpStr) = 5,
-    Array(Rc<PhpArray>) = 6,
+    /// A string in program memory (a compiled literal): a plain pointer,
+    /// no count to keep, nothing to release (PHP's interned strings,
+    /// which `Z_REFCOUNTED` is false for).
+    IStr(&'static IStr) = 5,
+    Str(PhpStr) = 6,
+    Array(Rc<PhpArray>) = 7,
     /// A PHP reference: the shared cell `$a = &$b` makes.
-    Ref(Rc<RefCell<Value>>) = 7,
+    Ref(Rc<RefCell<Value>>) = 8,
     /// An object: a shared handle (copying the value copies the handle).
-    Object(Rc<Object>) = 8,
+    Object(Rc<Object>) = 9,
 }
 
 /// The first tag holding memory: tags below it are plain.
-const FIRST_HEAP_TAG: u8 = 5;
+const FIRST_HEAP_TAG: u8 = 6;
 
 // The layout the engine is tuned for: a zval's 16 bytes, and `Option<Value>`
 // no bigger (the tag's spare values are its `None`).
 const _: () = assert!(mem::size_of::<Value>() == 16);
 const _: () = assert!(mem::size_of::<Option<Value>>() == 16);
-// `Kind` mirrors the tags one for one, so `kind()` is the tag itself.
+// `Kind` mirrors the tags, so `kind()` is the tag itself except that both
+// strings are `Kind::Str` (the program-memory one's tag, the last plain
+// one): the heap tags 6..=9 keep their numbers but for Str's.
 const _: () = {
     assert!(Kind::Null as u8 == 0);
     assert!(Kind::Bool as u8 == 1);
     assert!(Kind::Int as u8 == 2);
     assert!(Kind::Float as u8 == 3);
     assert!(Kind::Undef as u8 == 4);
-    assert!(Kind::Str as u8 == FIRST_HEAP_TAG);
-    assert!(Kind::Array as u8 == 6);
-    assert!(Kind::Ref as u8 == 7);
-    assert!(Kind::Object as u8 == 8);
+    assert!(Kind::Str as u8 == FIRST_HEAP_TAG - 1);
+    assert!(Kind::Array as u8 == FIRST_HEAP_TAG + 1);
+    assert!(Kind::Ref as u8 == 8);
+    assert!(Kind::Object as u8 == 9);
     assert!(mem::size_of::<Kind>() == 1);
+};
+// A program-memory string is a pointer: Copy, and shared by every thread.
+const _: () = {
+    const fn shared<T: Sync + 'static>() {}
+    shared::<IStr>();
+    assert!(mem::size_of::<&'static IStr>() == 8);
 };
 
 impl Default for Value {
@@ -113,6 +125,7 @@ impl Clone for Value {
             Repr::Bool(b) => Repr::Bool(*b),
             Repr::Int(i) => Repr::Int(*i),
             Repr::Float(f) => Repr::Float(*f),
+            Repr::IStr(s) => Repr::IStr(s),
             Repr::Str(s) => Repr::Str(s.clone()),
             Repr::Array(a) => Repr::Array(Rc::clone(a)),
             Repr::Ref(r) => Repr::Ref(Rc::clone(r)),
@@ -135,9 +148,9 @@ pub enum Kind {
     Float = 3,
     Undef = 4,
     Str = 5,
-    Array = 6,
-    Ref = 7,
-    Object = 8,
+    Array = 7,
+    Ref = 8,
+    Object = 9,
 }
 
 /// The accessor API: the only way code outside this module reads, writes
@@ -179,6 +192,22 @@ impl Value {
         Value(Repr::Str(s.into()))
     }
 
+    /// A program-memory string's value (a compiled literal): no count,
+    /// nothing to release.
+    #[inline(always)]
+    pub const fn istr(s: &'static IStr) -> Value {
+        Value(Repr::IStr(s))
+    }
+
+    /// The program-memory string this value holds, if it holds one.
+    #[inline(always)]
+    pub fn as_istr(&self) -> Option<&'static IStr> {
+        match self.0 {
+            Repr::IStr(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// An array value: from a `PhpArray` (one allocation for the handle)
     /// or an `Rc<PhpArray>` already shared.
     #[inline(always)]
@@ -210,7 +239,7 @@ impl Value {
             Repr::Int(_) => Kind::Int,
             Repr::Float(_) => Kind::Float,
             Repr::Undef => Kind::Undef,
-            Repr::Str(_) => Kind::Str,
+            Repr::IStr(_) | Repr::Str(_) => Kind::Str,
             Repr::Array(_) => Kind::Array,
             Repr::Ref(_) => Kind::Ref,
             Repr::Object(_) => Kind::Object,
@@ -257,7 +286,7 @@ impl Value {
 
     #[inline(always)]
     pub fn is_str(&self) -> bool {
-        matches!(self.0, Repr::Str(_))
+        matches!(self.0, Repr::IStr(_) | Repr::Str(_))
     }
 
     #[inline(always)]
@@ -276,11 +305,29 @@ impl Value {
     }
 
     /// Whether the value holds nothing to release (null, a bool, an int,
-    /// a float, undefined): overwriting it is a store. These are the
-    /// representation's first tags, so this is one compare.
+    /// a float, undefined, a program-memory string): overwriting it is a
+    /// store, copying it a copy. These are the representation's first
+    /// tags, so this is one compare.
     #[inline(always)]
     pub fn is_plain(&self) -> bool {
-        (self.kind() as u8) < FIRST_HEAP_TAG
+        self.tag() < FIRST_HEAP_TAG
+    }
+
+    /// The representation's tag (its `repr(u8)` discriminant).
+    #[inline(always)]
+    fn tag(&self) -> u8 {
+        match self.0 {
+            Repr::Null => 0,
+            Repr::Bool(_) => 1,
+            Repr::Int(_) => 2,
+            Repr::Float(_) => 3,
+            Repr::Undef => 4,
+            Repr::IStr(_) => 5,
+            Repr::Str(_) => 6,
+            Repr::Array(_) => 7,
+            Repr::Ref(_) => 8,
+            Repr::Object(_) => 9,
+        }
     }
 
     #[inline(always)]
@@ -330,6 +377,7 @@ impl Value {
     #[inline(always)]
     pub fn as_str(&self) -> Option<&StrHead> {
         match &self.0 {
+            Repr::IStr(s) => Some(s),
             Repr::Str(s) => Some(s),
             _ => None,
         }
@@ -373,7 +421,11 @@ impl Value {
 
     /// The string's bytes, for writing: separated first if shared
     /// (`PhpStr::make_mut`).
+    /// A program-memory string is copied out first (it is never written).
     pub fn str_mut(&mut self) -> Option<&mut Vec<u8>> {
+        if let Repr::IStr(s) = self.0 {
+            self.0 = Repr::Str(PhpStr::from(s.as_bytes()));
+        }
         match &mut self.0 {
             Repr::Str(s) => Some(s.make_mut()),
             _ => None,
@@ -388,14 +440,22 @@ impl Value {
                 s.push_bytes(bytes);
                 true
             }
+            // (One new string of both, as a shared one's append.)
+            Repr::IStr(s) => {
+                self.0 = Repr::Str(PhpStr::concat(s.as_bytes(), bytes));
+                true
+            }
             _ => false,
         }
     }
 
+    /// The string as an owned handle. A program-memory string's is the
+    /// thread's ordinary twin of it (a count, no copy); to read, `as_str`.
     #[inline(always)]
     pub fn cloned_str(&self) -> Option<PhpStr> {
         match &self.0 {
             Repr::Str(s) => Some(s.clone()),
+            Repr::IStr(s) => Some(s.to_php_str()),
             _ => None,
         }
     }
@@ -432,6 +492,7 @@ impl Value {
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
         match mem::replace(&mut self.0, Repr::Undef) {
             Repr::Str(s) => Ok(s),
+            Repr::IStr(s) => Ok(s.to_php_str()),
             r => Err(Value(r)),
         }
     }
@@ -535,7 +596,7 @@ impl Value {
             Repr::Bool(_) => "bool",
             Repr::Int(_) => "int",
             Repr::Float(_) => "float",
-            Repr::Str(_) => "string",
+            Repr::IStr(_) | Repr::Str(_) => "string",
             Repr::Array(_) => "array",
             Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => "resource",
             Repr::Object(o) => return Cow::Owned(String::from_utf8_lossy(o.class.name.as_bytes()).into_owned()),
@@ -550,6 +611,7 @@ impl Value {
             Repr::Bool(b) => *b,
             Repr::Int(i) => *i != 0,
             Repr::Float(f) => *f != 0.0,
+            Repr::IStr(s) => !(s.is_empty() || s.as_bytes() == b"0"),
             Repr::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
             Repr::Array(a) => !a.is_empty(),
             Repr::Object(o) => o.class.cast_bool.is_none_or(|cast| cast(o)),
@@ -576,7 +638,7 @@ impl Value {
             Repr::Bool(b) => i64::from(*b),
             Repr::Int(i) => *i,
             Repr::Float(f) => dval_to_lval(*f),
-            Repr::Str(s) => match leading_numeric(s.as_bytes()) {
+            Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
                 Some((Number::Int(i), _)) => i,
                 Some((Number::Float(f), _)) => dval_to_lval_cap(f),
                 None => 0,
@@ -599,7 +661,7 @@ impl Value {
             Repr::Bool(b) => f64::from(u8::from(*b)),
             Repr::Int(i) => *i as f64,
             Repr::Float(f) => *f,
-            Repr::Str(s) => match leading_numeric(s.as_bytes()) {
+            Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
                 Some((Number::Int(i), _)) => i as f64,
                 Some((Number::Float(f), _)) => f,
                 None => 0.0,
@@ -621,6 +683,7 @@ impl Value {
             Repr::Int(i) => PhpStr::from_int(*i),
             Repr::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Repr::Str(s) => s.clone(),
+            Repr::IStr(s) => s.to_php_str(),
             Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
             Repr::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
             // An object's string comes from __toString, which the engine
@@ -630,16 +693,30 @@ impl Value {
         })
     }
 
+    /// `to_php_string` to read: a string is lent as it is (no handle
+    /// made, a program-memory one's included), anything else converted.
+    #[inline]
+    pub fn to_str_view(&self) -> Option<crate::string::StrView<'_>> {
+        match self.as_str() {
+            Some(s) => Some(crate::string::StrView::Borrowed(s)),
+            None => self.to_php_string().map(crate::string::StrView::Owned),
+        }
+    }
+
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
         match (&self.0, &other.0) {
+            // One program-memory string per bytes: the same bytes are
+            // the same pointer.
+            (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
+            (Repr::Str(a), Repr::Str(b)) => a == b,
             (Repr::Ref(a), _) => a.borrow().identical(other),
             (_, Repr::Ref(b)) => self.identical(&b.borrow()),
             (Repr::Null | Repr::Undef, Repr::Null | Repr::Undef) => true,
             (Repr::Bool(a), Repr::Bool(b)) => a == b,
             (Repr::Int(a), Repr::Int(b)) => a == b,
             (Repr::Float(a), Repr::Float(b)) => a == b,
-            (Repr::Str(a), Repr::Str(b)) => a == b,
+            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str() == other.as_str(),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
             (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
@@ -648,9 +725,9 @@ impl Value {
 
     /// `==` (zend_compare == 0, with strings compared as zend_fast_equal_strings).
     pub fn loose_eq(&self, other: &Value) -> bool {
-        match (&self.0, &other.0) {
-            (Repr::Str(a), Repr::Str(b)) => {
-                PhpStr::ptr_eq(a, b)
+        match (self.as_str(), other.as_str()) {
+            (Some(a), Some(b)) => {
+                std::ptr::eq(a, b)
                     || match (numeric_string(a.as_bytes()), numeric_string(b.as_bytes())) {
                         (Some(x), Some(y)) => compare_numbers(x, y) == Ordering::Equal,
                         _ => a.as_bytes() == b.as_bytes(),
@@ -706,17 +783,17 @@ impl Value {
             (Null, Bool(b)) | (Bool(false), Bool(b)) => false.cmp(b),
             (Bool(a), Null) => a.cmp(&false),
             (Bool(true), Bool(b)) => true.cmp(b),
-            (Null, Str(s)) => if s.is_empty() { Ordering::Equal } else { Ordering::Less },
-            (Str(s), Null) => if s.is_empty() { Ordering::Equal } else { Ordering::Greater },
-            (Str(a), Str(b)) => smart_strcmp(a, b),
+            (Null, IStr(_) | Str(_)) => if other.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Less },
+            (IStr(_) | Str(_), Null) => if self.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Greater },
+            (IStr(_) | Str(_), IStr(_) | Str(_)) => smart_strcmp(self.as_str().expect("a string"), other.as_str().expect("a string")),
             (Bool(a), _) => a.cmp(&other.to_bool()),
             (_, Bool(b)) => self.to_bool().cmp(b),
             (Null, _) => false.cmp(&other.to_bool()),
             (_, Null) => self.to_bool().cmp(&false),
             // NAN against a string is "greater" either way round (zend_compare)
-            (Float(f), Str(_)) | (Str(_), Float(f)) if f.is_nan() => Ordering::Greater,
-            (Int(_) | Float(_), Str(s)) => compare_number_to_string(self, s),
-            (Str(s), Int(_) | Float(_)) => compare_number_to_string(other, s).reverse(),
+            (Float(f), IStr(_) | Str(_)) | (IStr(_) | Str(_), Float(f)) if f.is_nan() => Ordering::Greater,
+            (Int(_) | Float(_), IStr(_) | Str(_)) => compare_number_to_string(self, other.as_str().expect("a string")),
+            (IStr(_) | Str(_), Int(_) | Float(_)) => compare_number_to_string(other, self.as_str().expect("a string")).reverse(),
             (Array(_), _) => Ordering::Greater,
             (_, Array(_)) => Ordering::Less,
             (Object(_), _) => Ordering::Greater,
@@ -754,7 +831,7 @@ fn compare_numbers(a: Number, b: Number) -> Ordering {
 
 /// zendi_smart_strcmp: two numeric strings compare as numbers, anything
 /// else byte by byte (then by length).
-fn smart_strcmp(a: &PhpStr, b: &PhpStr) -> Ordering {
+fn smart_strcmp(a: &StrHead, b: &StrHead) -> Ordering {
     match (numeric_string(a.as_bytes()), numeric_string(b.as_bytes())) {
         (Some(x), Some(y)) => compare_numbers(x, y),
         _ => a.as_bytes().cmp(b.as_bytes()),
@@ -764,7 +841,7 @@ fn smart_strcmp(a: &PhpStr, b: &PhpStr) -> Ordering {
 /// compare_longs_to_string / compare_doubles_to_string (PHP 8): a
 /// numeric string compares as a number; otherwise the number is compared
 /// as a string.
-fn compare_number_to_string(number: &Value, s: &PhpStr) -> Ordering {
+fn compare_number_to_string(number: &Value, s: &StrHead) -> Ordering {
     let n = match number.0 {
         Repr::Int(i) => Number::Int(i),
         Repr::Float(f) => Number::Float(f),
@@ -776,5 +853,37 @@ fn compare_number_to_string(number: &Value, s: &PhpStr) -> Ordering {
             let text = number.to_php_string().unwrap_or_else(PhpStr::empty);
             text.as_bytes().cmp(s.as_bytes())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_memory_string_is_a_plain_string() {
+        let lit = Value::istr(IStr::intern(b"10 program-memory apples").expect("room"));
+        let same = Value::str("10 program-memory apples");
+        // Nothing to release, yet a string to everything that asks.
+        assert!(lit.is_plain() && !same.is_plain());
+        assert_eq!((lit.kind(), lit.is_str(), lit.type_name()), (Kind::Str, true, Cow::Borrowed("string")));
+        assert!(lit.identical(&same) && same.identical(&lit) && lit.loose_eq(&same));
+        assert_eq!(lit.compare(&same), Some(Ordering::Equal));
+        assert_eq!((lit.to_int(), lit.to_float(), lit.to_bool()), (10, 10.0, true));
+        // (Not numeric: 9 compares as "9".)
+        assert_eq!((lit.compare(&Value::int(9)), Value::int(9).compare(&lit)), (Some(Ordering::Less), Some(Ordering::Greater)));
+        assert!(!lit.identical(&Value::istr(IStr::intern(b"other").expect("room"))));
+        // A copy is the same pointer; owned handles are the thread's twin.
+        let copy = lit.clone();
+        assert!(std::ptr::eq(copy.as_str().expect("a string"), lit.as_str().expect("a string")));
+        assert!(PhpStr::ptr_eq(&lit.cloned_str().expect("a string"), &copy.into_str().expect("a string")));
+        // Writing one makes an ordinary string; program memory is unchanged.
+        let mut w = lit.clone();
+        assert!(w.str_push(b"!"));
+        assert_eq!((w.as_str().expect("a string").as_bytes(), w.is_plain()), (&b"10 program-memory apples!"[..], false));
+        let mut m = lit.clone();
+        m.str_mut().expect("a string").clear();
+        assert!(m.as_str().expect("a string").is_empty());
+        assert_eq!(lit.as_str().expect("a string").as_bytes(), b"10 program-memory apples");
     }
 }

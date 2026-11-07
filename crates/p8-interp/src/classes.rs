@@ -69,7 +69,13 @@ pub(crate) fn method_of(class: &Class, key: Option<Sym>) -> Option<&Rc<Method>> 
     class.methods.get_sym(key?)
 }
 
-fn text(s: &PhpStr) -> String {
+/// A name operand's string to read (a literal's in place); "" for an
+/// array or an object with no string.
+fn name_view(name: &Value) -> p8_runtime::string::StrView<'_> {
+    name.to_str_view().unwrap_or_else(|| p8_runtime::string::StrView::Owned(PhpStr::empty()))
+}
+
+fn text(s: &p8_runtime::string::StrHead) -> String {
     let b = s.as_bytes();
     String::from_utf8_lossy(b.iter().position(|&c| c == 0).map_or(b, |i| &b[..i])).into_owned()
 }
@@ -273,7 +279,9 @@ impl Context<'_> {
         let mut static_inits = Vec::new();
         for p in &def.properties {
             let pname = p.name.as_bytes().to_vec();
-            let default = p.default.as_ref().map_or(Value::UNDEF, |d| self.isolate.thaw(d));
+            // (A class's literals are program memory even when eval()
+            // declared it: few, and the pool is bounded.)
+            let default = p.default.as_ref().map_or(Value::UNDEF, |d| self.isolate.thaw(d, true));
             let init = p.code.as_ref().map(|c| Thunk(Rc::new(Arc::clone(c))));
             if p.is_static {
                 if let Some(t) = init {
@@ -476,7 +484,7 @@ impl Context<'_> {
         }
         let enum_flags = if def.flags & CLASS_ENUM != 0 {
             let backing = def.enum_backing.as_ref().map(text_of);
-            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::NULL, |v| self.isolate.thaw(v)))).collect();
+            let cases: Vec<(&[u8], Value)> = def.cases.iter().map(|(case, value)| (case.as_bytes(), value.as_ref().map_or(Value::NULL, |v| self.isolate.thaw(v, true)))).collect();
             EnumMembers { interfaces: &mut interfaces, properties: &mut properties, constants: &mut constants, methods: &mut methods }.add(&declaring, &class_name, backing.as_deref(), cases)
         } else {
             0
@@ -489,7 +497,7 @@ impl Context<'_> {
             constants.insert(
                 c.name.as_bytes().to_vec(),
                 Rc::new(Constant {
-                    value: self.isolate.thaw(&c.value),
+                    value: self.isolate.thaw(&c.value, true),
                     visibility: c.visibility,
                     declaring_name: class_name.clone(),
                     is_case: false,
@@ -1190,19 +1198,21 @@ impl Context<'_> {
     /// untyped or already of its type, as zend_assign_to_typed_prop's
     /// ZEND_TYPE_CONTAINS_CODE test); else the full checks.
     #[inline]
-    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &PhpStr, value: Value) -> Result<(), Throw> {
+    /// `name` is the name's constant (a string): an owned handle of it is
+    /// made only past the plain store.
+    pub(crate) fn write_cached(&mut self, object: &Object, slot: usize, name: &Value, value: Value) -> Result<(), Throw> {
         let prop = &object.class.properties[slot];
         if !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.as_ref().is_none_or(|t| t.quick(&value)) {
             object.slots()[slot].assign(value);
             return Ok(());
         }
-        self.write_slot(object, slot, prop, name, value)
+        self.write_slot(object, slot, prop, name.as_str().expect("a property name is a string"), value)
     }
 
     /// Store `value` in declared property `slot` of `object` (`prop`, named
     /// `name`): its readonly and set-visibility rules and its type checked,
     /// as zend_std_write_property does once it has the property's offset.
-    pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &PhpStr, value: Value) -> Result<(), Throw> {
+    pub(crate) fn write_slot(&mut self, object: &Object, slot: usize, prop: &Property, name: &p8_runtime::string::StrHead, value: Value) -> Result<(), Throw> {
         // Who may initialize a readonly property is its set
         // visibility's business (implicitly protected(set)).
         // (In a clone's __clone or clone()'s updates, once more.)
@@ -1376,7 +1386,7 @@ impl Context<'_> {
     /// `C::NAME`
     pub(crate) fn class_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Value, Throw> {
         let class = self.class_of(func, class, w)?;
-        let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
+        let name = name_view(name);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
             return Ok(Value::str(class.name.clone()));
         }
@@ -1416,7 +1426,7 @@ impl Context<'_> {
     #[allow(clippy::type_complexity)] // reason: one use, the ClassConst instruction
     pub(crate) fn pending_constant(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Option<(Thunk, Rc<Class>, (Vec<u8>, Vec<u8>))>, Throw> {
         let class = self.class_of(func, class, w)?;
-        let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
+        let name = name_view(name);
         let Some(c) = class.constants.get(name.as_bytes()) else { return Ok(None) };
         let Some(init) = &c.init else { return Ok(None) };
         let key = (c.declaring_name.as_bytes().to_ascii_lowercase(), name.as_bytes().to_vec());
@@ -1470,7 +1480,7 @@ impl Context<'_> {
         if o.class.flags & p8_runtime::object::CLASS_HOOKS == 0 {
             return None;
         }
-        let name = name.to_php_string()?;
+        let name = name.to_str_view()?;
         let p = self.hooked_property_seen(o, name.as_bytes(), check_visibility)?;
         let kind: &[u8] = if bit == p8_runtime::object::HOOK_GET { b"get" } else { b"set" };
         if p.hooks & bit == 0 {
@@ -1805,7 +1815,7 @@ impl Context<'_> {
     /// unknown class is an error, as in PHP).
     pub(crate) fn isset_static(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<bool, Throw> {
         let class = self.class_of(func, class, w)?;
-        let Some(name) = name.to_php_string() else { return Ok(false) };
+        let Some(name) = name.to_str_view() else { return Ok(false) };
         let Some((cell, visibility, declaring)) = class.statics.get(name.as_bytes()) else { return Ok(false) };
         let declaring = self.class_named(declaring).cloned().unwrap_or_else(|| Rc::clone(&class));
         Ok(visible(*visibility, &declaring, self.scope().0.as_deref()) && !cell.borrow().deref().is_null_or_undef())
@@ -1814,7 +1824,7 @@ impl Context<'_> {
     /// The cell of static property `C::$name`.
     pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
         let class = self.class_of(func, class, w)?;
-        let name = name.to_php_string().unwrap_or_else(PhpStr::empty);
+        let name = name_view(name);
         match class.statics.get(name.as_bytes()) {
             Some((cell, visibility, declaring)) => {
                 let declaring = self.declaring(&class, declaring);
