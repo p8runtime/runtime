@@ -24,10 +24,7 @@ use std::rc::Rc;
 const PUBLIC: Visibility = Visibility::Public;
 
 fn inner(o: &Object) -> Option<Rc<Object>> {
-    match get(o, "\0inner") {
-        Value::Object(i) => Some(i),
-        _ => None,
-    }
+    get(o, "\0inner").into_object().ok()
 }
 
 /// A method of the inner iterator.
@@ -42,19 +39,20 @@ fn on_inner(ctx: &mut dyn Ctx, o: &Object, name: &str, args: &mut [Value]) -> Re
 fn iterator_of(ctx: &mut dyn Ctx, v: Value, class: &str) -> Result<Rc<Object>, Throw> {
     let mut v = v;
     loop {
-        match v {
-            Value::Object(o) if o.class.is_a(b"iterator") => return Ok(o),
-            Value::Object(o) if o.class.is_a(b"iteratoraggregate") => {
+        match v.as_object() {
+            Some(o) if o.class.is_a(b"iterator") => return Ok(Rc::clone(o)),
+            Some(o) if o.class.is_a(b"iteratoraggregate") => {
+                let o = Rc::clone(o);
                 v = call_this(ctx, &o, "getIterator", &mut [])?;
-                if !matches!(&v, Value::Object(i) if i.class.is_a(b"traversable")) {
+                if !v.as_object().is_some_and(|i| i.class.is_a(b"traversable")) {
                     return Err(ctx.throw(
                         "LogicException",
                         format!("{}::getIterator() must return an object that implements Traversable", String::from_utf8_lossy(o.class.name.as_bytes())),
                     ));
                 }
             }
-            other => {
-                return Err(ctx.throw("TypeError", format!("{class}::__construct(): Argument #1 ($iterator) must be of type Traversable, {} given", other.type_name())));
+            _ => {
+                return Err(ctx.throw("TypeError", format!("{class}::__construct(): Argument #1 ($iterator) must be of type Traversable, {} given", v.type_name())));
             }
         }
     }
@@ -63,15 +61,15 @@ fn iterator_of(ctx: &mut dyn Ctx, v: Value, class: &str) -> Result<Rc<Object>, T
 /// Fetch the inner's valid/current/key (spl_dual_it_fetch).
 fn fetch(ctx: &mut dyn Ctx, o: &Object) -> Result<bool, Throw> {
     let valid = on_inner(ctx, o, "valid", &mut [])?.to_bool();
-    set(o, "\0valid", Value::Bool(valid));
+    set(o, "\0valid", Value::bool(valid));
     if valid {
         let cur = on_inner(ctx, o, "current", &mut [])?;
         let key = on_inner(ctx, o, "key", &mut [])?;
         set(o, "\0cur", cur.deref());
         set(o, "\0key", key.deref());
     } else {
-        set(o, "\0cur", Value::Null);
-        set(o, "\0key", Value::Null);
+        set(o, "\0cur", Value::NULL);
+        set(o, "\0key", Value::NULL);
     }
     Ok(valid)
 }
@@ -86,8 +84,8 @@ fn class_of(o: &Object) -> String {
 fn ii_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = class_of(this);
     let it = iterator_of(ctx, arg(args, 0), &class)?;
-    set(this, "\0inner", Value::Object(it));
-    Ok(Value::Null)
+    set(this, "\0inner", Value::object(it));
+    Ok(Value::NULL)
 }
 
 fn ii_get_inner(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -96,13 +94,13 @@ fn ii_get_inner(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 
 fn ii_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "rewind", &mut [])?;
-    set(this, "\0pos", Value::Int(0));
+    set(this, "\0pos", Value::int(0));
     fetch(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ii_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(get(this, "\0valid").to_bool()))
+    Ok(Value::bool(get(this, "\0valid").to_bool()))
 }
 
 fn ii_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -115,9 +113,9 @@ fn ii_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, 
 
 fn ii_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "next", &mut [])?;
-    set(this, "\0pos", Value::Int(int(this, "\0pos") + 1));
+    set(this, "\0pos", Value::int(int(this, "\0pos") + 1));
     fetch(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,26 +134,26 @@ fn fetch_accepted(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<(), Throw> {
 fn fi_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "rewind", &mut [])?;
     fetch_accepted(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn fi_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "next", &mut [])?;
     fetch_accepted(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn cfi_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     ii_construct(ctx, this, args)?;
     set(this, "\0cb", arg(args, 1));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// CallbackFilterIterator::accept(): callback($current, $key, $iterator).
 fn cfi_accept(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let cb = get(this, "\0cb");
     let mut a = [get(this, "\0cur"), get(this, "\0key"), get(this, "\0inner")];
-    Ok(Value::Bool(ctx.call(&cb, &mut a)?.to_bool()))
+    Ok(Value::bool(ctx.call(&cb, &mut a)?.to_bool()))
 }
 
 fn rfi_has_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -171,7 +169,7 @@ fn rfi_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
     if this.class.is_a(b"recursivecallbackfilteriterator") {
         a.push(get(this, "\0cb"));
     }
-    Ok(Value::Object(ctx.new_instance(&class, &mut a, true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut a, true)?))
 }
 
 /// ParentIterator::accept(): only elements with children.
@@ -192,9 +190,9 @@ fn li_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     if count < -1 {
         return Err(ctx.throw("ValueError", "LimitIterator::__construct(): Argument #3 ($limit) must be greater than or equal to -1".into()));
     }
-    set(this, "\0offset", Value::Int(offset));
-    set(this, "\0count", Value::Int(count));
-    Ok(Value::Null)
+    set(this, "\0offset", Value::int(offset));
+    set(this, "\0count", Value::int(count));
+    Ok(Value::NULL)
 }
 
 fn li_seek_to(ctx: &mut dyn Ctx, this: &Rc<Object>, pos: i64) -> Result<(), Throw> {
@@ -207,19 +205,19 @@ fn li_seek_to(ctx: &mut dyn Ctx, this: &Rc<Object>, pos: i64) -> Result<(), Thro
     }
     let seekable = inner(this).is_some_and(|i| i.class.is_a(b"seekableiterator"));
     if pos != int(this, "\0pos") && seekable {
-        on_inner(ctx, this, "seek", &mut [Value::Int(pos)])?;
-        set(this, "\0pos", Value::Int(pos));
+        on_inner(ctx, this, "seek", &mut [Value::int(pos)])?;
+        set(this, "\0pos", Value::int(pos));
         fetch(ctx, this)?;
         return Ok(());
     }
     if pos < int(this, "\0pos") {
         on_inner(ctx, this, "rewind", &mut [])?;
-        set(this, "\0pos", Value::Int(0));
+        set(this, "\0pos", Value::int(0));
         fetch(ctx, this)?;
     }
     while int(this, "\0pos") < pos && get(this, "\0valid").to_bool() {
         on_inner(ctx, this, "next", &mut [])?;
-        set(this, "\0pos", Value::Int(int(this, "\0pos") + 1));
+        set(this, "\0pos", Value::int(int(this, "\0pos") + 1));
         fetch(ctx, this)?;
     }
     Ok(())
@@ -227,36 +225,36 @@ fn li_seek_to(ctx: &mut dyn Ctx, this: &Rc<Object>, pos: i64) -> Result<(), Thro
 
 fn li_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "rewind", &mut [])?;
-    set(this, "\0pos", Value::Int(0));
+    set(this, "\0pos", Value::int(0));
     fetch(ctx, this)?;
     let offset = int(this, "\0offset");
     li_seek_to(ctx, this, offset)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn li_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (offset, count, pos) = (int(this, "\0offset"), int(this, "\0count"), int(this, "\0pos"));
-    Ok(Value::Bool((count == -1 || pos < offset + count) && get(this, "\0valid").to_bool()))
+    Ok(Value::bool((count == -1 || pos < offset + count) && get(this, "\0valid").to_bool()))
 }
 
 fn li_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (offset, count) = (int(this, "\0offset"), int(this, "\0count"));
     on_inner(ctx, this, "next", &mut [])?;
     let pos = int(this, "\0pos") + 1;
-    set(this, "\0pos", Value::Int(pos));
+    set(this, "\0pos", Value::int(pos));
     if count == -1 || pos < offset + count {
         fetch(ctx, this)?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn li_seek(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     li_seek_to(ctx, this, arg(args, 0).to_int())?;
-    Ok(Value::Int(int(this, "\0pos")))
+    Ok(Value::int(int(this, "\0pos")))
 }
 
 fn li_get_position(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "\0pos")))
+    Ok(Value::int(int(this, "\0pos")))
 }
 
 // ---------------------------------------------------------------------------
@@ -273,52 +271,52 @@ const CIT_VALID: i64 = 0x10000;
 fn ci_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     ii_construct(ctx, this, args)?;
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { CALL_TOSTRING };
-    set(this, "\0flags", Value::Int(flags));
-    set(this, "\0cache", Value::Array(Rc::new(PhpArray::new())));
-    Ok(Value::Null)
+    set(this, "\0flags", Value::int(flags));
+    set(this, "\0cache", Value::array(PhpArray::new()));
+    Ok(Value::NULL)
 }
 
 /// spl_caching_it_next: take the inner's element, then move the inner on.
 fn ci_take(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<(), Throw> {
     let flags = int(this, "\0flags");
     if fetch(ctx, this)? {
-        set(this, "\0flags", Value::Int(flags | CIT_VALID));
+        set(this, "\0flags", Value::int(flags | CIT_VALID));
         if flags & FULL_CACHE != 0 {
             let mut cache = array_of(get(this, "\0cache"));
             if let Ok((k, _)) = Key::from_value(&get(this, "\0key")) {
                 cache.insert(k, get(this, "\0cur"));
             }
-            set(this, "\0cache", Value::Array(Rc::new(cache)));
+            set(this, "\0cache", Value::array(cache));
         }
         if flags & CALL_TOSTRING != 0 {
             let cur = get(this, "\0cur");
-            let text = match &cur {
-                Value::Object(o) => call_this(ctx, o, "__toString", &mut [])?,
-                v => Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)),
+            let text = match cur.as_object() {
+                Some(o) => call_this(ctx, o, "__toString", &mut [])?,
+                None => Value::str(cur.to_php_string().unwrap_or_else(PhpStr::empty)),
             };
             set(this, "\0str", text);
         }
         on_inner(ctx, this, "next", &mut [])?;
     } else {
-        set(this, "\0flags", Value::Int(flags & !CIT_VALID));
+        set(this, "\0flags", Value::int(flags & !CIT_VALID));
     }
     Ok(())
 }
 
 fn ci_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "rewind", &mut [])?;
-    set(this, "\0cache", Value::Array(Rc::new(PhpArray::new())));
+    set(this, "\0cache", Value::array(PhpArray::new()));
     ci_take(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ci_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(int(this, "\0flags") & CIT_VALID != 0))
+    Ok(Value::bool(int(this, "\0flags") & CIT_VALID != 0))
 }
 
 fn ci_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     ci_take(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ci_has_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -339,7 +337,7 @@ fn ci_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result
     } else {
         get(this, "\0str")
     };
-    Ok(Value::Str(v.to_php_string().unwrap_or_else(PhpStr::empty)))
+    Ok(Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty)))
 }
 
 fn ci_full_cache(ctx: &mut dyn Ctx, this: &Object) -> Result<PhpArray, Throw> {
@@ -350,16 +348,16 @@ fn ci_full_cache(ctx: &mut dyn Ctx, this: &Object) -> Result<PhpArray, Throw> {
 }
 
 fn ci_get_cache(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(ci_full_cache(ctx, this)?)))
+    Ok(Value::array(ci_full_cache(ctx, this)?))
 }
 
 fn ci_count(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(ci_full_cache(ctx, this)?.len() as i64))
+    Ok(Value::int(ci_full_cache(ctx, this)?.len() as i64))
 }
 
 fn ci_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let cache = ci_full_cache(ctx, this)?;
-    let Ok((k, _)) = Key::from_value(&arg(args, 0)) else { return Ok(Value::Null) };
+    let Ok((k, _)) = Key::from_value(&arg(args, 0)) else { return Ok(Value::NULL) };
     match cache.get(&k) {
         Some(v) => Ok(v.deref()),
         None => {
@@ -368,7 +366,7 @@ fn ci_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
                 Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
             };
             ctx.warn(&format!("Undefined array key {shown}"));
-            Ok(Value::Null)
+            Ok(Value::NULL)
         }
     }
 }
@@ -378,13 +376,13 @@ fn ci_offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     if let Ok((k, _)) = Key::from_value(&arg(args, 0)) {
         cache.insert(k, arg(args, 1));
     }
-    set(this, "\0cache", Value::Array(Rc::new(cache)));
-    Ok(Value::Null)
+    set(this, "\0cache", Value::array(cache));
+    Ok(Value::NULL)
 }
 
 fn ci_offset_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let cache = ci_full_cache(ctx, this)?;
-    Ok(Value::Bool(Key::from_value(&arg(args, 0)).is_ok_and(|(k, _)| cache.contains_key(&k))))
+    Ok(Value::bool(Key::from_value(&arg(args, 0)).is_ok_and(|(k, _)| cache.contains_key(&k))))
 }
 
 fn ci_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -392,12 +390,12 @@ fn ci_offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     if let Ok((k, _)) = Key::from_value(&arg(args, 0)) {
         cache.remove(&k);
     }
-    set(this, "\0cache", Value::Array(Rc::new(cache)));
-    Ok(Value::Null)
+    set(this, "\0cache", Value::array(cache));
+    Ok(Value::NULL)
 }
 
 fn ci_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(int(this, "\0flags") & !CIT_VALID))
+    Ok(Value::int(int(this, "\0flags") & !CIT_VALID))
 }
 
 fn ci_set_flags(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -410,17 +408,17 @@ fn ci_set_flags(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         return Err(ctx.throw("InvalidArgumentException", "Unsetting flag TOSTRING_USE_INNER is not possible".into()));
     }
     if new & FULL_CACHE != 0 && old & FULL_CACHE == 0 {
-        set(this, "\0cache", Value::Array(Rc::new(PhpArray::new())));
+        set(this, "\0cache", Value::array(PhpArray::new()));
     }
-    set(this, "\0flags", Value::Int(new | (old & CIT_VALID)));
-    Ok(Value::Null)
+    set(this, "\0flags", Value::int(new | (old & CIT_VALID)));
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
 // NoRewindIterator, InfiniteIterator, EmptyIterator
 
 fn nri_rewind(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn nri_valid(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -437,7 +435,7 @@ fn nri_key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Valu
 
 fn nri_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     on_inner(ctx, this, "next", &mut [])?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn inf_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -446,11 +444,11 @@ fn inf_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Val
         on_inner(ctx, this, "rewind", &mut [])?;
     }
     fetch(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ei_false(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 fn ei_current(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -462,16 +460,16 @@ fn ei_key(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, T
 }
 
 fn ei_none(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---------------------------------------------------------------------------
 // AppendIterator: "\0list" (the iterators), "\0idx" (the one in use).
 
 fn ai_construct(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0list", Value::Array(Rc::new(PhpArray::new())));
-    set(this, "\0idx", Value::Int(0));
-    Ok(Value::Null)
+    set(this, "\0list", Value::array(PhpArray::new()));
+    set(this, "\0idx", Value::int(0));
+    Ok(Value::NULL)
 }
 
 fn ai_list(o: &Object) -> Vec<Value> {
@@ -485,7 +483,7 @@ fn ai_settle(ctx: &mut dyn Ctx, this: &Rc<Object>, mut idx: usize, rewind: bool)
     let mut first = rewind;
     while idx < list.len() {
         set(this, "\0inner", list[idx].clone());
-        set(this, "\0idx", Value::Int(idx as i64));
+        set(this, "\0idx", Value::int(idx as i64));
         if first {
             on_inner(ctx, this, "rewind", &mut [])?;
         }
@@ -495,18 +493,18 @@ fn ai_settle(ctx: &mut dyn Ctx, this: &Rc<Object>, mut idx: usize, rewind: bool)
         idx += 1;
         first = true;
     }
-    set(this, "\0valid", Value::Bool(false));
+    set(this, "\0valid", Value::FALSE);
     Ok(())
 }
 
 fn ai_append(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(it) = arg(args, 0) else {
+    let Ok(it) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "AppendIterator::append(): Argument #1 ($iterator) must be of type Iterator".into()));
     };
     let mut list = array_of(get(this, "\0list"));
-    let _ = list.push(Value::Object(Rc::clone(&it)));
+    let _ = list.push(Value::object(Rc::clone(&it)));
     let n = list.len();
-    set(this, "\0list", Value::Array(Rc::new(list)));
+    set(this, "\0list", Value::array(list));
     // The first one: rewound and used; a later one, used once the current runs out.
     if n == 1 || !get(this, "\0valid").to_bool() {
         let idx = if n == 1 { 0 } else { int(this, "\0idx") as usize };
@@ -515,33 +513,33 @@ fn ai_append(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
         }
         ai_settle(ctx, this, idx, false)?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ai_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     ai_settle(ctx, this, 0, true)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ai_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     if inner(this).is_none() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     on_inner(ctx, this, "next", &mut [])?;
     if !fetch(ctx, this)? {
         let idx = int(this, "\0idx") as usize + 1;
         ai_settle(ctx, this, idx, true)?;
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn ai_get_iterator_index(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(if get(this, "\0valid").to_bool() { Value::Int(int(this, "\0idx")) } else { Value::Null })
+    Ok(if get(this, "\0valid").to_bool() { Value::int(int(this, "\0idx")) } else { Value::NULL })
 }
 
 fn ai_get_array_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let class = ctx.class(b"ArrayIterator").expect("ArrayIterator");
-    Ok(Value::Object(ctx.new_instance(&class, &mut [get(this, "\0list")], true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut [get(this, "\0list")], true)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -562,10 +560,7 @@ const RS_START: i64 = 4;
 fn rii_stack(o: &Object) -> Vec<Rc<Object>> {
     array_of(get(o, "\0stack"))
         .values()
-        .filter_map(|v| match v {
-            Value::Object(i) => Some(Rc::clone(i)),
-            _ => None,
-        })
+        .filter_map(Value::cloned_object)
         .collect()
 }
 
@@ -574,16 +569,16 @@ fn rii_states(o: &Object) -> Vec<i64> {
 }
 
 fn rii_put(o: &Object, stack: &[Rc<Object>], states: &[i64]) {
-    set(o, "\0stack", Value::Array(Rc::new(PhpArray::from_list(stack.iter().map(|i| Value::Object(Rc::clone(i))).collect()))));
-    set(o, "\0states", Value::Array(Rc::new(PhpArray::from_list(states.iter().map(|s| Value::Int(*s)).collect()))));
+    set(o, "\0stack", Value::array(PhpArray::from_list(stack.iter().map(|i| Value::object(Rc::clone(i))).collect())));
+    set(o, "\0states", Value::array(PhpArray::from_list(states.iter().map(|s| Value::int(*s)).collect())));
 }
 
 fn rii_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = class_of(this);
-    let it = match arg(args, 0) {
-        Value::Object(o) if o.class.is_a(b"iteratoraggregate") => iterator_of(ctx, Value::Object(o), &class)?,
-        Value::Object(o) => o,
-        other => {
+    let it = match arg(args, 0).into_object() {
+        Ok(o) if o.class.is_a(b"iteratoraggregate") => iterator_of(ctx, Value::object(o), &class)?,
+        Ok(o) => o,
+        Err(other) => {
             return Err(ctx.throw("TypeError", format!("{class}::__construct(): Argument #1 ($iterator) must be of type Traversable, {} given", other.type_name())));
         }
     };
@@ -592,12 +587,12 @@ fn rii_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     }
     let mode = if args.len() > 1 { arg(args, 1).to_int() } else { LEAVES_ONLY };
     let flags = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
-    set(this, "\0mode", Value::Int(mode));
-    set(this, "\0flags", Value::Int(flags));
-    set(this, "\0maxdepth", Value::Int(-1));
-    set(this, "\0inner", Value::Object(Rc::clone(&it)));
+    set(this, "\0mode", Value::int(mode));
+    set(this, "\0flags", Value::int(flags));
+    set(this, "\0maxdepth", Value::int(-1));
+    set(this, "\0inner", Value::object(Rc::clone(&it)));
     rii_put(this, &[it], &[RS_START]);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// Whether the class (a subclass) has its own version of a hook.
@@ -676,7 +671,7 @@ fn rii_move(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<(), Throw> {
                     continue;
                 }
             };
-            let Value::Object(child) = child else {
+            let Ok(child) = child.into_object() else {
                 return Err(ctx.throw("UnexpectedValueException", "Objects returned by RecursiveIterator::getChildren() must implement RecursiveIterator".into()));
             };
             if !child.class.is_a(b"recursiveiterator") {
@@ -714,23 +709,23 @@ fn rii_rewind(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
     if !get(this, "\0started").to_bool() && overrides(this, b"beginiteration") {
         call_this(ctx, this, "beginIteration", &mut [])?;
     }
-    set(this, "\0started", Value::Bool(true));
+    set(this, "\0started", Value::TRUE);
     rii_move(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rii_valid(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     for it in rii_stack(this).iter().rev() {
         if call_this(ctx, it, "valid", &mut [])?.to_bool() {
-            return Ok(Value::Bool(true));
+            return Ok(Value::TRUE);
         }
     }
     if get(this, "\0started").to_bool() && overrides(this, b"enditeration") {
-        set(this, "\0started", Value::Bool(false));
+        set(this, "\0started", Value::FALSE);
         call_this(ctx, this, "endIteration", &mut [])?;
     }
-    set(this, "\0started", Value::Bool(false));
-    Ok(Value::Bool(false))
+    set(this, "\0started", Value::FALSE);
+    Ok(Value::FALSE)
 }
 
 fn rii_top(this: &Object) -> Rc<Object> {
@@ -749,24 +744,24 @@ fn rii_key(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Valu
 
 fn rii_next(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     rii_move(ctx, this)?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn rii_get_depth(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(rii_stack(this).len() as i64 - 1))
+    Ok(Value::int(rii_stack(this).len() as i64 - 1))
 }
 
 fn rii_get_sub_iterator(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let stack = rii_stack(this);
     let level = match arg(args, 0) {
-        Value::Null => stack.len() as i64 - 1,
+        v if v.is_null() => stack.len() as i64 - 1,
         v => v.to_int(),
     };
-    Ok(if level < 0 || level as usize >= stack.len() { Value::Null } else { Value::Object(Rc::clone(&stack[level as usize])) })
+    Ok(if level < 0 || level as usize >= stack.len() { Value::NULL } else { Value::object(Rc::clone(&stack[level as usize])) })
 }
 
 fn rii_get_inner(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Object(rii_top(this)))
+    Ok(Value::object(rii_top(this)))
 }
 
 fn rii_call_has_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -784,17 +779,17 @@ fn rii_set_max_depth(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     if d < -1 {
         return Err(ctx.throw("ValueError", "RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater than or equal to -1".into()));
     }
-    set(this, "\0maxdepth", Value::Int(d));
-    Ok(Value::Null)
+    set(this, "\0maxdepth", Value::int(d));
+    Ok(Value::NULL)
 }
 
 fn rii_get_max_depth(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let d = int(this, "\0maxdepth");
-    Ok(if d == -1 { Value::Bool(false) } else { Value::Int(d) })
+    Ok(if d == -1 { Value::FALSE } else { Value::int(d) })
 }
 
 fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The SPL iterators' method forwarding (spl_dual_it_get_method): a call
@@ -808,10 +803,7 @@ pub const DUAL_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks 
 /// RecursiveIteratorIterator's (spl_recursive_it_get_method): to the
 /// iterator at the current level.
 fn forward_to_level(o: &Object) -> Option<Rc<Object>> {
-    match array_of(get(o, "\0stack")).values().last() {
-        Some(Value::Object(i)) => Some(Rc::clone(i)),
-        _ => None,
-    }
+    array_of(get(o, "\0stack")).values().last().and_then(Value::cloned_object)
 }
 
 pub const RECURSIVE_HOOKS: p8_runtime::ext::ClassHooks = p8_runtime::ext::ClassHooks { forward_calls: Some(forward_to_level), get_properties: None, cast_bool: None, cast_string: None, cast_int: None, clone_data: None };
@@ -845,65 +837,62 @@ fn ri_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     let level = ctx.error_level(Some(0));
     let compiled = ctx.call(&Value::str("preg_match"), &mut [regex.clone(), Value::str("")]);
     ctx.error_level(Some(level));
-    if matches!(compiled?, Value::Bool(false)) {
+    if compiled?.as_bool() == Some(false) {
         let message = ctx.last_error(false).map(|(_, m, _, _)| m).unwrap_or_default();
         let reason = message.strip_prefix("preg_match(): ").unwrap_or(&message);
         return Err(ctx.throw("InvalidArgumentException", format!("{}::__construct(): {reason}", class_of(this))));
     }
     set(this, "\0regex", regex);
-    set(this, "\0mode", Value::Int(mode));
-    set(this, "\0flags", Value::Int(if args.len() > 3 { arg(args, 3).to_int() } else { 0 }));
-    set(this, "\0preg_flags", Value::Int(if args.len() > 4 { arg(args, 4).to_int() } else { 0 }));
-    Ok(Value::Null)
+    set(this, "\0mode", Value::int(mode));
+    set(this, "\0flags", Value::int(if args.len() > 3 { arg(args, 3).to_int() } else { 0 }));
+    set(this, "\0preg_flags", Value::int(if args.len() > 4 { arg(args, 4).to_int() } else { 0 }));
+    Ok(Value::NULL)
 }
 
 fn ri_accept(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     if !get(this, "\0valid").to_bool() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let flags = int(this, "\0flags");
     let subject = if flags & USE_KEY != 0 {
         get(this, "\0key")
     } else {
         match get(this, "\0cur") {
-            Value::Array(_) => return Ok(Value::Bool(false)),
+            v if v.is_array() => return Ok(Value::FALSE),
             v => v,
         }
     };
-    let subject = Value::Str(crate::printf::to_str(ctx, &subject)?);
+    let subject = Value::str(crate::printf::to_str(ctx, &subject)?);
     let regex = get(this, "\0regex");
-    let preg_flags = Value::Int(int(this, "\0preg_flags"));
+    let preg_flags = Value::int(int(this, "\0preg_flags"));
     let accepted = match int(this, "\0mode") {
         0 => ctx.call(&Value::str("preg_match"), &mut [regex, subject])?.to_int() > 0,
         mode @ (1 | 2) => {
-            let matches = Rc::new(std::cell::RefCell::new(Value::Null));
+            let matches = Rc::new(std::cell::RefCell::new(Value::NULL));
             let func = if mode == 2 { "preg_match_all" } else { "preg_match" };
-            let n = ctx.call(&Value::str(func), &mut [regex, subject, Value::Ref(Rc::clone(&matches)), preg_flags])?;
+            let n = ctx.call(&Value::str(func), &mut [regex, subject, Value::reference(Rc::clone(&matches)), preg_flags])?;
             set(this, "\0cur", matches.borrow().clone());
             n.to_int() > 0
         }
         3 => {
-            let parts = ctx.call(&Value::str("preg_split"), &mut [regex, subject, Value::Int(-1), preg_flags])?;
-            let n = match &parts {
-                Value::Array(a) => a.len(),
-                _ => 0,
-            };
+            let parts = ctx.call(&Value::str("preg_split"), &mut [regex, subject, Value::int(-1), preg_flags])?;
+            let n = parts.as_array().map_or(0, PhpArray::len);
             set(this, "\0cur", parts);
             n > 1
         }
         _ => {
             let replacement = crate::spl::get(this, "replacement");
-            let replacement = Value::Str(crate::printf::to_str(ctx, &replacement)?);
-            let count = Rc::new(std::cell::RefCell::new(Value::Int(0)));
-            let result = ctx.call(&Value::str("preg_replace"), &mut [regex, replacement, subject, Value::Int(-1), Value::Ref(Rc::clone(&count))])?;
-            if matches!(result, Value::Null) {
-                return Ok(Value::Bool(false));
+            let replacement = Value::str(crate::printf::to_str(ctx, &replacement)?);
+            let count = Rc::new(std::cell::RefCell::new(Value::int(0)));
+            let result = ctx.call(&Value::str("preg_replace"), &mut [regex, replacement, subject, Value::int(-1), Value::reference(Rc::clone(&count))])?;
+            if result.is_null() {
+                return Ok(Value::FALSE);
             }
             set(this, if flags & USE_KEY != 0 { "\0key" } else { "\0cur" }, result);
             count.borrow().to_int() > 0
         }
     };
-    Ok(Value::Bool(accepted != (flags & INVERT_MATCH != 0)))
+    Ok(Value::bool(accepted != (flags & INVERT_MATCH != 0)))
 }
 
 fn ri_get_mode(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -915,8 +904,8 @@ fn ri_set_mode(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resu
     if !(0..REGEX_MODES).contains(&mode) {
         return Err(mode_error(ctx, "RegexIterator::setMode", 1));
     }
-    set(this, "\0mode", Value::Int(mode));
-    Ok(Value::Null)
+    set(this, "\0mode", Value::int(mode));
+    Ok(Value::NULL)
 }
 
 fn ri_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -924,8 +913,8 @@ fn ri_get_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 }
 
 fn ri_set_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0flags", Value::Int(arg(args, 0).to_int()));
-    Ok(Value::Null)
+    set(this, "\0flags", Value::int(arg(args, 0).to_int()));
+    Ok(Value::NULL)
 }
 
 fn ri_get_preg_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -933,8 +922,8 @@ fn ri_get_preg_flags(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
 }
 
 fn ri_set_preg_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    set(this, "\0preg_flags", Value::Int(arg(args, 0).to_int()));
-    Ok(Value::Null)
+    set(this, "\0preg_flags", Value::int(arg(args, 0).to_int()));
+    Ok(Value::NULL)
 }
 
 fn ri_get_regex(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -945,10 +934,10 @@ fn ri_get_regex(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 /// is not empty, else RegexIterator's test.
 fn rri_accept(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     if !get(this, "\0valid").to_bool() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    if let Value::Array(a) = get(this, "\0cur") {
-        return Ok(Value::Bool(!a.is_empty()));
+    if let Some(a) = get(this, "\0cur").as_array() {
+        return Ok(Value::bool(!a.is_empty()));
     }
     ri_accept(ctx, this, args)
 }
@@ -959,7 +948,7 @@ fn rri_get_children(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
     let children = on_inner(ctx, this, "getChildren", &mut [])?;
     let class = Rc::clone(&this.class);
     let mut a = [children, get(this, "\0regex"), get(this, "\0mode"), get(this, "\0flags"), get(this, "\0preg_flags")];
-    Ok(Value::Object(ctx.new_instance(&class, &mut a, true)?))
+    Ok(Value::object(ctx.new_instance(&class, &mut a, true)?))
 }
 
 // ---------------------------------------------------------------------------
