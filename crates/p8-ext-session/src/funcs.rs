@@ -51,15 +51,13 @@ pub(crate) fn names() -> Vec<&'static str> {
 }
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 /// A string argument that may be null (`?string`).
 fn opt_str(args: &[Value], i: usize) -> Option<PhpStr> {
-    match arg(args, i) {
-        Value::Null => None,
-        v => v.to_php_string(),
-    }
+    let v = arg(args, i);
+    if v.is_null() { None } else { v.to_php_string() }
 }
 
 /// A `?string` argument PHP parses as a path ("P!"): no null bytes.
@@ -72,7 +70,7 @@ fn opt_path(ctx: &mut dyn Ctx, args: &[Value], i: usize, func: &str, name: &str)
 }
 
 fn string(b: &[u8]) -> Value {
-    Value::Str(PhpStr::from(b))
+    Value::str(PhpStr::from(b))
 }
 
 fn make(ctx: &mut dyn Ctx) -> Shared {
@@ -95,15 +93,15 @@ fn session_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let name = opt_path(ctx, args, 0, "session_name", "name")?;
     if name.is_some() && active(&s) {
         warn(ctx, "Session name cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if name.is_some() && headers_sent(ctx) {
         warn(ctx, "Session name cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = text(ctx, "session.name");
     if let Some(name) = name {
-        ctx.ini_set(b"session.name", Value::Str(name));
+        ctx.ini_set(b"session.name", Value::str(name));
     }
     Ok(string(&current))
 }
@@ -113,11 +111,11 @@ fn session_module_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let name = opt_str(args, 0);
     if name.is_some() && active(&s) {
         warn(ctx, "Session save handler module cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if name.is_some() && headers_sent(ctx) {
         warn(ctx, "Session save handler module cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = s.borrow().module.map_or("", Module::name);
     if let Some(name) = name {
@@ -126,7 +124,7 @@ fn session_module_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         if Module::find(name.as_bytes()).is_none() {
             warn(ctx, &format!("Session handler module \"{}\" cannot be found", String::from_utf8_lossy(name.as_bytes())));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         let open = s.borrow().has_mod_data();
         let m = s.borrow().module;
@@ -134,7 +132,7 @@ fn session_module_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             life::mod_close(ctx, &s, m)?;
         }
         s.borrow_mut().files = None;
-        ctx.ini_set(b"session.save_handler", Value::Str(name));
+        ctx.ini_set(b"session.save_handler", Value::str(name));
     }
     Ok(Value::str(current))
 }
@@ -144,15 +142,15 @@ fn session_save_path(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let path = opt_path(ctx, args, 0, "session_save_path", "path")?;
     if path.is_some() && active(&s) {
         warn(ctx, "Session save path cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if path.is_some() && headers_sent(ctx) {
         warn(ctx, "Session save path cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = text(ctx, "session.save_path");
     if let Some(path) = path {
-        ctx.ini_set(b"session.save_path", Value::Str(path));
+        ctx.ini_set(b"session.save_path", Value::str(path));
     }
     Ok(string(&current))
 }
@@ -162,76 +160,70 @@ fn session_cache_limiter(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let limiter = opt_str(args, 0);
     if limiter.is_some() && active(&s) {
         warn(ctx, "Session cache limiter cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if limiter.is_some() && headers_sent(ctx) {
         warn(ctx, "Session cache limiter cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = text(ctx, "session.cache_limiter");
     if let Some(limiter) = limiter {
-        ctx.ini_set(b"session.cache_limiter", Value::Str(limiter));
+        ctx.ini_set(b"session.cache_limiter", Value::str(limiter));
     }
     Ok(string(&current))
 }
 
 fn session_cache_expire(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = make(ctx);
-    let expires = match arg(args, 0) {
-        Value::Null => None,
-        v => Some(v.to_int()),
-    };
+    let expires = Some(arg(args, 0)).filter(|v| !v.is_null()).map(|v| v.to_int());
     if expires.is_some() && active(&s) {
         warn(ctx, "Session cache expiration cannot be changed when a session is active");
-        return Ok(Value::Int(int(ctx, "session.cache_expire")));
+        return Ok(Value::int(int(ctx, "session.cache_expire")));
     }
     if expires.is_some() && headers_sent(ctx) {
         warn(ctx, "Session cache expiration cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = int(ctx, "session.cache_expire");
     if let Some(e) = expires {
         ctx.ini_set(b"session.cache_expire", Value::str(e.to_string()));
     }
-    Ok(Value::Int(current))
+    Ok(Value::int(current))
 }
 
 fn session_get_cookie_params(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     make(ctx);
     let mut a = PhpArray::new();
     let mut set = |k: &str, v: Value| a.insert(Key::Str(PhpStr::from(k)), v);
-    set("lifetime", Value::Int(int(ctx, "session.cookie_lifetime")));
+    set("lifetime", Value::int(int(ctx, "session.cookie_lifetime")));
     set("path", string(&text(ctx, "session.cookie_path")));
     set("domain", string(&text(ctx, "session.cookie_domain")));
-    set("secure", Value::Bool(flag(ctx, "session.cookie_secure")));
-    set("httponly", Value::Bool(flag(ctx, "session.cookie_httponly")));
+    set("secure", Value::bool(flag(ctx, "session.cookie_secure")));
+    set("httponly", Value::bool(flag(ctx, "session.cookie_httponly")));
     set("samesite", string(&text(ctx, "session.cookie_samesite")));
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 fn session_set_cookie_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = make(ctx);
     let first = arg(args, 0);
     let str_arg = |i: usize| opt_str(args, i);
-    let bool_arg = |i: usize| match arg(args, i) {
-        Value::Null => None,
-        v => Some(v.to_bool()),
-    };
+    let bool_arg = |i: usize| Some(arg(args, i)).filter(|v| !v.is_null()).map(|v| v.to_bool());
     if !flag(ctx, "session.use_cookies") {
         warn(ctx, "Session cookies cannot be used when session.use_cookies is disabled");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if active(&s) {
         warn(ctx, "Session cookie parameters cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if headers_sent(ctx) {
         warn(ctx, "Session cookie parameters cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let (mut lifetime, mut path, mut domain, mut samesite) = (None, str_arg(1), str_arg(2), None::<PhpStr>);
     let (mut secure, mut httponly) = (bool_arg(3), bool_arg(4));
-    if let Value::Array(options) = &first {
+    if let Some(options) = first.as_array() {
         for (i, what) in [(1, path.is_some()), (2, domain.is_some()), (3, secure.is_some()), (4, httponly.is_some())] {
             if what {
                 let name = ["", "path", "domain", "secure", "httponly"][i];
@@ -269,13 +261,13 @@ fn session_set_cookie_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let bool_text = |b: bool| Value::str(if b { "1" } else { "0" });
     let mut changes: Vec<(&[u8], Value)> = Vec::new();
     if let Some(v) = lifetime {
-        changes.push((b"session.cookie_lifetime", Value::Str(v)));
+        changes.push((b"session.cookie_lifetime", Value::str(v)));
     }
     if let Some(v) = path {
-        changes.push((b"session.cookie_path", Value::Str(v)));
+        changes.push((b"session.cookie_path", Value::str(v)));
     }
     if let Some(v) = domain {
-        changes.push((b"session.cookie_domain", Value::Str(v)));
+        changes.push((b"session.cookie_domain", Value::str(v)));
     }
     if let Some(v) = secure {
         changes.push((b"session.cookie_secure", bool_text(v)));
@@ -284,14 +276,14 @@ fn session_set_cookie_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         changes.push((b"session.cookie_httponly", bool_text(v)));
     }
     if let Some(v) = samesite {
-        changes.push((b"session.cookie_samesite", Value::Str(v)));
+        changes.push((b"session.cookie_samesite", Value::str(v)));
     }
     for (name, value) in changes {
         if ctx.ini_set(name, value).is_none() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 // ---- the id ----
@@ -301,11 +293,11 @@ fn session_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let new = opt_str(args, 0);
     if new.is_some() && active(&s) {
         warn(ctx, "Session ID cannot be changed when a session is active");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if new.is_some() && flag(ctx, "session.use_cookies") && headers_sent(ctx) {
         warn(ctx, "Session ID cannot be changed after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let current = s.borrow().id.clone().unwrap_or_default();
     // keep compatibility for "\0" characters
@@ -329,7 +321,7 @@ fn session_create_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         if !crate::files::valid_key(key) {
             // E_ERROR raised for security reason.
             warn(ctx, "Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed");
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         id.extend_from_slice(prefix.as_bytes());
     }
@@ -363,7 +355,7 @@ fn session_create_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
         None => {
             warn(ctx, "Failed to create new ID");
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -373,13 +365,13 @@ fn session_regenerate_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let delete = arg(args, 0).to_bool();
     if !active(&s) {
         warn(ctx, "Session ID cannot be regenerated when there is no active session");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if headers_sent(ctx) {
         warn(ctx, "Session ID cannot be regenerated after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let Some(m) = s.borrow().module else { return Ok(Value::Bool(false)) };
+    let Some(m) = s.borrow().module else { return Ok(Value::FALSE) };
     let save_path = String::from_utf8_lossy(&text(ctx, "session.save_path")).into_owned();
     let old_id = s.borrow().id.clone().unwrap_or_default();
     // Process old session data
@@ -388,7 +380,7 @@ fn session_regenerate_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             life::mod_close(ctx, &s, m)?;
             s.borrow_mut().status = Status::None;
             warn(ctx, &format!("Session object destruction failed. ID: {} (path: {save_path})", m.name()));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     } else {
         let data = life::encode(ctx, &s)?;
@@ -397,7 +389,7 @@ fn session_regenerate_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             life::mod_close(ctx, &s, m)?;
             s.borrow_mut().status = Status::None;
             warn(ctx, &format!("Session write failed. ID: {} (path: {save_path})", m.name()));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
     life::mod_close(ctx, &s, m)?;
@@ -450,7 +442,7 @@ fn session_regenerate_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if flag(ctx, "session.use_cookies") {
         s.borrow_mut().send_cookie = true;
     }
-    Ok(Value::Bool(life::reset_id(ctx, &s)))
+    Ok(Value::bool(life::reset_id(ctx, &s)))
 }
 
 // ---- the data ----
@@ -458,8 +450,8 @@ fn session_regenerate_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn session_encode(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     Ok(match life::encode(ctx, &s)? {
-        Some(data) => Value::Str(PhpStr::new(data)),
-        None => Value::Bool(false),
+        Some(data) => Value::str(PhpStr::new(data)),
+        None => Value::FALSE,
     })
 }
 
@@ -468,38 +460,35 @@ fn session_decode(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let data = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
     if !active(&s) {
         warn(ctx, "Session data cannot be decoded when there is no active session");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(life::decode(ctx, &s, data.as_bytes())?))
+    Ok(Value::bool(life::decode(ctx, &s, data.as_bytes())?))
 }
 
 fn session_unset(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     if !active(&s) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     s.borrow().edit_vars(|a| *a = PhpArray::new());
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn session_gc(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     if !active(&s) {
         warn(ctx, "Session cannot be garbage collected when there is no active session");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let n = life::gc(ctx, &s, true)?;
-    Ok(if n < 0 { Value::Bool(false) } else { Value::Int(n) })
+    Ok(if n < 0 { Value::FALSE } else { Value::int(n) })
 }
 
 // ---- the session's life ----
 
 fn session_start(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = make(ctx);
-    let options = match arg(args, 0) {
-        Value::Array(a) => Some(a),
-        _ => None,
-    };
+    let options = arg(args, 0).into_array().ok();
     if active(&s) {
         let started = s.borrow().started.clone();
         match started {
@@ -507,81 +496,78 @@ fn session_start(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             None if flag(ctx, "session.auto_start") => crate::state::notice(ctx, "Ignoring session_start() because a session is already automatically active"),
             None => crate::state::notice(ctx, "Ignoring session_start() because a session is already active"),
         }
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     if flag(ctx, "session.use_cookies") && headers_sent(ctx) {
         warn(ctx, "Session cannot be started after headers have already been sent");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut read_and_close = 0;
     if let Some(options) = options {
         for (key, value) in options.iter() {
             let Key::Str(key) = key else { continue };
             let value = value.deref();
-            match &value {
-                Value::Str(_) | Value::Bool(_) | Value::Int(_) => {
-                    if key.as_bytes() == b"read_and_close" {
-                        read_and_close = value.to_int();
-                    } else {
-                        let shown = String::from_utf8_lossy(key.as_bytes()).into_owned();
-                        let name = [b"session.".as_slice(), key.as_bytes()].concat();
-                        if ctx.ini_set(&name, value.clone()).is_none() {
-                            warn(ctx, &format!("Setting option \"{shown}\" failed"));
-                        }
+            if value.is_str() || value.is_bool() || value.is_int() {
+                if key.as_bytes() == b"read_and_close" {
+                    read_and_close = value.to_int();
+                } else {
+                    let shown = String::from_utf8_lossy(key.as_bytes()).into_owned();
+                    let name = [b"session.".as_slice(), key.as_bytes()].concat();
+                    if ctx.ini_set(&name, value.clone()).is_none() {
+                        warn(ctx, &format!("Setting option \"{shown}\" failed"));
                     }
                 }
-                other => {
-                    return Err(ctx.throw(
-                        "TypeError",
-                        format!("session_start(): Option \"{}\" must be of type string|int|bool, {} given", String::from_utf8_lossy(key.as_bytes()), other.type_name()),
-                    ));
-                }
+            } else {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("session_start(): Option \"{}\" must be of type string|int|bool, {} given", String::from_utf8_lossy(key.as_bytes()), value.type_name()),
+                ));
             }
         }
     }
     life::start(ctx, &s)?;
     if !active(&s) {
         s.borrow().edit_vars(|a| *a = PhpArray::new());
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if read_and_close != 0 {
         life::flush(ctx, &s, false)?;
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn session_destroy(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
-    Ok(Value::Bool(life::destroy(ctx, &s)?))
+    Ok(Value::bool(life::destroy(ctx, &s)?))
 }
 
 fn session_write_close(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     if !active(&s) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     life::flush(ctx, &s, true)?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn session_abort(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
-    Ok(Value::Bool(life::abort(ctx, &s)?))
+    Ok(Value::bool(life::abort(ctx, &s)?))
 }
 
 fn session_reset(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     if !active(&s) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     life::reset(ctx, &s)?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn session_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let s = make(ctx);
     let status = s.borrow().status;
-    Ok(Value::Int(status as i64))
+    Ok(Value::int(status as i64))
 }
 
 fn session_register_shutdown(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
@@ -589,7 +575,7 @@ fn session_register_shutdown(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     // runs first; another one registered later may expect the session still
     // to be there, so the write is registered again now.
     ctx.on_shutdown(Value::str("session_write_close"), Vec::new());
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- the save handler ----
@@ -615,38 +601,40 @@ fn set_user_save_handler_ini(ctx: &mut dyn Ctx, s: &Shared) {
 }
 
 fn method_callable(obj: &Rc<Object>, method: &str) -> Value {
-    Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(obj)), Value::str(method)])))
+    Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(obj)), Value::str(method)]))
 }
 
 fn session_set_save_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = make(ctx);
     if args.len() <= 2 {
         // OOP version
-        let obj = match arg(args, 0) {
-            Value::Object(o) if o.class.is_a(b"sessionhandlerinterface") => o,
-            other => {
+        let first = arg(args, 0);
+        let obj = match first.as_object() {
+            Some(o) if o.class.is_a(b"sessionhandlerinterface") => Rc::clone(o),
+            _ => {
                 return Err(ctx.throw(
                     "TypeError",
-                    format!("session_set_save_handler(): Argument #1 ($open) must be of type SessionHandlerInterface, {} given", p8_runtime::args::value_name(&other)),
+                    format!("session_set_save_handler(): Argument #1 ($open) must be of type SessionHandlerInterface, {} given", p8_runtime::args::value_name(&first)),
                 ));
             }
         };
         let register_shutdown = if args.len() > 1 {
-            match arg(args, 1) {
-                Value::Bool(b) => b,
-                Value::Int(_) | Value::Float(_) | Value::Str(_) => arg(args, 1).to_bool(),
-                other => {
-                    return Err(ctx.throw(
-                        "TypeError",
-                        format!("session_set_save_handler(): Argument #2 ($close) must be of type bool, {} given", p8_runtime::args::value_name(&other)),
-                    ));
-                }
+            let close = arg(args, 1);
+            if let Some(b) = close.as_bool() {
+                b
+            } else if close.is_number() || close.is_str() {
+                arg(args, 1).to_bool()
+            } else {
+                return Err(ctx.throw(
+                    "TypeError",
+                    format!("session_set_save_handler(): Argument #2 ($close) must be of type bool, {} given", p8_runtime::args::value_name(&close)),
+                ));
             }
         } else {
             true
         };
         if !can_handler_change(ctx, &s) {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         {
             let mut st = s.borrow_mut();
@@ -679,7 +667,7 @@ fn session_set_save_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         if !active(&s) && not_user {
             set_user_save_handler_ini(ctx, &s);
         }
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     deprecated(ctx, "Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated");
     // Procedural version
@@ -690,7 +678,7 @@ fn session_set_save_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mut callables: Vec<Option<Value>> = Vec::new();
     for (i, name) in names.iter().enumerate().take(args.len()) {
         let v = arg(args, i);
-        if i >= 6 && matches!(v, Value::Null) {
+        if i >= 6 && v.is_null() {
             callables.push(None);
             continue;
         }
@@ -702,7 +690,7 @@ fn session_set_save_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         callables.push(Some(v));
     }
     if !can_handler_change(ctx, &s) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     s.borrow_mut().class_name = None;
     ctx.shutdown_named("session_shutdown", None);
@@ -728,5 +716,5 @@ fn session_set_save_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if let Some(v) = it.next().flatten() {
         st.names.update_timestamp = Some(v);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }

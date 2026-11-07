@@ -144,27 +144,24 @@ pub(crate) fn state(ctx: &mut dyn Ctx) -> Shared {
 impl State {
     /// IF_SESSION_VARS(): whether $_SESSION is the array the session keeps.
     pub(crate) fn has_vars(&self) -> bool {
-        self.vars.as_ref().is_some_and(|c| matches!(*c.borrow(), Value::Array(_)))
+        self.vars.as_ref().is_some_and(|c| c.borrow().is_array())
     }
 
     /// The session's variables, if they are an array.
     pub(crate) fn vars(&self) -> Option<Rc<PhpArray>> {
-        match &*self.vars.as_ref()?.borrow() {
-            Value::Array(a) => Some(Rc::clone(a)),
-            _ => None,
-        }
+        self.vars.as_ref()?.borrow().cloned_array()
     }
 
     /// Change the session's variables in place (SEPARATE_ARRAY); false when
     /// they are not an array.
     pub(crate) fn edit_vars(&self, f: impl FnOnce(&mut PhpArray)) -> bool {
         let Some(cell) = &self.vars else { return false };
-        match &mut *cell.borrow_mut() {
-            Value::Array(a) => {
-                f(Rc::make_mut(a));
+        match cell.borrow_mut().array_mut() {
+            Some(a) => {
+                f(a);
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
@@ -179,9 +176,9 @@ impl State {
 /// A setting's value as text (empty for a setting without one).
 pub(crate) fn text(ctx: &dyn Ctx, name: &str) -> Vec<u8> {
     match ctx.ini_get(name.as_bytes()) {
-        Some(Value::Str(s)) => s.as_bytes().to_vec(),
-        Some(Value::Null) | None => Vec::new(),
-        Some(v) => v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+        Some(v) if v.is_str() => v.as_str().expect("a string").as_bytes().to_vec(),
+        Some(v) if !v.is_null() => v.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+        _ => Vec::new(),
     }
 }
 

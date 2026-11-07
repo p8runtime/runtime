@@ -43,14 +43,14 @@ fn share(o: &Object) -> &Share {
 }
 
 fn set_ref(v: &Value, n: i64) {
-    if let Value::Ref(cell) = v {
-        *cell.borrow_mut() = Value::Int(n);
+    if let Some(cell) = v.as_reference() {
+        *cell.borrow_mut() = Value::int(n);
     }
 }
 
 fn curl_multi_init(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let class = ctx.class(b"CurlMultiHandle").expect("CurlMultiHandle");
-    Ok(Value::Object(ctx.new_object(&class)))
+    Ok(Value::object(ctx.new_object(&class)))
 }
 
 fn curl_multi_add_handle(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -65,13 +65,13 @@ fn curl_multi_add_handle(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     if handle(&ch).in_multi.get() {
         m.errno.set(CURLM_ADDED_ALREADY);
-        return Ok(Value::Int(CURLM_ADDED_ALREADY));
+        return Ok(Value::int(CURLM_ADDED_ALREADY));
     }
     handle(&ch).in_multi.set(true);
     m.easy.borrow_mut().push(Rc::clone(&ch));
     m.waiting.borrow_mut().push(ch);
     m.errno.set(CURLM_OK);
-    Ok(Value::Int(CURLM_OK))
+    Ok(Value::int(CURLM_OK))
 }
 
 fn curl_multi_remove_handle(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -83,7 +83,7 @@ fn curl_multi_remove_handle(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     m.done.borrow_mut().retain(|(e, _)| !Rc::ptr_eq(e, &ch));
     handle(&ch).in_multi.set(false);
     m.errno.set(CURLM_OK);
-    Ok(Value::Int(CURLM_OK))
+    Ok(Value::int(CURLM_OK))
 }
 
 fn curl_multi_exec(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -120,7 +120,7 @@ fn curl_multi_exec(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         set_ref(r, 0);
     }
     m.errno.set(CURLM_OK);
-    Ok(Value::Int(CURLM_OK))
+    Ok(Value::int(CURLM_OK))
 }
 
 fn curl_multi_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -130,30 +130,30 @@ fn curl_multi_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             return Err(ctx.throw("ValueError", "curl_multi_select(): Argument #2 ($timeout) must be between 0 and 2147484".into()));
         }
     }
-    Ok(Value::Int(0))
+    Ok(Value::int(0))
 }
 
 fn curl_multi_getcontent(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let ch = this_arg(args, 0);
     let st = handle(&ch).st.borrow();
     Ok(match st.write {
-        Sink::Return => Value::Str(PhpStr::new(st.content.clone().unwrap_or_default())),
-        _ => Value::Null,
+        Sink::Return => Value::str(PhpStr::new(st.content.clone().unwrap_or_default())),
+        _ => Value::NULL,
     })
 }
 
 fn curl_multi_info_read(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mh = this_arg(args, 0);
     let m = multi(&mh);
-    let Some((ch, code)) = m.done.borrow_mut().pop_front() else { return Ok(Value::Bool(false)) };
+    let Some((ch, code)) = m.done.borrow_mut().pop_front() else { return Ok(Value::FALSE) };
     if let Some(r) = args.get(1) {
         set_ref(r, m.done.borrow().len() as i64);
     }
     let mut a = PhpArray::new();
-    a.insert(Key::from_string(PhpStr::from("msg")), Value::Int(1));
-    a.insert(Key::from_string(PhpStr::from("result")), Value::Int(code));
-    a.insert(Key::from_string(PhpStr::from("handle")), Value::Object(ch));
-    Ok(Value::Array(Rc::new(a)))
+    a.insert(Key::from_string(PhpStr::from("msg")), Value::int(1));
+    a.insert(Key::from_string(PhpStr::from("result")), Value::int(code));
+    a.insert(Key::from_string(PhpStr::from("handle")), Value::object(ch));
+    Ok(Value::array(a))
 }
 
 fn curl_multi_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -166,11 +166,11 @@ fn curl_multi_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     }
     m.waiting.borrow_mut().clear();
     m.done.borrow_mut().clear();
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn curl_multi_errno(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(multi(&this_arg(args, 0)).errno.get()))
+    Ok(Value::int(multi(&this_arg(args, 0)).errno.get()))
 }
 
 fn curl_multi_strerror(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -201,7 +201,7 @@ fn curl_multi_setopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         }
     }
     m.errno.set(CURLM_OK);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn multi_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
@@ -212,11 +212,11 @@ fn multi_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn curl_share_init(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     let class = ctx.class(b"CurlShareHandle").expect("CurlShareHandle");
-    Ok(Value::Object(ctx.new_object(&class)))
+    Ok(Value::object(ctx.new_object(&class)))
 }
 
 fn curl_share_close(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn curl_share_setopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -231,11 +231,11 @@ fn curl_share_setopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     // CURL_LOCK_DATA_COOKIE .. CURL_LOCK_DATA_PSL
     let ok = (2..=6).contains(&value);
     s.errno.set(if ok { 0 } else { 1 });
-    Ok(Value::Bool(ok))
+    Ok(Value::bool(ok))
 }
 
 fn curl_share_errno(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(share(&this_arg(args, 0)).errno.get()))
+    Ok(Value::int(share(&this_arg(args, 0)).errno.get()))
 }
 
 fn curl_share_strerror(_: &mut dyn Ctx, args: &mut [Value]) -> R {

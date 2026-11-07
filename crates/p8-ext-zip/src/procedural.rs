@@ -60,7 +60,7 @@ fn new_resource(ctx: &mut dyn Ctx, kind: &'static str, id: u64) -> Value {
 fn resource_id(ctx: &mut dyn Ctx, args: &[Value], i: usize, kind: &'static str) -> Result<u64, Throw> {
     let func = ctx.builtin_name();
     let name = if kind == "Zip Directory" { if i == 0 { "zip" } else { "zip_entry" } } else { "zip_entry" };
-    let v = args.get(i).map(Value::deref).unwrap_or(Value::Null);
+    let v = args.get(i).map(Value::deref).unwrap_or(Value::NULL);
     match resource_of(&v) {
         Some(o) => match resource(&o) {
             Some(r) if r.kind == kind && !r.closed.get() => Ok(r.stream.borrow().path.parse().unwrap_or(0)),
@@ -92,14 +92,14 @@ fn zip_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             DIRS.with(|d| d.borrow_mut().insert(id, Dir { a: zip.a, next: 0 }));
             Ok(new_resource(ctx, "Zip Directory", id))
         }
-        Err(code) => Ok(Value::Int(i64::from(code))),
+        Err(code) => Ok(Value::int(i64::from(code))),
     }
 }
 
 fn zip_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     resource_id(ctx, args, 0, "Zip Directory")?;
     close_resource(&args[0]);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn zip_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -116,7 +116,7 @@ fn zip_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         dir.next += 1;
         Some(Entry { dir: id, stat, data, pos: 0 })
     });
-    let Some(entry) = entry else { return Ok(Value::Bool(false)) };
+    let Some(entry) = entry else { return Ok(Value::FALSE) };
     let eid = next_id();
     ENTRIES.with(|e| e.borrow_mut().insert(eid, entry));
     Ok(new_resource(ctx, "Zip Entry", eid))
@@ -125,13 +125,13 @@ fn zip_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn zip_entry_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     resource_id(ctx, args, 0, "Zip Directory")?;
     resource_id(ctx, args, 1, "Zip Entry")?;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn zip_entry_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     resource_id(ctx, args, 0, "Zip Entry")?;
     close_resource(&args[0]);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn zip_entry_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -149,8 +149,8 @@ fn zip_entry_read(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         Some(chunk)
     });
     Ok(match chunk {
-        Some(c) => Value::Str(PhpStr::new(c)),
-        None => Value::Bool(false),
+        Some(c) => Value::str(PhpStr::new(c)),
+        None => Value::FALSE,
     })
 }
 
@@ -165,15 +165,15 @@ fn info<T>(ctx: &mut dyn Ctx, args: &[Value], f: impl FnOnce(&Stat) -> T) -> Res
 }
 
 fn zip_entry_name(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(info(ctx, args, |s| Value::Str(PhpStr::new(s.name.clone())))?.unwrap_or(Value::Bool(false)))
+    Ok(info(ctx, args, |s| Value::str(PhpStr::new(s.name.clone())))?.unwrap_or(Value::FALSE))
 }
 
 fn zip_entry_filesize(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(info(ctx, args, |s| Value::Int(s.size as i64))?.unwrap_or(Value::Bool(false)))
+    Ok(info(ctx, args, |s| Value::int(s.size as i64))?.unwrap_or(Value::FALSE))
 }
 
 fn zip_entry_compressedsize(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(info(ctx, args, |s| Value::Int(s.comp_size))?.unwrap_or(Value::Bool(false)))
+    Ok(info(ctx, args, |s| Value::int(s.comp_size))?.unwrap_or(Value::FALSE))
 }
 
 fn zip_entry_compressionmethod(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -186,9 +186,9 @@ fn zip_entry_compressionmethod(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         8 => Value::str("deflated"),
         9 => Value::str("deflatedX"),
         10 => Value::str("implodedX"),
-        _ => Value::Bool(false),
+        _ => Value::FALSE,
     })?
-    .unwrap_or(Value::Bool(false)))
+    .unwrap_or(Value::FALSE))
 }
 
 macro_rules! b {

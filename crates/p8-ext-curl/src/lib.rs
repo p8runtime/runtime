@@ -125,9 +125,9 @@ impl Default for State {
     fn default() -> State {
         let mut opts = HashMap::new();
         // _php_curl_set_default_options() and libcurl's own defaults.
-        opts.insert(c::CURLOPT_MAXREDIRS, Value::Int(20));
-        opts.insert(c::CURLOPT_SSL_VERIFYPEER, Value::Int(1));
-        opts.insert(c::CURLOPT_SSL_VERIFYHOST, Value::Int(2));
+        opts.insert(c::CURLOPT_MAXREDIRS, Value::int(20));
+        opts.insert(c::CURLOPT_SSL_VERIFYPEER, Value::int(1));
+        opts.insert(c::CURLOPT_SSL_VERIFYHOST, Value::int(2));
         State {
             opts,
             req: Req::Get,
@@ -172,13 +172,13 @@ pub(crate) fn handle(o: &Object) -> &Handle {
 }
 
 pub(crate) fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 pub(crate) fn this_arg(args: &[Value], i: usize) -> Rc<Object> {
-    match arg(args, i) {
-        Value::Object(o) => o,
-        _ => unreachable!("checked against the stub"),
+    match arg(args, i).into_object() {
+        Ok(o) => o,
+        Err(_) => unreachable!("checked against the stub"),
     }
 }
 
@@ -189,19 +189,21 @@ pub(crate) fn bytes_of(v: &Value) -> Vec<u8> {
 /// zval_get_string(): __toString() for an object (an Error without one),
 /// "Array" with a warning for an array.
 pub(crate) fn to_str(ctx: &mut dyn Ctx, v: &Value) -> Result<PhpStr, Throw> {
-    match v.deref() {
-        Value::Object(o) if o.class.cast_string.is_none() && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0 => {
-            if o.class.method(b"__tostring").is_none() {
-                return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown()))));
-            }
-            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::str("__toString")])));
-            Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty))
+    let v = v.deref();
+    if let Some(o) = v.as_object()
+        && o.class.cast_string.is_none()
+        && o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0
+    {
+        if o.class.method(b"__tostring").is_none() {
+            return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.shown()))));
         }
-        Value::Array(_) => {
-            ctx.warn("Array to string conversion");
-            Ok(PhpStr::from("Array"))
-        }
-        other => Ok(other.to_php_string().unwrap_or_else(PhpStr::empty)),
+        let method = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__toString")]));
+        Ok(ctx.call(&method, &mut [])?.to_php_string().unwrap_or_else(PhpStr::empty))
+    } else if v.is_array() {
+        ctx.warn("Array to string conversion");
+        Ok(PhpStr::from("Array"))
+    } else {
+        Ok(v.to_php_string().unwrap_or_else(PhpStr::empty))
     }
 }
 
@@ -222,35 +224,36 @@ pub(crate) fn new_handle(ctx: &mut dyn Ctx, state: Option<State>) -> Rc<Object> 
 
 fn curl_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = new_handle(ctx, None);
-    if let Value::Str(url) = arg(args, 0) {
-        let ok = setopt::set(ctx, &o, c::CURLOPT_URL, &Value::Str(url), None)?;
+    let url = arg(args, 0);
+    if url.is_str() {
+        let ok = setopt::set(ctx, &o, c::CURLOPT_URL, &url, None)?;
         if !ok {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn curl_setopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = this_arg(args, 0);
     let option = arg(args, 1).to_int();
     let value = arg(args, 2);
-    Ok(Value::Bool(setopt::set(ctx, &o, option, &value, None)?))
+    Ok(Value::bool(setopt::set(ctx, &o, option, &value, None)?))
 }
 
 fn curl_setopt_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = this_arg(args, 0);
-    let Value::Array(options) = arg(args, 1) else { unreachable!("checked against the stub") };
+    let Ok(options) = arg(args, 1).into_array() else { unreachable!("checked against the stub") };
     for (key, value) in options.iter() {
         let Key::Int(option) = key else {
             let name = ctx.builtin_name();
             return Err(ctx.throw("ValueError", format!("{name}(): Argument #2 ($options) contains an invalid cURL option")));
         };
         if !setopt::set(ctx, &o, option, &value.deref(), Some(()))? {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn curl_exec(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -270,13 +273,13 @@ fn curl_exec(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             st.errno = e.code;
             st.error = e.message;
             st.content = None;
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         Ok(()) => {
             let content = st.content.take();
             match st.write {
-                Sink::Return => Ok(Value::Str(PhpStr::new(content.unwrap_or_default()))),
-                _ => Ok(Value::Bool(true)),
+                Sink::Return => Ok(Value::str(PhpStr::new(content.unwrap_or_default()))),
+                _ => Ok(Value::TRUE),
             }
         }
     }
@@ -316,10 +319,8 @@ pub(crate) fn verify_handlers(ctx: &mut dyn Ctx, h: &Handle) {
 fn curl_getinfo(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = this_arg(args, 0);
     let st = handle(&o).st.borrow();
-    Ok(match arg(args, 1) {
-        Value::Null => info::all(&st),
-        v => info::one(ctx, &st, v.to_int()),
-    })
+    let v = arg(args, 1);
+    Ok(if v.is_null() { info::all(&st) } else { info::one(ctx, &st, v.to_int()) })
 }
 
 fn curl_error(_: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -332,7 +333,7 @@ fn curl_error(_: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn curl_errno(_: &mut dyn Ctx, args: &mut [Value]) -> R {
-    Ok(Value::Int(handle(&this_arg(args, 0)).st.borrow().errno))
+    Ok(Value::int(handle(&this_arg(args, 0)).st.borrow().errno))
 }
 
 fn curl_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -341,7 +342,7 @@ fn curl_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         let name = ctx.builtin_name();
         return Err(ctx.throw("Error", format!("{name}(): Attempt to close cURL handle from a callback")));
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn curl_reset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
@@ -362,22 +363,22 @@ fn curl_reset(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     st.debug = None;
     st.info = info::Info::default();
     st.jar = None;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn curl_copy_handle(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let o = this_arg(args, 0);
     let state = handle(&o).st.borrow().clone();
-    Ok(Value::Object(new_handle(ctx, Some(state))))
+    Ok(Value::object(new_handle(ctx, Some(state))))
 }
 
 fn curl_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
     let mut a = PhpArray::new();
     let mut put = |k: &str, v: Value| a.insert(Key::from_string(PhpStr::from(k)), v);
-    put("version_number", Value::Int(LIBCURL_VERSION_NUM));
-    put("age", Value::Int(11));
+    put("version_number", Value::int(LIBCURL_VERSION_NUM));
+    put("age", Value::int(11));
     // CURL_VERSION_IPV6 | SSL | LIBZ | IDN | LARGEFILE | UNIX_SOCKETS (what rsurl has)
-    put("features", Value::Int(1 | 4 | 8 | 128 | 512 | 1 << 19));
+    put("features", Value::int(1 | 4 | 8 | 128 | 512 | 1 << 19));
     let mut features = PhpArray::new();
     for (name, on) in [
         ("AsynchDNS", false),
@@ -410,23 +411,23 @@ fn curl_version(_: &mut dyn Ctx, _: &mut [Value]) -> R {
         ("HSTS", false),
         ("GSASL", false),
     ] {
-        features.insert(Key::from_string(PhpStr::from(name)), Value::Bool(on));
+        features.insert(Key::from_string(PhpStr::from(name)), Value::bool(on));
     }
-    put("feature_list", Value::Array(Rc::new(features)));
-    put("ssl_version_number", Value::Int(0));
+    put("feature_list", Value::array(features));
+    put("ssl_version_number", Value::int(0));
     put("version", Value::str(LIBCURL_VERSION));
     put("host", Value::str(host_triple()));
     put("ssl_version", Value::str("purecrypto"));
     put("libz_version", Value::str("1.3.1"));
-    put("protocols", Value::Array(Rc::new(PhpArray::from_list(["file", "http", "https"].iter().map(|p| Value::str(*p)).collect()))));
+    put("protocols", Value::array(PhpArray::from_list(["file", "http", "https"].iter().map(|p| Value::str(*p)).collect())));
     put("ares", Value::str(""));
-    put("ares_num", Value::Int(0));
+    put("ares_num", Value::int(0));
     put("libidn", Value::str(""));
-    put("iconv_ver_num", Value::Int(0));
+    put("iconv_ver_num", Value::int(0));
     put("libssh_version", Value::str(""));
-    put("brotli_ver_num", Value::Int(0x1010000));
+    put("brotli_ver_num", Value::int(0x1010000));
     put("brotli_version", Value::str("brotli/1.1.0"));
-    Ok(Value::Array(Rc::new(a)))
+    Ok(Value::array(a))
 }
 
 fn host_triple() -> String {
@@ -458,7 +459,7 @@ fn curl_escape(_: &mut dyn Ctx, args: &mut [Value]) -> R {
             out.extend_from_slice(format!("%{b:02X}").as_bytes());
         }
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// curl_easy_unescape(): %XX sequences decoded, anything else kept.
@@ -478,16 +479,16 @@ fn curl_unescape(_: &mut dyn Ctx, args: &mut [Value]) -> R {
             i += 1;
         }
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn curl_pause(_: &mut dyn Ctx, _: &mut [Value]) -> R {
-    Ok(Value::Int(0))
+    Ok(Value::int(0))
 }
 
 fn curl_upkeep(_: &mut dyn Ctx, args: &mut [Value]) -> R {
     handle(&this_arg(args, 0)).st.borrow_mut().errno = 0;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 // ---- CurlHandle & friends: classes that only their functions make ----
@@ -504,16 +505,18 @@ fn handle_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn curlfile_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     curlfile_fill(ctx, this, args);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn curlfile_fill(_: &mut dyn Ctx, o: &Rc<Object>, args: &[Value]) {
     o.class.write(o, b"name", b"CURLFile", arg(args, 0));
-    if let Value::Str(s) = arg(args, 1) {
-        o.class.write(o, b"mime", b"CURLFile", Value::Str(s));
+    let mime = arg(args, 1);
+    if mime.is_str() {
+        o.class.write(o, b"mime", b"CURLFile", mime);
     }
-    if let Value::Str(s) = arg(args, 2) {
-        o.class.write(o, b"postname", b"CURLFile", Value::Str(s));
+    let postname = arg(args, 2);
+    if postname.is_str() {
+        o.class.write(o, b"postname", b"CURLFile", postname);
     }
 }
 
@@ -521,7 +524,7 @@ fn curl_file_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let class = ctx.class(b"CURLFile").expect("CURLFile");
     let o = ctx.new_object(&class);
     curlfile_fill(ctx, &o, args);
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 fn cf_get(name: &'static [u8]) -> impl Fn(&Rc<Object>) -> Value {
@@ -542,12 +545,12 @@ fn cf_get_postname(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn cf_set_mime(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     this.class.write(this, b"mime", b"CURLFile", arg(args, 0));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn cf_set_postname(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     this.class.write(this, b"postname", b"CURLFile", arg(args, 0));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn cf_wakeup(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
@@ -561,12 +564,10 @@ fn csf_wakeup(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 fn csf_construct(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     this.class.write(this, b"data", b"CURLStringFile", arg(args, 0));
     this.class.write(this, b"postname", b"CURLStringFile", arg(args, 1));
-    let mime = match arg(args, 2) {
-        Value::Str(s) => Value::Str(s),
-        _ => Value::str("application/octet-stream"),
-    };
+    let mime = arg(args, 2);
+    let mime = if mime.is_str() { mime } else { Value::str("application/octet-stream") };
     this.class.write(this, b"mime", b"CURLStringFile", mime);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- registration ----

@@ -235,7 +235,7 @@ static CLASSES: &[ClassSpec] = &[ClassSpec {
 // ---- the properties: virtual, read from the archive ----
 
 fn get_last_id(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(handle(this).last_id.get()))
+    Ok(Value::int(handle(this).last_id.get()))
 }
 
 fn error_of(this: &Object) -> Error {
@@ -247,15 +247,15 @@ fn error_of(this: &Object) -> Error {
 }
 
 fn get_status(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(i64::from(error_of(this).code)))
+    Ok(Value::int(i64::from(error_of(this).code)))
 }
 
 fn get_status_sys(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(i64::from(error_of(this).sys)))
+    Ok(Value::int(i64::from(error_of(this).sys)))
 }
 
 fn get_num_files(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(handle(this).z.borrow().as_ref().map_or(0, |z| z.a.count() as i64)))
+    Ok(Value::int(handle(this).z.borrow().as_ref().map_or(0, |z| z.a.count() as i64)))
 }
 
 fn get_filename(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
@@ -294,16 +294,16 @@ fn properties(o: &Object) -> PhpArray {
         let z = h.z.borrow();
         let err = z.as_ref().map_or(h.closed_err.get(), |z| z.err);
         let mut set = |k: &str, v: Value| a.insert(Key::from_string(k.into()), v);
-        set("lastId", Value::Int(h.last_id.get()));
-        set("status", Value::Int(i64::from(err.code)));
-        set("statusSys", Value::Int(i64::from(err.sys)));
-        set("numFiles", Value::Int(z.as_ref().map_or(0, |z| z.a.count() as i64)));
+        set("lastId", Value::int(h.last_id.get()));
+        set("status", Value::int(i64::from(err.code)));
+        set("statusSys", Value::int(i64::from(err.sys)));
+        set("numFiles", Value::int(z.as_ref().map_or(0, |z| z.a.count() as i64)));
         set("filename", z.as_ref().map_or_else(|| Value::str(""), |z| Value::str(z.path.clone())));
         set("comment", z.as_ref().map_or_else(|| Value::str(""), |z| string(z.a.comment.clone())));
     }
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        if p.hooks != 0 || p.is_internal() || matches!(v, Value::Undef) {
+        if p.hooks != 0 || p.is_internal() || v.is_undef() {
             continue;
         }
         let name = match p.visibility {
@@ -322,7 +322,7 @@ fn properties(o: &Object) -> PhpArray {
 // ---- argument helpers ----
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn int(args: &[Value], i: usize) -> i64 {
@@ -342,7 +342,7 @@ fn text(b: &[u8]) -> String {
 }
 
 fn string(b: Vec<u8>) -> Value {
-    Value::Str(PhpStr::new(b))
+    Value::str(PhpStr::new(b))
 }
 
 /// PHP's argument checks for the method `stub` ("ZipArchive::open").
@@ -393,12 +393,12 @@ fn with_zip(ctx: &mut dyn Ctx, this: &Rc<Object>, f: impl FnOnce(&mut Zip, &Hand
 
 fn fail(z: &mut Zip, code: i32) -> R {
     z.err = Error::new(code);
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// Success leaves the archive's error as it was (libzip clears none).
 fn ok(_: &mut Zip) -> R {
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// A read-only archive refuses changes.
@@ -514,14 +514,14 @@ fn open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     // An archive still open is closed first.
     if h.z.borrow().is_some() && !finish(ctx, this, "ZipArchive::open")? {
         ctx.warn("ZipArchive::open(): Empty string as source");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     Ok(match open_archive(ctx, "ZipArchive::open", &text(&name), flags) {
         Ok(zip) => {
             *h.z.borrow_mut() = Some(zip);
-            Value::Bool(true)
+            Value::TRUE
         }
-        Err(code) => Value::Int(i64::from(code)),
+        Err(code) => Value::int(i64::from(code)),
     })
 }
 
@@ -567,7 +567,7 @@ fn write_archive(ctx: &mut dyn Ctx, zip: &mut Zip) -> Result<Result<(), Error>, 
         let cancel = zip.cancel.clone();
         let tell = |ctx: &mut dyn Ctx, p: f64| -> Result<(), Throw> {
             if let Some((_, cb)) = &progress {
-                ctx.call(cb, &mut [Value::Float(p)])?;
+                ctx.call(cb, &mut [Value::float(p)])?;
             }
             Ok(())
         };
@@ -626,17 +626,17 @@ fn write_file(zip: &mut Zip) -> Result<(), Error> {
 fn close(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     prep(ctx, "ZipArchive::close", args)?;
     require_open(ctx, this)?;
-    Ok(Value::Bool(finish(ctx, this, "ZipArchive::close")?))
+    Ok(Value::bool(finish(ctx, this, "ZipArchive::close")?))
 }
 
 /// The object goes away: an open archive is written (a subclass with its own
 /// __destruct sees it open first; the handle's Drop then writes it).
 fn destruct(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     if this.class.method(b"__destruct").is_some() || handle(this).z.borrow().is_none() {
-        return Ok(Value::Null);
+        return Ok(Value::NULL);
     }
     let h = handle(this);
-    let Some(mut zip) = h.z.borrow_mut().take() else { return Ok(Value::Null) };
+    let Some(mut zip) = h.z.borrow_mut().take() else { return Ok(Value::NULL) };
     h.closing.set(true);
     let r = write_archive(ctx, &mut zip);
     h.closing.set(false);
@@ -645,7 +645,7 @@ fn destruct(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
         Err(thrown) => return Err(thrown),
         Ok(Ok(())) => {}
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn set_password(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -653,16 +653,16 @@ fn set_password(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let pw = bytes(args, 0);
     with_zip(ctx, this, |z, _| {
         if pw.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         z.a.password = Some(pw);
-        Ok(Value::Bool(true))
+        Ok(Value::TRUE)
     })
 }
 
 fn count(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     prep(ctx, "ZipArchive::count", args)?;
-    with_zip(ctx, this, |z, _| Ok(Value::Int(z.a.count() as i64)))
+    with_zip(ctx, this, |z, _| Ok(Value::int(z.a.count() as i64)))
 }
 
 fn get_status_string(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -677,7 +677,7 @@ fn clear_error(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         Some(z) => z.err = Error::default(),
         None => h.closed_err.set(Error::default()),
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 // ---- adding ----
@@ -712,11 +712,11 @@ fn add(z: &mut Zip, h: &Handle, name: Vec<u8>, source: Source, flags: i64) -> R 
         Some(i) => {
             h.last_id.set(i as i64);
             z.err = Error::default();
-            Ok(Value::Bool(true))
+            Ok(Value::TRUE)
         }
         None => {
             h.last_id.set(-1);
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -727,13 +727,13 @@ fn add_empty_dir(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     let flags = opt_int(args, 1, 0);
     with_zip(ctx, this, |z, h| {
         if name.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         if !name.ends_with(b"/") {
             name.push(b'/');
         }
         let r = add(z, h, name, Source::Memory(Rc::new(Vec::new())), flags)?;
-        if matches!(r, Value::Bool(true)) {
+        if r.as_bool() == Some(true) {
             z.a.slots[h.last_id.get() as usize].cur.attr = 0x41FF_0000;
         }
         Ok(r)
@@ -747,7 +747,7 @@ fn add_from_string(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> 
     let flags = opt_int(args, 2, FL_OVERWRITE);
     with_zip(ctx, this, |z, h| {
         let r = add(z, h, name, Source::Memory(Rc::new(content)), flags)?;
-        if matches!(r, Value::Bool(true)) {
+        if r.as_bool() == Some(true) {
             z.a.slots[h.last_id.get() as usize].cur.attr = 0x81B6_0000;
         }
         Ok(r)
@@ -829,15 +829,15 @@ fn add_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         name = path.clone();
     }
     let (start, len, flags) = (opt_int(args, 2, 0), opt_int(args, 3, 0), opt_int(args, 4, FL_OVERWRITE));
-    let Some(source) = file_source(ctx, "ZipArchive::addFile", &path, start, len, flags) else { return Ok(Value::Bool(false)) };
+    let Some(source) = file_source(ctx, "ZipArchive::addFile", &path, start, len, flags) else { return Ok(Value::FALSE) };
     let h = handle(this);
     if h.closing.get() {
         return Err(ctx.throw("Error", "Already being closed".into()));
     }
     let mut z = h.z.borrow_mut();
-    let Some(zip) = z.as_mut() else { return Ok(Value::Bool(false)) };
+    let Some(zip) = z.as_mut() else { return Ok(Value::FALSE) };
     let r = add(zip, h, name, source, flags & !FL_OPEN_FILE_NOW)?;
-    if matches!(r, Value::Bool(true)) {
+    if r.as_bool() == Some(true) {
         file_attrs(zip, h.last_id.get() as usize);
     }
     Ok(r)
@@ -857,22 +857,22 @@ fn replace_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         return Err(value_error(ctx, "ZipArchive::replaceFile", 2, "index", "must be greater than or equal to 0"));
     }
     let (start, len, flags) = (opt_int(args, 2, 0), opt_int(args, 3, 0), opt_int(args, 4, 0));
-    let Some(source) = file_source(ctx, "ZipArchive::replaceFile", &path, start, len, flags) else { return Ok(Value::Bool(false)) };
+    let Some(source) = file_source(ctx, "ZipArchive::replaceFile", &path, start, len, flags) else { return Ok(Value::FALSE) };
     let h = handle(this);
     if h.closing.get() {
         return Err(ctx.throw("Error", "Already being closed".into()));
     }
     let mut z = h.z.borrow_mut();
-    let Some(zip) = z.as_mut() else { return Ok(Value::Bool(false)) };
+    let Some(zip) = z.as_mut() else { return Ok(Value::FALSE) };
     let Some(i) = index(zip, idx).filter(|&i| !zip.a.slots[i].deleted) else { return fail(zip, archive::ER_INVAL) };
     if !modify(zip) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let name = zip.a.slots[i].cur.name.clone();
     zip.a.set_data(Some(i), name, source);
     file_attrs(zip, i);
     zip.err = Error::default();
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// The options of addGlob and addPattern (php_zip_parse_options).
@@ -887,21 +887,21 @@ struct Options {
 
 fn parse_options(ctx: &mut dyn Ctx, func: &str, opts: &Value) -> Result<Options, Throw> {
     let mut o = Options { remove_all_path: false, remove_path: None, add_path: None, flags: FL_OVERWRITE, comp_method: -1, comp_flags: 0 };
-    let Value::Array(a) = opts else { return Ok(o) };
+    let Some(a) = opts.as_array() else { return Ok(o) };
     let get = |name: &str| a.get(&Key::from_string(name.into())).map(Value::deref);
     if let Some(v) = get("remove_all_path") {
-        if !matches!(v, Value::Bool(_)) {
+        if !v.is_bool() {
             ctx.warn(&format!("{func}(): Option \"remove_all_path\" must be of type bool, {} given", p8_runtime::args::value_name(&v)));
         }
         o.remove_all_path = v.to_int() != 0;
     }
     if let Some(v) = get("comp_method") {
-        if !matches!(v, Value::Int(_)) {
+        if !v.is_int() {
             ctx.warn(&format!("{func}(): Option \"comp_method\" must be of type int, {} given", p8_runtime::args::value_name(&v)));
         }
         o.comp_method = v.to_int();
         if let Some(f) = get("comp_flags") {
-            if !matches!(f, Value::Int(_)) {
+            if !f.is_int() {
                 ctx.warn(&format!("{func}(): Option \"comp_flags\" must be of type int, {} given", p8_runtime::args::value_name(&f)));
             }
             o.comp_flags = f.to_int();
@@ -909,7 +909,7 @@ fn parse_options(ctx: &mut dyn Ctx, func: &str, opts: &Value) -> Result<Options,
     }
     for key in ["remove_path", "add_path"] {
         let Some(v) = get(key) else { continue };
-        let Value::Str(s) = &v else {
+        let Some(s) = v.as_str() else {
             return Err(ctx.throw("TypeError", format!("Option \"{key}\" must be of type string, {} given", p8_runtime::args::value_name(&v))));
         };
         if s.is_empty() {
@@ -921,7 +921,7 @@ fn parse_options(ctx: &mut dyn Ctx, func: &str, opts: &Value) -> Result<Options,
         if key == "remove_path" { o.remove_path = Some(s.as_bytes().to_vec()) } else { o.add_path = Some(s.as_bytes().to_vec()) }
     }
     if let Some(v) = get("flags") {
-        if !matches!(v, Value::Int(_)) {
+        if !v.is_int() {
             return Err(ctx.throw("TypeError", format!("Option \"flags\" must be of type int, {} given", p8_runtime::args::value_name(&v))));
         }
         o.flags = v.to_int();
@@ -945,26 +945,26 @@ fn add_found(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, found: Vec<Vec<u8
         if let Some(add) = &o.add_path {
             if add.len() + stripped.len() > MAXPATHLEN {
                 ctx.warn(&format!("{func}(): Entry name too long (max: {}, {} given)", MAXPATHLEN - 1, add.len() + stripped.len()));
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
             name = [&add[..], &stripped[..]].concat();
         }
         name.truncate(MAXPATHLEN - 1);
-        let Some(source) = file_source(ctx, func, file, 0, 0, o.flags) else { return Ok(Value::Bool(false)) };
+        let Some(source) = file_source(ctx, func, file, 0, 0, o.flags) else { return Ok(Value::FALSE) };
         let h = handle(this);
         let mut z = h.z.borrow_mut();
-        let Some(zip) = z.as_mut() else { return Ok(Value::Bool(false)) };
+        let Some(zip) = z.as_mut() else { return Ok(Value::FALSE) };
         let r = add(zip, h, name, source, o.flags & !FL_OPEN_FILE_NOW)?;
-        if !matches!(r, Value::Bool(true)) {
+        if r.as_bool() != Some(true) {
             return Ok(r);
         }
         let i = h.last_id.get() as usize;
         file_attrs(zip, i);
-        if o.comp_method >= 0 && !matches!(set_compression(zip, i as i64, o.comp_method, o.comp_flags)?, Value::Bool(true)) {
-            return Ok(Value::Bool(false));
+        if o.comp_method >= 0 && set_compression(zip, i as i64, o.comp_method, o.comp_flags)?.as_bool() != Some(true) {
+            return Ok(Value::FALSE);
         }
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(found.into_iter().map(string).collect()))))
+    Ok(Value::array(PhpArray::from_list(found.into_iter().map(string).collect())))
 }
 
 fn add_glob(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -977,23 +977,23 @@ fn add_glob(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let o = parse_options(ctx, "ZipArchive::addGlob", &arg(args, 2))?;
     if pattern.len() >= MAXPATHLEN {
         ctx.warn(&format!("ZipArchive::addGlob(): Pattern exceeds the maximum allowed length of {MAXPATHLEN} characters"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let available = GLOB_BRACE | GLOB_MARK | GLOB_NOSORT | GLOB_NOCHECK | GLOB_NOESCAPE | GLOB_ERR | GLOB_ONLYDIR;
     if glob_flags & available != glob_flags {
         ctx.warn("ZipArchive::addGlob(): At least one of the passed flags is invalid or not supported on this platform");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let list = ctx.call(&Value::str("glob"), &mut [string(pattern), Value::Int(glob_flags & !GLOB_ONLYDIR)])?;
-    let mut found: Vec<Vec<u8>> = match list {
-        Value::Array(a) => a.values().filter_map(|v| v.to_php_string()).map(|s| s.as_bytes().to_vec()).collect(),
-        _ => return Ok(Value::Array(Rc::new(PhpArray::new()))),
+    let list = ctx.call(&Value::str("glob"), &mut [string(pattern), Value::int(glob_flags & !GLOB_ONLYDIR)])?;
+    let mut found: Vec<Vec<u8>> = match list.as_array() {
+        Some(a) => a.values().filter_map(|v| v.to_php_string()).map(|s| s.as_bytes().to_vec()).collect(),
+        None => return Ok(Value::array(PhpArray::new())),
     };
     if glob_flags & GLOB_ONLYDIR != 0 {
         found.retain(|f| std::fs::metadata(text(f)).is_ok_and(|m| m.is_dir()));
     }
     if found.is_empty() {
-        return Ok(Value::Array(Rc::new(PhpArray::new())));
+        return Ok(Value::array(PhpArray::new()));
     }
     add_found(ctx, this, "ZipArchive::addGlob", found, &o)
 }
@@ -1008,16 +1008,16 @@ fn add_pattern(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let o = parse_options(ctx, "ZipArchive::addPattern", &arg(args, 2))?;
     let dir = text(&path);
     let listing = ctx.call(&Value::str("scandir"), &mut [Value::str(dir.clone())])?;
-    let names: Vec<Vec<u8>> = match listing {
-        Value::Array(a) => a.values().filter_map(|v| v.to_php_string()).map(|s| s.as_bytes().to_vec()).collect(),
-        _ => return Ok(Value::Array(Rc::new(PhpArray::new()))),
+    let names: Vec<Vec<u8>> = match listing.as_array() {
+        Some(a) => a.values().filter_map(|v| v.to_php_string()).map(|s| s.as_bytes().to_vec()).collect(),
+        None => return Ok(Value::array(PhpArray::new())),
     };
     if names.is_empty() {
-        return Ok(Value::Array(Rc::new(PhpArray::new())));
+        return Ok(Value::array(PhpArray::new()));
     }
     let Some(re) = p8_ext_pcre::Pattern::compile(ctx, "ZipArchive::addPattern", &pattern) else {
         ctx.warn("ZipArchive::addPattern(): Invalid expression");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let mut found = Vec::new();
     for name in names {
@@ -1052,7 +1052,7 @@ fn rename(z: &mut Zip, i: i64, new_name: Vec<u8>) -> R {
         return fail(z, archive::ER_INVAL);
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     if let Some(j) = locate(z, &new_name, 0)
         && j != i {
@@ -1066,7 +1066,7 @@ fn rename_index(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     prep(ctx, "ZipArchive::renameIndex", args)?;
     let (i, n) = (int(args, 0), bytes(args, 1));
     if i < 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     require_open(ctx, this)?;
     if n.is_empty() {
@@ -1100,7 +1100,7 @@ fn set_archive_comment(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
     }
     with_zip(ctx, this, |z, _| {
         if !modify(z) {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         z.a.comment = c;
         ok(z)
@@ -1143,7 +1143,7 @@ fn get_archive_flag(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
     prep(ctx, "ZipArchive::getArchiveFlag", args)?;
     let flag = int(args, 0);
     with_zip(ctx, this, |z, _| {
-        Ok(Value::Int(match flag {
+        Ok(Value::int(match flag {
             AFL_RDONLY => i64::from(z.a.readonly),
             AFL_IS_TORRENTZIP => i64::from(z.a.torrent),
             AFL_WANT_TORRENTZIP => i64::from(z.a.want_torrent),
@@ -1159,7 +1159,7 @@ fn set_comment(z: &mut Zip, i: i64, comment: Vec<u8>) -> R {
         return fail(z, archive::ER_DELETED);
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     z.a.slots[i].cur.comment = comment;
     ok(z)
@@ -1187,7 +1187,7 @@ fn set_comment_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
     }
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
         Some(i) => set_comment(z, i as i64, c),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     })
 }
 
@@ -1225,7 +1225,7 @@ fn set_mtime(z: &mut Zip, i: i64, t: i64) -> R {
         return fail(z, archive::ER_DELETED);
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     z.a.slots[i].cur.mtime = t;
     ok(z)
@@ -1246,7 +1246,7 @@ fn set_mtime_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     }
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
         Some(i) => set_mtime(z, i as i64, t),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     })
 }
 
@@ -1256,7 +1256,7 @@ fn delete(z: &mut Zip, i: i64) -> R {
         return fail(z, archive::ER_DELETED);
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     z.a.slots[i].deleted = true;
     ok(z)
@@ -1273,7 +1273,7 @@ fn delete_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let name = bytes(args, 0);
     with_zip(ctx, this, |z, _| {
         if name.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         match locate(z, &name, 0) {
             Some(i) => delete(z, i as i64),
@@ -1288,14 +1288,14 @@ fn stat_array(st: archive::Stat) -> Value {
     let mut a = PhpArray::new();
     let mut set = |k: &str, v: Value| a.insert(Key::from_string(k.into()), v);
     set("name", string(st.name));
-    set("index", Value::Int(st.index as i64));
-    set("crc", Value::Int(i64::from(st.crc)));
-    set("size", Value::Int(st.size as i64));
-    set("mtime", Value::Int(st.mtime));
-    set("comp_size", Value::Int(st.comp_size));
-    set("comp_method", Value::Int(i64::from(st.comp_method)));
-    set("encryption_method", Value::Int(i64::from(st.encryption)));
-    Value::Array(Rc::new(a))
+    set("index", Value::int(st.index as i64));
+    set("crc", Value::int(i64::from(st.crc)));
+    set("size", Value::int(st.size as i64));
+    set("mtime", Value::int(st.mtime));
+    set("comp_size", Value::int(st.comp_size));
+    set("comp_method", Value::int(i64::from(st.comp_method)));
+    set("encryption_method", Value::int(i64::from(st.encryption)));
+    Value::array(a)
 }
 
 fn stat(z: &mut Zip, i: i64, flags: i64) -> R {
@@ -1331,10 +1331,10 @@ fn locate_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let (name, flags) = (bytes(args, 0), opt_int(args, 1, 0));
     with_zip(ctx, this, |z, _| {
         if name.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         match locate(z, &name, flags) {
-            Some(i) => Ok(Value::Int(i as i64)),
+            Some(i) => Ok(Value::int(i as i64)),
             None => fail(z, archive::ER_NOENT),
         }
     })
@@ -1390,7 +1390,7 @@ fn unchange_index(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
     let i = int(args, 0);
     require_open(ctx, this)?;
     if i < 0 {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     with_zip(ctx, this, |z, _| unchange(z, i))
 }
@@ -1400,7 +1400,7 @@ fn unchange_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
     let name = bytes(args, 0);
     with_zip(ctx, this, |z, _| {
         if name.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         match locate(z, &name, 0) {
             Some(i) => unchange(z, i as i64),
@@ -1431,7 +1431,7 @@ fn read_entry(z: &mut Zip, i: usize, flags: i64, len: i64, warns: &mut Vec<Strin
             if !silent_read_error(e) {
                 warns.push(format!("{func}(): Cannot read entry: {}", e.message()));
             }
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
     }
 }
@@ -1478,20 +1478,20 @@ fn open_stream(ctx: &mut dyn Ctx, this: &Rc<Object>, found: Result<usize, i32>, 
         let unchanged = flags & FL_UNCHANGED != 0;
         let name = z.a.name(i, unchanged).map(<[u8]>::to_vec).unwrap_or_default();
         match z.a.read(i, unchanged) {
-            Ok(d) => Ok(Value::Array(Rc::new(PhpArray::from_list(vec![string(d), string(name)])))),
+            Ok(d) => Ok(Value::array(PhpArray::from_list(vec![string(d), string(name)]))),
             Err(e) => {
                 z.err = e;
-                Ok(Value::Bool(false))
+                Ok(Value::FALSE)
             }
         }
     })?;
-    Ok(match got {
-        Value::Array(a) => {
+    Ok(match got.into_array() {
+        Ok(a) => {
             let data = a.get_int(0).and_then(|v| v.to_php_string()).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
             let name = a.get_int(1).and_then(|v| v.to_php_string()).map(|s| text(s.as_bytes())).unwrap_or_default();
             entry_stream(ctx, data, &name, "rb")
         }
-        other => other,
+        Err(other) => other,
     })
 }
 
@@ -1641,39 +1641,35 @@ fn extract_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let mut warns = Vec::new();
     let r = with_zip(ctx, this, |z, _| {
         if dest.is_empty() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         let dest = text(&dest);
         if !std::path::Path::new(&dest).exists() && std::fs::create_dir_all(&dest).is_err() {
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
-        match &files {
-            Value::Str(s) => {
-                if !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
-                    return Ok(Value::Bool(false));
-                }
+        if let Some(s) = files.as_str() {
+            if !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
+                return Ok(Value::FALSE);
             }
-            Value::Array(a) => {
-                if a.is_empty() {
-                    return Ok(Value::Bool(false));
-                }
-                for v in a.values() {
-                    if let Value::Str(s) = v.deref()
-                        && !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
-                            return Ok(Value::Bool(false));
-                        }
-                }
+        } else if let Some(a) = files.as_array() {
+            if a.is_empty() {
+                return Ok(Value::FALSE);
             }
-            _ => {
-                for i in 0..z.a.count() {
-                    let Ok(name) = z.a.name(i, true).map(<[u8]>::to_vec) else { return Ok(Value::Bool(false)) };
-                    if !extract_file(z, &dest, &name, Some(i), &mut warns) {
-                        return Ok(Value::Bool(false));
+            for v in a.values() {
+                if let Some(s) = v.deref().as_str()
+                    && !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
+                        return Ok(Value::FALSE);
                     }
+            }
+        } else {
+            for i in 0..z.a.count() {
+                let Ok(name) = z.a.name(i, true).map(<[u8]>::to_vec) else { return Ok(Value::FALSE) };
+                if !extract_file(z, &dest, &name, Some(i), &mut warns) {
+                    return Ok(Value::FALSE);
                 }
             }
         }
-        Ok(Value::Bool(true))
+        Ok(Value::TRUE)
     });
     warn_all(ctx, warns);
     r
@@ -1687,7 +1683,7 @@ fn set_ext_attr(z: &mut Zip, i: i64, flags: i64, opsys: i64, attr: i64) -> R {
         return fail(z, archive::ER_INVAL);
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let r = &mut z.a.slots[i].cur;
     r.opsys = (opsys & 0xff) as u8;
@@ -1713,13 +1709,13 @@ fn set_ext_attr_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     }
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
         Some(i) => set_ext_attr(z, i as i64, f, o, a),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     })
 }
 
 /// Store through a by-reference argument.
 fn set_ref(args: &[Value], i: usize, v: Value) {
-    if let Some(Value::Ref(cell)) = args.get(i) {
+    if let Some(cell) = args.get(i).and_then(Value::as_reference) {
         *cell.borrow_mut() = v;
     }
 }
@@ -1730,8 +1726,8 @@ fn get_ext_attr(z: &mut Zip, args: &[Value], i: i64, flags: i64) -> R {
     let s = &z.a.slots[i];
     let rec = if unchanged { s.orig.as_ref() } else if s.deleted { None } else { Some(&s.cur) };
     let Some(r) = rec else { return fail(z, archive::ER_INVAL) };
-    set_ref(args, 1, Value::Int(i64::from(r.opsys)));
-    set_ref(args, 2, Value::Int(i64::from(r.attr)));
+    set_ref(args, 1, Value::int(i64::from(r.opsys)));
+    set_ref(args, 2, Value::int(i64::from(r.attr)));
     ok(z)
 }
 
@@ -1752,7 +1748,7 @@ fn get_ext_attr_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
     let args = &*args;
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
         Some(i) => get_ext_attr(z, args, i as i64, flags),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     })
 }
 
@@ -1766,7 +1762,7 @@ fn set_compression(z: &mut Zip, i: i64, method: i64, level: i64) -> R {
         return fail(z, if known { archive::ER_COMPNOTSUPP } else { archive::ER_INVAL });
     }
     if !modify(z) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let r = &mut z.a.slots[i].cur;
     let raw = matches!(r.source, Source::Raw(..));
@@ -1792,7 +1788,7 @@ fn set_compression_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
     }
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
         Some(i) => set_compression(z, i as i64, m, l),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     })
 }
 
@@ -1815,7 +1811,7 @@ fn set_encryption_name(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
         return Err(not_empty(ctx, "ZipArchive::setEncryptionName", 1, "name"));
     }
     with_zip(ctx, this, |z, _| match locate(z, &name, 0) {
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
         Some(_) if m == 0 => ok(z),
         Some(_) => fail(z, archive::ER_ENCRNOTSUPP),
     })
@@ -1826,7 +1822,7 @@ fn register_progress_callback(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [
     let (rate, cb) = (arg(args, 0).to_float(), arg(args, 1));
     with_zip(ctx, this, |z, _| {
         z.progress = Some((rate, cb));
-        Ok(Value::Bool(true))
+        Ok(Value::TRUE)
     })
 }
 
@@ -1835,16 +1831,16 @@ fn register_cancel_callback(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Va
     let cb = arg(args, 0);
     with_zip(ctx, this, |z, _| {
         z.cancel = Some(cb);
-        Ok(Value::Bool(true))
+        Ok(Value::TRUE)
     })
 }
 
 fn is_compression_supported(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     prep(ctx, "ZipArchive::isCompressionMethodSupported", args)?;
-    Ok(Value::Bool(matches!(int(args, 0), 0 | 8)))
+    Ok(Value::bool(matches!(int(args, 0), 0 | 8)))
 }
 
 fn is_encryption_supported(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     prep(ctx, "ZipArchive::isEncryptionMethodSupported", args)?;
-    Ok(Value::Bool(int(args, 0) == 0))
+    Ok(Value::bool(int(args, 0) == 0))
 }

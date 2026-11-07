@@ -107,48 +107,48 @@ fn open(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
     if ok {
         s.borrow_mut().user_is_open = true;
     }
-    Ok(Value::Bool(ok))
+    Ok(Value::bool(ok))
 }
 
 fn close(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
-    let Some((s, m)) = sanity_open(ctx, "close")? else { return Ok(Value::Bool(false)) };
+    let Some((s, m)) = sanity_open(ctx, "close")? else { return Ok(Value::FALSE) };
     s.borrow_mut().user_is_open = false;
     let r = life::mod_close(ctx, &s, m);
     if r.is_err() {
         s.borrow_mut().status = Status::None;
     }
-    Ok(Value::Bool(r?))
+    Ok(Value::bool(r?))
 }
 
 fn read(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((s, m)) = sanity_open(ctx, "read")? else { return Ok(Value::Bool(false)) };
+    let Some((s, m)) = sanity_open(ctx, "read")? else { return Ok(Value::FALSE) };
     Ok(match life::mod_read(ctx, &s, m, &bytes(args, 0))? {
-        Some(v) => Value::Str(PhpStr::new(v)),
-        None => Value::Bool(false),
+        Some(v) => Value::str(PhpStr::new(v)),
+        None => Value::FALSE,
     })
 }
 
 fn write(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((s, m)) = sanity_open(ctx, "write")? else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(life::mod_write(ctx, &s, m, &bytes(args, 0), &bytes(args, 1))?))
+    let Some((s, m)) = sanity_open(ctx, "write")? else { return Ok(Value::FALSE) };
+    Ok(Value::bool(life::mod_write(ctx, &s, m, &bytes(args, 0), &bytes(args, 1))?))
 }
 
 fn destroy(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((s, m)) = sanity_open(ctx, "destroy")? else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(life::mod_destroy(ctx, &s, m, &bytes(args, 0))?))
+    let Some((s, m)) = sanity_open(ctx, "destroy")? else { return Ok(Value::FALSE) };
+    Ok(Value::bool(life::mod_destroy(ctx, &s, m, &bytes(args, 0))?))
 }
 
 fn gc(ctx: &mut dyn Ctx, _: &Rc<Object>, args: &mut [Value]) -> R {
-    let Some((s, m)) = sanity_open(ctx, "gc")? else { return Ok(Value::Bool(false)) };
+    let Some((s, m)) = sanity_open(ctx, "gc")? else { return Ok(Value::FALSE) };
     let lifetime = args.first().map_or(0, |v| v.deref().to_int());
     let n = life::mod_gc(ctx, &s, m, lifetime)?;
-    Ok(if n == -1 { Value::Bool(false) } else { Value::Int(n) })
+    Ok(if n == -1 { Value::FALSE } else { Value::int(n) })
 }
 
 fn create_sid(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
     let (s, m) = sanity(ctx)?;
     match life::mod_create_sid(ctx, &s, m)? {
-        Some(id) => Ok(Value::Str(PhpStr::new(id))),
+        Some(id) => Ok(Value::str(PhpStr::new(id))),
         None => Err(ctx.throw("Error", format!("Failed to create session ID: {}", m.name()))),
     }
 }

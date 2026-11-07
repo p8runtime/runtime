@@ -34,15 +34,12 @@ fn opt_int(st: &State, option: i64) -> Option<i64> {
 }
 
 fn opt_str(st: &State, option: i64) -> Option<String> {
-    match st.opts.get(&option) {
-        Some(Value::Str(s)) => Some(lossy(s.as_bytes())),
-        _ => None,
-    }
+    st.opts.get(&option).and_then(Value::as_str).map(|s| lossy(s.as_bytes()))
 }
 
 fn opt_list(st: &State, option: i64) -> Vec<String> {
-    match st.opts.get(&option) {
-        Some(Value::Array(a)) => a.values().map(|v| lossy(&bytes_of(v))).collect(),
+    match st.opts.get(&option).and_then(Value::as_array) {
+        Some(a) => a.values().map(|v| lossy(&bytes_of(v))).collect(),
         _ => Vec::new(),
     }
 }
@@ -96,7 +93,7 @@ impl Run<'_> {
     /// Call a user callback with the handle first; its result, or None when
     /// it threw (the exception is kept to end the transfer with).
     fn call(&self, callable: Value, mut rest: Vec<Value>) -> Option<Value> {
-        let mut args = vec![Value::Object(Rc::clone(&self.this))];
+        let mut args = vec![Value::object(Rc::clone(&self.this))];
         args.append(&mut rest);
         let h = handle(&self.this);
         let was = h.in_callback.replace(true);
@@ -145,7 +142,7 @@ impl Run<'_> {
                 }
             }
             Sink::User(f) => {
-                let Some(ret) = self.call(f, vec![Value::Str(PhpStr::new(data.to_vec()))]) else { return };
+                let Some(ret) = self.call(f, vec![Value::str(PhpStr::new(data.to_vec()))]) else { return };
                 let n = ret.to_int();
                 if n != data.len() as i64 {
                     self.fail(23, format!("Failure writing output to destination, passed {} returned {}", data.len(), n));
@@ -167,7 +164,7 @@ impl Run<'_> {
                 }
             }
             HeaderSink::User(f) => {
-                let Some(ret) = self.call(f, vec![Value::Str(PhpStr::new(line.to_vec()))]) else { return };
+                let Some(ret) = self.call(f, vec![Value::str(PhpStr::new(line.to_vec()))]) else { return };
                 if ret.to_int() != line.len() as i64 {
                     self.fail(23, "Failed writing header");
                 }
@@ -176,7 +173,7 @@ impl Run<'_> {
         let debug = handle(&self.this).st.borrow().debug.clone();
         if let Some(d) = debug {
             // CURLINFO_HEADER_IN
-            self.call(d, vec![Value::Int(1), Value::Str(PhpStr::new(line.to_vec()))]);
+            self.call(d, vec![Value::int(1), Value::str(PhpStr::new(line.to_vec()))]);
         }
     }
 
@@ -669,17 +666,19 @@ pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(),
     let mut content_type: Option<String> = None;
     match st.req {
         Req::Post if !is_file => match st.opts.get(&c::CURLOPT_POSTFIELDS) {
-            Some(Value::Array(fields)) => match form::build(ctx, fields)? {
-                Ok(f) => {
-                    content_type = Some(format!("multipart/form-data; boundary={}", f.boundary));
-                    body = f.body;
+            Some(v) => match v.as_array() {
+                Some(fields) => match form::build(ctx, fields)? {
+                    Ok(f) => {
+                        content_type = Some(format!("multipart/form-data; boundary={}", f.boundary));
+                        body = f.body;
+                    }
+                    Err(e) => return Ok(Err(e)),
+                },
+                None => {
+                    body = bytes_of(v);
+                    content_type = Some("application/x-www-form-urlencoded".into());
                 }
-                Err(e) => return Ok(Err(e)),
             },
-            Some(v) => {
-                body = bytes_of(v);
-                content_type = Some("application/x-www-form-urlencoded".into());
-            }
             None => content_type = Some("application/x-www-form-urlencoded".into()),
         },
         Req::Post => {}
@@ -768,7 +767,7 @@ pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(),
         let debug = h.st.borrow().debug.clone();
         if let Some(d) = debug {
             // CURLINFO_HEADER_OUT
-            run.call(d, vec![Value::Int(2), Value::Str(PhpStr::new(prepared.text.clone().into_bytes()))]);
+            run.call(d, vec![Value::int(2), Value::str(PhpStr::new(prepared.text.clone().into_bytes()))]);
         }
         run.status.borrow_mut().location = None;
         let mut jar_ref = jar.as_ref().map(|j| j.borrow_mut());
@@ -884,19 +883,19 @@ fn read_upload(ctx: &mut dyn Ctx, this: &Rc<Object>, st: &State) -> Result<Resul
     let limit = opt_int(st, c::CURLOPT_INFILESIZE).filter(|n| *n >= 0).map(|n| n as usize);
     let mut out = Vec::new();
     if let Some(f) = &st.read.func {
-        let stream = st.read.file.clone().unwrap_or(Value::Null);
+        let stream = st.read.file.clone().unwrap_or(Value::NULL);
         let h = handle(this);
         loop {
             let want = limit.map_or(65536, |n| (n - out.len()).min(65536));
             if want == 0 {
                 break;
             }
-            let mut args = [Value::Object(Rc::clone(this)), stream.clone(), Value::Int(want as i64)];
+            let mut args = [Value::object(Rc::clone(this)), stream.clone(), Value::int(want as i64)];
             let was = h.in_callback.replace(true);
             let r = ctx.call(f, &mut args);
             h.in_callback.set(was);
-            match r?.deref() {
-                Value::Str(s) if !s.is_empty() => out.extend_from_slice(&s.as_bytes()[..s.len().min(want)]),
+            match r?.deref().as_str() {
+                Some(s) if !s.is_empty() => out.extend_from_slice(&s.as_bytes()[..s.len().min(want)]),
                 _ => break,
             }
         }

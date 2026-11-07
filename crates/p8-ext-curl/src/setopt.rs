@@ -22,7 +22,7 @@ fn name_of(option: i64) -> &'static str {
 /// The file-handle options' stream: Err for what PHP's
 /// zend_fetch_resource2_ex() rejects, Ok(None) for null.
 fn file_handle(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<Rc<Object>>, Throw> {
-    if matches!(v, Value::Null) {
+    if v.is_null() {
         return Ok(None);
     }
     let name = ctx.builtin_name();
@@ -44,7 +44,7 @@ fn writable(r: &Object) -> bool {
 }
 
 fn string_of(ctx: &mut dyn Ctx, v: &Value) -> Result<Value, Throw> {
-    Ok(Value::Str(to_str(ctx, v)?))
+    Ok(Value::str(to_str(ctx, v)?))
 }
 
 /// _php_curl_setopt(): Ok(false) is PHP's FAILURE without an exception.
@@ -95,7 +95,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
                 c::CURLOPT_UPLOAD | c::CURLOPT_PUT => st.req = if n != 0 { Req::Put } else if st.req == Req::Put { Req::Get } else { st.req },
                 _ => {}
             }
-            st.opts.insert(option, Value::Int(n));
+            st.opts.insert(option, Value::int(n));
         }
         Kind::VerifyHost => {
             let mut n = value.to_int();
@@ -103,10 +103,10 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
                 ctx.notice(&format!("{func}(): CURLOPT_SSL_VERIFYHOST no longer accepts the value 1, value 2 will be used instead"));
                 n = 2;
             }
-            h.st.borrow_mut().opts.insert(option, Value::Int(n));
+            h.st.borrow_mut().opts.insert(option, Value::int(n));
         }
         Kind::Follow => {
-            h.st.borrow_mut().opts.insert(option, Value::Int(value.to_bool() as i64));
+            h.st.borrow_mut().opts.insert(option, Value::int(value.to_bool() as i64));
         }
         Kind::Str | Kind::PathStr | Kind::Url | Kind::Blob => {
             let s = string_of(ctx, value)?;
@@ -116,7 +116,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             h.st.borrow_mut().opts.insert(option, s);
         }
         Kind::NStr => {
-            if matches!(value, Value::Null) {
+            if value.is_null() {
                 h.st.borrow_mut().opts.remove(&option);
             } else {
                 let s = string_of(ctx, value)?;
@@ -125,7 +125,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             }
         }
         Kind::List => {
-            let Value::Array(a) = value else {
+            let Some(a) = value.as_array() else {
                 let name = name_of(option);
                 return Err(ctx.throw("TypeError", format!("{func}(): The {name} option must have an array value")));
             };
@@ -133,14 +133,14 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             for v in a.values() {
                 items.push(string_of(ctx, &v.deref())?);
             }
-            h.st.borrow_mut().opts.insert(option, Value::Array(Rc::new(PhpArray::from_list(items))));
+            h.st.borrow_mut().opts.insert(option, Value::array(PhpArray::from_list(items)));
         }
         Kind::Ignore => {}
         Kind::PostFields => {
-            let v = match value {
-                Value::Array(a) if a.is_empty() => Value::str(""),
-                Value::Array(_) => value.clone(),
-                other => string_of(ctx, other)?,
+            let v = match value.as_array() {
+                Some(a) if a.is_empty() => Value::str(""),
+                Some(_) => value.clone(),
+                None => string_of(ctx, value)?,
             };
             let mut st = h.st.borrow_mut();
             st.req = Req::Post;
@@ -150,7 +150,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             h.st.borrow_mut().write = if value.to_bool() { Sink::Return } else { Sink::Stdout };
         }
         Kind::PostRedir => {
-            h.st.borrow_mut().opts.insert(option, Value::Int(value.to_int() & 7));
+            h.st.borrow_mut().opts.insert(option, Value::int(value.to_int() & 7));
         }
         Kind::SafeUpload => {
             if !value.to_bool() {
@@ -168,7 +168,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
             h.st.borrow_mut().header_out = value.to_bool();
         }
         Kind::Share => {
-            if let Value::Object(s) = value
+            if let Some(s) = value.as_object()
                 && s.class.lower == b"curlsharehandle"
             {
                 h.st.borrow_mut().share = Some(Rc::clone(s));
@@ -214,7 +214,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
                     }
                 }
             };
-            if matches!(value, Value::Null) {
+            if value.is_null() {
                 default(h);
                 return Ok(true);
             }
