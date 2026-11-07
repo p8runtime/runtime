@@ -1045,7 +1045,7 @@ fn move_uploaded_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
     }
     let uploaded = ctx.state(UPLOADED);
     if let Some(a) = uploaded.as_array() {
-        let rest: Vec<Value> = a.values().filter(|v| !v.as_str().is_some_and(|s| s.as_bytes() == from.as_bytes())).cloned().collect();
+        let rest: Vec<Value> = a.values().filter(|v| v.as_str().is_none_or(|s| s.as_bytes() != from.as_bytes())).cloned().collect();
         *uploaded = Value::array(PhpArray::from_list(rest));
     }
     Ok(Value::TRUE)
