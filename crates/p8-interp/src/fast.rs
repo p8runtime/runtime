@@ -899,11 +899,12 @@ pub(crate) fn release(v: Value) {
 /// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then a call).
 #[inline(always)]
 pub(crate) fn put(slot: &mut Value, v: Value) {
-    let old = std::mem::replace(slot, v);
-    if is_plain(&old) {
-        std::mem::forget(old);
+    // The tag is tested in the slot, so the plain case reads one byte
+    // and stores; only the other case reads the old value out, for `release`.
+    if is_plain(slot) {
+        std::mem::forget(std::mem::replace(slot, v));
     } else {
-        release(old);
+        release(std::mem::replace(slot, v));
     }
 }
 
