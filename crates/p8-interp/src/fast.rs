@@ -53,6 +53,28 @@ impl Context<'_> {
                     continue 'frame;
                 }};
             }
+            // The same for an instruction that jumped: `$next` is where it
+            // goes on, `$at` the instruction itself.
+            macro_rules! pending_at {
+                ($next:expr, $at:expr) => {{
+                    pc = self.after_errors(regs, $next, $at)?;
+                    continue 'frame;
+                }};
+            }
+            // The straight-line instruction at `pc` is done; `$released`
+            // says whether its write released memory (`put`), which is
+            // when a destructor may be due (it runs at this instruction's
+            // pc, as PHP runs it where the value went). A plain overwrite
+            // tests nothing.
+            macro_rules! done {
+                ($released:expr) => {{
+                    let released: bool = $released;
+                    pc += 1;
+                    if released && ids.has_pending() {
+                        pending!();
+                    }
+                }};
+            }
         // A compare-and-branch on two numbers (anything else goes to `step`).
         // A compare-and-branch: two ints inline, anything else (floats,
         // references, strings, null) through `test`; an undefined
@@ -80,14 +102,16 @@ impl Context<'_> {
         // `.` on strings) through `arith`; what may warn or throw is `step`'s.
         macro_rules! arith {
             ($w:ident, $op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
-                if let (Value::Int(x), Value::Int(y)) = (&$w[rx!($a as usize)], &$w[rx!($b as usize)])
+                let released = if let (Value::Int(x), Value::Int(y)) = (&$w[rx!($a as usize)], &$w[rx!($b as usize)])
                     && let Some(n) = $int(*x, *y)
                 {
-                    put_var(&mut $w[rx!($dst as usize)], Value::Int(n));
-                } else if !arith(&mut $w[..],$op, $dst, $a, $b) {
-                    slow!();
-                }
-                pc += 1;
+                    put_var(&mut $w[rx!($dst as usize)], Value::Int(n))
+                } else if arith(&mut $w[..], $op, $dst, $a, $b) {
+                    true
+                } else {
+                    slow!()
+                };
+                done!(released);
             }};
         }
         // A fused step and test (`IncJumpLt` and co.) on ints (through a
@@ -138,8 +162,7 @@ impl Context<'_> {
                 Instr::This { dst } => match &top.this {
                     Some(this) => {
                         let this = Value::Object(Rc::clone(this));
-                        put(&mut $w[rx!(dst as usize)], this);
-                        pc += 1;
+                        done!(put(&mut $w[rx!(dst as usize)], this));
                     }
                     None => slow!(),
                 },
@@ -157,8 +180,7 @@ impl Context<'_> {
                     };
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let Some(v) = cached_prop(site.get(), o, scope) else { slow!() };
-                    put(&mut $w[rx!(dst as usize)], v);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                 }
                 // `$o->name = v` the name's cache entry answers, on a
                 // property with nothing to check (`plain_slot`): the slots
@@ -192,18 +214,20 @@ impl Context<'_> {
                     if !written {
                         slow!();
                     }
+                    let at = pc;
                     if unused {
                         pc += 2;
                     } else {
                         let v = $w[rx!(val as usize)].clone();
-                        put(&mut $w[rx!(dst as usize)], v);
+                        let _ = put(&mut $w[rx!(dst as usize)], v);
                         pc += 1;
                     }
                     if take {
-                        clear(&mut $w[rx!(val as usize)]);
+                        let _ = clear(&mut $w[rx!(val as usize)]);
                     }
+                    // (The slot's old value may have been the last holder.)
                     if ids.has_pending() {
-                        pending!();
+                        pending_at!(pc, at);
                     }
                 }
                 // Function entry, when every passed argument is plainly of
@@ -258,8 +282,7 @@ impl Context<'_> {
                     for i in 0..usize::from(argc) {
                         clear(&mut $w[rx!(args as usize + i)]);
                     }
-                    put(&mut $w[rx!(dst as usize)], r);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], r));
                 }
                 // `$o->m($v)`: an argument the method the call site's cache
                 // names for this class and scope takes by value is copied
@@ -277,11 +300,7 @@ impl Context<'_> {
                         slow!();
                     }
                     let Some(v) = copied(&$w[rx!(var as usize)]) else { slow!() };
-                    put(&mut $w[rx!(arg as usize)], v);
-                    pc += 1;
-                    if ids.has_pending() {
-                        pending!();
-                    }
+                    done!(put(&mut $w[rx!(arg as usize)], v));
                 }
                 Instr::Jump { target } => {
                     if back(target, pc) {
@@ -308,8 +327,7 @@ impl Context<'_> {
                             None => slow!(),
                         },
                     };
-                    put_var(&mut $w[rx!(dst as usize)], Value::Bool(t));
-                    pc += 1;
+                    done!(put_var(&mut $w[rx!(dst as usize)], Value::Bool(t)));
                 }
                 Instr::IncVar { var } => match &mut $w[rx!(var as usize)] {
                     Value::Int(i) if *i != i64::MAX => {
@@ -332,19 +350,19 @@ impl Context<'_> {
                     _ => slow!(),
                 },
                 Instr::Binary { op, dst, a, b } => {
-                    if !arith(&mut $w[..],op, dst, a, b) {
+                    if !arith(&mut $w[..], op, dst, a, b) {
                         slow!();
                     }
-                    pc += 1;
+                    done!(true);
                 }
                 Instr::Add { dst, a, b } => arith!($w,BinOp::Add, dst, a, b, i64::checked_add),
                 Instr::Sub { dst, a, b } => arith!($w,BinOp::Sub, dst, a, b, i64::checked_sub),
                 Instr::Mul { dst, a, b } => arith!($w,BinOp::Mul, dst, a, b, i64::checked_mul),
                 Instr::ConcatN { dst, start, n } => {
-                    if !concat_n(&mut $w[..],dst, start, n) {
+                    if !concat_n(&mut $w[..], dst, start, n) {
                         slow!();
                     }
-                    pc += 1;
+                    done!(true);
                 }
                 // A copy of a register (a reference's value read through
                 // it; undefined: `step` warns). A write that freed an object
@@ -359,8 +377,7 @@ impl Context<'_> {
                         },
                         v => v.clone(),
                     };
-                    put(&mut $w[rx!(dst as usize)], v);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                     if ids.has_pending() {
                         pending!();
                     }
@@ -374,38 +391,30 @@ impl Context<'_> {
                         },
                         v => v.clone(),
                     };
-                    put_var(&mut $w[rx!(var as usize)], v);
-                    pc += 1;
-                    if ids.has_pending() {
-                        pending!();
-                    }
+                    done!(put_var(&mut $w[rx!(var as usize)], v));
                 }
                 Instr::AssignTake { var, src } => {
-                    match std::mem::replace(&mut $w[rx!(src as usize)], Value::Undef) {
+                    let released = match std::mem::replace(&mut $w[rx!(src as usize)], Value::Undef) {
                         // Undefined: `step`'s (the warning).
                         Value::Undef => slow!(),
                         // A reference's value, and the temporary lets go of
-                        // the reference.
+                        // the reference (which may have been its last holder).
                         Value::Ref(cell) => match read_ref(&cell) {
-                            Some(v) => put_var(&mut $w[rx!(var as usize)], v),
+                            Some(v) => {
+                                let _ = put_var(&mut $w[rx!(var as usize)], v);
+                                true
+                            }
                             None => {
                                 $w[rx!(src as usize)] = Value::Ref(cell);
                                 slow!();
                             }
                         },
                         v => put_var(&mut $w[rx!(var as usize)], v),
-                    }
-                    pc += 1;
-                    if ids.has_pending() {
-                        pending!();
-                    }
+                    };
+                    done!(released);
                 }
                 Instr::Free { reg } => {
-                    clear(&mut $w[rx!(reg as usize)]);
-                    pc += 1;
-                    if ids.has_pending() {
-                        pending!();
-                    }
+                    done!(clear(&mut $w[rx!(reg as usize)]));
                 }
                 // A condition: a bool inline, anything else through `truth`
                 // (what may warn, NAN and an undefined variable, is `step`'s).
@@ -457,8 +466,7 @@ impl Context<'_> {
                             None => slow!(),
                         },
                     };
-                    put(&mut $w[rx!(dst as usize)], v);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                     if ids.has_pending() {
                         pending!();
                     }
@@ -474,63 +482,71 @@ impl Context<'_> {
                             None => slow!(),
                         },
                     };
-                    put(&mut $w[rx!(dst as usize)], Value::Bool(set));
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(set)));
                 }
                 // $a[int] = int|float|bool|null, $a an array (or a reference to one)
+                // $a[k] = v, $a an array (or a reference to one): a string
+                // key with any defined, non-reference value; an int key
+                // with a plain value. The element replaced may have been
+                // an object's last holder: tested as for any write.
                 Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
                     if let Value::Str(_) = $w[rx!(keys as usize)] {
-                        if !set_str_elem(&mut $w[..],var, keys, val, dst) {
+                        if !set_str_elem(&mut $w[..], var, keys, val, dst) {
                             slow!();
                         }
-                        pc += 1;
-                        continue;
-                    }
-                    let (Value::Int(k), Some(v)) = (&$w[rx!(keys as usize)], plain(&$w[rx!(val as usize)])) else { slow!() };
-                    let k = *k;
-                    let done = match &mut $w[rx!(var as usize)] {
-                        Value::Array(a) => set_int_elem(a, k, &v),
-                        Value::Ref(cell) => match &mut *cell.borrow_mut() {
+                    } else {
+                        let (Value::Int(k), Some(v)) = (&$w[rx!(keys as usize)], plain(&$w[rx!(val as usize)])) else { slow!() };
+                        let k = *k;
+                        let done = match &mut $w[rx!(var as usize)] {
                             Value::Array(a) => set_int_elem(a, k, &v),
+                            Value::Ref(cell) => match &mut *cell.borrow_mut() {
+                                Value::Array(a) => set_int_elem(a, k, &v),
+                                _ => false,
+                            },
                             _ => false,
-                        },
-                        _ => false,
-                    };
-                    if !done {
-                        slow!();
+                        };
+                        if !done {
+                            slow!();
+                        }
+                        let _ = put(&mut $w[rx!(dst as usize)], v);
                     }
-                    put(&mut $w[rx!(dst as usize)], v);
-                    pc += 1;
-                    if ids.has_pending() {
-                        pending!();
-                    }
+                    done!(true);
                 }
                 // $a[int] op= number, $a an array holding a number at
                 // that key
                 Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => {
-                    if !dim_op(&mut $w[..],op, var, keys, val, dst) {
+                    if !dim_op(&mut $w[..], op, var, keys, val, dst) {
                         slow!();
                     }
-                    pc += 1;
+                    done!(true);
                 }
+                // The loop variable's old value may have been an object's
+                // last holder: a destructor due runs before the body, at
+                // this instruction.
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     // An object (a generator, an Iterator) is `step`'s.
                     if !matches!($w[rx!(iter as usize)], Value::Array(_)) {
                         slow!();
                     }
-                    pc = if iter_next(&mut $w[..],iter, val, key, has_key) { pc + 1 } else { end as usize };
+                    let next = if iter_next(&mut $w[..], iter, val, key, has_key) { pc + 1 } else { end as usize };
+                    if ids.has_pending() {
+                        pending_at!(next, pc);
+                    }
+                    pc = next;
                 }
                 // $var op= number, $var holding a number (two ints inline,
                 // the rest through `assign_op`); $str .= string
                 Instr::AssignOp { op, var, src } => {
-                    if let (Value::Int(x), Value::Int(y)) = (&$w[rx!(var as usize)], &$w[rx!(src as usize)])
+                    let released = if let (Value::Int(x), Value::Int(y)) = (&$w[rx!(var as usize)], &$w[rx!(src as usize)])
                         && let Some(n) = int_op(op, *x, *y)
                     {
-                        put(&mut $w[rx!(var as usize)], Value::Int(n));
-                    } else if !assign_op(&mut $w[..],op, var, src) {
-                        slow!();
-                    }
-                    pc += 1;
+                        put(&mut $w[rx!(var as usize)], Value::Int(n))
+                    } else if assign_op(&mut $w[..], op, var, src) {
+                        true
+                    } else {
+                        slow!()
+                    };
+                    done!(released);
                 }
                 // $i++ / ++$i (and --) whose value is used, on an int
                 Instr::IncDec { var, dst, inc, post } => {
@@ -538,12 +554,10 @@ impl Context<'_> {
                     let i = *slot;
                     let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
                     *slot = n;
-                    put(&mut $w[rx!(dst as usize)], Value::Int(if post { i } else { n }));
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Int(if post { i } else { n })));
                 }
                 Instr::LoadNull { dst } => {
-                    put(&mut $w[rx!(dst as usize)], Value::Null);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Null));
                 }
                 // `!x` and a condition made a value: as `truth` decides
                 // (NAN and an undefined variable warn: `step`).
@@ -555,8 +569,7 @@ impl Context<'_> {
                             None => slow!(),
                         },
                     };
-                    put(&mut $w[rx!(dst as usize)], Value::Bool(!t));
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(!t)));
                 }
                 Instr::ToBool { dst, src } => {
                     let t = match &$w[rx!(src as usize)] {
@@ -566,13 +579,11 @@ impl Context<'_> {
                             None => slow!(),
                         },
                     };
-                    put(&mut $w[rx!(dst as usize)], Value::Bool(t));
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(t)));
                 }
                 Instr::IssetVar { dst, var } => {
                     let set = is_set(&$w[rx!(var as usize)]);
-                    put(&mut $w[rx!(dst as usize)], Value::Bool(set));
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], Value::Bool(set)));
                 }
                 // `a ?? b`: a set and not null goes to dst and jumps.
                 Instr::JumpIfSet { src, dst, target } => {
@@ -586,7 +597,9 @@ impl Context<'_> {
                     };
                     match v {
                         Some(v) => {
-                            put(&mut $w[rx!(dst as usize)], v);
+                            if put(&mut $w[rx!(dst as usize)], v) && ids.has_pending() {
+                                pending_at!(target as usize, pc);
+                            }
                             pc = target as usize;
                         }
                         None => pc += 1,
@@ -598,8 +611,7 @@ impl Context<'_> {
                 // occupied included, is `step`'s).
                 Instr::NewArray { dst, n } => {
                     let a = Value::Array(Rc::new(PhpArray::list_with_capacity(n as usize)));
-                    put(&mut $w[rx!(dst as usize)], a);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], a));
                 }
                 Instr::ArrayPush { arr, val, take } => {
                     let Value::Array(a) = &$w[rx!(arr as usize)] else { slow!() };
@@ -619,16 +631,16 @@ impl Context<'_> {
                     };
                     let Some(v) = taken(&mut $w[..],val, take) else { slow!() };
                     let Value::Array(a) = &mut $w[rx!(arr as usize)] else { unreachable!("checked above") };
+                    // (A key written twice in one literal replaces the first value.)
                     Rc::make_mut(a).insert(k, v);
-                    pc += 1;
+                    done!(true);
                 }
                 // A constant the site resolved (a deprecated one is never
                 // cached: it warns on every fetch).
                 Instr::FetchConst { site, dst } => {
                     let Some(Callee::Constant(v)) = clo.sites[usize::from(site)].get() else { slow!() };
                     let v = v.clone();
-                    put(&mut $w[rx!(dst as usize)], v);
-                    pc += 1;
+                    done!(put(&mut $w[rx!(dst as usize)], v));
                 }
                 // Every other instruction (listed, so dispatch needs no range check).
                 Instr::AssignDim { .. }
@@ -951,7 +963,8 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
         frame.owner = None;
     }
     if frame.ret != NO_RET {
-        put(&mut regs[frame.ret as usize], value);
+        // (The Return arm tests pending after `leave`.)
+        let _ = put(&mut regs[frame.ret as usize], value);
     }
 }
 
@@ -974,20 +987,30 @@ pub(crate) fn release(v: Value) {
 /// Write `v` over a register's value: the old value's tag is tested
 /// here, and only one holding memory is released, out of line (PHP's
 /// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then a call).
+///
+/// Returns whether the old value held memory: the release may have freed
+/// the last holder of an object with a destructor, which the loop runs
+/// before the next instruction (`done!`), at this instruction's pc, as
+/// PHP runs it where the value went. A plain old value cannot have, so
+/// that test is on the release path only.
 #[inline(always)]
-pub(crate) fn put(slot: &mut Value, v: Value) {
+#[must_use = "a released value may leave a destructor due: test `ids.has_pending()`"]
+pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
     // The tag is tested in the slot, so the plain case reads one byte
     // and stores; only the other case reads the old value out, for `release`.
     if is_plain(slot) {
         std::mem::forget(std::mem::replace(slot, v));
+        false
     } else {
         release(std::mem::replace(slot, v));
+        true
     }
 }
 
 /// `put` into a variable: through the reference it holds, if it is one.
 #[inline(always)]
-pub(crate) fn put_var(slot: &mut Value, v: Value) {
+#[must_use = "a released value may leave a destructor due: test `ids.has_pending()`"]
+pub(crate) fn put_var(slot: &mut Value, v: Value) -> bool {
     match slot {
         Value::Ref(cell) => write_ref(cell, v),
         _ => put(slot, v),
@@ -1000,8 +1023,8 @@ pub(crate) fn put_var(slot: &mut Value, v: Value) {
 /// off its inline cases.)
 #[cold]
 #[inline(never)]
-pub(crate) fn write_ref(cell: &RefCell<Value>, v: Value) {
-    put(&mut cell.borrow_mut(), v);
+pub(crate) fn write_ref(cell: &RefCell<Value>, v: Value) -> bool {
+    put(&mut cell.borrow_mut(), v)
 }
 
 /// A reference's value, for a read: None when it is undefined (a global
@@ -1017,8 +1040,8 @@ pub(crate) fn read_ref(cell: &RefCell<Value>) -> Option<Value> {
 
 /// Make a register undefined, releasing what it held.
 #[inline(always)]
-pub(crate) fn clear(r: &mut Value) {
-    put(r, Value::Undef);
+pub(crate) fn clear(r: &mut Value) -> bool {
+    put(r, Value::Undef)
 }
 
 /// An operand to store (`operand_take`): moved out of its register when
@@ -1140,7 +1163,8 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
     };
     match r {
         Some(r) => {
-            put_var(&mut w[usize::from(dst)], r);
+            // (Reported as released whatever the old value: the arm tests pending.)
+            let _ = put_var(&mut w[usize::from(dst)], r);
             true
         }
         None => op == BinOp::Concat && concat(w, dst, a, b),
@@ -1162,7 +1186,7 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
     };
     match r {
         Some(r) => {
-            put_var(&mut w[usize::from(var)], r);
+            let _ = put_var(&mut w[usize::from(var)], r);
             true
         }
         None => op == BinOp::Concat && append_str(w, var, src),

@@ -1397,7 +1397,9 @@ impl Context<'_> {
                     clear(&mut reg!(src));
                     assign(w, var, v);
                 }
-                Instr::Free { reg } => clear(&mut reg!(reg)),
+                Instr::Free { reg } => {
+                    clear(&mut reg!(reg));
+                }
                 Instr::LoadNull { dst } => reg!(dst) = Value::Null,
                 Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
                 Instr::Binary { op, dst, a, b } => {
