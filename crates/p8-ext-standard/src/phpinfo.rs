@@ -13,7 +13,6 @@ use p8_runtime::info;
 use p8_runtime::stubs;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "phpinfo", run: phpinfo, by_ref: &[] },
@@ -61,7 +60,7 @@ fn phpinfo(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         general(ctx);
     }
     // zend_ini_sort_entries(): the directives are listed by name from now on.
-    *ctx.state(info::INI_SORTED) = Value::Bool(true);
+    *ctx.state(info::INI_SORTED) = Value::TRUE;
     if flags & INFO_CONFIGURATION != 0 {
         hr(ctx);
         section(ctx, "Configuration");
@@ -104,7 +103,7 @@ fn phpinfo(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if flags & INFO_LICENSE != 0 {
         ctx.echo(LICENSE.as_bytes());
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 const LICENSE: &str = "
@@ -200,19 +199,21 @@ fn variables(ctx: &mut dyn Ctx) {
     section(ctx, "PHP Variables");
     ctx.echo(b"\nVariable => Value\n");
     for name in ["PHP_SELF", "PHP_AUTH_TYPE", "PHP_AUTH_USER", "PHP_AUTH_PW"] {
-        if let Some(Value::Str(v)) = ctx.global_value(name.as_bytes()) {
+        if let Some(v) = ctx.global_value(name.as_bytes()).and_then(|v| v.into_str().ok()) {
             row(ctx, &[name.as_bytes(), v.as_bytes()]);
         }
     }
     for name in ["_REQUEST", "_GET", "_POST", "_FILES", "_COOKIE", "_SERVER", "_ENV"] {
-        let Some(Value::Array(a)) = ctx.global_value(name.as_bytes()) else { continue };
+        let Some(a) = ctx.global_value(name.as_bytes()).and_then(|v| v.into_array().ok()) else { continue };
         for (k, v) in a.iter() {
             let mut out = format!("${name}['").into_bytes();
             out.extend_from_slice(&key_bytes(&k));
             out.extend_from_slice(b"'] => ");
-            match v.deref() {
-                v @ Value::Array(_) => crate::var::print_r_to(&v, 0, &mut out, &mut Vec::new()),
-                v => out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+            let v = v.deref();
+            if v.is_array() {
+                crate::var::print_r_to(&v, 0, &mut out, &mut Vec::new());
+            } else {
+                out.extend_from_slice(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
             }
             out.push(b'\n');
             ctx.echo(&out);
@@ -234,7 +235,7 @@ fn credits(ctx: &mut dyn Ctx, flags: i64) {
 fn phpcredits(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let flags = if args.is_empty() { CREDITS_ALL } else { arg(args, 0).to_int() };
     credits(ctx, flags);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// uname(2), as php_get_uname() reads it: one field, or all five ('a').
@@ -289,12 +290,12 @@ fn get_extension_funcs(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
     let name = str_arg(args, 0);
     let name = if name.as_bytes().eq_ignore_ascii_case(b"zend") { PhpStr::from("core") } else { name };
     let Some(spec) = info::loaded_module(ctx, name.as_bytes()).and_then(|m| stubs::module_spec(m.as_bytes())) else {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     if spec.functions.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let builtins = ctx.defined_functions().0;
     let names = spec.functions.iter().filter(|f| builtins.contains(f)).map(|f| Value::str(*f)).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names))))
+    Ok(Value::array(PhpArray::from_list(names)))
 }

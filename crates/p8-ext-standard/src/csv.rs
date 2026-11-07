@@ -215,14 +215,14 @@ fn record(fields: Option<Vec<Vec<u8>>>) -> Value {
     match fields {
         Some(fields) => {
             for f in fields {
-                let _ = out.push(Value::Str(PhpStr::new(f)));
+                let _ = out.push(Value::str(PhpStr::new(f)));
             }
         }
         None => {
-            let _ = out.push(Value::Null);
+            let _ = out.push(Value::NULL);
         }
     }
-    Value::Array(Rc::new(out))
+    Value::array(out)
 }
 
 /// str_getcsv(string $string, string $separator = ",", string $enclosure = "\"", string $escape = "\\")
@@ -236,8 +236,8 @@ fn str_getcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn fgetcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = crate::file::stream_arg(ctx, "fgetcsv", args, 0)?;
     let len = match args.get(1).map(Value::deref) {
-        None | Some(Value::Null) => 0,
-        Some(v) => v.to_int(),
+        Some(v) if !v.is_null() => v.to_int(),
+        _ => 0,
     };
     if len < 0 {
         return Err(ctx.throw("ValueError", format!("fgetcsv(): Argument #2 ($length) must be between 0 and {}", i64::MAX - 1)));
@@ -246,8 +246,8 @@ fn fgetcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let r = resource(&o).expect("a stream resource");
     let limit = (len > 0).then(|| len as usize + 1);
     // A user-space wrapper's code reaching for its own stream finds it busy.
-    let Ok(mut s) = r.stream.try_borrow_mut() else { return Ok(Value::Bool(false)) };
-    let Some(first) = s.gets_in(ctx, limit)? else { return Ok(Value::Bool(false)) };
+    let Ok(mut s) = r.stream.try_borrow_mut() else { return Ok(Value::FALSE) };
+    let Some(first) = s.gets_in(ctx, limit)? else { return Ok(Value::FALSE) };
     // A line more for a quoted field going on; what a wrapper throws
     // ends the record and goes on up.
     let mut thrown = None;
@@ -300,14 +300,11 @@ pub(crate) fn line(fields: &PhpArray, fmt: &Format, eol: &[u8], diags: &mut Vec<
 /// fputcsv(resource $stream, array $fields, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n")
 fn fputcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = crate::file::stream_arg(ctx, "fputcsv", args, 0)?;
-    let fields = match arg(args, 1) {
-        Value::Array(a) => a,
-        _ => Rc::new(PhpArray::new()),
-    };
+    let fields = arg(args, 1).into_array().unwrap_or_else(|_| Rc::new(PhpArray::new()));
     let fmt = Format::from_args(ctx, "fputcsv", args, 2)?;
     let eol = match args.get(5).map(Value::deref) {
-        None | Some(Value::Null) => b"\n".to_vec(),
-        Some(v) => v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec(),
+        Some(v) if !v.is_null() => v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec(),
+        _ => b"\n".to_vec(),
     };
     let mut diags = Vec::new();
     let bytes = line(&fields, &fmt, &eol, &mut diags);
@@ -315,5 +312,5 @@ fn fputcsv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         ctx.warn("Array to string conversion");
     }
     let written = crate::file::with_user(ctx, &o, None, |ctx, s| s.write(ctx, &bytes))?;
-    Ok(written.map_or(Value::Bool(false), |n| Value::Int(n as i64)))
+    Ok(written.map_or(Value::FALSE, |n| Value::int(n as i64)))
 }

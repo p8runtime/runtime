@@ -9,7 +9,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "chr", run: chr, by_ref: &[] },
@@ -63,15 +62,12 @@ pub static BUILTINS: &[Builtin] = &[
 ];
 
 fn string(bytes: Vec<u8>) -> Result<Value, Throw> {
-    Ok(Value::Str(PhpStr::new(bytes)))
+    Ok(Value::str(PhpStr::new(bytes)))
 }
 
 /// Optional argument `i`: None when left out or passed as null.
 fn opt(args: &[Value], i: usize) -> Option<Value> {
-    match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) => None,
-        v => v,
-    }
+    args.get(i).map(Value::deref).filter(|v| !v.is_null())
 }
 
 fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -81,7 +77,7 @@ fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             "chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256",
         );
     }
-    Ok(Value::Str(PhpStr::byte(c.rem_euclid(256) as u8)))
+    Ok(Value::str(PhpStr::byte(c.rem_euclid(256) as u8)))
 }
 
 fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -92,18 +88,18 @@ fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         0 => ctx.deprecated("ord(): Providing an empty string is deprecated"),
         _ => ctx.deprecated("ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead"),
     }
-    Ok(Value::Int(i64::from(s.as_bytes().first().copied().unwrap_or(0))))
+    Ok(Value::int(i64::from(s.as_bytes().first().copied().unwrap_or(0))))
 }
 
 /// `s` with each byte mapped by `f`: `s` itself when nothing changes (as
 /// zend_string_tolower hands back the same string), else built once.
 fn map_bytes(s: PhpStr, changes: impl Fn(&u8) -> bool, f: impl Fn(&u8) -> u8) -> Result<Value, Throw> {
     let bytes = s.as_bytes();
-    let Some(first) = bytes.iter().position(changes) else { return Ok(Value::Str(s)) };
+    let Some(first) = bytes.iter().position(changes) else { return Ok(Value::str(s)) };
     let mut out = PhpStr::scratch(bytes.len());
     out.extend_from_slice(&bytes[..first]);
     out.extend(bytes[first..].iter().map(f));
-    Ok(Value::Str(PhpStr::from_scratch(out)))
+    Ok(Value::str(PhpStr::from_scratch(out)))
 }
 
 fn strtolower(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -184,7 +180,7 @@ fn trim_with(args: &[Value], left: bool, right: bool) -> Result<Value, Throw> {
         }
     }
     if bytes.len() == s.len() {
-        return Ok(Value::Str(s));
+        return Ok(Value::str(s));
     }
     string(bytes.to_vec())
 }
@@ -216,15 +212,15 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 fn str_contains(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(find(str_arg(args, 0).as_bytes(), str_arg(args, 1).as_bytes()).is_some()))
+    Ok(Value::bool(find(str_arg(args, 0).as_bytes(), str_arg(args, 1).as_bytes()).is_some()))
 }
 
 fn str_starts_with(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(str_arg(args, 0).as_bytes().starts_with(str_arg(args, 1).as_bytes())))
+    Ok(Value::bool(str_arg(args, 0).as_bytes().starts_with(str_arg(args, 1).as_bytes())))
 }
 
 fn str_ends_with(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(str_arg(args, 0).as_bytes().ends_with(str_arg(args, 1).as_bytes())))
+    Ok(Value::bool(str_arg(args, 0).as_bytes().ends_with(str_arg(args, 1).as_bytes())))
 }
 
 /// The haystack offset an `$offset` argument names, or the ValueError PHP
@@ -246,7 +242,7 @@ fn position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Result<Val
         (h.as_bytes().to_vec(), n.as_bytes().to_vec())
     };
     let at = offset(ctx, func, args, h.len())?;
-    Ok(find(&h[at..], &n).map_or(Value::Bool(false), |i| Value::Int((at + i) as i64)))
+    Ok(find(&h[at..], &n).map_or(Value::FALSE, |i| Value::int((at + i) as i64)))
 }
 
 fn strpos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -278,7 +274,7 @@ fn last_position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Resul
         let end = ((len + off) as usize + n.len()).min(h.len());
         rfind(&h[..end], &n)
     };
-    Ok(found.map_or(Value::Bool(false), |i| Value::Int(i as i64)))
+    Ok(found.map_or(Value::FALSE, |i| Value::int(i as i64)))
 }
 
 fn strrpos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -307,9 +303,9 @@ fn substr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (a, b) = sub_range(s.len(), arg(args, 1).to_int(), opt(args, 2).map(|v| v.to_int()));
     // The whole string: itself (RETURN_STR_COPY); else one copy of the part.
     if a == 0 && b == s.len() {
-        return Ok(Value::Str(s));
+        return Ok(Value::str(s));
     }
-    Ok(Value::Str(PhpStr::from(&s.as_bytes()[a..b])))
+    Ok(Value::str(PhpStr::from(&s.as_bytes()[a..b])))
 }
 
 fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -339,7 +335,7 @@ fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         count += 1;
         i += at + needle.len();
     }
-    Ok(Value::Int(count))
+    Ok(Value::int(count))
 }
 
 /// str_pad($string, $length, $pad_string = " ", $pad_type = STR_PAD_RIGHT)
@@ -349,7 +345,7 @@ fn str_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let pad = if args.len() > 2 { str_arg(args, 2) } else { PhpStr::from(" ") };
     let kind = if args.len() > 3 { arg(args, 3).to_int() } else { 1 };
     if length < 0 || length as usize <= s.len() {
-        return Ok(Value::Str(s));
+        return Ok(Value::str(s));
     }
     if pad.is_empty() {
         return Err(ctx.throw("ValueError", "str_pad(): Argument #3 ($pad_string) must be a non-empty string".into()));
@@ -373,31 +369,33 @@ fn str_split(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if n < 1 {
         return Err(ctx.throw("ValueError", "str_split(): Argument #2 ($length) must be greater than 0".into()));
     }
-    let parts = s.as_bytes().chunks(n as usize).map(|c| Value::Str(PhpStr::from(c))).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(parts))))
+    let parts = s.as_bytes().chunks(n as usize).map(|c| Value::str(PhpStr::from(c))).collect();
+    Ok(Value::array(PhpArray::from_list(parts)))
 }
 
 /// implode(string $separator, array $array) or implode(array $array).
 fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let (sep, list) = match (arg(args, 0), opt(args, 1)) {
-        (Value::Array(a), None) => (PhpStr::empty(), a),
-        (Value::Array(_), Some(_)) => {
+    let (sep, list) = match (arg(args, 0).into_array(), opt(args, 1)) {
+        (Ok(a), None) => (PhpStr::empty(), a),
+        (Ok(_), Some(_)) => {
             return Err(ctx.throw("TypeError", "implode(): Argument #1 ($separator) must be of type string, array given".into()));
         }
-        (_, None) => {
+        (Err(_), None) => {
             return Err(ctx.throw("TypeError", "implode(): Argument #2 ($array) must be of type ?array, null given".into()));
         }
-        (sep, Some(Value::Array(a))) => (sep.to_php_string().unwrap_or_else(PhpStr::empty), a),
-        (_, Some(other)) => {
-            return Err(ctx.throw("TypeError", format!("implode(): Argument #2 ($array) must be of type ?array, {} given", other.type_name())));
-        }
+        (Err(sep), Some(second)) => match second.into_array() {
+            Ok(a) => (sep.to_php_string().unwrap_or_else(PhpStr::empty), a),
+            Err(other) => {
+                return Err(ctx.throw("TypeError", format!("implode(): Argument #2 ($array) must be of type ?array, {} given", other.type_name())));
+            }
+        },
     };
     // No pieces: the empty string; one string: itself (php_implode), no copy.
     match list.len() {
-        0 => return Ok(Value::Str(PhpStr::empty())),
+        0 => return Ok(Value::str(PhpStr::empty())),
         1 => {
-            if let Some((_, Value::Str(s))) = list.iter().next().map(|(k, v)| (k, v.deref())) {
-                return Ok(Value::Str(s));
+            if let Some(s) = list.iter().next().and_then(|(_, v)| v.deref().into_str().ok()) {
+                return Ok(Value::str(s));
             }
         }
         _ => {}
@@ -412,11 +410,11 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.extend_from_slice(sep.as_bytes());
         }
         // An object: its __toString().
-        if let Value::Object(o) = v.deref() {
+        if let Ok(o) = v.deref().into_object() {
             if o.class.method(b"__tostring").is_none() {
                 return Err(ctx.throw("Error", format!("Object of class {} could not be converted to string", String::from_utf8_lossy(o.class.name.as_bytes()))));
             }
-            let method = Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::Str(PhpStr::from("__toString"))])));
+            let method = Value::array(PhpArray::from_list(vec![Value::object(o), Value::str(PhpStr::from("__toString"))]));
             let s = ctx.call(&method, &mut [])?;
             out.extend_from_slice(s.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes());
             continue;
@@ -426,7 +424,7 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !diags.is_empty() {
         ctx.warn("Array to string conversion");
     }
-    Ok(Value::Str(PhpStr::from_scratch(out)))
+    Ok(Value::str(PhpStr::from_scratch(out)))
 }
 
 /// explode($separator, $string, $limit = PHP_INT_MAX)
@@ -453,8 +451,8 @@ fn explode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         let keep = parts.len() as i64 + limit;
         parts.truncate(keep.max(0) as usize);
     }
-    let values = parts.into_iter().map(|p| Value::Str(PhpStr::from(p))).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(values))))
+    let values = parts.into_iter().map(|p| Value::str(PhpStr::from(p))).collect();
+    Ok(Value::array(PhpArray::from_list(values)))
 }
 
 fn strrev(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -465,7 +463,7 @@ fn strrev(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// -1, 0 or 1, as PHP 8.2 normalizes string comparisons.
 fn sign(o: std::cmp::Ordering) -> Result<Value, Throw> {
-    Ok(Value::Int(o as i64))
+    Ok(Value::int(o as i64))
 }
 
 fn strcmp(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -527,9 +525,9 @@ fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count:
 
 /// A value's bytes as a string: a string's own, else converted into `buf`.
 fn text_of<'a>(v: &'a Value, buf: &'a mut Vec<u8>, diags: &mut Vec<p8_runtime::ops::Diag>) -> &'a [u8] {
-    match v {
-        Value::Str(s) => s.as_bytes(),
-        v => {
+    match v.as_str() {
+        Some(s) => s.as_bytes(),
+        None => {
             p8_runtime::ops::push_string(buf, v, diags);
             buf
         }
@@ -544,14 +542,11 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
     let subject_bytes = text_of(subject, &mut subject_buf, diags);
     // The text once something was replaced.
     let mut text: Option<Vec<u8>> = None;
-    match search {
-        Value::Array(searches) => {
+    match search.as_array() {
+        Some(searches) => {
             // An array of replacements pairs up with the searches (a
             // missing one is ""); a single one goes with each.
-            let mut replaces = match replace {
-                Value::Array(r) => Some(r.values()),
-                _ => None,
-            };
+            let mut replaces = replace.as_array().map(|r| r.values());
             for s in searches.values() {
                 let (mut needle_buf, mut with_buf) = (Vec::new(), Vec::new());
                 let needle = text_of(s, &mut needle_buf, diags);
@@ -567,39 +562,39 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
                 }
             }
         }
-        _ => {
+        None => {
             let (mut needle_buf, mut with_buf) = (Vec::new(), Vec::new());
             let needle = text_of(search, &mut needle_buf, diags);
             let with = text_of(replace, &mut with_buf, diags);
             text = replace_one(subject_bytes, needle, with, fold, count);
         }
     }
-    match (text, subject) {
-        (Some(t), _) => Value::Str(PhpStr::from_scratch(t)),
-        (None, Value::Str(s)) => Value::Str(s.clone()),
-        (None, _) => Value::Str(PhpStr::new(subject_buf)),
+    match text {
+        Some(t) => Value::str(PhpStr::from_scratch(t)),
+        None if subject.is_str() => subject.clone(),
+        None => Value::str(PhpStr::new(subject_buf)),
     }
 }
 
 fn replace(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, Throw> {
     let (search, with, subject) = (arg(args, 0), arg(args, 1), arg(args, 2));
-    if let (Value::Str(_), Value::Array(_)) = (&search, &with) {
+    if search.is_str() && with.is_array() {
         let name = if fold { "str_ireplace" } else { "str_replace" };
         return Err(ctx.throw("TypeError", format!("{name}(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string")));
     }
     let mut count = 0;
     let mut diags = Vec::new();
-    let result = match &subject {
+    let result = match subject.as_array() {
         // Every element is a subject, made a string as any is (a nested
         // array is "Array", warned): php_str_replace_common.
-        Value::Array(items) => {
+        Some(items) => {
             let mut out = PhpArray::new();
             for (k, v) in items.iter() {
                 out.insert(k, replace_in(&v.deref(), &search, &with, fold, &mut count, &mut diags));
             }
-            Value::Array(Rc::new(out))
+            Value::array(out)
         }
-        s => replace_in(s, &search, &with, fold, &mut count, &mut diags),
+        None => replace_in(&subject, &search, &with, fold, &mut count, &mut diags),
     };
     // One report per conversion, in order, as zval_get_string makes them.
     for d in diags {
@@ -608,8 +603,8 @@ fn replace(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, T
             p8_runtime::ops::Diag::Deprecated(m) => ctx.deprecated(&m),
         }
     }
-    if let Some(Value::Ref(cell)) = args.get(3) {
-        *cell.borrow_mut() = Value::Int(count);
+    if let Some(cell) = args.get(3).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::int(count);
     }
     Ok(result)
 }
@@ -627,7 +622,7 @@ fn str_ireplace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     if args.len() == 2 {
-        let Value::Array(pairs) = arg(args, 1) else {
+        let Ok(pairs) = arg(args, 1).into_array() else {
             return Err(ctx.throw("TypeError", format!("strtr(): Argument #2 ($from) must be of type array, {} given", arg(args, 1).type_name())));
         };
         let mut map: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -662,7 +657,7 @@ fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.push(bytes[i]);
             i += 1;
         }
-        return Ok(Value::Str(PhpStr::from_scratch(out)));
+        return Ok(Value::str(PhpStr::from_scratch(out)));
     }
     if args.len() < 3 {
         return Err(ctx.throw("ArgumentCountError", "strtr() expects exactly 3 arguments, 2 given".into()));
@@ -687,7 +682,7 @@ fn strstr_with(args: &[Value], fold: bool) -> Result<Value, Throw> {
     match found {
         Some(at) if before => string(h.as_bytes()[..at].to_vec()),
         Some(at) => string(h.as_bytes()[at..].to_vec()),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -708,7 +703,7 @@ fn strrchr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     match h.as_bytes().iter().rposition(|&b| b == c) {
         Some(at) if before => string(h.as_bytes()[..at].to_vec()),
         Some(at) => string(h.as_bytes()[at..].to_vec()),
-        None => Ok(Value::Bool(false)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -765,7 +760,7 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     // Nothing to escape: the string itself.
     let special = |c: &u8| matches!(c, b'&' | b'<' | b'>') || (*c == b'"' && flags & 2 != 0) || (*c == b'\'' && flags & 3 == 3);
     if std::ptr::eq(bytes, s.as_bytes()) && !bytes.iter().any(special) {
-        return Ok(Value::Str(s));
+        return Ok(Value::str(s));
     }
     let mut out = PhpStr::scratch(bytes.len() + 16);
     let mut i = 0;
@@ -787,18 +782,18 @@ fn htmlspecialchars(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
         }
         i += 1;
     }
-    Ok(Value::Str(PhpStr::from_scratch(out)))
+    Ok(Value::str(PhpStr::from_scratch(out)))
 }
 
 /// Whether the charset argument at `i` is UTF-8 (left out, null or empty:
 /// default_charset, UTF-8).
 pub(crate) fn utf8_charset(args: &[Value], i: usize) -> bool {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Null) => true,
-        Some(v) => {
+        Some(v) if !v.is_null() => {
             let c = v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_ascii_lowercase();
             c.is_empty() || c == b"utf-8" || c == b"utf8"
         }
+        _ => true,
     }
 }
 
@@ -928,7 +923,7 @@ fn hex2bin(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = s.as_bytes();
     if !s.len().is_multiple_of(2) {
         ctx.warn("hex2bin(): Hexadecimal input string must have an even length");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     for pair in s.chunks(2) {
@@ -936,7 +931,7 @@ fn hex2bin(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             (Some(h), Some(l)) => out.push((h * 16 + l) as u8),
             _ => {
                 ctx.warn("hex2bin(): Input string must be hexadecimal string");
-                return Ok(Value::Bool(false));
+                return Ok(Value::FALSE);
             }
         }
     }
@@ -1027,5 +1022,5 @@ fn vprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let values = crate::printf::array_values(&arg(args, 1));
     let out = crate::printf::formatted(ctx, "vprintf", str_arg(args, 0).as_bytes(), &values, crate::printf::Missing::Array)?;
     ctx.echo(&out);
-    Ok(Value::Int(out.len() as i64))
+    Ok(Value::int(out.len() as i64))
 }

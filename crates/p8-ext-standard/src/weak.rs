@@ -16,7 +16,7 @@ use std::rc::{Rc, Weak};
 type R = Result<Value, Throw>;
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 // ---- WeakReference ----
@@ -41,7 +41,7 @@ fn weakref_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 }
 
 fn weakref_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let Value::Object(target) = arg(args, 0) else {
+    let Ok(target) = arg(args, 0).into_object() else {
         return Err(ctx.throw("TypeError", "WeakReference::create(): Argument #1 ($object) must be of type object".into()));
     };
     let key = Rc::as_ptr(&target) as usize;
@@ -49,7 +49,7 @@ fn weakref_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if let Some(wr) = existing
         && wr.native::<WeakRef>().and_then(|w| w.target.borrow().upgrade()).is_some_and(|t| Rc::ptr_eq(&t, &target))
     {
-        return Ok(Value::Object(wr));
+        return Ok(Value::object(wr));
     }
     let class = ctx.class(b"WeakReference").expect("declared");
     let wr = ctx.new_object(&class);
@@ -59,11 +59,11 @@ fn weakref_create(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
         m.retain(|_, w| w.strong_count() > 0);
         m.insert(key, Rc::downgrade(&wr));
     });
-    Ok(Value::Object(wr))
+    Ok(Value::object(wr))
 }
 
 fn weakref_get(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(this.native::<WeakRef>().and_then(|w| w.target.borrow().upgrade()).map_or(Value::Null, Value::Object))
+    Ok(this.native::<WeakRef>().and_then(|w| w.target.borrow().upgrade()).map_or(Value::NULL, Value::object))
 }
 
 // ---- WeakMap ----
@@ -89,10 +89,12 @@ fn live(o: &Object) -> Vec<(Rc<Object>, Value)> {
 }
 
 fn key_object(ctx: &mut dyn Ctx, k: &Value) -> Result<Rc<Object>, Throw> {
-    match k {
-        Value::Object(o) => Ok(Rc::clone(o)),
-        Value::Null | Value::Undef => Err(ctx.throw("Error", "Cannot append to WeakMap".into())),
-        _ => Err(ctx.throw("TypeError", "WeakMap key must be an object".into())),
+    if let Some(o) = k.as_object() {
+        Ok(Rc::clone(o))
+    } else if k.is_null_or_undef() {
+        Err(ctx.throw("Error", "Cannot append to WeakMap".into()))
+    } else {
+        Err(ctx.throw("TypeError", "WeakMap key must be an object".into()))
     }
 }
 
@@ -115,13 +117,13 @@ fn offset_set(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         Some(i) => map(this).entries.borrow_mut()[i].1 = v,
         None => map(this).entries.borrow_mut().push((Rc::downgrade(&key), v)),
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn offset_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let key = key_object(ctx, &arg(args, 0))?;
     // isset(): set and not null.
-    Ok(Value::Bool(position(this, &key).is_some_and(|i| !matches!(map(this).entries.borrow()[i].1.deref(), Value::Null))))
+    Ok(Value::bool(position(this, &key).is_some_and(|i| !map(this).entries.borrow()[i].1.deref().is_null())))
 }
 
 fn offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
@@ -130,15 +132,15 @@ fn offset_unset(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         let removed = map(this).entries.borrow_mut().remove(i);
         drop(removed);
     }
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn count(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    Ok(Value::Int(live(this).len() as i64))
+    Ok(Value::int(live(this).len() as i64))
 }
 
 fn get_iterator(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
-    let entries = live(this).into_iter().map(|(k, v)| (Value::Object(k), v)).collect();
+    let entries = live(this).into_iter().map(|(k, v)| (Value::object(k), v)).collect();
     internal_iterator(ctx, entries)
 }
 
@@ -147,9 +149,9 @@ fn weakmap_info(o: &Object) -> PhpArray {
     let mut out = PhpArray::new();
     for (k, v) in live(o) {
         let mut pair = PhpArray::new();
-        pair.insert(Key::from_string(PhpStr::from("key")), Value::Object(k));
+        pair.insert(Key::from_string(PhpStr::from("key")), Value::object(k));
         pair.insert(Key::from_string(PhpStr::from("value")), v);
-        let _ = out.push(Value::Array(Rc::new(pair)));
+        let _ = out.push(Value::array(pair));
     }
     out
 }
@@ -176,7 +178,7 @@ pub(crate) fn internal_iterator(ctx: &mut dyn Ctx, items: Vec<(Value, Value)>) -
     let class = ctx.class(b"InternalIterator").expect("declared");
     let it = ctx.new_object(&class);
     *it.native::<Internal>().expect("InternalIterator state").items.borrow_mut() = items;
-    Ok(Value::Object(it))
+    Ok(Value::object(it))
 }
 
 fn internal(o: &Object) -> &Internal {
@@ -189,28 +191,28 @@ fn it_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn it_current(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let s = internal(this);
-    Ok(s.items.borrow().get(s.at.get()).map_or(Value::Null, |(_, v)| v.clone()))
+    Ok(s.items.borrow().get(s.at.get()).map_or(Value::NULL, |(_, v)| v.clone()))
 }
 
 fn it_key(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let s = internal(this);
-    Ok(s.items.borrow().get(s.at.get()).map_or(Value::Null, |(k, _)| k.clone()))
+    Ok(s.items.borrow().get(s.at.get()).map_or(Value::NULL, |(k, _)| k.clone()))
 }
 
 fn it_next(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let s = internal(this);
     s.at.set(s.at.get() + 1);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn it_valid(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let s = internal(this);
-    Ok(Value::Bool(s.at.get() < s.items.borrow().len()))
+    Ok(Value::bool(s.at.get() < s.items.borrow().len()))
 }
 
 fn it_rewind(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     internal(this).at.set(0);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 macro_rules! m {

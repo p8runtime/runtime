@@ -10,7 +10,7 @@ use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Object, Visibility};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -67,7 +67,7 @@ fn finish(ctx: &mut dyn Ctx, flags: i64, code: i64, ok: Value) -> Result<Value, 
         }
         return Ok(ok);
     }
-    *ctx.state("json_error") = Value::Int(code);
+    *ctx.state("json_error") = Value::int(code);
     Ok(ok)
 }
 
@@ -100,22 +100,23 @@ impl Encoder<'_> {
     }
 
     fn value(&mut self, v: &Value, out: &mut Vec<u8>) -> Result<(), Throw> {
-        match v {
-            Value::Null | Value::Undef => out.extend_from_slice(b"null"),
-            Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
-            Value::Int(i) => out.extend_from_slice(i.to_string().as_bytes()),
-            Value::Float(f) => self.float(*f, out),
-            Value::Str(s) => self.string(s.as_bytes(), out),
-            Value::Ref(cell) => {
-                let inner = cell.borrow().clone();
+        match v.kind() {
+            Kind::Null | Kind::Undef => out.extend_from_slice(b"null"),
+            Kind::Bool => out.extend_from_slice(if v.as_bool().expect("a bool") { b"true" } else { b"false" }),
+            Kind::Int => out.extend_from_slice(v.as_int().expect("an int").to_string().as_bytes()),
+            Kind::Float => self.float(v.as_float().expect("a float"), out),
+            Kind::Str => self.string(v.as_str().expect("a string").as_bytes(), out),
+            Kind::Ref => {
+                let inner = v.as_reference().expect("a reference").borrow().clone();
                 self.value(&inner, out)?;
             }
-            Value::Array(a) => {
+            Kind::Array => {
+                let a = v.as_array().expect("an array");
                 let list = a.is_list() && self.flags & FORCE_OBJECT == 0;
                 let entries: Vec<(Key, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
                 self.container(entries, list, out)?;
             }
-            Value::Object(o) => self.object(o, out)?,
+            Kind::Object => self.object(v.as_object().expect("an object"), out)?,
         }
         Ok(())
     }
@@ -286,7 +287,7 @@ impl Encoder<'_> {
                 continue;
             }
             // A hooked property through its get hook (a virtual one too).
-            let v = if p.hooks == 0 { Some(o.slots.borrow()[i].clone()).filter(|v| !matches!(v, Value::Undef)) } else { self.ctx.prop_value(o, i)? };
+            let v = if p.hooks == 0 { Some(o.slots.borrow()[i].clone()).filter(|v| !v.is_undef()) } else { self.ctx.prop_value(o, i)? };
             if let Some(v) = v {
                 entries.push((Key::from_string(p.name.clone()), v));
             }
@@ -302,7 +303,7 @@ impl Encoder<'_> {
 }
 
 fn callable(o: &Rc<Object>, method: &[u8]) -> Value {
-    Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::Str(PhpStr::from(method))])))
+    Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str(PhpStr::from(method))]))
 }
 
 /// json_encode(mixed $value, int $flags = 0, int $depth = 512)
@@ -317,7 +318,7 @@ fn json_encode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut e = Encoder { ctx, flags, depth: 0, max_depth: max_depth as usize, error: 0, seen: Vec::new() };
     e.value(&v, &mut out)?;
     let error = e.error;
-    let ok = if error != 0 && flags & PARTIAL_OUTPUT_ON_ERROR == 0 { Value::Bool(false) } else { Value::Str(PhpStr::new(out)) };
+    let ok = if error != 0 && flags & PARTIAL_OUTPUT_ON_ERROR == 0 { Value::FALSE } else { Value::str(PhpStr::new(out)) };
     finish(ctx, flags, error, ok)
 }
 
@@ -393,7 +394,7 @@ impl<'a> Parser<'a> {
                     for (k, v) in entries {
                         a.insert(Key::from_string(k), v);
                     }
-                    return Ok(Value::Array(Rc::new(a)));
+                    return Ok(Value::array(a));
                 }
                 let o = object.expect("made at the brace");
                 for (k, v) in entries {
@@ -402,7 +403,7 @@ impl<'a> Parser<'a> {
                     }
                     o.dynamic.borrow_mut().insert(Key::Str(k), v);
                 }
-                Ok(Value::Object(o))
+                Ok(Value::object(o))
             }
             b'[' => {
                 self.depth += 1;
@@ -429,20 +430,20 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.depth -= 1;
-                Ok(Value::Array(Rc::new(PhpArray::from_list(items))))
+                Ok(Value::array(PhpArray::from_list(items)))
             }
-            b'"' => Ok(Value::Str(self.string()?)),
+            b'"' => Ok(Value::str(self.string()?)),
             b't' if self.s[self.at..].starts_with(b"true") => {
                 self.at += 4;
-                Ok(Value::Bool(true))
+                Ok(Value::TRUE)
             }
             b'f' if self.s[self.at..].starts_with(b"false") => {
                 self.at += 5;
-                Ok(Value::Bool(false))
+                Ok(Value::FALSE)
             }
             b'n' if self.s[self.at..].starts_with(b"null") => {
                 self.at += 4;
-                Ok(Value::Null)
+                Ok(Value::NULL)
             }
             b'-' | b'0'..=b'9' => self.number(),
             _ => Err(Fail::Code(4)),
@@ -489,13 +490,13 @@ impl<'a> Parser<'a> {
         let text = std::str::from_utf8(&self.s[start..self.at]).unwrap_or("0");
         if !float {
             if let Ok(i) = text.parse::<i64>() {
-                return Ok(Value::Int(i));
+                return Ok(Value::int(i));
             }
             if self.bigint_string {
-                return Ok(Value::Str(PhpStr::from(text)));
+                return Ok(Value::str(PhpStr::from(text)));
             }
         }
-        Ok(Value::Float(text.parse::<f64>().unwrap_or(0.0)))
+        Ok(Value::float(text.parse::<f64>().unwrap_or(0.0)))
     }
 
     fn hex4(&mut self) -> Result<u32, Fail> {
@@ -578,15 +579,15 @@ fn json_decode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let flags = if args.len() > 3 { arg(args, 3).to_int() } else { 0 };
     let assoc = match args.get(1).map(Value::deref) {
-        Some(Value::Null) | None => flags & OBJECT_AS_ARRAY != 0,
-        Some(v) => v.to_bool(),
+        Some(v) if !v.is_null() => v.to_bool(),
+        _ => flags & OBJECT_AS_ARRAY != 0,
     };
     let depth = if args.len() > 2 { arg(args, 2).to_int() } else { 512 };
     if depth <= 0 {
         return Err(ctx.throw("ValueError", "json_decode(): Argument #3 ($depth) must be greater than 0".into()));
     }
     if s.is_empty() {
-        return finish(ctx, flags, 4, Value::Null);
+        return finish(ctx, flags, 4, Value::NULL);
     }
     let mut p = Parser { s: s.as_bytes(), at: 0, assoc, bigint_string: flags & BIGINT_AS_STRING != 0, depth: 0, max_depth: depth as usize };
     let r = p.value(ctx);
@@ -594,11 +595,11 @@ fn json_decode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Ok(v) => {
             p.ws();
             if p.at != p.s.len() {
-                return finish(ctx, flags, 4, Value::Null);
+                return finish(ctx, flags, 4, Value::NULL);
             }
             finish(ctx, flags, 0, v)
         }
-        Err(Fail::Code(code)) => finish(ctx, flags, code, Value::Null),
+        Err(Fail::Code(code)) => finish(ctx, flags, code, Value::NULL),
     }
 }
 
@@ -609,12 +610,12 @@ fn json_validate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         p.ws();
         p.at == p.s.len()
     };
-    *ctx.state("json_error") = Value::Int(if ok { 0 } else { 4 });
-    Ok(Value::Bool(ok))
+    *ctx.state("json_error") = Value::int(if ok { 0 } else { 4 });
+    Ok(Value::bool(ok))
 }
 
 fn json_last_error(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(ctx.state("json_error").to_int()))
+    Ok(Value::int(ctx.state("json_error").to_int()))
 }
 
 fn json_last_error_msg(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

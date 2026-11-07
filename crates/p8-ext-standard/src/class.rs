@@ -62,10 +62,12 @@ pub const REENTER: &[&str] = &[
 /// calling code can see, as declared.
 fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 0);
-    let class = match &v {
-        Value::Object(o) => Some(Rc::clone(&o.class)),
-        Value::Str(s) => ctx.class_load(s.as_bytes())?,
-        _ => None,
+    let class = if let Some(o) = v.as_object() {
+        Some(Rc::clone(&o.class))
+    } else if let Some(s) = v.as_str() {
+        ctx.class_load(s.as_bytes())?
+    } else {
+        None
     };
     let Some(class) = class else {
         return Err(ctx.throw(
@@ -80,9 +82,9 @@ fn get_class_methods(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
         // A property hook (`$x::get`) is not a method PHP lists.
         .filter(|m| !m.name.as_bytes().starts_with(b"$"))
         .filter(|m| visible(m.visibility, declaring(&class, &m.declaring), scope.as_deref()))
-        .map(|m| Value::Str(m.name.clone()))
+        .map(|m| Value::str(m.name.clone()))
         .collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(names))))
+    Ok(Value::array(PhpArray::from_list(names)))
 }
 
 fn get_called_class(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
@@ -99,7 +101,7 @@ fn class_alias(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = if args.len() < 3 || arg(args, 2).to_bool() { ctx.class_load(original.as_bytes())? } else { ctx.class(original.as_bytes()) };
     let Some(class) = class else {
         ctx.warn(&format!("Class \"{}\" not found", String::from_utf8_lossy(original.as_bytes())));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     // zend_register_class_alias_ex: zend_assert_valid_class_name(lcname,
     // "a class alias"), the name lowercased (and without a leading "\").
@@ -112,17 +114,17 @@ fn class_alias(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     if !ctx.class_alias(class, alias.as_bytes()) {
         ctx.warn(&format!("Cannot declare class {}, because the name is already in use", String::from_utf8_lossy(alias.as_bytes())));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// How a class-name parameter's error names what it was given
 /// (zend_wrong_parameter_type_error, 8.6): a string quoted, else its type.
 pub(crate) fn class_name_given(v: &Value) -> String {
-    match v {
-        Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-        v => v.type_name().to_string(),
+    match v.as_str() {
+        Some(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
+        None => v.type_name().to_string(),
     }
 }
 
@@ -137,7 +139,7 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             None => return Err(ctx.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(class_name)))),
         };
         if name.eq_ignore_ascii_case(b"class") {
-            return Ok(Value::Str(class.name.clone()));
+            return Ok(Value::str(class.name.clone()));
         }
         return match class.constants.get(name) {
             Some(c) => {
@@ -149,7 +151,7 @@ fn constant(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
                     ));
                 }
                 // An enum case's object; a constant computed from an expression.
-                Ok(ctx.class_constant(&class, name)?.unwrap_or(Value::Null))
+                Ok(ctx.class_constant(&class, name)?.unwrap_or(Value::NULL))
             }
             None => Err(ctx.throw("Error", format!("Undefined constant {}::{}", class.name.to_lossy(), String::from_utf8_lossy(name)))),
         };
@@ -226,7 +228,7 @@ fn set_error_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
 
 fn restore_error_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     ctx.error_handler(None);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn set_exception_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -235,7 +237,7 @@ fn set_exception_handler(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 
 fn restore_exception_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     ctx.exception_handler(None);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// get_error_handler(): ?callable (PHP 8.5): the handler set_error_handler
@@ -252,19 +254,19 @@ fn get_exception_handler(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Th
 /// spl_autoload_register(?callable $callback = null, bool $throw = true, bool $prepend = false)
 fn spl_autoload_register(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = arg(args, 0);
-    if matches!(callable, Value::Null) {
+    if callable.is_null() {
         // The default (spl_autoload: lowercase file names in include_path) is not here yet.
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     let prepend = args.len() > 2 && arg(args, 2).to_bool();
-    Ok(Value::Bool(ctx.autoloader(callable, Some(prepend))))
+    Ok(Value::bool(ctx.autoloader(callable, Some(prepend))))
 }
 
 fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = arg(args, 0);
     // spl_autoload_call itself: every autoloader goes (php_spl.c),
     // deprecated since PHP 8.5.
-    if let Value::Str(s) = &callable
+    if let Some(s) = callable.as_str()
         && s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes()).eq_ignore_ascii_case(b"spl_autoload_call")
     {
         ctx.deprecated(
@@ -273,9 +275,9 @@ fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
         for loader in ctx.autoloaders() {
             ctx.autoloader(loader, None);
         }
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
-    Ok(Value::Bool(ctx.autoloader(callable, None)))
+    Ok(Value::bool(ctx.autoloader(callable, None)))
 }
 
 /// spl_autoload_call(string $class): the autoloaders run for `$class`
@@ -283,11 +285,11 @@ fn spl_autoload_unregister(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
 fn spl_autoload_call(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
     ctx.class_load(name.as_bytes())?;
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn spl_autoload_functions(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.autoloaders()))))
+    Ok(Value::array(PhpArray::from_list(ctx.autoloaders())))
 }
 
 /// register_shutdown_function(callable $callback, mixed ...$args)
@@ -295,36 +297,38 @@ fn register_shutdown_function(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<V
     let callable = arg(args, 0);
     let rest = args[1..].iter().map(Value::deref).collect();
     ctx.on_shutdown(callable, rest);
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 /// The class an `$object_or_class` argument names: an object's, or a
 /// declared class's (None for an unknown name).
 fn class_of(ctx: &mut dyn Ctx, v: &Value) -> Option<Rc<Class>> {
-    match v {
-        Value::Object(o) => Some(Rc::clone(&o.class)),
-        Value::Str(s) => ctx.class(s.as_bytes()),
-        _ => None,
+    if let Some(o) = v.as_object() {
+        Some(Rc::clone(&o.class))
+    } else if let Some(s) = v.as_str() {
+        ctx.class(s.as_bytes())
+    } else {
+        None
     }
 }
 
 /// class_of, autoloading a class given by name (zend_lookup_class).
 fn class_loaded(ctx: &mut dyn Ctx, v: &Value) -> Result<Option<Rc<Class>>, Throw> {
-    match v {
-        Value::Str(s) => ctx.class_load(s.as_bytes()),
-        other => Ok(class_of(ctx, other)),
+    match v.as_str() {
+        Some(s) => ctx.class_load(s.as_bytes()),
+        None => Ok(class_of(ctx, v)),
     }
 }
 
 fn name(class: &Class) -> Value {
-    Value::Str(class.name.clone())
+    Value::str(class.name.clone())
 }
 
 /// get_class($object = ?): the object's class, or with no argument the
 /// class the calling code is in.
 fn get_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    match args.first().map(Value::deref) {
-        Some(Value::Object(o)) => Ok(name(&o.class)),
+    match args.first().map(Value::deref).and_then(|v| v.into_object().ok()) {
+        Some(o) => Ok(name(&o.class)),
         _ => match ctx.scope() {
             Some(c) => Ok(name(&c)),
             None => Err(ctx.throw("Error", "get_class() without arguments must be called from within a class".into())),
@@ -346,19 +350,19 @@ fn get_parent_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
         },
         None => ctx.scope(),
     };
-    Ok(class.and_then(|c| c.parent.as_deref().map(name)).unwrap_or(Value::Bool(false)))
+    Ok(class.and_then(|c| c.parent.as_deref().map(name)).unwrap_or(Value::FALSE))
 }
 
 /// get_mangled_object_vars($object): every initialized property under its
 /// mangled name ("\0A\0p" private, "\0*\0p" protected), then the dynamic
 /// ones, as (array) gives them (but no class's own view of its properties).
 fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
     let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };
     let mut out = PhpArray::new();
     let slots = o.slots.borrow();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
-        if matches!(v, Value::Undef) || p.is_internal() {
+        if v.is_undef() || p.is_internal() {
             continue;
         }
         let mut name = Vec::new();
@@ -377,7 +381,7 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.clone());
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// get_object_vars($object): the properties the calling code can see,
@@ -385,24 +389,24 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
 /// clone(object $object, array $withProperties = []): what `clone $object`
 /// makes, with the properties updated (ZEND_FUNCTION(clone)).
 fn clone(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
-    let with = match arg(args, 1) {
-        Value::Array(a) => a,
-        _ => Rc::new(PhpArray::new()),
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
+    let with = match arg(args, 1).into_array() {
+        Ok(a) => a,
+        Err(_) => Rc::new(PhpArray::new()),
     };
     ctx.clone_with(&o, &with)
 }
 
 fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
     let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };
     if let Some(props) = o.class.get_properties {
-        return Ok(Value::Array(Rc::new(props(&o))));
+        return Ok(Value::array(props(&o)));
     }
     let scope = ctx.scope();
     let mut out = PhpArray::new();
     for (i, p) in o.class.properties.iter().enumerate() {
-        if p.is_internal() || p.hooks == 0 && matches!(o.slots.borrow()[i], Value::Undef) {
+        if p.is_internal() || p.hooks == 0 && o.slots.borrow()[i].is_undef() {
             continue;
         }
         let declaring = declaring(&o.class, &p.declaring);
@@ -422,7 +426,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     for (k, v) in o.dynamic.borrow().iter() {
         out.insert(k, v.deref());
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 /// get_class_vars(string $class): the default values of the properties
@@ -432,7 +436,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
 fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
     let Some(class) = ctx.class_load(name.as_bytes())? else {
-        return Err(ctx.throw("TypeError", format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {} given", class_name_given(&Value::Str(name)))));
+        return Err(ctx.throw("TypeError", format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {} given", class_name_given(&Value::str(name)))));
     };
     let defaults = ctx.class_defaults(&class)?;
     let scope = ctx.scope();
@@ -456,7 +460,7 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
                 continue;
             }
             let v = match &defaults[i] {
-                Value::Undef => Value::Null,
+                v if v.is_undef() => Value::NULL,
                 v => v.clone(),
             };
             out.insert(Key::from_string(p.name.clone()), v);
@@ -468,13 +472,13 @@ fn get_class_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
             // An uninitialized typed static is listed as null, as an
             // instance property is above (add_class_vars: ZVAL_NULL).
             let v = match cell.borrow().deref() {
-                Value::Undef => Value::Null,
+                v if v.is_undef() => Value::NULL,
                 v => v,
             };
             out.insert(Key::from_string(PhpStr::from(name.as_slice())), v);
         }
     }
-    Ok(Value::Array(Rc::new(out)))
+    Ok(Value::array(out))
 }
 
 fn declaring<'c>(class: &'c Class, lower: &[u8]) -> &'c Class {
@@ -491,7 +495,7 @@ fn declaring<'c>(class: &'c Class, lower: &[u8]) -> &'c Class {
 /// method_exists($object_or_class, $method)
 fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let target = arg(args, 0);
-    if !matches!(target, Value::Object(_) | Value::Str(_)) {
+    if !(target.is_object() || target.is_str()) {
         return Err(ctx.throw(
             "TypeError",
             format!("method_exists(): Argument #1 ($object_or_class) must be of type object|string, {} given", target.type_name()),
@@ -499,9 +503,9 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     }
     let method = str_arg(args, 1).as_bytes().to_ascii_lowercase();
     if method.starts_with(b"$") {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(class_loaded(ctx, &target)?.is_some_and(|c| c.method(&method).is_some())))
+    Ok(Value::bool(class_loaded(ctx, &target)?.is_some_and(|c| c.method(&method).is_some())))
 }
 
 /// property_exists($object_or_class, $property): declared (any
@@ -509,14 +513,11 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 fn property_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let target = arg(args, 0);
     let property = str_arg(args, 1);
-    let Some(class) = class_loaded(ctx, &target)? else { return Ok(Value::Bool(false)) };
+    let Some(class) = class_loaded(ctx, &target)? else { return Ok(Value::FALSE) };
     if class.slots.contains_key(property.as_bytes()) || class.statics.contains_key(property.as_bytes()) {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
-    Ok(Value::Bool(match &target {
-        Value::Object(o) => o.dynamic.borrow().contains_key(&Key::from_string(property)),
-        _ => false,
-    }))
+    Ok(Value::bool(target.as_object().is_some_and(|o| o.dynamic.borrow().contains_key(&Key::from_string(property)))))
 }
 
 /// The class `$class` names, autoloaded when `$autoload` (argument 1) is.
@@ -528,43 +529,43 @@ fn lookup(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<Rc<Class>>, Throw>
 /// class_exists($class, $autoload = true): a class (not an interface or trait).
 fn class_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = lookup(ctx, args)?;
-    Ok(Value::Bool(class.is_some_and(|c| c.flags & (CLASS_INTERFACE | CLASS_TRAIT) == 0)))
+    Ok(Value::bool(class.is_some_and(|c| c.flags & (CLASS_INTERFACE | CLASS_TRAIT) == 0)))
 }
 
 fn interface_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = lookup(ctx, args)?;
-    Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_INTERFACE != 0)))
+    Ok(Value::bool(class.is_some_and(|c| c.flags & CLASS_INTERFACE != 0)))
 }
 
 fn trait_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = lookup(ctx, args)?;
-    Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_TRAIT != 0)))
+    Ok(Value::bool(class.is_some_and(|c| c.flags & CLASS_TRAIT != 0)))
 }
 
 fn enum_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let class = lookup(ctx, args)?;
-    Ok(Value::Bool(class.is_some_and(|c| c.flags & CLASS_ENUM != 0)))
+    Ok(Value::bool(class.is_some_and(|c| c.flags & CLASS_ENUM != 0)))
 }
 
 /// is_a($object_or_class, $class, $allow_string = false)
 fn is_a(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let allow_string = args.len() > 2 && arg(args, 2).to_bool();
-    Ok(Value::Bool(instance(ctx, args, allow_string, false)?))
+    Ok(Value::bool(instance(ctx, args, allow_string, false)?))
 }
 
 /// is_subclass_of($object_or_class, $class, $allow_string = true)
 fn is_subclass_of(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let allow_string = args.len() <= 2 || arg(args, 2).to_bool();
-    Ok(Value::Bool(instance(ctx, args, allow_string, true)?))
+    Ok(Value::bool(instance(ctx, args, allow_string, true)?))
 }
 
 /// A class named by a string is autoloaded (when strings are allowed).
 fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool) -> Result<bool, Throw> {
     let target = arg(args, 0);
-    let class = match &target {
-        Value::Str(_) if !allow_string => return Ok(false),
-        Value::Str(s) => ctx.class_load(s.as_bytes())?,
-        other => class_of(ctx, other),
+    let class = match target.as_str() {
+        Some(_) if !allow_string => return Ok(false),
+        Some(s) => ctx.class_load(s.as_bytes())?,
+        None => class_of(ctx, &target),
     };
     let Some(class) = class else { return Ok(false) };
     let wanted = str_arg(args, 1);
@@ -579,20 +580,20 @@ fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool)
 }
 
 fn spl_object_id(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
-    Ok(Value::Int(i64::from(o.id)))
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
+    Ok(Value::int(i64::from(o.id)))
 }
 
 /// spl_object_hash: the id in 16 hex digits, then 16 zeros (PHP 8.1+).
 fn spl_object_hash(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Object(o) = arg(args, 0) else { return Ok(Value::Null) };
-    Ok(Value::Str(PhpStr::from(format!("{:016x}0000000000000000", o.id))))
+    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
+    Ok(Value::str(PhpStr::from(format!("{:016x}0000000000000000", o.id))))
 }
 
 /// The names of the declared classes whose kind `pick` accepts.
 fn declared(ctx: &mut dyn Ctx, pick: impl Fn(u32) -> bool) -> Value {
-    let names = ctx.declared_classes().into_iter().filter(|(_, c)| pick(c.flags)).map(|(name, _)| Value::Str(name)).collect();
-    Value::Array(Rc::new(PhpArray::from_list(names)))
+    let names = ctx.declared_classes().into_iter().filter(|(_, c)| pick(c.flags)).map(|(name, _)| Value::str(name)).collect();
+    Value::array(PhpArray::from_list(names))
 }
 
 /// Classes and enums: not interfaces or traits.

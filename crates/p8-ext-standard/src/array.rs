@@ -9,7 +9,7 @@ use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::CLASS_ENUM;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
@@ -71,7 +71,7 @@ pub static BUILTINS: &[Builtin] = &[
 ];
 
 fn array(values: PhpArray) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(values)))
+    Ok(Value::array(values))
 }
 
 fn list(values: Vec<Value>) -> Result<Value, Throw> {
@@ -80,24 +80,21 @@ fn list(values: Vec<Value>) -> Result<Value, Throw> {
 
 /// Argument `i` as an array (the signature check has made sure it is one).
 fn arr(args: &[Value], i: usize) -> Rc<PhpArray> {
-    match arg(args, i) {
-        Value::Array(a) => a,
-        _ => Rc::new(PhpArray::new()),
-    }
+    arg(args, i).into_array().unwrap_or_else(|_| Rc::new(PhpArray::new()))
 }
 
 /// The array a by-reference parameter holds, to change in place.
 fn with_array<R>(args: &[Value], change: impl FnOnce(&mut PhpArray) -> R) -> Option<R> {
-    let Some(Value::Ref(cell)) = args.first() else { return None };
+    let cell = args.first()?.as_reference()?;
     let mut value = cell.borrow_mut();
-    let Value::Array(a) = &mut *value else { return None };
-    Some(change(Rc::make_mut(a)))
+    let a = value.array_mut()?;
+    Some(change(a))
 }
 
 fn array_values(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let a = arr(args, 0);
     if a.is_list() {
-        return Ok(Value::Array(a));
+        return Ok(Value::array(a));
     }
     list(a.values().cloned().collect())
 }
@@ -112,7 +109,7 @@ fn array_merge(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         if let Some(other) = other
             && (other.is_dense_list() || (!other.is_packed() && other.iter().all(|(k, _)| matches!(k, Key::Str(_)))))
         {
-            return Ok(Value::Array(other));
+            return Ok(Value::array(other));
         }
     }
     let count = (0..args.len()).map(|i| arr(args, i).len()).sum();
@@ -133,19 +130,21 @@ fn array_merge(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn key_of(v: &Value) -> Option<Key> {
-    match v {
-        Value::Null | Value::Undef => Some(Key::Str(p8_runtime::string::PhpStr::empty())),
-        Value::Float(f) => Some(Key::Int(*f as i64)),
-        v => Key::from_value(v).ok().map(|(k, _)| k),
+    if v.is_null_or_undef() {
+        return Some(Key::Str(p8_runtime::string::PhpStr::empty()));
+    }
+    match v.as_float() {
+        Some(f) => Some(Key::Int(f as i64)),
+        None => Key::from_value(v).ok().map(|(k, _)| k),
     }
 }
 
 fn array_key_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    if matches!(arg(args, 0), Value::Null) {
+    if arg(args, 0).is_null() {
         ctx.deprecated("Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead");
     }
     let found = key_of(&arg(args, 0)).is_some_and(|k| arr(args, 1).contains_key(&k));
-    Ok(Value::Bool(found))
+    Ok(Value::bool(found))
 }
 
 pub(crate) fn matches(needle: &Value, v: &Value, strict: bool) -> bool {
@@ -154,7 +153,7 @@ pub(crate) fn matches(needle: &Value, v: &Value, strict: bool) -> bool {
 
 fn in_array(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (needle, strict) = (arg(args, 0), args.len() > 2 && arg(args, 2).to_bool());
-    Ok(Value::Bool(arr(args, 1).values().any(|v| matches(&needle, &v.deref(), strict))))
+    Ok(Value::bool(arr(args, 1).values().any(|v| matches(&needle, &v.deref(), strict))))
 }
 
 fn array_search(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -162,7 +161,7 @@ fn array_search(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(arr(args, 1)
         .iter()
         .find(|(_, v)| matches(&needle, &v.deref(), strict))
-        .map_or(Value::Bool(false), |(k, _)| k.to_value()))
+        .map_or(Value::FALSE, |(k, _)| k.to_value()))
 }
 
 /// array_slice($array, $offset, $length = null, $preserve_keys = false):
@@ -173,11 +172,11 @@ fn array_slice(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let offset = arg(args, 1).to_int();
     let start = if offset < 0 { (len + offset).max(0) } else { offset.min(len) };
     let end = match args.get(2).map(Value::deref) {
-        None | Some(Value::Null) => len,
-        Some(l) => {
+        Some(l) if !l.is_null() => {
             let l = l.to_int();
             if l < 0 { (len + l).max(start) } else { (start + l).min(len) }
         }
+        _ => len,
     };
     let preserve = args.len() > 3 && arg(args, 3).to_bool();
     let mut out = PhpArray::new();
@@ -211,13 +210,13 @@ fn array_reverse(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn array_flip(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = PhpArray::new();
     for (k, v) in arr(args, 0).iter() {
-        match v.deref() {
-            v @ (Value::Int(_) | Value::Str(_)) => {
-                if let Ok((key, _)) = Key::from_value(&v) {
-                    out.insert(key, k.to_value());
-                }
+        let v = v.deref();
+        if v.is_int() || v.is_str() {
+            if let Ok((key, _)) = Key::from_value(&v) {
+                out.insert(key, k.to_value());
             }
-            _ => ctx.warn("array_flip(): Can only flip string and integer values, entry skipped"),
+        } else {
+            ctx.warn("array_flip(): Can only flip string and integer values, entry skipped");
         }
     }
     array(out)
@@ -315,7 +314,7 @@ fn fold(ctx: &mut dyn Ctx, args: &[Value], op: p8_runtime::ops::BinOp, start: Va
     let mut acc = start;
     for v in arr(args, 0).values() {
         let v = v.deref();
-        if matches!(v, Value::Array(_)) {
+        if v.is_array() {
             ctx.warn(&format!("{verb} is not supported on type array"));
             continue;
         }
@@ -334,11 +333,11 @@ fn fold(ctx: &mut dyn Ctx, args: &[Value], op: p8_runtime::ops::BinOp, start: Va
 }
 
 fn array_sum(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    fold(ctx, args, p8_runtime::ops::BinOp::Add, Value::Int(0), "Addition")
+    fold(ctx, args, p8_runtime::ops::BinOp::Add, Value::int(0), "Addition")
 }
 
 fn array_product(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    fold(ctx, args, p8_runtime::ops::BinOp::Mul, Value::Int(1), "Multiplication")
+    fold(ctx, args, p8_runtime::ops::BinOp::Mul, Value::int(1), "Multiplication")
 }
 
 fn array_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -348,7 +347,7 @@ fn array_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Err(ctx.throw("ValueError", "array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size".into()));
     }
     if target <= a.len() {
-        return Ok(Value::Array(a));
+        return Ok(Value::array(a));
     }
     let fill = vec![value; target - a.len()];
     let mut out = PhpArray::new();
@@ -375,36 +374,36 @@ fn array_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn array_key_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).iter().next().map_or(Value::Null, |(k, _)| k.to_value()))
+    Ok(arr(args, 0).iter().next().map_or(Value::NULL, |(k, _)| k.to_value()))
 }
 
 fn array_key_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).iter().last().map_or(Value::Null, |(k, _)| k.to_value()))
+    Ok(arr(args, 0).iter().last().map_or(Value::NULL, |(k, _)| k.to_value()))
 }
 
 /// array_first(array $array): mixed (PHP 8.5): the first value, dereferenced
 /// (RETURN_COPY_DEREF), or null for an empty array.
 fn array_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).values().next().map_or(Value::Null, Value::deref))
+    Ok(arr(args, 0).values().next().map_or(Value::NULL, Value::deref))
 }
 
 /// array_last(array $array): mixed (PHP 8.5): the last value, dereferenced,
 /// or null for an empty array.
 fn array_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).values().last().map_or(Value::Null, Value::deref))
+    Ok(arr(args, 0).values().last().map_or(Value::NULL, Value::deref))
 }
 
 fn array_count_values(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut out = PhpArray::new();
     for v in arr(args, 0).values() {
-        match v.deref() {
-            v @ (Value::Int(_) | Value::Str(_)) => {
-                if let Ok((key, _)) = Key::from_value(&v) {
-                    let n = out.get(&key).map_or(0, Value::to_int);
-                    out.insert(key, Value::Int(n + 1));
-                }
+        let v = v.deref();
+        if v.is_int() || v.is_str() {
+            if let Ok((key, _)) = Key::from_value(&v) {
+                let n = out.get(&key).map_or(0, Value::to_int);
+                out.insert(key, Value::int(n + 1));
             }
-            _ => ctx.warn("array_count_values(): Can only count string and integer values, entry skipped"),
+        } else {
+            ctx.warn("array_count_values(): Can only count string and integer values, entry skipped");
         }
     }
     array(out)
@@ -425,11 +424,11 @@ fn array_chunk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             let _ = chunk.push(v.clone());
         }
         if chunk.len() as i64 == size {
-            chunks.push(Value::Array(Rc::new(std::mem::take(&mut chunk))));
+            chunks.push(Value::array(std::mem::take(&mut chunk)));
         }
     }
     if !chunk.is_empty() {
-        chunks.push(Value::Array(Rc::new(chunk)));
+        chunks.push(Value::array(chunk));
     }
     list(chunks)
 }
@@ -493,7 +492,7 @@ fn array_replace(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn array_is_list(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(arr(args, 0).is_list()))
+    Ok(Value::bool(arr(args, 0).is_list()))
 }
 
 fn array_push(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -507,14 +506,14 @@ fn array_push(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Ok(a.len() as i64)
     });
     match pushed {
-        Some(Ok(n)) => Ok(Value::Int(n)),
+        Some(Ok(n)) => Ok(Value::int(n)),
         Some(Err(())) => Err(ctx.throw("Error", "Cannot add element to the array as the next element is already occupied".into())),
-        None => Ok(Value::Null),
+        None => Ok(Value::NULL),
     }
 }
 
 fn array_pop(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(with_array(args, PhpArray::pop).flatten().unwrap_or(Value::Null))
+    Ok(with_array(args, PhpArray::pop).flatten().unwrap_or(Value::NULL))
 }
 
 /// The entries again, int keys renumbered from 0 (string keys kept).
@@ -538,7 +537,7 @@ fn array_shift(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         *a = renumbered(entries);
         first
     });
-    Ok(shifted.flatten().unwrap_or(Value::Null))
+    Ok(shifted.flatten().unwrap_or(Value::NULL))
 }
 
 fn array_unshift(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -549,7 +548,7 @@ fn array_unshift(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         *a = renumbered(front.chain(rest));
         a.len() as i64
     });
-    Ok(n.map_or(Value::Null, Value::Int))
+    Ok(n.map_or(Value::NULL, Value::int))
 }
 
 /// How sort() and friends compare two values for `$flags`: SORT_REGULAR
@@ -574,11 +573,11 @@ fn regular(a: &Value, b: &Value) -> Ordering {
     use p8_runtime::object::CLASS_ENUM;
     match a.compare(b) {
         Some(o) => o,
-        None => match (a, b) {
-            (Value::Object(x), Value::Object(y)) if y.class.flags & CLASS_ENUM != 0 && x.class.flags & CLASS_ENUM != 0 => {
+        None => match (a.as_object(), b.as_object()) {
+            (Some(x), Some(y)) if y.class.flags & CLASS_ENUM != 0 && x.class.flags & CLASS_ENUM != 0 => {
                 (Rc::as_ptr(x) as usize).cmp(&(Rc::as_ptr(y) as usize))
             }
-            (_, Value::Object(y)) if y.class.flags & CLASS_ENUM != 0 => Ordering::Less,
+            (_, Some(y)) if y.class.flags & CLASS_ENUM != 0 => Ordering::Less,
             _ => Ordering::Greater,
         },
     }
@@ -592,33 +591,37 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let mut arrays: Vec<(usize, bool, i64)> = Vec::new();
     let (mut order_free, mut type_free) = (false, false);
     for (i, a) in args.iter().enumerate() {
-        match a.deref() {
-            Value::Array(_) => {
+        let a = a.deref();
+        match a.kind() {
+            Kind::Array => {
                 arrays.push((i, false, 0));
                 (order_free, type_free) = (true, true);
             }
-            Value::Int(n) => match n & !8 {
-                3 | 4 if order_free => {
-                    arrays.last_mut().expect("an array before").1 = n == 3;
-                    order_free = false;
+            Kind::Int => {
+                let n = a.as_int().expect("an int");
+                match n & !8 {
+                    3 | 4 if order_free => {
+                        arrays.last_mut().expect("an array before").1 = n == 3;
+                        order_free = false;
+                    }
+                    0 | 1 | 2 | 5 | 6 if type_free => {
+                        arrays.last_mut().expect("an array before").2 = n;
+                        type_free = false;
+                    }
+                    0..=6 => {
+                        return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified", i + 1)));
+                    }
+                    _ => return Err(ctx.throw("ValueError", format!("array_multisort(): Argument #{} must be a valid sort flag", i + 1))),
                 }
-                0 | 1 | 2 | 5 | 6 if type_free => {
-                    arrays.last_mut().expect("an array before").2 = n;
-                    type_free = false;
-                }
-                0..=6 => {
-                    return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified", i + 1)));
-                }
-                _ => return Err(ctx.throw("ValueError", format!("array_multisort(): Argument #{} must be a valid sort flag", i + 1))),
-            },
+            }
             _ => return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag", i + 1))),
         }
     }
     let columns: Vec<Vec<(Key, Value)>> = arrays
         .iter()
-        .map(|(i, _, _)| match args[*i].deref() {
-            Value::Array(a) => a.iter().map(|(k, v)| (k, v.clone())).collect(),
-            _ => Vec::new(),
+        .map(|(i, _, _)| match args[*i].deref().as_array() {
+            Some(a) => a.iter().map(|(k, v)| (k, v.clone())).collect(),
+            None => Vec::new(),
         })
         .collect();
     let size = columns[0].len();
@@ -626,7 +629,7 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
         return Err(ctx.throw("ValueError", "Array sizes are inconsistent".into()));
     }
     if size == 0 {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     let orders: Vec<_> = arrays.iter().map(|(_, desc, flags)| (*desc, order(*flags))).collect();
     let mut rows: Vec<usize> = (0..size).collect();
@@ -652,11 +655,11 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
                 }
             }
         }
-        if let Value::Ref(cell) = &args[*i] {
-            *cell.borrow_mut() = Value::Array(Rc::new(out));
+        if let Some(cell) = args[*i].as_reference() {
+            *cell.borrow_mut() = Value::array(out);
         }
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn key_value(k: &Key) -> Value {
@@ -693,7 +696,7 @@ fn sort_with(args: &[Value], by_key: bool, reverse: bool, keep_keys: bool) -> Re
             PhpArray::from_list(entries.into_iter().map(|(_, v)| v).collect())
         };
     });
-    Ok(Value::Bool(done.is_some()))
+    Ok(Value::bool(done.is_some()))
 }
 
 fn sort(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

@@ -172,7 +172,7 @@ fn hex(bytes: &[u8]) -> Vec<u8> {
 
 /// The digest as a binary string, or its hex (`binary` false).
 fn shown(d: Vec<u8>, binary: bool) -> Value {
-    Value::Str(PhpStr::new(if binary { d } else { hex(&d) }))
+    Value::str(PhpStr::new(if binary { d } else { hex(&d) }))
 }
 
 fn binary(args: &[Value], i: usize) -> bool {
@@ -189,7 +189,7 @@ fn sha1(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// crc32(): the checksum as an int.
 fn crc32(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(i64::from(crc32fast::hash(str_arg(args, 0).as_bytes()))))
+    Ok(Value::int(i64::from(crc32fast::hash(str_arg(args, 0).as_bytes()))))
 }
 
 fn read_file(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Option<Vec<u8>> {
@@ -203,12 +203,12 @@ fn read_file(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Option<Vec<u8>> {
 }
 
 fn md5_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(b) = read_file(ctx, "md5_file", &str_arg(args, 0)) else { return Ok(Value::Bool(false)) };
+    let Some(b) = read_file(ctx, "md5_file", &str_arg(args, 0)) else { return Ok(Value::FALSE) };
     Ok(shown(digest("md5", &b).expect("md5"), binary(args, 1)))
 }
 
 fn sha1_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(b) = read_file(ctx, "sha1_file", &str_arg(args, 0)) else { return Ok(Value::Bool(false)) };
+    let Some(b) = read_file(ctx, "sha1_file", &str_arg(args, 0)) else { return Ok(Value::FALSE) };
     Ok(shown(digest("sha1", &b).expect("sha1"), binary(args, 1)))
 }
 
@@ -222,10 +222,7 @@ fn algo(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<String, Throw> 
 
 /// The `seed` in an options array (murmur, xxhash).
 fn seed_option(args: &[Value], i: usize) -> Option<u64> {
-    match args.get(i).map(Value::deref) {
-        Some(Value::Array(a)) => a.get(&p8_runtime::array::Key::from_string(PhpStr::from("seed"))).map(|v| v.to_int() as u64),
-        _ => None,
-    }
+    args.get(i).map(Value::deref)?.as_array().and_then(|a| a.get(&p8_runtime::array::Key::from_string(PhpStr::from("seed"))).map(|v| v.to_int() as u64))
 }
 
 /// hash(string $algo, string $data, bool $binary = false, array $options = [])
@@ -236,7 +233,7 @@ fn hash(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn hash_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = algo(ctx, "hash_file", args)?;
-    let Some(b) = read_file(ctx, "hash_file", &str_arg(args, 1)) else { return Ok(Value::Bool(false)) };
+    let Some(b) = read_file(ctx, "hash_file", &str_arg(args, 1)) else { return Ok(Value::FALSE) };
     Ok(shown(digest(&name, &b).expect("a known algorithm"), binary(args, 2)))
 }
 
@@ -298,21 +295,22 @@ pub static CLASSES: &[ClassSpec] = &[ClassSpec {
 
 /// The HashContext in argument 0, not yet finalized.
 fn context(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<Rc<Object>, Throw> {
-    match arg(args, 0) {
-        Value::Object(o) if o.class.name.as_bytes() == b"HashContext" => {
-            if crate::spl::get(&o, DONE).to_bool() {
+    let v = arg(args, 0);
+    match v.as_object() {
+        Some(o) if o.class.name.as_bytes() == b"HashContext" => {
+            if crate::spl::get(o, DONE).to_bool() {
                 return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($context) must be a valid, non-finalized HashContext")));
             }
-            Ok(o)
+            Ok(Rc::clone(o))
         }
-        v => Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($context) must be of type HashContext, {} given", v.type_name()))),
+        _ => Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($context) must be of type HashContext, {} given", v.type_name()))),
     }
 }
 
 fn append(o: &Object, bytes: &[u8]) {
     let mut data = crate::spl::get(o, DATA).to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec();
     data.extend_from_slice(bytes);
-    crate::spl::set(o, DATA, Value::Str(PhpStr::new(data)));
+    crate::spl::set(o, DATA, Value::str(PhpStr::new(data)));
 }
 
 /// hash_init(string $algo, int $flags = 0, string $key = "", array $options = [])
@@ -332,16 +330,16 @@ fn hash_init(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = ctx.new_instance(&class, &mut [], false)?;
     crate::spl::set(&o, ALGO, Value::str(name.as_str()));
     if hmac {
-        crate::spl::set(&o, KEY, Value::Str(key));
+        crate::spl::set(&o, KEY, Value::str(key));
     }
-    Ok(Value::Object(o))
+    Ok(Value::object(o))
 }
 
 /// hash_update(HashContext $context, string $data): true
 fn hash_update(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context(ctx, "hash_update", args)?;
     append(&o, str_arg(args, 1).as_bytes());
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// hash_update_stream(HashContext $context, resource $stream, int $length = -1): bytes read
@@ -352,15 +350,15 @@ fn hash_update_stream(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
     let r = p8_runtime::stream::resource(&s).expect("a stream resource");
     let bytes = if length < 0 { r.stream.borrow_mut().read_all() } else { r.stream.borrow_mut().read(length as usize) };
     append(&o, &bytes);
-    Ok(Value::Int(bytes.len() as i64))
+    Ok(Value::int(bytes.len() as i64))
 }
 
 /// hash_update_file(HashContext $context, string $filename, ?resource $stream_context = null)
 fn hash_update_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context(ctx, "hash_update_file", args)?;
-    let Some(bytes) = read_file(ctx, "hash_update_file", &str_arg(args, 1)) else { return Ok(Value::Bool(false)) };
+    let Some(bytes) = read_file(ctx, "hash_update_file", &str_arg(args, 1)) else { return Ok(Value::FALSE) };
     append(&o, &bytes);
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// hash_final(HashContext $context, bool $binary = false): the digest; the context is done.
@@ -369,11 +367,11 @@ fn hash_final(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = crate::spl::get(&o, ALGO).to_php_string().unwrap_or_else(PhpStr::empty);
     let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
     let data = crate::spl::get(&o, DATA).to_php_string().unwrap_or_else(PhpStr::empty);
-    let d = match crate::spl::get(&o, KEY) {
-        Value::Str(key) => hmac(&name, key.as_bytes(), data.as_bytes()),
-        _ => digest(&name, data.as_bytes()).expect("a known algorithm"),
+    let d = match crate::spl::get(&o, KEY).as_str() {
+        Some(key) => hmac(&name, key.as_bytes(), data.as_bytes()),
+        None => digest(&name, data.as_bytes()).expect("a known algorithm"),
     };
-    crate::spl::set(&o, DONE, Value::Bool(true));
+    crate::spl::set(&o, DONE, Value::TRUE);
     crate::spl::set(&o, DATA, Value::str(""));
     Ok(shown(d, binary(args, 1)))
 }
@@ -385,7 +383,7 @@ fn hash_copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     for name in [ALGO, DATA, KEY, DONE] {
         crate::spl::set(&copy, name, crate::spl::get(&o, name));
     }
-    Ok(Value::Object(copy))
+    Ok(Value::object(copy))
 }
 
 /// The algorithm in argument 0, for a function needing a cryptographic one.
@@ -426,7 +424,7 @@ fn hash_hkdf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         i = i.wrapping_add(1);
     }
     out.truncate(length);
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// hash_pbkdf2(string $algo, string $password, string $salt, int $iterations, int $length = 0, bool $binary = false)
@@ -466,28 +464,28 @@ fn hash_pbkdf2(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     if raw {
         out.truncate(want);
-        Ok(Value::Str(PhpStr::new(out)))
+        Ok(Value::str(PhpStr::new(out)))
     } else {
         let mut h = hex(&out);
         h.truncate(want);
-        Ok(Value::Str(PhpStr::new(h)))
+        Ok(Value::str(PhpStr::new(h)))
     }
 }
 
 fn hash_algos(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(ALGOS.iter().map(|a| Value::str(*a)).collect()))))
+    Ok(Value::array(PhpArray::from_list(ALGOS.iter().map(|a| Value::str(*a)).collect())))
 }
 
 /// hash_hmac_algos(): the cryptographic ones.
 fn hash_hmac_algos(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(ALGOS.iter().filter(|a| !not_cryptographic(a)).map(|a| Value::str(*a)).collect()))))
+    Ok(Value::array(PhpArray::from_list(ALGOS.iter().filter(|a| !not_cryptographic(a)).map(|a| Value::str(*a)).collect())))
 }
 
 /// hash_equals(string $known_string, string $user_string): compared in constant time.
 fn hash_equals(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     for (i, name) in [(0, "known_string"), (1, "user_string")] {
         let v = arg(args, i);
-        if !matches!(v, Value::Str(_)) {
+        if !v.is_str() {
             return Err(ctx.throw(
                 "TypeError",
                 format!("hash_equals(): Argument #{} (${name}) must be of type string, {} given", i + 1, v.type_name()),
@@ -496,8 +494,8 @@ fn hash_equals(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let (a, b) = (str_arg(args, 0), str_arg(args, 1));
     if a.len() != b.len() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let diff = a.as_bytes().iter().zip(b.as_bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y));
-    Ok(Value::Bool(diff == 0))
+    Ok(Value::bool(diff == 0))
 }

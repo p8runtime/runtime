@@ -11,7 +11,6 @@ use p8_runtime::value::Value;
 #[cfg(unix)]
 use std::net::SocketAddr;
 use std::net::{IpAddr, ToSocketAddrs};
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "gethostname", run: gethostname, by_ref: &[] },
@@ -37,7 +36,7 @@ fn path_arg(ctx: &mut dyn Ctx, args: &[Value], func: &str, name: &str) -> Result
 
 #[cfg(unix)]
 fn gethostname(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(dns_lookup::get_hostname().map_or(Value::Bool(false), Value::str))
+    Ok(dns_lookup::get_hostname().map_or(Value::FALSE, Value::str))
 }
 
 /// gethostname() on WASI: wasi-libc's, uname()'s node name.
@@ -74,13 +73,13 @@ fn gethostbynamel(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     let name = path_arg(ctx, args, "gethostbynamel", "hostname")?;
     if name.len() > MAX_NAME {
         ctx.warn(&format!("gethostbynamel(): Host name cannot be longer than {MAX_NAME} characters"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let found = ipv4s(&name);
     if found.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(found.into_iter().map(Value::str).collect()))))
+    Ok(Value::array(PhpArray::from_list(found.into_iter().map(Value::str).collect())))
 }
 
 /// gethostbyaddr($ip): the name the address reverses to, the address
@@ -89,7 +88,7 @@ fn gethostbyaddr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     let ip = path_arg(ctx, args, "gethostbyaddr", "ip")?;
     let Ok(addr) = ip.parse::<IpAddr>() else {
         ctx.warn("gethostbyaddr(): Address is not a valid IPv4 or IPv6 address");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     match reverse(addr) {
         Some(name) => Ok(Value::str(name)),
@@ -114,22 +113,22 @@ fn reverse(_: IpAddr) -> Option<String> {
 /// not one (glibc's inet_pton: no leading zeros, IPv4 written in full).
 fn inet_pton(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let text = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
-    let Ok(text) = std::str::from_utf8(text.as_bytes()) else { return Ok(Value::Bool(false)) };
+    let Ok(text) = std::str::from_utf8(text.as_bytes()) else { return Ok(Value::FALSE) };
     let bytes = if text.contains(':') {
         text.parse::<std::net::Ipv6Addr>().map(|a| a.octets().to_vec())
     } else {
         text.parse::<std::net::Ipv4Addr>().map(|a| a.octets().to_vec())
     };
-    Ok(bytes.map_or(Value::Bool(false), |b| Value::Str(PhpStr::new(b))))
+    Ok(bytes.map_or(Value::FALSE, |b| Value::str(PhpStr::new(b))))
 }
 
 /// inet_ntop($ip): a 4- or 16-byte address as text, as glibc writes it.
 fn inet_ntop(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let bin = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
     Ok(match bin.as_bytes() {
-        [a, b, c, d] => Value::Str(PhpStr::from(format!("{a}.{b}.{c}.{d}"))),
-        b if b.len() == 16 => Value::Str(PhpStr::from(ipv6_text(b))),
-        _ => Value::Bool(false),
+        [a, b, c, d] => Value::str(PhpStr::from(format!("{a}.{b}.{c}.{d}"))),
+        b if b.len() == 16 => Value::str(PhpStr::from(ipv6_text(b))),
+        _ => Value::FALSE,
     })
 }
 
@@ -183,13 +182,13 @@ fn ipv6_text(b: &[u8]) -> String {
 fn ip2long(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let ip = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
     Ok(match std::str::from_utf8(ip.as_bytes()).ok().and_then(|s| s.parse::<std::net::Ipv4Addr>().ok()) {
-        Some(a) => Value::Int(i64::from(u32::from(a))),
-        None => Value::Bool(false),
+        Some(a) => Value::int(i64::from(u32::from(a))),
+        None => Value::FALSE,
     })
 }
 
 /// long2ip(int $ip): string: the low 32 bits as a dotted IPv4 address.
 fn long2ip(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let n = arg(args, 0).to_int() as u32;
-    Ok(Value::Str(PhpStr::from(std::net::Ipv4Addr::from(n).to_string().as_str())))
+    Ok(Value::str(PhpStr::from(std::net::Ipv4Addr::from(n).to_string().as_str())))
 }

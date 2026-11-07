@@ -5,8 +5,7 @@ use p8_runtime::array::PhpArray;
 use p8_runtime::ext::{Ctx, Throw};
 use p8_runtime::numeric::{numeric_string, Number};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
-use std::rc::Rc;
+use p8_runtime::value::{Kind as ValueKind, Value};
 
 /// HT_MAX_SIZE on 64-bit: the most entries an array may have.
 const MAX_SIZE: u64 = 0x4000_0000;
@@ -52,11 +51,14 @@ fn name(n: usize) -> &'static str {
 }
 
 fn input(ctx: &mut dyn Ctx, n: usize, v: &Value) -> Result<Input, Throw> {
-    Ok(match v {
-        Value::Int(i) => Input { kind: Kind::Long, long: *i, double: *i as f64 },
-        Value::Float(d) => Input { kind: Kind::Double, long: 0, double: finite(ctx, n, *d)? },
-        Value::Str(s) => {
-            let bytes = s.as_bytes();
+    Ok(match v.kind() {
+        ValueKind::Int => {
+            let i = v.as_int().expect("an int");
+            Input { kind: Kind::Long, long: i, double: i as f64 }
+        }
+        ValueKind::Float => Input { kind: Kind::Double, long: 0, double: finite(ctx, n, v.as_float().expect("a float"))? },
+        ValueKind::Str => {
+            let bytes = v.as_str().expect("a string").as_bytes();
             if bytes.is_empty() {
                 ctx.warn(&format!("range(): Argument #{n} (${}) must not be empty, casted to 0", name(n)));
                 return Ok(Input { kind: Kind::Long, long: 0, double: 0.0 });
@@ -72,25 +74,25 @@ fn input(ctx: &mut dyn Ctx, n: usize, v: &Value) -> Result<Input, Throw> {
                 }
             }
         }
-        other => Input { kind: Kind::Long, long: other.to_int(), double: other.to_int() as f64 },
+        _ => Input { kind: Kind::Long, long: v.to_int(), double: v.to_int() as f64 },
     })
 }
 
 fn list(values: Vec<Value>) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(values))))
+    Ok(Value::array(PhpArray::from_list(values)))
 }
 
 /// range($start, $end, $step = 1)
 pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let get = |i: usize| args.get(i).map(Value::deref);
-    let (user_start, user_end, user_step) = (get(0).unwrap_or(Value::Null), get(1).unwrap_or(Value::Null), get(2));
+    let (user_start, user_end, user_step) = (get(0).unwrap_or(Value::NULL), get(1).unwrap_or(Value::NULL), get(2));
     let mut step_double_is = false;
     let mut negative = false;
     let mut step_double = 1.0;
     let mut step: i64 = 1;
     if let Some(s) = &user_step {
-        if let Value::Float(d) = s {
-            step_double = finite(ctx, 3, *d)?;
+        if let Some(d) = s.as_float() {
+            step_double = finite(ctx, 3, d)?;
             if step_double < 0.0 {
                 negative = true;
                 step_double = -step_double;
@@ -151,7 +153,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
                 let mut out = Vec::new();
                 let mut c = from;
                 loop {
-                    out.push(Value::Str(PhpStr::byte(c as u8)));
+                    out.push(Value::str(PhpStr::byte(c as u8)));
                     let next = if down { c - step as i64 } else { c + step as i64 };
                     if (down && (next < to || next < 0)) || (!down && (next > to || next > 255)) {
                         break;
@@ -174,7 +176,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
                 }
                 list(chars(low, high, false))
             } else {
-                list(vec![Value::Str(PhpStr::byte(low as u8))])
+                list(vec![Value::str(PhpStr::byte(low as u8))])
             };
         }
     }
@@ -195,7 +197,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
             let mut i = 0u32;
             let mut element = from;
             while i < size && if down { element >= to } else { element <= to } {
-                out.push(Value::Float(element));
+                out.push(Value::float(element));
                 i += 1;
                 element = if down { from - (i as f64 * step_double) } else { from + (i as f64 * step_double) };
             }
@@ -215,7 +217,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
             }
             list(floats(s, e, false)?)
         } else {
-            list(vec![Value::Float(s)])
+            list(vec![Value::float(s)])
         };
     }
     let (s, e) = (start.long, end.long);
@@ -231,7 +233,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
         Ok((0..size)
             .map(|i| {
                 let d = i.wrapping_mul(ustep);
-                Value::Int(if down { (from as u64).wrapping_sub(d) as i64 } else { (from as u64).wrapping_add(d) as i64 })
+                Value::int(if down { (from as u64).wrapping_sub(d) as i64 } else { (from as u64).wrapping_add(d) as i64 })
             })
             .collect())
     };
@@ -249,7 +251,7 @@ pub(crate) fn range(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thro
         }
         list(ints(s, e, false)?)
     } else {
-        list(vec![Value::Int(s)])
+        list(vec![Value::int(s)])
     }
 }
 

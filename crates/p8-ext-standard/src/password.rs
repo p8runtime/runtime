@@ -15,7 +15,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "password_hash", run: password_hash, by_ref: &[] },
@@ -85,19 +84,21 @@ fn bcrypt_valid(hash: &[u8]) -> bool {
 /// The algorithm argument: null or 0 is the default, 1-3 the PASSWORD_*
 /// numbers, a string an identifier. None: unknown.
 fn algo_arg(v: &Value) -> Option<Algo> {
-    match v {
-        Value::Null => Some(Algo::Bcrypt),
-        Value::Int(0 | 1) => Some(Algo::Bcrypt),
-        Value::Int(2) => Some(Algo::Argon2i),
-        Value::Int(3) => Some(Algo::Argon2id),
-        Value::Int(_) => None,
-        other => Algo::by_ident(other.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+    if v.is_null() {
+        return Some(Algo::Bcrypt);
+    }
+    match v.as_int() {
+        Some(0 | 1) => Some(Algo::Bcrypt),
+        Some(2) => Some(Algo::Argon2i),
+        Some(3) => Some(Algo::Argon2id),
+        Some(_) => None,
+        None => Algo::by_ident(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
     }
 }
 
 /// An option's value as an integer (zval_get_long), if the options have it.
 fn option(options: &Value, name: &str) -> Option<i64> {
-    let Value::Array(a) = options else { return None };
+    let a = options.as_array()?;
     a.get(&Key::from_string(PhpStr::from(name))).map(|v| v.deref().to_int())
 }
 
@@ -285,7 +286,7 @@ fn crypt(key: &[u8], salt: &[u8]) -> Vec<u8> {
 /// crypt(string $string, string $salt): string
 fn crypt_fn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (key, salt) = (str_arg(args, 0), str_arg(args, 1));
-    Ok(Value::Str(PhpStr::new(crypt(key.as_bytes(), salt.as_bytes()))))
+    Ok(Value::str(PhpStr::new(crypt(key.as_bytes(), salt.as_bytes()))))
 }
 
 const ITOA64: &[u8; 64] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -510,7 +511,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 fn salt_given(options: &Value) -> bool {
-    matches!(options, Value::Array(a) if a.get(&Key::from_string(PhpStr::from("salt"))).is_some())
+    options.as_array().is_some_and(|a| a.get(&Key::from_string(PhpStr::from("salt"))).is_some())
 }
 
 fn password_hash(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -541,7 +542,7 @@ fn password_hash(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         Algo::Argon2i => argon2_hash(ctx, password.as_bytes(), &options, Algorithm::Argon2i, "argon2i")?,
         Algo::Argon2id => argon2_hash(ctx, password.as_bytes(), &options, Algorithm::Argon2id, "argon2id")?,
     };
-    Ok(Value::Str(PhpStr::new(hash)))
+    Ok(Value::str(PhpStr::new(hash)))
 }
 
 fn password_verify(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -549,7 +550,7 @@ fn password_verify(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     let hash = str_arg(args, 1);
     let (password, hash) = (password.as_bytes(), hash.as_bytes());
     // An unknown hash goes to bcrypt's check, which is crypt()'s.
-    Ok(Value::Bool(match Algo::of_hash(hash).unwrap_or(Algo::Bcrypt) {
+    Ok(Value::bool(match Algo::of_hash(hash).unwrap_or(Algo::Bcrypt) {
         Algo::Bcrypt => {
             let computed = crypt(password, hash);
             hash.len() >= 13 && computed.len() == hash.len() && computed.iter().zip(hash).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
@@ -561,13 +562,13 @@ fn password_verify(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 
 fn password_needs_rehash(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let hash = str_arg(args, 0);
-    let Some(new) = algo_arg(&arg(args, 1)) else { return Ok(Value::Bool(false)) };
+    let Some(new) = algo_arg(&arg(args, 1)) else { return Ok(Value::FALSE) };
     let options = arg(args, 2);
     let old = Algo::of_hash(hash.as_bytes());
     if old != Some(new) {
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
-    Ok(Value::Bool(match new {
+    Ok(Value::bool(match new {
         Algo::Bcrypt => bcrypt_cost(hash.as_bytes()) != option(&options, "cost").unwrap_or(BCRYPT_COST),
         Algo::Argon2i | Algo::Argon2id => {
             let (_, m, t, p) = argon2_params(hash.as_bytes()).unwrap_or_default();
@@ -592,7 +593,7 @@ fn password_get_info(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let mut options = PhpArray::new();
     match Algo::of_hash(hash) {
         None => {
-            info.insert(key("algo"), Value::Null);
+            info.insert(key("algo"), Value::NULL);
             info.insert(key("algoName"), Value::str("unknown"));
         }
         Some(algo) => {
@@ -600,24 +601,24 @@ fn password_get_info(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
             info.insert(key("algoName"), Value::str(algo.name()));
             match algo {
                 Algo::Bcrypt => {
-                    options.insert(key("cost"), Value::Int(bcrypt_cost(hash)));
+                    options.insert(key("cost"), Value::int(bcrypt_cost(hash)));
                 }
                 Algo::Argon2i | Algo::Argon2id => {
                     let (_, m, t, p) = argon2_params(hash).unwrap_or((0, ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_THREADS));
-                    options.insert(key("memory_cost"), Value::Int(m));
-                    options.insert(key("time_cost"), Value::Int(t));
-                    options.insert(key("threads"), Value::Int(p));
+                    options.insert(key("memory_cost"), Value::int(m));
+                    options.insert(key("time_cost"), Value::int(t));
+                    options.insert(key("threads"), Value::int(p));
                 }
             }
         }
     }
-    info.insert(key("options"), Value::Array(Rc::new(options)));
-    Ok(Value::Array(Rc::new(info)))
+    info.insert(key("options"), Value::array(options));
+    Ok(Value::array(info))
 }
 
 fn password_algos(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let algos = [Algo::Bcrypt, Algo::Argon2i, Algo::Argon2id].map(|a| Value::str(a.ident()));
-    Ok(Value::Array(Rc::new(PhpArray::from_list(algos.to_vec()))))
+    Ok(Value::array(PhpArray::from_list(algos.to_vec())))
 }
 
 #[cfg(test)]

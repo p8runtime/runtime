@@ -9,7 +9,7 @@ use p8_runtime::args::value_name;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::io::Write;
 
 pub static BUILTINS: &[Builtin] = &[Builtin { name: "mail", run: mail, by_ref: &[] }];
@@ -32,8 +32,9 @@ fn mail(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let message = path(ctx, 2, "message")?;
     let extra = if args.len() > 4 { Some(path(ctx, 4, "additional_params")?) } else { None };
     let headers = match args.get(3).map(Value::deref) {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(h)) => build_headers(ctx, &h)?,
+        None => Vec::new(),
+        Some(v) if v.is_null() => Vec::new(),
+        Some(v) if v.is_array() => build_headers(ctx, v.as_array().expect("an array"))?,
         Some(other) => {
             let h = other.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec();
             if h.contains(&0) {
@@ -51,10 +52,10 @@ fn mail(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let sep: &[u8] = if ini_on(ctx, b"mail.mixed_lf_and_crlf") { b"\n" } else { b"\r\n" };
     if !headers.is_empty() && malformed_newlines(&headers) {
         ctx.warn("mail(): Multiple or malformed newlines found in additional_header");
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let Some(sendmail) = ctx.ini_get(b"sendmail_path").and_then(|v| v.to_php_string()) else {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     let mut command = sendmail.as_bytes().to_vec();
     if let Some(extra) = &extra {
@@ -78,14 +79,14 @@ fn mail(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let Ok(mut child) = cmd.spawn() else {
         let path = String::from_utf8_lossy(sendmail.as_bytes()).into_owned();
         ctx.warn(&format!("mail(): Could not execute mail delivery program '{path}'"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
     // A program that stops reading early still gets its status read.
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&body);
     }
     let status = child.wait().ok().and_then(|s| s.code());
-    Ok(Value::Bool(matches!(status, Some(EX_OK | EX_TEMPFAIL))))
+    Ok(Value::bool(matches!(status, Some(EX_OK | EX_TEMPFAIL))))
 }
 
 fn ini_on(ctx: &mut dyn Ctx, name: &[u8]) -> bool {
@@ -161,9 +162,11 @@ fn build_headers(ctx: &mut dyn Ctx, headers: &PhpArray) -> Result<Vec<u8>, Throw
             "subject" => return Err(ctx.throw("ValueError", "The additional headers cannot contain the \"Subject\" header".into())),
             _ => {}
         }
-        match v.deref() {
-            Value::Str(s) => header(ctx, &mut out, &shown, s.as_bytes())?,
-            Value::Array(list) => {
+        let v = v.deref();
+        match v.kind() {
+            Kind::Str => header(ctx, &mut out, &shown, v.as_str().expect("a string").as_bytes())?,
+            Kind::Array => {
+                let list = v.as_array().expect("an array");
                 if let Some(single) = SINGLE.iter().find(|n| **n == lower) {
                     return Err(ctx.throw("TypeError", format!("Header \"{single}\" must be of type string, array given")));
                 }
@@ -172,13 +175,13 @@ fn build_headers(ctx: &mut dyn Ctx, headers: &PhpArray) -> Result<Vec<u8>, Throw
                         let key = String::from_utf8_lossy(s.as_bytes()).into_owned();
                         return Err(ctx.throw("TypeError", format!("Header \"{shown}\" must only contain numeric keys, \"{key}\" found")));
                     }
-                    let Value::Str(s) = v.deref() else {
+                    let Some(s) = v.deref().cloned_str() else {
                         return Err(ctx.throw("TypeError", format!("Header \"{shown}\" must only contain values of type string, {} found", value_name(v))));
                     };
                     header(ctx, &mut out, &shown, s.as_bytes())?;
                 }
             }
-            other => return Err(ctx.throw("TypeError", format!("Header \"{shown}\" must be of type array|string, {} given", value_name(&other)))),
+            _ => return Err(ctx.throw("TypeError", format!("Header \"{shown}\" must be of type array|string, {} given", value_name(&v)))),
         }
     }
     // The last line's CRLF goes.

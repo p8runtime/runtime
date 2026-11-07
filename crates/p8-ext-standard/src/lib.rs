@@ -257,7 +257,7 @@ fn register(registry: &mut Registry) {
 }
 
 fn arg(args: &[Value], i: usize) -> Value {
-    args.get(i).map(Value::deref).unwrap_or(Value::Null)
+    args.get(i).map(Value::deref).unwrap_or(Value::NULL)
 }
 
 fn str_arg(args: &[Value], i: usize) -> PhpStr {
@@ -265,59 +265,59 @@ fn str_arg(args: &[Value], i: usize) -> PhpStr {
 }
 
 fn strlen(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(str_arg(args, 0).len() as i64))
+    Ok(Value::int(str_arg(args, 0).len() as i64))
 }
 
 fn str_repeat(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let s = str_arg(args, 0);
     let n = arg(args, 1).to_int().max(0) as usize;
-    Ok(Value::Str(PhpStr::new(s.as_bytes().repeat(n))))
+    Ok(Value::str(PhpStr::new(s.as_bytes().repeat(n))))
 }
 
 fn count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mode = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
-    Ok(Value::Int(match arg(args, 0) {
-        Value::Array(a) if mode == 1 => count_recursive(&a),
-        Value::Array(a) => a.len() as i64,
+    let v = arg(args, 0);
+    Ok(Value::int(if let Some(a) = v.as_array() {
+        if mode == 1 { count_recursive(a) } else { a.len() as i64 }
+    } else if let Some(o) = v.as_object().filter(|o| o.class.is_a(b"countable")) {
         // A Countable: its count().
-        Value::Object(o) if o.class.is_a(b"countable") => {
-            let callable = Value::Array(std::rc::Rc::new(PhpArray::from_list(vec![Value::Object(o), Value::str("count")])));
-            ctx.call(&callable, &mut [])?.to_int()
-        }
-        _ => 1,
+        let callable = Value::array(PhpArray::from_list(vec![Value::object(o.clone()), Value::str("count")]));
+        ctx.call(&callable, &mut [])?.to_int()
+    } else {
+        1
     }))
 }
 
 /// count($a, COUNT_RECURSIVE)
 fn count_recursive(a: &PhpArray) -> i64 {
-    a.values().map(|v| match v.deref() {
-        Value::Array(inner) => 1 + count_recursive(&inner),
-        _ => 1,
+    a.values().map(|v| match v.deref().as_array() {
+        Some(inner) => 1 + count_recursive(inner),
+        None => 1,
     }).sum()
 }
 
 fn dechex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut digits = Vec::with_capacity(16);
     p8_runtime::numeric::push_digits(&mut digits, arg(args, 0).to_int() as u64, 16, false);
-    Ok(Value::Str(PhpStr::new(digits)))
+    Ok(Value::str(PhpStr::new(digits)))
 }
 
 fn hrtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     thread_local!(static START: std::time::Instant = std::time::Instant::now());
     let ns = START.with(|s| s.elapsed().as_nanos()) as i64;
     if arg(args, 0).to_bool() {
-        return Ok(Value::Int(ns));
+        return Ok(Value::int(ns));
     }
-    Ok(Value::Array(Rc::new(PhpArray::from_list(vec![
-        Value::Int(ns / 1_000_000_000),
-        Value::Int(ns % 1_000_000_000),
+    Ok(Value::array(Rc::new(PhpArray::from_list(vec![
+        Value::int(ns / 1_000_000_000),
+        Value::int(ns % 1_000_000_000),
     ]))))
 }
 
 fn microtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     if arg(args, 0).to_bool() {
-        return Ok(Value::Float(now.as_secs_f64()));
+        return Ok(Value::float(now.as_secs_f64()));
     }
     Ok(Value::str(format!("{:.8} {}", now.subsec_nanos() as f64 / 1e9, now.as_secs())))
 }
@@ -328,7 +328,7 @@ fn number_format(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let decimals = arg(args, 1).to_int().max(0) as usize;
     // ?string $decimal_separator = ".", ?string $thousands_separator = ",":
     // null (or not given) is the default (math.c, PHP_FUNCTION(number_format)).
-    let given = |args: &[Value], i: usize| args.get(i).is_some_and(|v| !matches!(v.deref(), Value::Null));
+    let given = |args: &[Value], i: usize| args.get(i).is_some_and(|v| !v.deref().is_null());
     let point = if given(args, 2) { str_arg(args, 2).as_bytes().to_vec() } else { b".".to_vec() };
     let sep = if given(args, 3) { str_arg(args, 3).as_bytes().to_vec() } else { b",".to_vec() };
     // _php_math_round: round half away from zero at `decimals` places
@@ -350,18 +350,18 @@ fn number_format(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         out.extend_from_slice(&point);
         out.extend_from_slice(frac.as_bytes());
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn printf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let out = printf::formatted(ctx, "printf", str_arg(args, 0).as_bytes(), &args[1..], printf::Missing::Count(1))?;
     ctx.echo(&out);
-    Ok(Value::Int(out.len() as i64))
+    Ok(Value::int(out.len() as i64))
 }
 
 fn sprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let out = printf::formatted(ctx, "sprintf", str_arg(args, 0).as_bytes(), &args[1..], printf::Missing::Count(1))?;
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 /// ob_start($callback = null, $chunk_size = 0, $flags = PHP_OUTPUT_HANDLER_STDFLAGS)
@@ -374,7 +374,7 @@ fn ob_start(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// An ob_* operation that needs a buffer: PHP's notice when there is none.
 fn ob_or_notice(ctx: &mut dyn Ctx, op: Ob, notice: &str) -> Result<Value, Throw> {
     let r = ctx.ob(op)?;
-    if matches!(r, Value::Bool(false)) {
+    if r.as_bool() == Some(false) {
         ctx.notice(notice);
     }
     Ok(r)
@@ -411,7 +411,7 @@ fn ob_get_level(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// ob_get_clean(): the contents, and the buffer removed (false without one).
 fn ob_get_clean(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let contents = ctx.ob(Ob::Contents)?;
-    if matches!(contents, Value::Bool(false)) {
+    if contents.as_bool() == Some(false) {
         return Ok(contents);
     }
     ctx.ob(Ob::End { flush: false })?;
@@ -421,7 +421,7 @@ fn ob_get_clean(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// ob_get_flush(): the contents, and the buffer flushed and removed.
 fn ob_get_flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let contents = ctx.ob(Ob::Contents)?;
-    if matches!(contents, Value::Bool(false)) {
+    if contents.as_bool() == Some(false) {
         ctx.notice("ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush");
         return Ok(contents);
     }
@@ -438,22 +438,22 @@ fn ob_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 }
 
 fn ob_implicit_flush(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     ctx.flush_output();
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn function_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(ctx.function_exists(str_arg(args, 0).as_bytes())))
+    Ok(Value::bool(ctx.function_exists(str_arg(args, 0).as_bytes())))
 }
 
 /// extension_loaded(string $extension): any case.
 fn extension_loaded(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
-    Ok(Value::Bool(ctx.modules().iter().any(|m| m.as_bytes().eq_ignore_ascii_case(name.as_bytes()))))
+    Ok(Value::bool(ctx.modules().iter().any(|m| m.as_bytes().eq_ignore_ascii_case(name.as_bytes()))))
 }
 
 /// get_loaded_extensions(bool $zend_extensions = false): with
@@ -465,7 +465,7 @@ fn get_loaded_extensions(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     } else {
         ctx.modules().iter().map(|m| Value::str(*m)).collect()
     };
-    Ok(Value::Array(std::rc::Rc::new(PhpArray::from_list(names))))
+    Ok(Value::array(PhpArray::from_list(names)))
 }
 
 fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -487,9 +487,9 @@ fn define(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !ctx.define(name.as_bytes(), arg(args, 1)) {
         // zend_register_constant (8.5: redeclaring is on its way to an error)
         ctx.warn(&format!("Constant {} already defined, this will be an error in PHP 9", String::from_utf8_lossy(name.as_bytes())));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// defined($name): a constant, or a class constant (`A::B`, the class
@@ -498,14 +498,14 @@ fn defined(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = str_arg(args, 0);
     let text = name.as_bytes();
     if let Some(at) = text.windows(2).position(|w| w == b"::") {
-        return class::class_constant_defined(ctx, &text[..at], &text[at + 2..]).map(Value::Bool);
+        return class::class_constant_defined(ctx, &text[..at], &text[at + 2..]).map(Value::bool);
     }
-    Ok(Value::Bool(ctx.constant(text).is_some()))
+    Ok(Value::bool(ctx.constant(text).is_some()))
 }
 
 
 fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(ctx.call_args()))))
+    Ok(Value::array(PhpArray::from_list(ctx.call_args())))
 }
 
 /// range() for int bounds and step (the float and character forms come with the port).
@@ -513,14 +513,15 @@ fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// (even null), only the keys whose values match it.
 fn array_keys(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let filter = (args.len() > 1).then(|| (arg(args, 1), args.len() > 2 && arg(args, 2).to_bool()));
-    Ok(match arg(args, 0) {
-        Value::Array(a) => {
+    let v = arg(args, 0);
+    Ok(match v.as_array() {
+        Some(a) => {
             // Sized once: every key when there is no filter.
             let mut keys = Vec::with_capacity(if filter.is_none() { a.len() } else { 0 });
             keys.extend(a.iter().filter(|(_, v)| filter.as_ref().is_none_or(|(needle, strict)| array::matches(needle, &v.deref(), *strict))).map(|(k, _)| k.to_value()));
-            Value::Array(Rc::new(PhpArray::from_list(keys)))
+            Value::array(PhpArray::from_list(keys))
         }
-        _ => Value::Null,
+        None => Value::NULL,
     })
 }
 

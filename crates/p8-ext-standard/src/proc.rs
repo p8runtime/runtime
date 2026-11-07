@@ -51,7 +51,7 @@ fn descriptor(ctx: &mut dyn Ctx, fd: i64, spec: &Value) -> Result<Option<(Stdio,
             _ => (Stdio::inherit(), false),
         }));
     }
-    let Value::Array(parts) = spec.deref() else {
+    let Ok(parts) = spec.deref().into_array() else {
         return Err(ctx.throw("ValueError", "proc_open(): Argument #2 ($descriptor_spec) must only contain arrays and streams".into()));
     };
     let item = |i: i64| parts.get(&Key::Int(i)).map(Value::deref);
@@ -81,8 +81,8 @@ fn descriptor(ctx: &mut dyn Ctx, fd: i64, spec: &Value) -> Result<Option<(Stdio,
 /// proc_open(array|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null)
 fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let command = arg(args, 0);
-    let mut cmd = match &command {
-        Value::Array(parts) => {
+    let mut cmd = match command.as_array() {
+        Some(parts) => {
             let words: Vec<Vec<u8>> = parts.values().map(|v| v.deref().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec()).collect();
             let Some((program, rest)) = words.split_first() else {
                 return Err(ctx.throw("ValueError", "proc_open(): Argument #1 ($command) must have at least one element".into()));
@@ -91,22 +91,26 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             c.args(rest.iter().map(|a| std::ffi::OsStr::from_bytes(a)));
             c
         }
-        v => crate::process::shell(ctx, v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
+        None => crate::process::shell(ctx, command.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
     };
-    let display = match &command {
-        Value::Array(parts) => parts.values().map(text).collect::<Vec<_>>().join(" "),
-        v => text(v),
+    let display = match command.as_array() {
+        Some(parts) => parts.values().map(text).collect::<Vec<_>>().join(" "),
+        None => text(&command),
     };
-    if let Some(Value::Str(cwd)) = args.get(3).map(Value::deref) {
+    if let Some(cwd) = args.get(3).map(Value::deref)
+        && let Some(cwd) = cwd.as_str()
+    {
         cmd.current_dir(std::ffi::OsStr::from_bytes(cwd.as_bytes()));
     }
-    if let Some(Value::Array(env)) = args.get(4).map(Value::deref) {
+    if let Some(env) = args.get(4).map(Value::deref)
+        && let Some(env) = env.as_array()
+    {
         cmd.env_clear();
         for (k, v) in env.iter() {
             cmd.env(std::ffi::OsStr::from_bytes(k.into_value().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()), std::ffi::OsStr::from_bytes(v.deref().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()));
         }
     }
-    let Value::Array(spec) = arg(args, 1) else {
+    let Ok(spec) = arg(args, 1).into_array() else {
         return Err(ctx.throw("TypeError", "proc_open(): Argument #2 ($descriptor_spec) must be of type array".into()));
     };
     let mut piped = Vec::new();
@@ -131,7 +135,7 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Ok(c) => c,
         Err(e) => {
             ctx.warn(&format!("proc_open(): Exec failed: {}", crate::file::os_error(&e)));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     let mut pipes = PhpArray::new();
@@ -145,8 +149,8 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             pipes.insert(Key::Int(fd), new_stream(ctx, s));
         }
     }
-    if let Some(Value::Ref(cell)) = args.get(2) {
-        *cell.borrow_mut() = Value::Array(Rc::new(pipes));
+    if let Some(cell) = args.get(2).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::array(pipes);
     }
     let process = Stream::new(Target::Process(Box::new(child)), &display, "r");
     Ok(ctx.new_resource(Resource { kind: "process", closed: Cell::new(false), stream: RefCell::new(process) }))
@@ -169,7 +173,7 @@ fn proc_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let mut s = r.stream.borrow_mut();
     let command = s.path.clone();
     let reported = s.pos != 0;
-    let Target::Process(child) = &mut s.target else { return Ok(Value::Bool(false)) };
+    let Target::Process(child) = &mut s.target else { return Ok(Value::FALSE) };
     let pid = i64::from(child.id());
     let status = child.try_wait().ok().flatten();
     let (running, signaled, termsig, mut exitcode) = match status {
@@ -184,15 +188,15 @@ fn proc_get_status(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     }
     let mut out = PhpArray::new();
     let mut put = |k: &str, v: Value| out.insert(Key::from_string(PhpStr::from(k)), v);
-    put("command", Value::Str(PhpStr::from(command.as_str())));
-    put("pid", Value::Int(pid));
-    put("running", Value::Bool(running));
-    put("signaled", Value::Bool(signaled));
-    put("stopped", Value::Bool(false));
-    put("exitcode", Value::Int(exitcode));
-    put("termsig", Value::Int(termsig));
-    put("stopsig", Value::Int(0));
-    Ok(Value::Array(Rc::new(out)))
+    put("command", Value::str(PhpStr::from(command.as_str())));
+    put("pid", Value::int(pid));
+    put("running", Value::bool(running));
+    put("signaled", Value::bool(signaled));
+    put("stopped", Value::FALSE);
+    put("exitcode", Value::int(exitcode));
+    put("termsig", Value::int(termsig));
+    put("stopsig", Value::int(0));
+    Ok(Value::array(out))
 }
 
 /// proc_terminate(resource $process, int $signal = 15): the process is
@@ -201,8 +205,8 @@ fn proc_terminate(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     let o = process_arg(ctx, "proc_terminate", args)?;
     let r = resource(&o).expect("a process");
     let mut s = r.stream.borrow_mut();
-    let Target::Process(child) = &mut s.target else { return Ok(Value::Bool(false)) };
-    Ok(Value::Bool(child.kill().is_ok()))
+    let Target::Process(child) = &mut s.target else { return Ok(Value::FALSE) };
+    Ok(Value::bool(child.kill().is_ok()))
 }
 
 /// proc_close(resource $process): waits for the process; its exit code.
@@ -211,12 +215,12 @@ fn proc_close(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let r = resource(&o).expect("a process");
     let code = {
         let mut s = r.stream.borrow_mut();
-        let Target::Process(child) = &mut s.target else { return Ok(Value::Int(-1)) };
+        let Target::Process(child) = &mut s.target else { return Ok(Value::int(-1)) };
         drop(child.stdin.take());
         child.wait().ok().and_then(|st| st.code()).map_or(-1, i64::from)
     };
     r.closed.set(true);
-    Ok(Value::Int(code))
+    Ok(Value::int(code))
 }
 
 /// fsockopen(string $hostname, int $port = -1, &$error_code = null, &$error_message = null, ?float $timeout = null)
@@ -228,15 +232,15 @@ fn fsockopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(("tcp", rest)) => rest.to_string(),
         Some((scheme, _)) => {
             ctx.warn(&format!("fsockopen(): Unable to find the socket transport \"{scheme}\" - did you forget to enable it when you configured PHP?"));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
         None => hostname.clone(),
     };
     let target = if port >= 0 { if rest.contains(':') && !rest.starts_with('[') { format!("[{rest}]:{port}") } else { format!("{rest}:{port}") } } else { rest };
     let shown = format!("tcp://{target}");
     let timeout = match args.get(4).map(Value::deref) {
-        Some(Value::Null) | None => 60.0,
-        Some(v) => v.to_float(),
+        Some(v) if !v.is_null() => v.to_float(),
+        _ => 60.0,
     };
     let mut last = None;
     let mut stream = None;
@@ -259,20 +263,20 @@ fn fsockopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             Some(e) => (i64::from(e.raw_os_error().unwrap_or(0)), crate::file::os_error(e)),
             None => (0, String::new()),
         };
-        if let Some(Value::Ref(r)) = args.get(2) {
-            *r.borrow_mut() = Value::Int(code);
+        if let Some(r) = args.get(2).and_then(Value::as_reference) {
+            *r.borrow_mut() = Value::int(code);
         }
-        if let Some(Value::Ref(r)) = args.get(3) {
-            *r.borrow_mut() = Value::Str(PhpStr::from(message.as_str()));
+        if let Some(r) = args.get(3).and_then(Value::as_reference) {
+            *r.borrow_mut() = Value::str(PhpStr::from(message.as_str()));
         }
         ctx.warn(&format!("fsockopen(): Unable to connect to {shown} ({message})"));
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     };
-    if let Some(Value::Ref(r)) = args.get(2) {
-        *r.borrow_mut() = Value::Int(0);
+    if let Some(r) = args.get(2).and_then(Value::as_reference) {
+        *r.borrow_mut() = Value::int(0);
     }
-    if let Some(Value::Ref(r)) = args.get(3) {
-        *r.borrow_mut() = Value::Str(PhpStr::empty());
+    if let Some(r) = args.get(3).and_then(Value::as_reference) {
+        *r.borrow_mut() = Value::str(PhpStr::empty());
     }
     Ok(new_stream(ctx, Stream::new(Target::Tcp(sock), &shown, "r+")))
 }
@@ -282,12 +286,12 @@ fn stream_set_blocking(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
     let o = stream_arg(ctx, "stream_set_blocking", args, 0)?;
     let enable = arg(args, 1).to_bool();
     if is_user(&o) {
-        let mode = Value::Int(i64::from(enable));
-        return Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_BLOCKING, mode, None))?));
+        let mode = Value::int(i64::from(enable));
+        return Ok(Value::bool(with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_BLOCKING, mode, None))?));
     }
     let r = resource(&o).expect("a stream");
     r.stream.borrow_mut().nonblocking = !enable;
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 /// stream_set_chunk_size(resource $stream, int $size): the size before.
@@ -299,7 +303,7 @@ fn stream_set_chunk_size(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     }
     let r = resource(&o).expect("a stream");
     let old = std::mem::replace(&mut r.stream.borrow_mut().chunk_size, size);
-    Ok(Value::Int(old))
+    Ok(Value::int(old))
 }
 
 /// stream_select(?array &$read, ?array &$write, ?array &$except, ?int
@@ -308,10 +312,7 @@ fn stream_set_chunk_size(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 /// timeout (forever when null) for a read to be. Pipes are read on threads
 /// and sockets peeked, so the wait is a poll every millisecond.
 fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let list = |v: &Value| match v.deref() {
-        Value::Array(a) => Some(a),
-        _ => None,
-    };
+    let list = |v: &Value| v.deref().into_array().ok();
     let (read, write, except) = (args.first().and_then(list), args.get(1).and_then(list), args.get(2).and_then(list));
     if read.is_none() && write.is_none() && except.is_none() {
         return Err(ctx.throw("ValueError", "No stream arrays were passed".into()));
@@ -348,8 +349,7 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         }
     };
     let timeout = match args.get(3).map(Value::deref) {
-        None | Some(Value::Null) => None,
-        Some(v) => {
+        Some(v) if !v.is_null() => {
             let seconds = v.to_int();
             let micros = args.get(4).map(Value::deref).map_or(0, |v| v.to_int());
             if seconds < 0 {
@@ -360,6 +360,7 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
             }
             Some(Duration::from_secs(seconds as u64) + Duration::from_micros(micros as u64))
         }
+        _ => None,
     };
     let deadline = timeout.map(|t| std::time::Instant::now() + t);
     let mut writes = PhpArray::new();
@@ -392,16 +393,16 @@ fn stream_select(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
         }
     }
     let count = ready_reads.len() + writable;
-    if let (Some(Value::Ref(cell)), Some(_)) = (args.first(), &read) {
-        *cell.borrow_mut() = Value::Array(Rc::new(ready_reads));
+    if let (Some(cell), Some(_)) = (args.first().and_then(Value::as_reference), &read) {
+        *cell.borrow_mut() = Value::array(ready_reads);
     }
-    if let (Some(Value::Ref(cell)), Some(_)) = (args.get(1), &write) {
-        *cell.borrow_mut() = Value::Array(Rc::new(writes));
+    if let (Some(cell), Some(_)) = (args.get(1).and_then(Value::as_reference), &write) {
+        *cell.borrow_mut() = Value::array(writes);
     }
-    if let (Some(Value::Ref(cell)), Some(_)) = (args.get(2), &except) {
-        *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+    if let (Some(cell), Some(_)) = (args.get(2).and_then(Value::as_reference), &except) {
+        *cell.borrow_mut() = Value::array(PhpArray::new());
     }
-    Ok(Value::Int(count as i64))
+    Ok(Value::int(count as i64))
 }
 
 /// stream_set_timeout(resource $stream, int $seconds, int $microseconds = 0)
@@ -411,8 +412,8 @@ fn stream_set_timeout(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
         // The wrapper is told the seconds and microseconds as given.
         let seconds = arg(args, 1).to_int();
         let micros = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
-        let set = with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_READ_TIMEOUT, Value::Int(seconds), Some(micros)))?;
-        return Ok(Value::Bool(set));
+        let set = with_user(ctx, &o, false, |ctx, s| user_stream::set_option(ctx, "", s, user_stream::OPTION_READ_TIMEOUT, Value::int(seconds), Some(micros)))?;
+        return Ok(Value::bool(set));
     }
     let seconds = arg(args, 1).to_int().max(0) as u64;
     let micros = if args.len() > 2 { arg(args, 2).to_int().max(0) as u64 } else { 0 };
@@ -421,10 +422,10 @@ fn stream_set_timeout(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
     if let Target::Tcp(sock) = &s.target {
         let d = Duration::from_secs(seconds) + Duration::from_micros(micros);
         let _ = sock.set_read_timeout((!d.is_zero()).then_some(d));
-        return Ok(Value::Bool(true));
+        return Ok(Value::TRUE);
     }
     let _ = str_arg(args, 0);
-    Ok(Value::Bool(false))
+    Ok(Value::FALSE)
 }
 
 /// stream_set_write_buffer / stream_set_read_buffer for a user-space
@@ -432,8 +433,8 @@ fn stream_set_timeout(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
 /// PHP_STREAM_BUFFER_FULL 2 and the size); 0 when it agrees, else EOF (-1).
 fn user_buffer(ctx: &mut dyn Ctx, o: &p8_runtime::object::Object, option: i64, size: i64) -> Result<Value, Throw> {
     let (mode, size) = if size == 0 { (0, None) } else { (2, Some(size)) };
-    let set = with_user(ctx, o, false, |ctx, s| user_stream::set_option(ctx, "", s, option, Value::Int(mode), size))?;
-    Ok(Value::Int(if set { 0 } else { -1 }))
+    let set = with_user(ctx, o, false, |ctx, s| user_stream::set_option(ctx, "", s, option, Value::int(mode), size))?;
+    Ok(Value::int(if set { 0 } else { -1 }))
 }
 
 /// stream_set_write_buffer(resource $stream, int $size) (and set_file_buffer):
@@ -447,7 +448,7 @@ fn stream_set_write_buffer(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     }
     let r = resource(&o).expect("a stream");
     let standard = matches!(r.stream.borrow().target, Target::Stdin | Target::Stdout | Target::Stderr);
-    Ok(Value::Int(if standard { 0 } else { -1 }))
+    Ok(Value::int(if standard { 0 } else { -1 }))
 }
 
 /// stream_set_read_buffer(resource $stream, int $size): 0 (p8's streams
@@ -458,7 +459,7 @@ fn stream_set_read_buffer(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value
     if is_user(&o) {
         return user_buffer(ctx, &o, user_stream::OPTION_READ_BUFFER, size);
     }
-    Ok(Value::Int(0))
+    Ok(Value::int(0))
 }
 
 /// stream_supports_lock(resource $stream): files and the standard streams
@@ -466,9 +467,9 @@ fn stream_set_read_buffer(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value
 fn stream_supports_lock(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = stream_arg(ctx, "stream_supports_lock", args, 0)?;
     if is_user(&o) {
-        return Ok(Value::Bool(with_user(ctx, &o, false, |ctx, s| user_stream::lock(ctx, s, 0))?));
+        return Ok(Value::bool(with_user(ctx, &o, false, |ctx, s| user_stream::lock(ctx, s, 0))?));
     }
     let r = resource(&o).expect("a stream");
     let lockable = matches!(r.stream.borrow().target, Target::File(_) | Target::Stdin | Target::Stdout | Target::Stderr);
-    Ok(Value::Bool(lockable))
+    Ok(Value::bool(lockable))
 }

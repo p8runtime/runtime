@@ -21,7 +21,6 @@ use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::numeric::{Number, numeric_string};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "filter_var", run: filter_var, by_ref: &[] },
@@ -118,22 +117,16 @@ fn exists(id: i64) -> bool {
 
 /// What a failed validation leaves: false, or null with FILTER_NULL_ON_FAILURE.
 fn failed(flags: i64) -> Value {
-    if flags & NULL_ON_FAILURE != 0 { Value::Null } else { Value::Bool(false) }
+    if flags & NULL_ON_FAILURE != 0 { Value::NULL } else { Value::FALSE }
 }
 
 /// An option from the options array.
 fn option(options: Option<&Value>, name: &str) -> Option<Value> {
-    match options? {
-        Value::Array(a) => a.get(&Key::from_string(PhpStr::from(name))).map(Value::deref),
-        _ => None,
-    }
+    options?.as_array()?.get(&Key::from_string(PhpStr::from(name))).map(Value::deref)
 }
 
 fn string_option(options: Option<&Value>, name: &str) -> Option<Vec<u8>> {
-    match option(options, name)? {
-        Value::Str(s) => Some(s.as_bytes().to_vec()),
-        _ => None,
-    }
+    option(options, name)?.as_str().map(|s| s.as_bytes().to_vec())
 }
 
 /// PHP_FILTER_TRIM_DEFAULT: spaces, tabs, CR, LF and VT off both ends.
@@ -149,15 +142,15 @@ fn trim(s: &[u8]) -> &[u8] {
 fn apply(ctx: &mut dyn Ctx, value: Value, id: i64, flags: i64, options: Option<&Value>) -> Result<Value, Throw> {
     let id = if FILTERS.iter().any(|(_, f)| *f == id) { id } else { DEFAULT };
     let result = match value {
-        Value::Object(o) if o.class.method(b"__tostring").is_none() => failed(flags),
+        v if v.as_object().is_some_and(|o| o.class.method(b"__tostring").is_none()) => failed(flags),
         v => {
             let s = crate::printf::to_str(ctx, &v)?;
             run(ctx, id, s, flags, options)?
         }
     };
-    let failure = if flags & NULL_ON_FAILURE != 0 { matches!(result, Value::Null) } else { matches!(result, Value::Bool(false)) };
+    let failure = if flags & NULL_ON_FAILURE != 0 { result.is_null() } else { result.as_bool() == Some(false) };
     if failure
-        && matches!(options, Some(Value::Array(_)))
+        && options.is_some_and(Value::is_array)
         && let Some(default) = option(options, "default")
     {
         return Ok(default);
@@ -172,15 +165,15 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
         VALIDATE_BOOL => validate_bool(b, flags),
         VALIDATE_FLOAT => validate_float(ctx, b, flags, options)?,
         VALIDATE_REGEXP => {
-            let Some(Value::Str(re)) = option(options, "regexp") else {
+            let Some(re) = option(options, "regexp").and_then(|v| v.into_str().ok()) else {
                 let name = ctx.builtin_name();
                 return Err(ctx.throw("ValueError", format!("{name}(): \"regexp\" option is missing")));
             };
-            if matches(ctx, Value::Str(re), &s)? { Value::Str(s) } else { failed(flags) }
+            if matches(ctx, Value::str(re), &s)? { Value::str(s) } else { failed(flags) }
         }
         VALIDATE_DOMAIN => {
             if valid_domain(b, flags) {
-                Value::Str(s)
+                Value::str(s)
             } else {
                 failed(flags)
             }
@@ -188,11 +181,11 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
         VALIDATE_URL => validate_url(ctx, s, flags)?,
         VALIDATE_EMAIL => {
             let pattern = if flags & EMAIL_UNICODE != 0 { EMAIL_UNICODE_RE } else { EMAIL_RE };
-            if b.len() <= 320 && matches(ctx, Value::str(pattern), &s)? { Value::Str(s) } else { failed(flags) }
+            if b.len() <= 320 && matches(ctx, Value::str(pattern), &s)? { Value::str(s) } else { failed(flags) }
         }
         VALIDATE_IP => {
             if valid_ip(b, flags) {
-                Value::Str(s)
+                Value::str(s)
             } else {
                 failed(flags)
             }
@@ -206,13 +199,13 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
             }
             encode_flags(&mut enc, flags);
             let stripped = encode_html(&strip(b, flags), &enc);
-            let out = ctx.call(&Value::str("strip_tags"), &mut [Value::Str(PhpStr::new(stripped))])?;
+            let out = ctx.call(&Value::str("strip_tags"), &mut [Value::str(PhpStr::new(stripped))])?;
             match out {
-                Value::Str(t) if t.is_empty() && flags & EMPTY_STRING_NULL != 0 => Value::Null,
+                t if t.as_str().is_some_and(|t| t.is_empty()) && flags & EMPTY_STRING_NULL != 0 => Value::NULL,
                 other => other,
             }
         }
-        SANITIZE_ENCODED => Value::Str(PhpStr::new(encode_url(&strip(b, flags)))),
+        SANITIZE_ENCODED => Value::str(PhpStr::new(encode_url(&strip(b, flags)))),
         SANITIZE_SPECIAL_CHARS => {
             let mut enc = [false; 256];
             for &c in b"'\"<>&" {
@@ -222,11 +215,11 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
             if flags & ENCODE_HIGH != 0 {
                 enc[127..].fill(true);
             }
-            Value::Str(PhpStr::new(encode_html(&strip(b, flags), &enc)))
+            Value::str(PhpStr::new(encode_html(&strip(b, flags), &enc)))
         }
         SANITIZE_FULL_SPECIAL_CHARS => {
             let quotes = if flags & NO_ENCODE_QUOTES == 0 { 3 } else { 0 };
-            ctx.call(&Value::str("htmlentities"), &mut [Value::Str(s), Value::Int(quotes), Value::Null, Value::Bool(false)])?
+            ctx.call(&Value::str("htmlentities"), &mut [Value::str(s), Value::int(quotes), Value::NULL, Value::FALSE])?
         }
         SANITIZE_EMAIL => keep(b, |c| c.is_ascii_alphanumeric() || b"!#$%&'*+-=?^_`{|}~@.[]".contains(&c)),
         SANITIZE_URL => keep(b, url_char),
@@ -239,25 +232,25 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
                 || (c == b',' && flags & ALLOW_THOUSAND != 0)
                 || ((c == b'e' || c == b'E') && flags & ALLOW_SCIENTIFIC != 0)
         }),
-        SANITIZE_ADD_SLASHES => ctx.call(&Value::str("addslashes"), &mut [Value::Str(s)])?,
+        SANITIZE_ADD_SLASHES => ctx.call(&Value::str("addslashes"), &mut [Value::str(s)])?,
         CALLBACK => {
-            let callable = options.cloned().unwrap_or(Value::Null);
+            let callable = options.cloned().unwrap_or(Value::NULL);
             if options.is_none() || !ctx.is_callable(&callable) {
                 let name = ctx.builtin_name();
                 return Err(ctx.throw("TypeError", format!("{name}(): Option must be a valid callback")));
             }
-            ctx.call(&callable, &mut [Value::Str(s)])?
+            ctx.call(&callable, &mut [Value::str(s)])?
         }
         // FILTER_UNSAFE_RAW (FILTER_DEFAULT).
         _ => {
             if flags != 0 && !b.is_empty() {
                 let mut enc = [false; 256];
                 encode_flags(&mut enc, flags);
-                Value::Str(PhpStr::new(encode_html(&strip(b, flags), &enc)))
+                Value::str(PhpStr::new(encode_html(&strip(b, flags), &enc)))
             } else if flags & EMPTY_STRING_NULL != 0 && b.is_empty() {
-                Value::Null
+                Value::NULL
             } else {
-                Value::Str(s)
+                Value::str(s)
             }
         }
     })
@@ -265,8 +258,8 @@ fn run(ctx: &mut dyn Ctx, id: i64, s: PhpStr, flags: i64, options: Option<&Value
 
 /// Whether preg_match finds `pattern` in `s`.
 fn matches(ctx: &mut dyn Ctx, pattern: Value, s: &PhpStr) -> Result<bool, Throw> {
-    let r = ctx.call(&Value::str("preg_match"), &mut [pattern, Value::Str(s.clone())])?;
-    Ok(matches!(r, Value::Int(n) if n > 0))
+    let r = ctx.call(&Value::str("preg_match"), &mut [pattern, Value::str(s.clone())])?;
+    Ok(r.as_int().is_some_and(|n| n > 0))
 }
 
 /// php_filter_int.
@@ -299,7 +292,7 @@ fn validate_int(s: &[u8], flags: i64, options: Option<&Value>) -> Value {
         parse_int(p)
     };
     match parsed {
-        Some(n) if min.is_none_or(|m| n >= m) && max.is_none_or(|m| n <= m) => Value::Int(n),
+        Some(n) if min.is_none_or(|m| n >= m) && max.is_none_or(|m| n <= m) => Value::int(n),
         _ => failed(flags),
     }
 }
@@ -341,8 +334,8 @@ fn radix(s: &[u8], base: u64) -> Option<i64> {
 /// php_filter_boolean: 1/true/on/yes and 0/false/off/no/"", else a failure.
 fn validate_bool(s: &[u8], flags: i64) -> Value {
     match trim(s).to_ascii_lowercase().as_slice() {
-        b"1" | b"true" | b"on" | b"yes" => Value::Bool(true),
-        b"0" | b"false" | b"off" | b"no" | b"" => Value::Bool(false),
+        b"1" | b"true" | b"on" | b"yes" => Value::TRUE,
+        b"0" | b"false" | b"off" | b"no" | b"" => Value::FALSE,
         _ => failed(flags),
     }
 }
@@ -440,7 +433,7 @@ fn validate_float(ctx: &mut dyn Ctx, s: &[u8], flags: i64, options: Option<&Valu
     if min.is_some_and(|m| f < m) || max.is_some_and(|m| f > m) {
         return Ok(failed(flags));
     }
-    Ok(Value::Float(f))
+    Ok(Value::float(f))
 }
 
 /// _php_filter_validate_domain: labels of up to 63 characters, 253 in
@@ -481,13 +474,16 @@ fn validate_url(ctx: &mut dyn Ctx, s: PhpStr, flags: i64) -> Result<Value, Throw
     if !b.iter().all(|&c| url_char(c)) {
         return Ok(failed(flags));
     }
-    let Value::Array(url) = ctx.call(&Value::str("parse_url"), &mut [Value::Str(s.clone())])? else {
+    let Ok(url) = ctx.call(&Value::str("parse_url"), &mut [Value::str(s.clone())])?.into_array() else {
         return Ok(failed(flags));
     };
-    let part = |name: &str| match url.get(&Key::from_string(PhpStr::from(name))) {
-        Some(Value::Str(v)) => Some(v.as_bytes().to_vec()),
-        Some(Value::Int(n)) => Some(n.to_string().into_bytes()),
-        _ => None,
+    let part = |name: &str| {
+        let v = url.get(&Key::from_string(PhpStr::from(name)))?;
+        if let Some(v) = v.as_str() {
+            Some(v.as_bytes().to_vec())
+        } else {
+            v.as_int().map(|n| n.to_string().into_bytes())
+        }
     };
     let scheme = part("scheme");
     let host = part("host");
@@ -510,7 +506,7 @@ fn validate_url(ctx: &mut dyn Ctx, s: PhpStr, flags: i64) -> Result<Value, Throw
     if part("user").is_some_and(|u| !userinfo_valid(&u)) || part("pass").is_some_and(|p| !userinfo_valid(&p)) {
         return Ok(failed(flags));
     }
-    Ok(Value::Str(s))
+    Ok(Value::str(s))
 }
 
 fn userinfo_valid(s: &[u8]) -> bool {
@@ -745,7 +741,7 @@ fn validate_mac(ctx: &mut dyn Ctx, s: PhpStr, flags: i64, options: Option<&Value
             return Ok(failed(flags));
         }
     }
-    Ok(Value::Str(s))
+    Ok(Value::str(s))
 }
 
 /// php_filter_strip: the flags' low, high and backtick bytes dropped.
@@ -797,7 +793,7 @@ fn encode_url(s: &[u8]) -> Vec<u8> {
 }
 
 fn keep(s: &[u8], allowed: impl Fn(u8) -> bool) -> Value {
-    Value::Str(PhpStr::new(s.iter().copied().filter(|&c| allowed(c)).collect::<Vec<u8>>()))
+    Value::str(PhpStr::new(s.iter().copied().filter(|&c| allowed(c)).collect::<Vec<u8>>()))
 }
 
 /// php_filter_call: the filter, flags and options from `args` (an options
@@ -805,15 +801,16 @@ fn keep(s: &[u8], allowed: impl Fn(u8) -> bool) -> Value {
 /// element of an array.
 fn call(ctx: &mut dyn Ctx, value: Value, mut filter: i64, args: Option<&Value>, mut flags: i64) -> Result<Value, Throw> {
     let mut options: Option<Value> = None;
-    match args.map(Value::deref) {
-        Some(Value::Array(a)) => {
+    let args = args.map(Value::deref);
+    match args.as_ref().and_then(Value::as_array) {
+        Some(a) => {
             let get = |k: &str| a.get(&Key::from_string(PhpStr::from(k))).map(Value::deref);
             if let Some(f) = get("filter") {
                 filter = f.to_int();
             }
             if let Some(o) = get("options") {
                 if filter != CALLBACK {
-                    if matches!(o, Value::Array(_)) {
+                    if o.is_array() {
                         options = Some(o);
                     }
                 } else {
@@ -828,8 +825,8 @@ fn call(ctx: &mut dyn Ctx, value: Value, mut filter: i64, args: Option<&Value>, 
                 }
             }
         }
-        other => {
-            let n = other.map_or(0, |v| v.to_int());
+        None => {
+            let n = args.as_ref().map_or(0, |v| v.to_int());
             if filter != -1 {
                 flags = n;
                 if flags & (REQUIRE_ARRAY | FORCE_ARRAY) == 0 {
@@ -841,26 +838,27 @@ fn call(ctx: &mut dyn Ctx, value: Value, mut filter: i64, args: Option<&Value>, 
         }
     }
     let options = options.as_ref();
-    if let Value::Array(a) = &value {
+    if let Some(a) = value.as_array() {
         if flags & REQUIRE_SCALAR != 0 {
             return Ok(failed(flags));
         }
-        return recurse(ctx, a, filter, flags, options).map(|a| Value::Array(Rc::new(a)));
+        return recurse(ctx, a, filter, flags, options).map(Value::array);
     }
     if flags & REQUIRE_ARRAY != 0 {
         return Ok(failed(flags));
     }
     let v = apply(ctx, value, filter, flags, options)?;
-    Ok(if flags & FORCE_ARRAY != 0 { Value::Array(Rc::new(PhpArray::from_list(vec![v]))) } else { v })
+    Ok(if flags & FORCE_ARRAY != 0 { Value::array(PhpArray::from_list(vec![v])) } else { v })
 }
 
 /// php_zval_filter_recursive: every element of `a` and its arrays.
 fn recurse(ctx: &mut dyn Ctx, a: &PhpArray, filter: i64, flags: i64, options: Option<&Value>) -> Result<PhpArray, Throw> {
     let mut out = PhpArray::new();
     for (k, v) in a.iter() {
-        let v = match v.deref() {
-            Value::Array(inner) => Value::Array(Rc::new(recurse(ctx, &inner, filter, flags, options)?)),
-            other => apply(ctx, other, filter, flags, options)?,
+        let v = v.deref();
+        let v = match v.as_array() {
+            Some(inner) => Value::array(recurse(ctx, inner, filter, flags, options)?),
+            None => apply(ctx, v, filter, flags, options)?,
         };
         out.insert(k, v);
     }
@@ -880,7 +878,7 @@ fn filter_arg(ctx: &mut dyn Ctx, args: &[Value], i: usize) -> Option<i64> {
 
 /// filter_var($value, $filter = FILTER_DEFAULT, $options = 0).
 fn filter_var(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(filter) = filter_arg(ctx, args, 1) else { return Ok(Value::Bool(false)) };
+    let Some(filter) = filter_arg(ctx, args, 1) else { return Ok(Value::FALSE) };
     call(ctx, arg(args, 0), filter, args.get(2), REQUIRE_SCALAR)
 }
 
@@ -888,8 +886,9 @@ fn filter_var(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// element), or through the definition's filter for each named key.
 fn array_handler(ctx: &mut dyn Ctx, input: &PhpArray, definition: Option<&Value>, add_empty: bool) -> Result<Value, Throw> {
     let name = ctx.builtin_name();
-    match definition.map(Value::deref) {
-        Some(Value::Array(def)) => {
+    let definition = definition.map(Value::deref);
+    match definition.as_ref().and_then(Value::as_array) {
+        Some(def) => {
             let mut out = PhpArray::new();
             for (k, spec) in def.iter() {
                 let Key::Str(key) = &k else {
@@ -899,27 +898,24 @@ fn array_handler(ctx: &mut dyn Ctx, input: &PhpArray, definition: Option<&Value>
                     return Err(ctx.throw("ValueError", format!("{name}(): Argument #2 ($options) cannot contain empty keys")));
                 }
                 match input.get(&k) {
-                    None if add_empty => out.insert(k.clone(), Value::Null),
+                    None if add_empty => out.insert(k.clone(), Value::NULL),
                     None => {}
                     Some(v) => {
                         let spec = spec.deref();
-                        let (args, n) = match &spec {
-                            Value::Array(_) => (Some(spec.clone()), 0),
-                            other => (None, other.to_int()),
-                        };
+                        let (args, n) = if spec.is_array() { (Some(spec.clone()), 0) } else { (None, spec.to_int()) };
                         let filtered = match args {
                             Some(a) => call(ctx, v.deref(), -1, Some(&a), REQUIRE_SCALAR)?,
-                            None => call(ctx, v.deref(), -1, Some(&Value::Int(n)), REQUIRE_SCALAR)?,
+                            None => call(ctx, v.deref(), -1, Some(&Value::int(n)), REQUIRE_SCALAR)?,
                         };
                         out.insert(k.clone(), filtered);
                     }
                 }
             }
-            Ok(Value::Array(Rc::new(out)))
+            Ok(Value::array(out))
         }
-        other => {
-            let n = other.map_or(DEFAULT, |v| v.to_int());
-            call(ctx, Value::Array(Rc::new(input.clone())), -1, Some(&Value::Int(n)), REQUIRE_ARRAY)
+        None => {
+            let n = definition.as_ref().map_or(DEFAULT, |v| v.to_int());
+            call(ctx, Value::array(input.clone()), -1, Some(&Value::int(n)), REQUIRE_ARRAY)
         }
     }
 }
@@ -927,8 +923,7 @@ fn array_handler(ctx: &mut dyn Ctx, input: &PhpArray, definition: Option<&Value>
 /// The definition argument of the *_array functions: checked when it is a filter id.
 fn definition_ok(ctx: &mut dyn Ctx, args: &[Value], i: usize) -> bool {
     match args.get(i).map(Value::deref) {
-        None | Some(Value::Array(_)) => true,
-        Some(v) => {
+        Some(v) if !v.is_array() => {
             let id = v.to_int();
             if exists(id) {
                 return true;
@@ -937,15 +932,16 @@ fn definition_ok(ctx: &mut dyn Ctx, args: &[Value], i: usize) -> bool {
             ctx.warn(&format!("{name}(): Unknown filter with ID {id}"));
             false
         }
+        _ => true,
     }
 }
 
 /// filter_var_array($array, $options = FILTER_DEFAULT, $add_empty = true).
 fn filter_var_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !definition_ok(ctx, args, 1) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let Value::Array(input) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(input) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let add_empty = args.len() < 3 || arg(args, 2).to_bool();
     array_handler(ctx, &input, args.get(1), add_empty)
 }
@@ -962,26 +958,25 @@ fn storage(ctx: &mut dyn Ctx, kind: i64) -> Result<Option<PhpArray>, Throw> {
             return Err(ctx.throw("ValueError", format!("{name}(): Argument #1 ($type) must be an INPUT_* constant")));
         }
     };
-    Ok(match ctx.global_value(global).map(|v| v.deref()) {
-        Some(Value::Array(a)) => Some((*a).clone()),
-        _ => None,
-    })
+    Ok(ctx.global_value(global).map(|v| v.deref()).and_then(|v| v.as_array().cloned()))
 }
 
 /// filter_input($type, $var_name, $filter = FILTER_DEFAULT, $options = 0).
 fn filter_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(filter) = filter_arg(ctx, args, 2) else { return Ok(Value::Bool(false)) };
+    let Some(filter) = filter_arg(ctx, args, 2) else { return Ok(Value::FALSE) };
     let input = storage(ctx, arg(args, 0).to_int())?;
     let name = arg(args, 1).to_php_string().unwrap_or_else(PhpStr::empty);
     let found = input.as_ref().and_then(|a| a.get(&Key::from_string(name)).map(Value::deref));
     let Some(value) = found else {
         let mut flags = 0;
         match args.get(3).map(Value::deref) {
-            Some(Value::Array(a)) => {
+            Some(v) if v.is_array() => {
+                let a = v.as_array().expect("an array");
                 if let Some(f) = a.get(&Key::from_string(PhpStr::from("flags"))) {
                     flags = f.to_int();
                 }
-                if let Some(Value::Array(o)) = a.get(&Key::from_string(PhpStr::from("options"))).map(Value::deref)
+                if let Some(o) = a.get(&Key::from_string(PhpStr::from("options"))).map(Value::deref)
+                    && let Some(o) = o.as_array()
                     && let Some(d) = o.get(&Key::from_string(PhpStr::from("default")))
                 {
                     return Ok(d.deref());
@@ -991,7 +986,7 @@ fn filter_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             None => {}
         }
         // A missing variable is null; with FILTER_NULL_ON_FAILURE, false.
-        return Ok(if flags & NULL_ON_FAILURE != 0 { Value::Bool(false) } else { Value::Null });
+        return Ok(if flags & NULL_ON_FAILURE != 0 { Value::FALSE } else { Value::NULL });
     };
     call(ctx, value, filter, args.get(3), REQUIRE_SCALAR)
 }
@@ -999,9 +994,9 @@ fn filter_input(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// filter_input_array($type, $options = FILTER_DEFAULT, $add_empty = true).
 fn filter_input_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !definition_ok(ctx, args, 1) {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
-    let Some(input) = storage(ctx, arg(args, 0).to_int())? else { return Ok(Value::Null) };
+    let Some(input) = storage(ctx, arg(args, 0).to_int())? else { return Ok(Value::NULL) };
     let add_empty = args.len() < 3 || arg(args, 2).to_bool();
     array_handler(ctx, &input, args.get(1), add_empty)
 }
@@ -1010,16 +1005,16 @@ fn filter_input_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
 fn filter_has_var(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let input = storage(ctx, arg(args, 0).to_int())?;
     let name = arg(args, 1).to_php_string().unwrap_or_else(PhpStr::empty);
-    Ok(Value::Bool(input.is_some_and(|a| a.get(&Key::from_string(name)).is_some())))
+    Ok(Value::bool(input.is_some_and(|a| a.get(&Key::from_string(name)).is_some())))
 }
 
 fn filter_list(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Array(Rc::new(PhpArray::from_list(FILTERS.iter().map(|(n, _)| Value::str(*n)).collect()))))
+    Ok(Value::array(PhpArray::from_list(FILTERS.iter().map(|(n, _)| Value::str(*n)).collect())))
 }
 
 fn filter_id(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let name = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
-    Ok(FILTERS.iter().find(|(n, _)| n.as_bytes() == name.as_bytes()).map_or(Value::Bool(false), |(_, id)| Value::Int(*id)))
+    Ok(FILTERS.iter().find(|(n, _)| n.as_bytes() == name.as_bytes()).map_or(Value::FALSE, |(_, id)| Value::int(*id)))
 }
 
 /// The domain half of the e-mail patterns: a routable name or an address literal.

@@ -53,18 +53,19 @@ fn float(args: &[Value], i: usize) -> f64 {
 }
 
 fn abs(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(match arg(args, 0) {
-        Value::Int(i) => i.checked_abs().map_or(Value::Float(-(i as f64)), Value::Int),
-        v => Value::Float(v.to_float().abs()),
+    let v = arg(args, 0);
+    Ok(match v.as_int() {
+        Some(i) => i.checked_abs().map_or(Value::float(-(i as f64)), Value::int),
+        None => Value::float(v.to_float().abs()),
     })
 }
 
 fn ceil(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0).ceil()))
+    Ok(Value::float(float(args, 0).ceil()))
 }
 
 fn floor(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0).floor()))
+    Ok(Value::float(float(args, 0).floor()))
 }
 
 const HALF_UP: i64 = 1;
@@ -109,19 +110,22 @@ fn round(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mode = match args.get(2).map(Value::deref) {
         None => HALF_UP,
         // A RoundingMode case (the argument check let no other object in).
-        Some(Value::Object(o)) => {
-            let name = o.class.read(&o, b"name", &o.class.lower);
-            let case = CLASSES[0].constants.iter().position(|(n, _)| name.to_php_string().is_some_and(|s| s.as_bytes() == n.as_bytes()));
-            case.map_or(HALF_UP, |i| ROUNDING_MODES[i])
-        }
-        Some(v) => v.to_int(),
+        Some(v) => match v.as_object() {
+            Some(o) => {
+                let name = o.class.read(o, b"name", &o.class.lower);
+                let case = CLASSES[0].constants.iter().position(|(n, _)| name.to_php_string().is_some_and(|s| s.as_bytes() == n.as_bytes()));
+                case.map_or(HALF_UP, |i| ROUNDING_MODES[i])
+            }
+            None => v.to_int(),
+        },
     };
     if !(HALF_UP..=AWAY_FROM_ZERO).contains(&mode) {
         return Err(ctx.throw("ValueError", "round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)".into()));
     }
-    Ok(Value::Float(match arg(args, 0) {
-        Value::Int(i) if places >= 0 => i as f64,
-        v => php_round(v.to_float(), places, mode),
+    let v = arg(args, 0);
+    Ok(Value::float(match v.as_int() {
+        Some(i) if places >= 0 => i as f64,
+        _ => php_round(v.to_float(), places, mode),
     }))
 }
 
@@ -189,17 +193,17 @@ fn intdiv(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Err(ctx.throw("DivisionByZeroError", "Division by zero".into()));
     }
     match a.checked_div(b) {
-        Some(q) => Ok(Value::Int(q)),
+        Some(q) => Ok(Value::int(q)),
         None => Err(ctx.throw("ArithmeticError", "Division of PHP_INT_MIN by -1 is not an integer".into())),
     }
 }
 
 fn fmod(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0) % float(args, 1)))
+    Ok(Value::float(float(args, 0) % float(args, 1)))
 }
 
 fn fdiv(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0) / float(args, 1)))
+    Ok(Value::float(float(args, 0) / float(args, 1)))
 }
 
 /// pow() is the ** operator.
@@ -222,15 +226,16 @@ fn pow(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// max/min: of one array's values, or of the arguments themselves.
 fn extreme(ctx: &dyn Ctx, func: &str, args: &[Value], want: Ordering) -> Result<Value, Throw> {
-    let values: Vec<Value> = match (args.len(), arg(args, 0)) {
-        (1, Value::Array(a)) => {
+    let first = arg(args, 0);
+    let values: Vec<Value> = match (args.len(), first.as_array()) {
+        (1, Some(a)) => {
             if a.is_empty() {
                 return Err(ctx.throw("ValueError", format!("{func}(): Argument #1 ($value) must contain at least one element")));
             }
             a.values().cloned().collect()
         }
-        (1, other) => {
-            return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($value) must be of type array, {} given", other.type_name())));
+        (1, None) => {
+            return Err(ctx.throw("TypeError", format!("{func}(): Argument #1 ($value) must be of type array, {} given", first.type_name())));
         }
         _ => args.iter().map(Value::deref).collect(),
     };
@@ -253,25 +258,25 @@ fn min(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn pi(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(std::f64::consts::PI))
+    Ok(Value::float(std::f64::consts::PI))
 }
 
 fn is_nan(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(float(args, 0).is_nan()))
+    Ok(Value::bool(float(args, 0).is_nan()))
 }
 
 fn is_finite(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(float(args, 0).is_finite()))
+    Ok(Value::bool(float(args, 0).is_finite()))
 }
 
 fn is_infinite(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Bool(float(args, 0).is_infinite()))
+    Ok(Value::bool(float(args, 0).is_infinite()))
 }
 
 macro_rules! float_fn {
     ($($name:ident => $f:expr),* $(,)?) => {
         $(fn $name(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-            Ok(Value::Float($f(float(args, 0))))
+            Ok(Value::float($f(float(args, 0))))
         })*
     };
 }
@@ -294,7 +299,7 @@ float_fn! {
 fn log(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let x = float(args, 0);
     if args.len() < 2 {
-        return Ok(Value::Float(x.ln()));
+        return Ok(Value::float(x.ln()));
     }
     let base = float(args, 1);
     if base <= 0.0 {
@@ -303,21 +308,21 @@ fn log(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if base == 1.0 {
         return Err(ctx.throw("ValueError", "log(): Argument #2 ($base) must not be equal to 1".into()));
     }
-    Ok(Value::Float(if base == 2.0 { x.log2() } else if base == 10.0 { x.log10() } else { x.ln() / base.ln() }))
+    Ok(Value::float(if base == 2.0 { x.log2() } else if base == 10.0 { x.log10() } else { x.ln() / base.ln() }))
 }
 
 fn atan2(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0).atan2(float(args, 1))))
+    Ok(Value::float(float(args, 0).atan2(float(args, 1))))
 }
 
 fn hypot(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(float(args, 0).hypot(float(args, 1))))
+    Ok(Value::float(float(args, 0).hypot(float(args, 1))))
 }
 
 fn digits(n: u64, radix: u64) -> Result<Value, Throw> {
     let mut out = Vec::new();
     p8_runtime::numeric::push_digits(&mut out, n, radix, false);
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 fn decbin(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -354,7 +359,7 @@ fn from_base(ctx: &mut dyn Ctx, s: &[u8], radix: u32) -> Value {
     if invalid {
         ctx.deprecated("Invalid characters passed for attempted conversion, these have been ignored");
     }
-    f.map_or(Value::Int(n), Value::Float)
+    f.map_or(Value::int(n), Value::float)
 }
 
 fn bindec(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -384,8 +389,8 @@ fn base_convert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let lower = s.as_bytes().to_ascii_lowercase();
     let n = from_base(ctx, &lower, from as u32);
     let mut out = Vec::new();
-    match n {
-        Value::Float(f) => {
+    match n.as_float() {
+        Some(f) => {
             // _php_math_zvaltobase for a float: digit by digit with fmod.
             let mut f = f.abs().floor();
             let to = to as f64;
@@ -399,7 +404,7 @@ fn base_convert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
             out.reverse();
         }
-        n => {
+        None => {
             let n = n.to_int() as u64;
             let mut x = n;
             loop {
@@ -412,7 +417,7 @@ fn base_convert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             out.reverse();
         }
     }
-    Ok(Value::Str(PhpStr::new(out)))
+    Ok(Value::str(PhpStr::new(out)))
 }
 
 #[cfg(test)]

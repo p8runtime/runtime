@@ -11,7 +11,6 @@ use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cell::RefCell;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "mt_rand", run: mt_rand, by_ref: &[] },
@@ -138,27 +137,27 @@ fn with_mt<R>(f: impl FnOnce(&mut Mt) -> R) -> R {
 /// mt_rand(int $min, int $max) / mt_rand(): 31 random bits.
 fn mt_rand(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if args.is_empty() {
-        return Ok(Value::Int(i64::from(with_mt(|m| m.next_u32() >> 1))));
+        return Ok(Value::int(i64::from(with_mt(|m| m.next_u32() >> 1))));
     }
     let (min, max) = (arg(args, 0).to_int(), arg(args, 1).to_int());
     if max < min {
         return Err(ctx.throw("ValueError", "mt_rand(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)".into()));
     }
-    Ok(Value::Int(with_mt(|m| m.range(min, max))))
+    Ok(Value::int(with_mt(|m| m.range(min, max))))
 }
 
 /// mt_srand(int $seed = 0, int $mode = MT_RAND_MT19937)
 fn mt_srand(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let seed = match args.first().map(Value::deref) {
-        Some(Value::Null) | None => u32::from_le_bytes(os_random::<4>()),
-        Some(v) => v.to_int() as u32,
+        Some(v) if !v.is_null() => v.to_int() as u32,
+        _ => u32::from_le_bytes(os_random::<4>()),
     };
     MT.with(|m| *m.borrow_mut() = Some(Mt::seeded(seed)));
-    Ok(Value::Null)
+    Ok(Value::NULL)
 }
 
 fn getrandmax(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Int(2_147_483_647))
+    Ok(Value::int(2_147_483_647))
 }
 
 /// Fisher-Yates from the end, as php_array_data_shuffle does.
@@ -175,25 +174,25 @@ fn shuffle_in_place<T>(items: &mut [T]) {
 }
 
 fn shuffle(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(Value::Ref(cell)) = args.first() else { return Ok(Value::Bool(true)) };
+    let Some(cell) = args.first().and_then(Value::as_reference) else { return Ok(Value::TRUE) };
     let mut value = cell.borrow_mut();
-    if let Value::Array(a) = &*value {
+    if let Some(a) = value.as_array() {
         let mut items: Vec<Value> = a.values().cloned().collect();
         shuffle_in_place(&mut items);
-        *value = Value::Array(Rc::new(PhpArray::from_list(items)));
+        *value = Value::array(PhpArray::from_list(items));
     }
-    Ok(Value::Bool(true))
+    Ok(Value::TRUE)
 }
 
 fn str_shuffle(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut bytes = str_arg(args, 0).as_bytes().to_vec();
     shuffle_in_place(&mut bytes);
-    Ok(Value::Str(PhpStr::new(bytes)))
+    Ok(Value::str(PhpStr::new(bytes)))
 }
 
 /// array_rand(array $array, int $num = 1): a key, or `num` keys in order.
 fn array_rand(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Value::Array(a) = arg(args, 0) else { return Ok(Value::Null) };
+    let Ok(a) = arg(args, 0).into_array() else { return Ok(Value::NULL) };
     let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
     let n = keys.len();
     if n == 0 {
@@ -225,7 +224,7 @@ fn array_rand(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
     });
     let out: Vec<Value> = keys.iter().zip(picked).filter(|(_, p)| *p != negative).map(|(k, _)| k.to_value()).collect();
-    Ok(Value::Array(Rc::new(PhpArray::from_list(out))))
+    Ok(Value::array(PhpArray::from_list(out)))
 }
 
 /// random_int(int $min, int $max): from the OS's randomness.
@@ -236,14 +235,14 @@ fn random_int(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let span = max.wrapping_sub(min) as u64;
     if span == u64::MAX {
-        return Ok(Value::Int(i64::from_le_bytes(os_random::<8>())));
+        return Ok(Value::int(i64::from_le_bytes(os_random::<8>())));
     }
     let range = span + 1;
     let limit = u64::MAX - (u64::MAX % range);
     loop {
         let r = u64::from_le_bytes(os_random::<8>());
         if r < limit {
-            return Ok(Value::Int(min.wrapping_add((r % range) as i64)));
+            return Ok(Value::int(min.wrapping_add((r % range) as i64)));
         }
     }
 }
@@ -255,11 +254,11 @@ fn random_bytes(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let mut b = vec![0u8; n as usize];
     let _ = getrandom::getrandom(&mut b);
-    Ok(Value::Str(PhpStr::new(b)))
+    Ok(Value::str(PhpStr::new(b)))
 }
 
 fn lcg_value(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::Float(f64::from(u32::from_le_bytes(os_random::<4>())) / 4_294_967_296.0))
+    Ok(Value::float(f64::from(u32::from_le_bytes(os_random::<4>())) / 4_294_967_296.0))
 }
 
 /// uniqid(string $prefix = "", bool $more_entropy = false)
@@ -273,5 +272,5 @@ fn uniqid(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     // Two calls in one microsecond would be equal: PHP sleeps a little.
     std::thread::sleep(std::time::Duration::from_micros(1));
-    Ok(Value::Str(PhpStr::from(out)))
+    Ok(Value::str(PhpStr::from(out)))
 }

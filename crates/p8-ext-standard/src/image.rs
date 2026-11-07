@@ -14,7 +14,6 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
-use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "getimagesize", run: getimagesize, by_ref: &[1] },
@@ -315,7 +314,7 @@ fn jpeg(ctx: &mut dyn Ctx, func: &str, c: &mut Cursor, mut info: Option<&mut Php
                     let Some(body) = c.read(length - 2) else { return result };
                     let key = Key::from_string(PhpStr::from(format!("APP{}", marker - 0xe0).as_str()));
                     if app.get(&key).is_none() {
-                        app.insert(key, Value::Str(PhpStr::from(body)));
+                        app.insert(key, Value::str(PhpStr::from(body)));
                     }
                 }
                 None => {
@@ -483,20 +482,20 @@ fn size_of(ctx: &mut dyn Ctx, func: &str, data: &[u8], input: &str, info: Option
         WEBP => webp(&mut c),
         _ => None,
     };
-    let Some(r) = result else { return Value::Bool(false) };
+    let Some(r) = result else { return Value::FALSE };
     let mut out = PhpArray::new();
-    out.insert(Key::Int(0), Value::Int(i64::from(r.width)));
-    out.insert(Key::Int(1), Value::Int(i64::from(r.height)));
-    out.insert(Key::Int(2), Value::Int(kind));
+    out.insert(Key::Int(0), Value::int(i64::from(r.width)));
+    out.insert(Key::Int(1), Value::int(i64::from(r.height)));
+    out.insert(Key::Int(2), Value::int(kind));
     out.insert(Key::Int(3), Value::str(format!("width=\"{}\" height=\"{}\"", r.width as i32, r.height as i32)));
     if r.bits != 0 {
-        out.insert(Key::from_string(PhpStr::from("bits")), Value::Int(i64::from(r.bits)));
+        out.insert(Key::from_string(PhpStr::from("bits")), Value::int(i64::from(r.bits)));
     }
     if r.channels != 0 {
-        out.insert(Key::from_string(PhpStr::from("channels")), Value::Int(i64::from(r.channels)));
+        out.insert(Key::from_string(PhpStr::from("channels")), Value::int(i64::from(r.channels)));
     }
     out.insert(Key::from_string(PhpStr::from("mime")), Value::str(mime(kind)));
-    Value::Array(Rc::new(out))
+    Value::array(out)
 }
 
 /// The by-reference $image_info, made an array (filled with a JPEG's APP markers).
@@ -506,8 +505,8 @@ fn with_info(ctx: &mut dyn Ctx, func: &str, args: &mut [Value], data: &[u8], inp
     }
     let mut info = PhpArray::new();
     let r = size_of(ctx, func, data, input, Some(&mut info));
-    if let Some(Value::Ref(cell)) = args.get(1) {
-        *cell.borrow_mut() = Value::Array(Rc::new(info));
+    if let Some(cell) = args.get(1).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::array(info);
     }
     r
 }
@@ -524,12 +523,12 @@ fn getimagesize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Ok(d) => d,
         Err(e) => {
             if args.len() > 1
-                && let Some(Value::Ref(cell)) = args.get(1)
+                && let Some(cell) = args.get(1).and_then(Value::as_reference)
             {
-                *cell.borrow_mut() = Value::Array(Rc::new(PhpArray::new()));
+                *cell.borrow_mut() = Value::array(PhpArray::new());
             }
             ctx.warn(&format!("getimagesize({shown}): Failed to open stream: {}", crate::file::os_error(&e)));
-            return Ok(Value::Bool(false));
+            return Ok(Value::FALSE);
         }
     };
     Ok(with_info(ctx, "getimagesize", args, &data, &shown))
@@ -585,7 +584,7 @@ fn image_type_to_extension(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
         ICO => "ico",
         WEBP => "webp",
         AVIF => "avif",
-        _ => return Ok(Value::Bool(false)),
+        _ => return Ok(Value::FALSE),
     };
     let dot = args.len() < 2 || arg(args, 1).to_bool();
     Ok(Value::str(if dot { format!(".{ext}") } else { ext.to_string() }))

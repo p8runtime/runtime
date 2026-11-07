@@ -11,7 +11,7 @@ use p8_runtime::ext::{Builtin, Ctx, Throw};
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
 use p8_runtime::string::PhpStr;
-use p8_runtime::value::Value;
+use p8_runtime::value::{Kind, Value};
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -24,7 +24,7 @@ fn text(s: &[u8]) -> String {
 }
 
 fn method(o: &Rc<Object>, name: &[u8]) -> Value {
-    Value::Array(Rc::new(PhpArray::from_list(vec![Value::Object(Rc::clone(o)), Value::Str(PhpStr::from(name))])))
+    Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str(PhpStr::from(name))]))
 }
 
 struct Writer<'c> {
@@ -51,22 +51,26 @@ impl Writer<'_> {
 
     fn value(&mut self, v: &Value) -> Result<(), Throw> {
         self.count += 1;
-        match v {
-            Value::Null | Value::Undef => self.out.extend_from_slice(b"N;"),
-            Value::Bool(b) => self.out.extend_from_slice(if *b { b"b:1;" } else { b"b:0;" }),
-            Value::Int(i) => self.out.extend_from_slice(format!("i:{i};").as_bytes()),
-            Value::Float(f) => {
+        match v.kind() {
+            Kind::Null | Kind::Undef => self.out.extend_from_slice(b"N;"),
+            Kind::Bool => self.out.extend_from_slice(if v.as_bool().expect("a bool") { b"b:1;" } else { b"b:0;" }),
+            Kind::Int => {
+                let i = v.as_int().expect("an int");
+                self.out.extend_from_slice(format!("i:{i};").as_bytes());
+            }
+            Kind::Float => {
                 self.out.extend_from_slice(b"d:");
-                self.out.extend_from_slice(float_to_string(*f, Precision::SERIALIZE, 'E').as_bytes());
+                self.out.extend_from_slice(float_to_string(v.as_float().expect("a float"), Precision::SERIALIZE, 'E').as_bytes());
                 self.out.push(b';');
             }
-            Value::Str(s) => self.string(s.as_bytes()),
-            Value::Ref(cell) => {
+            Kind::Str => self.string(v.as_str().expect("a string").as_bytes()),
+            Kind::Ref => {
                 self.count -= 1;
-                let inner = cell.borrow().clone();
+                let inner = v.as_reference().expect("a reference").borrow().clone();
                 self.value(&inner)?;
             }
-            Value::Array(a) => {
+            Kind::Array => {
+                let a = v.as_array().expect("an array");
                 self.out.extend_from_slice(format!("a:{}:{{", a.len()).as_bytes());
                 for (k, v) in a.iter() {
                     self.key(&k);
@@ -74,9 +78,15 @@ impl Writer<'_> {
                 }
                 self.out.push(b'}');
             }
-            // a resource is written as 0
-            Value::Object(o) if o.class.flags & CLASS_RESOURCE != 0 => self.out.extend_from_slice(b"i:0;"),
-            Value::Object(o) => self.object(o)?,
+            Kind::Object => {
+                let o = v.as_object().expect("an object");
+                if o.class.flags & CLASS_RESOURCE != 0 {
+                    // a resource is written as 0
+                    self.out.extend_from_slice(b"i:0;");
+                } else {
+                    self.object(o)?;
+                }
+            }
         }
         Ok(())
     }
@@ -115,7 +125,7 @@ impl Writer<'_> {
         };
         if o.class.method(b"__serialize").is_some() {
             let data = self.ctx.call(&method(o, b"__serialize"), &mut [])?;
-            let Value::Array(a) = data else {
+            let Ok(a) = data.into_array() else {
                 return Err(self.ctx.throw("TypeError", format!("{}::__serialize() must return an array", text(&name))));
             };
             header(self, a.len());
@@ -128,9 +138,9 @@ impl Writer<'_> {
         }
         // __sleep: only the properties it names.
         let only: Option<Vec<PhpStr>> = if o.class.method(b"__sleep").is_some() {
-            match self.ctx.call(&method(o, b"__sleep"), &mut [])? {
-                Value::Array(a) => Some(a.values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty)).collect()),
-                _ => {
+            match self.ctx.call(&method(o, b"__sleep"), &mut [])?.into_array() {
+                Ok(a) => Some(a.values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty)).collect()),
+                Err(_) => {
                     self.ctx.warn("serialize(): __sleep should return an array only containing the names of instance-variables to serialize");
                     self.out.extend_from_slice(b"N;");
                     return Ok(());
@@ -163,7 +173,7 @@ impl Writer<'_> {
             all.push((k, v.clone()));
         }
         let props: Vec<(Vec<u8>, Value)> = match only {
-            None => all.into_iter().filter(|(_, v)| !matches!(v, Value::Undef)).collect(),
+            None => all.into_iter().filter(|(_, v)| !v.is_undef()).collect(),
             // __sleep's names in its order, each the first of: the public
             // property, the object's class's private one, the protected one
             // (a name given mangled is that property); one there is none of
@@ -176,7 +186,7 @@ impl Writer<'_> {
                     let private = [b"\0", o.class.name.as_bytes(), b"\0", n].concat();
                     let protected = [b"\0*\0".as_slice(), n].concat();
                     match find(n).or_else(|| find(&private)).or_else(|| find(&protected)) {
-                        Some((_, Value::Undef)) => {}
+                        Some((_, v)) if v.is_undef() => {}
                         Some(found) => out.push(found),
                         None => self.ctx.warn(&format!("serialize(): \"{}\" returned as member variable from __sleep() but does not exist", text(n))),
                     }
@@ -281,7 +291,7 @@ fn serialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 0);
     let mut w = Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() };
     w.value(&v)?;
-    Ok(Value::Str(PhpStr::new(w.out)))
+    Ok(Value::str(PhpStr::new(w.out)))
 }
 
 struct Reader<'a> {
@@ -313,7 +323,7 @@ impl<'a> Reader<'a> {
         for (o, data) in std::mem::take(&mut self.wakeups) {
             match data {
                 Some(d) => {
-                    ctx.call(&method(&o, b"__unserialize"), &mut [Value::Array(Rc::new(d))])?;
+                    ctx.call(&method(&o, b"__unserialize"), &mut [Value::array(d)])?;
                 }
                 None => {
                     ctx.call(&method(&o, b"__wakeup"), &mut [])?;
@@ -367,15 +377,15 @@ impl<'a> Reader<'a> {
         }
         self.at += 2;
         let slot = self.values.len();
-        self.values.push(Value::Null);
+        self.values.push(Value::NULL);
         let v = match tag {
-            b'N' => Value::Null,
+            b'N' => Value::NULL,
             b'b' => match self.int(b';')? {
-                0 => Value::Bool(false),
-                1 => Value::Bool(true),
+                0 => Value::FALSE,
+                1 => Value::TRUE,
                 _ => return Err(Bad::At(start)),
             },
-            b'i' => Value::Int(self.int(b';')?),
+            b'i' => Value::int(self.int(b';')?),
             b'd' => {
                 let from = self.at;
                 while self.at < self.s.len() && self.s[self.at] != b';' {
@@ -389,13 +399,13 @@ impl<'a> Reader<'a> {
                     t => t.parse::<f64>().map_err(|_| Bad::At(start))?,
                 };
                 self.expect(b';')?;
-                Value::Float(f)
+                Value::float(f)
             }
             b's' => {
                 let b = self.bytes()?;
                 self.expect(b';')?;
                 // (One copy, a short one in the string's own allocation.)
-                Value::Str(PhpStr::from(b))
+                Value::str(PhpStr::from(b))
             }
             b'r' | b'R' => {
                 self.values.pop();
@@ -412,7 +422,7 @@ impl<'a> Reader<'a> {
                     a.insert(k, v);
                 }
                 self.expect(b'}')?;
-                Value::Array(Rc::new(a))
+                Value::array(a)
             }
             b'E' => {
                 let body = self.bytes()?;
@@ -457,11 +467,11 @@ impl<'a> Reader<'a> {
                     None => {
                         let c = ctx.class(b"__PHP_Incomplete_Class").ok_or(Bad::At(start))?;
                         let o = ctx.new_object(&c);
-                        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::Str(PhpStr::from(name)));
+                        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::str(PhpStr::from(name)));
                         (o, true)
                     }
                 };
-                self.values[slot] = Value::Object(Rc::clone(&o));
+                self.values[slot] = Value::object(Rc::clone(&o));
                 let custom = !incomplete && o.class.method(b"__unserialize").is_some();
                 let mut data = PhpArray::new();
                 for _ in 0..n {
@@ -479,7 +489,7 @@ impl<'a> Reader<'a> {
                 } else if !incomplete && o.class.method(b"__wakeup").is_some() {
                     self.wakeups.push((Rc::clone(&o), None));
                 }
-                Value::Object(o)
+                Value::object(o)
             }
             _ => return Err(Bad::At(start)),
         };
@@ -491,10 +501,12 @@ impl<'a> Reader<'a> {
         let at = self.at;
         let k = self.value(ctx)?;
         self.values.pop();
-        match k {
-            Value::Int(i) => Ok(Key::Int(i)),
-            Value::Str(s) => Ok(Key::from_string(s)),
-            _ => Err(Bad::At(at)),
+        if let Some(i) = k.as_int() {
+            return Ok(Key::Int(i));
+        }
+        match k.into_str() {
+            Ok(s) => Ok(Key::from_string(s)),
+            Err(_) => Err(Bad::At(at)),
         }
     }
 }
@@ -518,16 +530,16 @@ fn object_class(ctx: &mut dyn Ctx, name: &[u8]) -> Result<Option<Rc<Class>>, Opt
     if let Some(c) = ctx.class_load(name)? {
         return Ok(Some(c));
     }
-    let func = match ctx.ini_get(b"unserialize_callback_func") {
-        Some(Value::Str(f)) if !f.is_empty() => f,
+    let func = match ctx.ini_get(b"unserialize_callback_func").and_then(|v| v.into_str().ok()) {
+        Some(f) if !f.is_empty() => f,
         _ => return Ok(None),
     };
-    let callback = Value::Str(func.clone());
+    let callback = Value::str(func.clone());
     if !func.as_bytes().windows(2).any(|w| w == b"::") && !ctx.is_callable(&callback) {
         let f = text(func.as_bytes());
         return Err(Some(ctx.throw("Error", format!("Invalid callback {f}, function \"{f}\" not found or invalid function name"))));
     }
-    ctx.call(&callback, &mut [Value::Str(PhpStr::from(name))])?;
+    ctx.call(&callback, &mut [Value::str(PhpStr::from(name))])?;
     // The callback may have declared it.
     let class = ctx.class_load(name)?;
     if class.is_none() {
@@ -574,16 +586,17 @@ fn set_property(o: &Object, key: Key, v: Value) {
 /// unserialize(string $data, array $options = [])
 fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let data = arg(args, 0).to_php_string().unwrap_or_else(PhpStr::empty);
-    let allowed = match arg(args, 1) {
-        Value::Array(o) => match o.get(&Key::from_string(PhpStr::from("allowed_classes"))).map(Value::deref) {
-            Some(Value::Bool(false)) => Some(Vec::new()),
-            Some(Value::Array(list)) => Some(list.values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec()).collect()),
+    let options = arg(args, 1);
+    let allowed = match options.as_array() {
+        Some(o) => match o.get(&Key::from_string(PhpStr::from("allowed_classes"))).map(Value::deref) {
+            Some(v) if v.as_bool() == Some(false) => Some(Vec::new()),
+            Some(v) if v.is_array() => Some(v.as_array().expect("an array").values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec()).collect()),
             _ => None,
         },
-        _ => None,
+        None => None,
     };
     if data.is_empty() {
-        return Ok(Value::Bool(false));
+        return Ok(Value::FALSE);
     }
     let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new() };
     match r.value(ctx) {
@@ -593,7 +606,7 @@ fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         Err(Bad::At(at)) => {
             ctx.warn(&format!("unserialize(): Error at offset {at} of {} bytes", data.len()));
-            Ok(Value::Bool(false))
+            Ok(Value::FALSE)
         }
         Err(Bad::Threw(t)) => Err(t),
     }
