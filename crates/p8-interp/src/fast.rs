@@ -205,16 +205,17 @@ impl Context<'_> {
                     let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                     let Some(slot) = plain_slot(site.get(), o, scope, &$w[rx!(val as usize)]) else { slow!() };
                     let unused = matches!(code.get(pc + 1), Some(Instr::Free { reg }) if *reg == dst);
-                    let written = {
-                        let mut slots = o.slots.borrow_mut();
-                        match slots.get_mut(slot) {
-                            Some(s) if !(s.is_undef() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0) => {
-                                // (Pending is tested below, whatever this released.)
-                                let _ = put_var(s, $w[rx!(val as usize)].clone());
-                                true
-                            }
-                            _ => false,
+                    let written = match o.slots().get(slot) {
+                        Some(s) if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 || !p8_runtime::object::Slot::peek(s, Value::is_undef) => {
+                            // The slot's value out, written as a register
+                            // is, back in. (Pending is tested below,
+                            // whatever this released.)
+                            let mut cur = s.replace(Value::UNDEF);
+                            let _ = put_var(&mut cur, $w[rx!(val as usize)].clone());
+                            p8_runtime::object::put_slot(s, cur);
+                            true
                         }
+                        _ => false,
                     };
                     if !written {
                         slow!();

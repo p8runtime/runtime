@@ -13,7 +13,7 @@
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_INTERNAL, CLASS_READONLY, CLASS_TRAIT, Class, Native, Object, Visibility,
+    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_INTERNAL, CLASS_READONLY, CLASS_TRAIT, Class, Native, Object, Slot, Visibility,
 };
 use p8_runtime::reflect::{Callee, FnInfo, ParamInfo, Subject};
 use p8_runtime::string::PhpStr;
@@ -28,14 +28,14 @@ const PUBLIC: Visibility = Visibility::Public;
 
 fn get(o: &Object, name: &str) -> Value {
     match o.class.slot(name.as_bytes(), None) {
-        Some(i) => o.slots.borrow()[i].clone(),
+        Some(i) => o.slots()[i].cloned(),
         None => Value::NULL,
     }
 }
 
 fn set(o: &Object, name: &str, v: Value) {
     if let Some(i) = o.class.slot(name.as_bytes(), None) {
-        o.slots.borrow_mut()[i] = v;
+        o.slots()[i].set(v);
     }
 }
 
@@ -1343,7 +1343,7 @@ fn rpr_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     };
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
         Some(i) => {
-            let v = o.slots.borrow()[i].deref();
+            let v = o.slots()[i].peek(Value::deref);
             if v.is_undef() {
                 let p = &o.class.properties[i];
                 if p.ty.is_some() {
@@ -1375,13 +1375,7 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     };
     let v = arg(args, 1);
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
-        Some(i) => {
-            let mut slots = o.slots.borrow_mut();
-            match slots[i].as_reference() {
-                Some(cell) => *cell.borrow_mut() = v,
-                None => slots[i] = v,
-            }
-        }
+        Some(i) => o.slots()[i].assign(v),
         None => {
             o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name.as_str())), v);
         }
@@ -1531,7 +1525,7 @@ fn rpr_skip_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut
         return Ok(Value::NULL);
     }
     let defaults = ctx.class_defaults(&o.class)?;
-    o.slots.borrow_mut()[slot] = defaults.get(slot).cloned().unwrap_or(Value::UNDEF);
+    o.slots()[slot].set(defaults.get(slot).cloned().unwrap_or(Value::UNDEF));
     ctx.lazy_slot_done(&o, slot);
     Ok(Value::NULL)
 }
@@ -1539,7 +1533,7 @@ fn rpr_skip_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut
 fn rpr_set_raw_value_without_lazy_initialization(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let (o, slot) = lazy_property_target(ctx, this, args, "setRawValueWithoutLazyInitialization")?;
     let was_lazy = o.lazy_slot(slot);
-    o.slots.borrow_mut()[slot] = arg(args, 1);
+    o.slots()[slot].set(arg(args, 1));
     if was_lazy {
         ctx.lazy_slot_done(&o, slot);
     }
@@ -1565,7 +1559,7 @@ fn rpr_is_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     }
     let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     Ok(Value::bool(match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
-        Some(i) => !o.slots.borrow()[i].is_undef(),
+        Some(i) => !o.slots()[i].peek(Value::is_undef),
         None => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
     }))
 }

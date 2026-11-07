@@ -360,7 +360,7 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
     let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
     let o = if o.lazy.get() != 0 { ctx.lazy_initialize(&o)? } else { o };
     let mut out = PhpArray::new();
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if v.is_undef() || p.is_internal() {
             continue;
@@ -406,7 +406,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let scope = ctx.scope();
     let mut out = PhpArray::new();
     for (i, p) in o.class.properties.iter().enumerate() {
-        if p.is_internal() || p.hooks == 0 && o.slots.borrow()[i].is_undef() {
+        if p.is_internal() || p.hooks == 0 && p8_runtime::object::Slot::peek(&o.slots()[i], Value::is_undef) {
             continue;
         }
         let declaring = declaring(&o.class, &p.declaring);

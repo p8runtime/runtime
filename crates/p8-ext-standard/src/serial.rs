@@ -152,7 +152,7 @@ impl Writer<'_> {
         // Every property by its serialized (mangled) name; an uninitialized
         // typed one too (Undef: __sleep may name it, then it is left out).
         let mut all: Vec<(Vec<u8>, Value)> = Vec::new();
-        let slots = o.slots.borrow();
+        let slots = o.slot_values();
         for (p, v) in o.class.properties.iter().zip(slots.iter()) {
             if p.is_internal() {
                 continue;
@@ -576,7 +576,7 @@ fn set_property(o: &Object, key: Key, v: Value) {
         }
     };
     match slot {
-        Some(i) => o.slots.borrow_mut()[i] = v,
+        Some(i) => o.slots()[i].set(v),
         None => {
             o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), v);
         }

@@ -515,7 +515,7 @@ fn entries(o: &Object) -> Vec<Entry> {
         }
         return list;
     }
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         // A virtual property stores nothing, a builtin's hidden state is
         // not shown: neither is listed.

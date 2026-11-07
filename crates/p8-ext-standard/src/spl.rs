@@ -13,7 +13,7 @@
 use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
-use p8_runtime::object::{CLASS_ABSTRACT, CLASS_INTERFACE, Native, Object, Visibility};
+use p8_runtime::object::{CLASS_ABSTRACT, CLASS_INTERFACE, Native, Object, Slot, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
@@ -31,12 +31,12 @@ pub(crate) fn slot(o: &Object, name: &str) -> Option<usize> {
 }
 
 pub(crate) fn get(o: &Object, name: &str) -> Value {
-    slot(o, name).map_or(Value::NULL, |i| o.slots.borrow()[i].deref())
+    slot(o, name).map_or(Value::NULL, |i| o.slots()[i].peek(Value::deref))
 }
 
 pub(crate) fn set(o: &Object, name: &str, v: Value) {
     if let Some(i) = slot(o, name) {
-        o.slots.borrow_mut()[i] = v;
+        o.slots()[i].set(v);
     }
 }
 
@@ -95,7 +95,7 @@ fn elements(o: &Object) -> PhpArray {
     let storage = get(o, "storage");
     let Some(inner) = storage.as_object() else { return array_of(storage) };
     let mut out = PhpArray::new();
-    let slots = inner.slots.borrow();
+    let slots = inner.slot_values();
     for (p, v) in inner.class.properties.iter().zip(slots.iter()) {
         if p.visibility == Visibility::Public && !p.is_internal() && !v.is_undef() {
             out.insert(Key::from_string(p.name.clone()), v.deref());
@@ -120,7 +120,7 @@ fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
                     Key::Int(_) => None,
                 };
                 match declared {
-                    Some(i) => inner.slots.borrow_mut()[i] = v.clone(),
+                    Some(i) => inner.slots()[i].set(v.clone()),
                     None => dynamic.insert(k, v.clone()),
                 }
             }
@@ -250,7 +250,7 @@ fn ao_exchange_array(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -
 /// declares and the dynamic ones, by their mangled names.
 fn members(o: &Object) -> PhpArray {
     let mut out = PhpArray::new();
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         let name = p.name.as_bytes();
         if name.starts_with(b"\0") || name == b"storage" || v.is_undef() {
@@ -917,7 +917,7 @@ fn put_dll(o: &Object, list: Vec<Value>) {
 /// (declared by `own`) are internal, keyed as zend_std_get_properties keys them.
 fn spl_members(o: &Object, own: &[u8]) -> PhpArray {
     let mut out = PhpArray::new();
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (i, p) in o.class.properties.iter().enumerate() {
         if p.declaring.as_slice() == own || p.name.as_bytes().starts_with(b"\0") || slots[i].is_undef() {
             continue;
@@ -950,7 +950,7 @@ fn spl_restore_members(ctx: &mut dyn Ctx, o: &Object, own: &[u8], members: &PhpA
             None => raw,
         };
         match o.class.properties.iter().position(|p| p.name.as_bytes() == name.as_slice() && p.declaring.as_slice() != own) {
-            Some(i) => o.slots.borrow_mut()[i] = v.deref(),
+            Some(i) => o.slots()[i].set(v.deref()),
             None => {
                 if o.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 && !o.dynamic.borrow().contains_key(&k) {
                     let class = String::from_utf8_lossy(o.class.name.as_bytes()).into_owned();

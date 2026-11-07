@@ -35,7 +35,7 @@ use p8_runtime::array::{Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Registry, const_key};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object};
+use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object, Slot};
 use p8_runtime::ops::{self, BinOp, Diag, OpError};
 use p8_runtime::string::PhpStr;
 use p8_runtime::symbol::Sym;
@@ -2468,9 +2468,9 @@ impl Context<'_> {
                             .find(|c| o.class.is_a(c.as_bytes()))
                             .and_then(|c| o.class.slot(b"storage", Some(c.as_bytes())));
                         if let Some(i) = storage
-                            && o.slots.borrow()[i].deref().is_array()
+                            && o.slots()[i].peek(|v| v.deref().is_array())
                         {
-                            let cell = refs::make_ref(&mut o.slots.borrow_mut()[i]);
+                            let cell = o.slots()[i].modify(refs::make_ref);
                             let empty = cell.borrow().as_array().is_some_and(PhpArray::is_empty);
                             if empty {
                                 pc = end as usize;
@@ -5079,7 +5079,7 @@ impl Ctx for Context<'_> {
 
     fn prop_value(&mut self, o: &Rc<Object>, slot: usize) -> Result<Option<Value>, Throw> {
         let p = &o.class.properties[slot];
-        let raw = || Some(o.slots.borrow()[slot].deref()).filter(|v| !v.is_undef());
+        let raw = || Some(o.slots()[slot].peek(Value::deref)).filter(|v| !v.is_undef());
         if p.hooks == 0 || self.isolate.regs.is_empty() {
             return Ok(raw());
         }

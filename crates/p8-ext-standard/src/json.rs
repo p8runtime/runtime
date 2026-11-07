@@ -287,7 +287,7 @@ impl Encoder<'_> {
                 continue;
             }
             // A hooked property through its get hook (a virtual one too).
-            let v = if p.hooks == 0 { Some(o.slots.borrow()[i].clone()).filter(|v| !v.is_undef()) } else { self.ctx.prop_value(o, i)? };
+            let v = if p.hooks == 0 { Some(p8_runtime::object::Slot::cloned(&o.slots()[i])).filter(|v| !v.is_undef()) } else { self.ctx.prop_value(o, i)? };
             if let Some(v) = v {
                 entries.push((Key::from_string(p.name.clone()), v));
             }

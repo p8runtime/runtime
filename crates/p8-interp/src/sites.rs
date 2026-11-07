@@ -179,15 +179,15 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    let slots = o.slots.borrow();
-    let v = slots.get(site.slot as usize)?;
-    if v.is_undef() {
-        None
-    } else if let Some(cell) = v.as_reference() {
-        Some(cell.borrow().clone())
-    } else {
-        Some(v.clone())
-    }
+    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, |v| {
+        if v.is_undef() {
+            None
+        } else if let Some(cell) = v.as_reference() {
+            Some(cell.borrow().clone())
+        } else {
+            Some(v.clone())
+        }
+    })
 }
 
 /// The declared slot a property write the cache answers goes to: as for
@@ -199,7 +199,7 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
         return None;
     }
     let slot = site.slot as usize;
-    let unset = o.slots.borrow().get(slot)?.is_undef();
+    let unset = p8_runtime::object::Slot::peek(o.slots().get(slot)?, Value::is_undef);
     (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
 }
 

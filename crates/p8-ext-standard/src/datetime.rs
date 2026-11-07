@@ -14,7 +14,7 @@ use chrono::{Datelike, Timelike};
 use chrono_tz::Tz;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
-use p8_runtime::object::{CLASS_INTERFACE, Native, Object, Visibility};
+use p8_runtime::object::{CLASS_INTERFACE, Native, Object, Slot, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -234,14 +234,14 @@ struct State {
 
 fn read(o: &Object, name: &str) -> Value {
     match o.class.slot(name.as_bytes(), None) {
-        Some(i) => o.slots.borrow()[i].clone(),
+        Some(i) => o.slots()[i].cloned(),
         None => Value::NULL,
     }
 }
 
 fn write(o: &Object, name: &str, v: Value) {
     if let Some(i) = o.class.slot(name.as_bytes(), None) {
-        o.slots.borrow_mut()[i] = v;
+        o.slots()[i].set(v);
     }
 }
 
@@ -828,7 +828,7 @@ fn datetime_info(o: &Object) -> PhpArray {
 /// The other properties of a date object (a subclass's), as serialize
 /// keeps them.
 fn own_props(o: &Object, out: &mut PhpArray) {
-    let slots = o.slots.borrow();
+    let slots = o.slot_values();
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if !p.is_internal() && !v.is_undef() {
             out.insert(Key::from_string(p.name.clone()), v.deref());
@@ -847,7 +847,7 @@ fn restore_props(o: &Object, a: &PhpArray, skip: &[&str]) {
             continue;
         }
         match o.class.slot(name.as_bytes(), None) {
-            Some(i) => o.slots.borrow_mut()[i] = v.deref(),
+            Some(i) => o.slots()[i].set(v.deref()),
             None => {
                 o.dynamic.borrow_mut().insert(k.clone(), v.deref());
             }
@@ -1304,7 +1304,7 @@ fn timezone_name_get(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Thr
 /// A copy of an object (a DateTime or DateInterval): its class, its slots.
 fn copy_object(ctx: &mut dyn Ctx, o: &Rc<Object>) -> Rc<Object> {
     let copy = ctx.new_object(&o.class);
-    *copy.slots.borrow_mut() = o.slots.borrow().clone();
+    copy.set_slot_values(&o.slot_values());
     copy
 }
 
