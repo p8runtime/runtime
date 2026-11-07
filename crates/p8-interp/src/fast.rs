@@ -1273,10 +1273,8 @@ fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
         let key = &w[usize::from(keys)];
         if let Some(k) = key.as_int() {
             Some(a.get_int(k).is_some_and(is_set))
-        } else if let Some(s) = key.cloned_str() {
-            Some(a.get(&Key::from_string(s)).is_some_and(is_set))
         } else {
-            None
+            key.cloned_str().map(|s| a.get(&Key::from_string(s)).is_some_and(is_set))
         }
     };
     let var = &w[usize::from(var)];

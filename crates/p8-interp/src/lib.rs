@@ -2317,7 +2317,7 @@ impl Context<'_> {
                     }
                     Rare::AutoGlobal => {
                         // The name is a constant string: read, not converted.
-                        let name = self.operand(w, func, b).into_str().ok().expect("AutoGlobal names a constant string");
+                        let name = self.operand(w, func, b).into_str().expect("AutoGlobal names a constant string");
                         let main: &mut [Value] = if in_main { w } else { below };
                         reg!(a) = Value::reference(self.with_main(main, |cx, main| cx.global_slot(main, name.as_bytes())));
                     }
@@ -4885,7 +4885,7 @@ impl Ctx for Context<'_> {
         let default = self.isolate.registry.ini_default(name)?;
         Some(match self.ini_master.get(name) {
             Some(v) => v.clone(),
-            None => default.map_or(Value::NULL, |d| Value::str(d)),
+            None => default.map_or(Value::NULL, Value::str),
         })
     }
 
