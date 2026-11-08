@@ -158,6 +158,9 @@ pub(crate) struct Prog {
     pub startline: bool,
     /// The bytes a match can start with, when they're known.
     pub first: First,
+    /// Text every match contains, when there is some beyond `first`'s
+    /// prefix: a subject without it is settled by one memmem.
+    pub required: Option<Box<memchr::memmem::Finder<'static>>>,
     pub match_limit: Option<u64>,
     pub depth_limit: Option<u64>,
     pub not_empty: bool,
@@ -249,11 +252,17 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
     let dotstar = if names_groups(&parsed.node) { None } else { dot_star(&parsed.node) };
     let anchored = anchored_opt || starts_anchored(&parsed.node) || dotstar == Some(true);
     let startline = !anchored && dotstar == Some(false);
+    let mut required = None;
     let first = if anchored {
         First::Any
     } else {
         let mut prefix = Vec::new();
         literal_prefix(&parsed.node, parsed.utf, &mut prefix);
+        // A required literal that is not the prefix the search already
+        // looks for (an anchored search decides at the start offset).
+        required = required_literal(&parsed.node, parsed.utf)
+            .filter(|lit| *lit != prefix)
+            .map(|lit| Box::new(memchr::memmem::Finder::new(&lit).into_owned()));
         First::of(first_bytes(&parsed.node, &c), prefix)
     };
     Ok(Prog {
@@ -269,6 +278,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         anchored,
         startline,
         first,
+        required,
         match_limit: parsed.match_limit,
         depth_limit: parsed.depth_limit,
         not_empty: parsed.not_empty,
@@ -374,6 +384,84 @@ fn literal_prefix(node: &Node, utf: bool, out: &mut Vec<u8>) -> bool {
         Node::Group(b, _) => literal_prefix(b, utf, out),
         Node::Concat(v) => v.iter().all(|n| literal_prefix(n, utf, out)),
         _ => false,
+    }
+}
+
+/// The longest run of case-sensitive characters every match contains
+/// (PCRE2's "required code unit", taken to a string): a subject without
+/// it has no match, which one memmem settles. None with `(*ACCEPT)`,
+/// which can end a match before the rest of the pattern.
+fn required_literal(node: &Node, utf: bool) -> Option<Vec<u8>> {
+    if has_accept(node) {
+        return None;
+    }
+    let mut run = Vec::new();
+    let mut best = Vec::new();
+    required(node, utf, &mut run, &mut best);
+    close_run(&mut run, &mut best);
+    (!best.is_empty()).then_some(best)
+}
+
+fn has_accept(node: &Node) -> bool {
+    match node {
+        Node::Verb(Verb::Accept) => true,
+        Node::Group(b, _) | Node::Atomic(b) | Node::Look { body: b, .. } | Node::Repeat { node: b, .. } => has_accept(b),
+        Node::Concat(v) | Node::Alt(v) => v.iter().any(has_accept),
+        Node::Cond { cond, yes, no } => {
+            matches!(cond, Cond::Look { body, .. } if has_accept(body)) || has_accept(yes) || no.as_deref().is_some_and(has_accept)
+        }
+        _ => false,
+    }
+}
+
+fn close_run(run: &mut Vec<u8>, best: &mut Vec<u8>) {
+    if run.len() > best.len() {
+        std::mem::swap(run, best);
+    }
+    run.clear();
+}
+
+/// Walks the pattern in match order; `run` is the text the match contains
+/// contiguously so far, closed by anything that may match other text.
+fn required(node: &Node, utf: bool, run: &mut Vec<u8>, best: &mut Vec<u8>) {
+    match node {
+        Node::Char { c, nocase: false, .. } => {
+            if utf {
+                match char::from_u32(*c) {
+                    Some(ch) => {
+                        let mut buf = [0u8; 4];
+                        run.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                    }
+                    None => close_run(run, best),
+                }
+            } else if *c < 256 {
+                run.push(*c as u8);
+            } else {
+                close_run(run, best);
+            }
+        }
+        Node::Concat(v) => v.iter().for_each(|n| required(n, utf, run, best)),
+        Node::Group(b, _) | Node::Atomic(b) => required(b, utf, run, best),
+        // An optional body's text is required only when it is taken.
+        Node::Repeat { min: 0, .. } => close_run(run, best),
+        Node::Repeat { node, min, max, .. } => {
+            required(node, utf, run, best);
+            if !(*min == 1 && *max == Some(1)) {
+                close_run(run, best);
+            }
+        }
+        // Zero-width: the text on either side is contiguous.
+        Node::Empty | Node::Assert(_) | Node::Keep | Node::Look { .. } | Node::Verb(_) => {}
+        Node::Char { .. }
+        | Node::Any { .. }
+        | Node::Byte
+        | Node::Set(_)
+        | Node::Alt(_)
+        | Node::BackRef { .. }
+        | Node::Call(_)
+        | Node::Cond { .. }
+        | Node::Newline
+        | Node::Grapheme => close_run(run, best),
     }
 }
 
