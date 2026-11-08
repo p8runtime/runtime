@@ -1,0 +1,29 @@
+array(5) {
+  [0]=>
+  string(6) "shared"
+  [1]=>
+  int(42)
+  [2]=>
+  int(6)
+  [3]=>
+  int(1)
+  [4]=>
+  int(1)
+}
+array(5) {
+  [0]=>
+  string(6) "shared"
+  [1]=>
+  int(42)
+  [2]=>
+  int(1)
+  [3]=>
+  int(6)
+  [4]=>
+  int(2)
+}
+string(8) "shared42"
+string(8) "shared!6"
+string(7) "shared6"
+string(12) "sharedshared"
+string(6) "shared"

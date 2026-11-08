@@ -991,6 +991,7 @@ impl PhpArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::string::IStr;
 
     fn int(i: i64) -> Value {
         Value::int(i)
@@ -1021,6 +1022,36 @@ mod tests {
         let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![Key::Int(0), Key::Int(1), Key::Str(PhpStr::from("x"))]);
         assert_eq!(a.get(&Key::Int(0)).map(Value::to_int), Some(9));
+    }
+
+    /// A string key is found from another handle of the same bytes (the
+    /// byte compare `find` and `scan` hand off), in a scanned table and a
+    /// chained one, by every lookup and by `set`; other bytes find nothing.
+    #[test]
+    fn string_keys_found_from_another_handle() {
+        let got = |v: Option<&Value>| v.and_then(Value::as_int);
+        for n in [4usize, 40] {
+            let mut a = PhpArray::new();
+            for i in 0..n {
+                a.insert(Key::Str(PhpStr::from(format!("key{i}"))), int(i as i64));
+            }
+            for i in 0..n {
+                let other = PhpStr::from(format!("key{i}"));
+                assert_eq!(got(a.get(&Key::Str(other.clone()))), Some(i as i64), "get, {n} keys");
+                assert_eq!(got(a.get_str(&other)), Some(i as i64), "get_str, {n} keys");
+                assert!(a.get_mut(&Key::Str(other.clone())).is_some(), "get_mut, {n} keys");
+                assert_eq!(got(a.get(&Key::Str(PhpStr::from(format!("key{i}x"))))), None, "a miss, {n} keys");
+            }
+            // set() finds the entry too: no second one is made.
+            a.insert(Key::Str(PhpStr::from("key1")), int(-1));
+            assert_eq!(a.len(), n);
+            assert_eq!(got(a.get_str(&PhpStr::from("key1"))), Some(-1));
+            // A program-memory key (one head): found by its head, and by its bytes.
+            let i = IStr::intern(b"istr key").expect("room in the pool");
+            a.insert(Key::Str(i.to_php_str()), int(7));
+            assert_eq!(got(a.get_str(i)), Some(7));
+            assert_eq!(got(a.get_str(&PhpStr::from("istr key"))), Some(7));
+        }
     }
 
     #[test]
