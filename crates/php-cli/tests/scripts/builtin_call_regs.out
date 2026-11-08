@@ -1,0 +1,46 @@
+15
+int(4)
+bool(false)
+Hello
+mixed
+array(2) {
+  [0]=>
+  string(3) "REF"
+  [1]=>
+  string(7) "changed"
+}
+0|integer
+
+Warning: Undefined variable $missing in %s on line 50
+int(0)
+123455
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+  }
+}
+uu
+YESNO
+ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0 at line 85
+#0 %s(85): str_repeat('x', -1)
+#1 %s(88): repeat('x', -1)
+#2 {main}
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+still here: D
+D gone
+bool(true)
+25
+done

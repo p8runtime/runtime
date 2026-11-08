@@ -220,20 +220,31 @@ impl Context<'_> {
                 }};
             }
             loop {
-                let Insn { op, a, b, c, imm } = code[pc];
+                let insn: &Insn = &code[pc];
+                let op = insn.op;
+                // An arm's operands, read in the arm: read before the match,
+                // they would all be loaded (and kept) on every dispatch.
+                macro_rules! ops {
+                    ($a:ident, $b:ident, $c:ident, $imm:ident) => {
+                        // (Each arm names all four; it reads the ones it uses.)
+                        #[allow(unused_variables)]
+                        let ($a, $b, $c, $imm) = (insn.a, insn.b, insn.c, insn.imm);
+                    };
+                }
                 match op {
                     Op::Slow => slow!(),
                     // `$this`, in a method that has one (else `step` raises).
                     Op::This => match &top.this {
                         Some(this) => {
                             let this = Value::object(Rc::clone(this));
-                            done!(put(&mut w[rx!(a)], this));
+                            done!(put(&mut w[rx!(insn.a)], this));
                         }
                         None => slow!(),
                     },
                     // A property read the name's cache entry answers (anything
                     // else, `step`: a miss, an unset slot, a reference operand).
                     Op::FetchProp | Op::FetchPropThis => {
+                        ops!(a, b, c, imm);
                         let Some(site) = clo.props.get(imm as usize) else { slow!() };
                         // FetchPropThis: the method's own `$this`, from the frame.
                         let o = if op == Op::FetchPropThis {
@@ -254,6 +265,7 @@ impl Context<'_> {
                     // An unset slot of a class with __set and its kin, and
                     // anything `plain_slot` declines, is `step`'s.
                     Op::AssignProp | Op::AssignPropThis => {
+                        ops!(a, b, c, imm);
                         let (val, dst) = (b, c);
                         let Some(site) = clo.props.get((imm & !insn::TAKE) as usize) else { slow!() };
                         // AssignPropThis: the method's own `$this`, from the frame.
@@ -310,7 +322,7 @@ impl Context<'_> {
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     Op::VerifyReturn => match &clo.code.ret_type {
-                        Some(ty) if clo.code.is_generator || !ty.quick(&w[rx!(a)]) => slow!(),
+                        Some(ty) if clo.code.is_generator || !ty.quick(&w[rx!(insn.a)]) => slow!(),
                         _ => pc += 1,
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
@@ -320,6 +332,7 @@ impl Context<'_> {
                     // consumed as a call's are. Anything else is the call.
                     // (The kinds are numbered as `insn::INTRINSICS`.)
                     Op::Intrinsic => {
+                        ops!(a, b, c, imm);
                         let (dst, args, argc) = (a, rx!(b), c);
                         if !matches!(clo.sites[(imm & 0xffff) as usize].get(), Some(Callee::Builtin(_))) {
                             slow!();
@@ -368,6 +381,7 @@ impl Context<'_> {
                     // (by reference, a miss, or an undefined or reference
                     // variable: `step`, which looks the method up by name).
                     Op::SendVarMethod => {
+                        ops!(a, b, c, imm);
                         let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
@@ -383,22 +397,24 @@ impl Context<'_> {
                         done!(put(&mut w[rx!(arg)], v));
                     }
                     Op::Jump => {
+                        let imm = insn.imm;
                         if back!(imm) {
                             slow!();
                         }
                         pc = imm as usize;
                     }
-                    Op::JumpLt => jump_if!(Cmp::Lt, true, a, b, imm),
-                    Op::JumpNotLt => jump_if!(Cmp::Lt, false, a, b, imm),
-                    Op::JumpLe => jump_if!(Cmp::Le, true, a, b, imm),
-                    Op::JumpNotLe => jump_if!(Cmp::Le, false, a, b, imm),
-                    Op::JumpEq => jump_if!(Cmp::Eq, true, a, b, imm),
-                    Op::JumpNotEq => jump_if!(Cmp::Eq, false, a, b, imm),
-                    Op::JumpIdentical => jump_if!(Cmp::Identical, true, a, b, imm),
-                    Op::JumpNotIdentical => jump_if!(Cmp::Identical, false, a, b, imm),
+                    Op::JumpLt => jump_if!(Cmp::Lt, true, insn.a, insn.b, insn.imm),
+                    Op::JumpNotLt => jump_if!(Cmp::Lt, false, insn.a, insn.b, insn.imm),
+                    Op::JumpLe => jump_if!(Cmp::Le, true, insn.a, insn.b, insn.imm),
+                    Op::JumpNotLe => jump_if!(Cmp::Le, false, insn.a, insn.b, insn.imm),
+                    Op::JumpEq => jump_if!(Cmp::Eq, true, insn.a, insn.b, insn.imm),
+                    Op::JumpNotEq => jump_if!(Cmp::Eq, false, insn.a, insn.b, insn.imm),
+                    Op::JumpIdentical => jump_if!(Cmp::Identical, true, insn.a, insn.b, insn.imm),
+                    Op::JumpNotIdentical => jump_if!(Cmp::Identical, false, insn.a, insn.b, insn.imm),
                     // A comparison (`<=>` is `step`'s): two ints inline, the
                     // rest through `test`.
                     Op::Compare => {
+                        ops!(a, b, c, imm);
                         let cmp = insn::cmp(imm);
                         let t = if let (Some(x), Some(y)) = (w[rx!(b)].as_int(), w[rx!(c)].as_int())
                             && cmp != Cmp::Spaceship
@@ -415,7 +431,7 @@ impl Context<'_> {
                         done!(put_var(&mut w[rx!(a)], Value::bool(t)));
                     }
                     Op::IncVar => {
-                        let r = &mut w[rx!(a)];
+                        let r = &mut w[rx!(insn.a)];
                         if let Some(i) = r.as_int_mut()
                             && *i != i64::MAX
                         {
@@ -429,12 +445,12 @@ impl Context<'_> {
                             slow!();
                         }
                     }
-                    Op::IncJumpLt => step_jump!(a, b, imm, i64::checked_add, |n, b| n < b),
-                    Op::IncJumpLe => step_jump!(a, b, imm, i64::checked_add, |n, b| n <= b),
-                    Op::DecJumpGt => step_jump!(a, b, imm, i64::checked_sub, |n, b| n > b),
-                    Op::DecJumpGe => step_jump!(a, b, imm, i64::checked_sub, |n, b| n >= b),
+                    Op::IncJumpLt => step_jump!(insn.a, insn.b, insn.imm, i64::checked_add, |n, b| n < b),
+                    Op::IncJumpLe => step_jump!(insn.a, insn.b, insn.imm, i64::checked_add, |n, b| n <= b),
+                    Op::DecJumpGt => step_jump!(insn.a, insn.b, insn.imm, i64::checked_sub, |n, b| n > b),
+                    Op::DecJumpGe => step_jump!(insn.a, insn.b, insn.imm, i64::checked_sub, |n, b| n >= b),
                     Op::DecVar => {
-                        let r = &mut w[rx!(a)];
+                        let r = &mut w[rx!(insn.a)];
                         if let Some(i) = r.as_int_mut()
                             && *i != i64::MIN
                         {
@@ -449,15 +465,17 @@ impl Context<'_> {
                         }
                     }
                     Op::Binary => {
+                        ops!(a, b, c, imm);
                         if !arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), Reg::from(c)) {
                             slow!();
                         }
                         done!(true);
                     }
-                    Op::Add => arith!(BinOp::Add, a, b, c, i64::checked_add),
-                    Op::Sub => arith!(BinOp::Sub, a, b, c, i64::checked_sub),
-                    Op::Mul => arith!(BinOp::Mul, a, b, c, i64::checked_mul),
+                    Op::Add => arith!(BinOp::Add, insn.a, insn.b, insn.c, i64::checked_add),
+                    Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, insn.c, i64::checked_sub),
+                    Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, insn.c, i64::checked_mul),
                     Op::ConcatN => {
+                        ops!(a, b, c, imm);
                         if !concat_n(&mut w[..], Reg::from(a), Reg::from(b), c) {
                             slow!();
                         }
@@ -468,6 +486,7 @@ impl Context<'_> {
                     // with a destructor stops here: it runs before the next
                     // instruction.
                     Op::Move => {
+                        ops!(a, b, c, imm);
                         let Some(v) = copied(&w[rx!(b)]) else { slow!() };
                         done!(put(&mut w[rx!(a)], v));
                         if self.ids.has_pending() {
@@ -475,10 +494,12 @@ impl Context<'_> {
                         }
                     }
                     Op::Assign => {
+                        ops!(a, b, c, imm);
                         let Some(v) = copied(&w[rx!(b)]) else { slow!() };
                         done!(put_var(&mut w[rx!(a)], v));
                     }
                     Op::AssignTake => {
+                        ops!(a, b, c, imm);
                         let (var, src) = (a, b);
                         let taken = std::mem::replace(&mut w[rx!(src)], Value::UNDEF);
                         // Undefined: `step`'s (the warning).
@@ -505,11 +526,12 @@ impl Context<'_> {
                         done!(released);
                     }
                     Op::Free => {
-                        done!(clear(&mut w[rx!(a)]));
+                        done!(clear(&mut w[rx!(insn.a)]));
                     }
                     // A condition: a bool inline, anything else through `truth`
                     // (what may warn, NAN and an undefined variable, is `step`'s).
                     Op::JumpIf | Op::JumpIfNot => {
+                        ops!(a, b, c, imm);
                         let v = &w[rx!(a)];
                         let c = match v.as_bool() {
                             Some(c) => c,
@@ -531,6 +553,7 @@ impl Context<'_> {
                     // value at that key: an int key inline, a string key (and
                     // a reference) through `elem`.
                     Op::FetchDim => {
+                        ops!(a, b, c, imm);
                         let v = if let (Some(arr), Some(k)) = (w[rx!(b)].as_array(), w[rx!(c)].as_int()) {
                             match arr.get_int(k) {
                                 Some(v) if !v.is_reference() => v.clone(),
@@ -551,6 +574,7 @@ impl Context<'_> {
                     // or a string; the rest (an object, a string's offset, a
                     // key of another type) is `step`'s.
                     Op::IssetDim => {
+                        ops!(a, b, c, imm);
                         let set = if let (Some(arr), Some(k)) = (w[rx!(b)].as_array(), w[rx!(c)].as_int()) {
                             arr.get_int(k).is_some_and(is_set)
                         } else {
@@ -566,6 +590,7 @@ impl Context<'_> {
                     // with a plain value. The element replaced may have been
                     // an object's last holder: tested as for any write.
                     Op::AssignDim => {
+                        ops!(a, b, c, imm);
                         let (var, keys, val, dst) = (a, b, c, imm as u8);
                         if w[rx!(keys)].is_str() {
                             if !set_str_elem(&mut w[..], Reg::from(var), Reg::from(keys), Reg::from(val), Reg::from(dst)) {
@@ -591,6 +616,7 @@ impl Context<'_> {
                     // $a[int] op= number, $a an array holding a number at
                     // that key
                     Op::AssignDimOp => {
+                        ops!(a, b, c, imm);
                         if !dim_op(&mut w[..], insn::binop(imm >> 8), Reg::from(a), Reg::from(b), Reg::from(c), Reg::from(imm as u8)) {
                             slow!();
                         }
@@ -600,6 +626,7 @@ impl Context<'_> {
                     // last holder: a destructor due runs before the body, at
                     // this instruction.
                     Op::IterNext | Op::IterNextKey => {
+                        ops!(a, b, c, imm);
                         // An object (a generator, an Iterator) is `step`'s.
                         if !w[rx!(a)].is_array() {
                             slow!();
@@ -613,6 +640,7 @@ impl Context<'_> {
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
+                        ops!(a, b, c, imm);
                         let op = insn::binop(imm);
                         let released = if let (Some(x), Some(y)) = (w[rx!(a)].as_int(), w[rx!(b)].as_int())
                             && let Some(n) = int_op(op, x, y)
@@ -627,6 +655,7 @@ impl Context<'_> {
                     }
                     // $i++ / ++$i (and --) whose value is used, on an int
                     Op::IncDec => {
+                        ops!(a, b, c, imm);
                         let Some(slot) = w[rx!(a)].as_int_mut() else { slow!() };
                         let i = *slot;
                         let Some(n) = (if imm & insn::INC != 0 { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
@@ -634,11 +663,12 @@ impl Context<'_> {
                         done!(put(&mut w[rx!(b)], Value::int(if imm & insn::POST != 0 { i } else { n })));
                     }
                     Op::LoadNull => {
-                        done!(put(&mut w[rx!(a)], Value::NULL));
+                        done!(put(&mut w[rx!(insn.a)], Value::NULL));
                     }
                     // `!x` and a condition made a value: as `truth` decides
                     // (NAN and an undefined variable warn: `step`).
                     Op::Not | Op::ToBool => {
+                        ops!(a, b, c, imm);
                         let v = &w[rx!(b)];
                         let t = match v.as_bool() {
                             Some(b) => b,
@@ -650,11 +680,13 @@ impl Context<'_> {
                         done!(put(&mut w[rx!(a)], Value::bool(t != (op == Op::Not))));
                     }
                     Op::IssetVar => {
+                        ops!(a, b, c, imm);
                         let set = is_set(&w[rx!(b)]);
                         done!(put(&mut w[rx!(a)], Value::bool(set)));
                     }
                     // `a ?? b`: a set and not null goes to dst and jumps.
                     Op::JumpIfSet => {
+                        ops!(a, b, c, imm);
                         let s = &w[rx!(a)];
                         let v = if s.is_null_or_undef() {
                             None
@@ -678,10 +710,12 @@ impl Context<'_> {
                     // read through a reference; anything else, a next key
                     // occupied included, is `step`'s).
                     Op::NewArray => {
+                        ops!(a, b, c, imm);
                         let arr = Value::array(PhpArray::list_with_capacity(imm as usize));
                         done!(put(&mut w[rx!(a)], arr));
                     }
                     Op::ArrayPush => {
+                        ops!(a, b, c, imm);
                         let Some(arr) = w[rx!(a)].as_array() else { slow!() };
                         if arr.next_key().is_none() {
                             slow!();
@@ -692,6 +726,7 @@ impl Context<'_> {
                         done!(true);
                     }
                     Op::ArraySet => {
+                        ops!(a, b, c, imm);
                         if !w[rx!(a)].is_array() {
                             slow!();
                         }
@@ -711,6 +746,7 @@ impl Context<'_> {
                     // A constant the site resolved (a deprecated one is never
                     // cached: it warns on every fetch).
                     Op::FetchConst => {
+                        ops!(a, b, c, imm);
                         let Some(Callee::Constant(v)) = clo.sites[imm as usize].get() else { slow!() };
                         let v = v.clone();
                         done!(put(&mut w[rx!(a)], v));
@@ -721,6 +757,7 @@ impl Context<'_> {
                     // it can be (the frame and window kept), else called out of
                     // line. Anything else (a miss, a generator) is `step`'s.
                     Op::Call => {
+                        ops!(a, b, c, imm);
                         let (args, n, dst) = (a, b, c);
                         match clo.sites[imm as usize].get() {
                             Some(&Callee::User(target)) => {
@@ -744,7 +781,7 @@ impl Context<'_> {
                                 let call = self.isolate.registry.call(i);
                                 if let Some(run) = call.frameless
                                     && call.plain(&w[start..start + n])
-                                    && !(self.header_callback_set && !self.out.started)
+                                    && (!self.header_callback_set || self.out.started)
                                 {
                                     frameless!(i, run, start, n, dst, true, pc);
                                 } else {
@@ -761,13 +798,14 @@ impl Context<'_> {
                     // argument registers are not run. Anything else runs the
                     // first Move as `Op::Move` does, and goes on with the next.
                     Op::CallRegs => {
+                        ops!(a, b, c, imm);
                         let (start, n) = (rx!(a), rx!(b));
                         if let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() {
                             let call = self.isolate.registry.call(i);
                             if let Some(run) = call.frameless
                                 && matches!(run, Imp::Lent(_))
                                 && call.plain(&w[start..start + n])
-                                && !(self.header_callback_set && !self.out.started)
+                                && (!self.header_callback_set || self.out.started)
                             {
                                 frameless!(i, run, start, n, c, false, pc + n);
                                 continue;
@@ -783,6 +821,7 @@ impl Context<'_> {
                     // and scope, on an object, with its required arguments, and
                     // no interrupt pending: anything else is `step`'s.
                     Op::MethodCall => {
+                        ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
@@ -825,7 +864,7 @@ impl Context<'_> {
                         if self.frames.len() == self.frames.floor + 1 {
                             slow!();
                         }
-                        let Some(value) = returned(regs, top, base, Reg::from(a)) else { slow!() };
+                        let Some(value) = returned(regs, top, base, Reg::from(insn.a)) else { slow!() };
                         leave(&mut self.frames, regs, value);
                         pc = self.frames.last().expect("the caller's frame").pc as usize;
                         if self.ids.has_pending() {
