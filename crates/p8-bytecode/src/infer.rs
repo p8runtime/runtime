@@ -302,14 +302,16 @@ impl State {
         self.k.get(usize::from(r)).copied().unwrap_or(ANY)
     }
 
+    /// `self` joined with `other`; whether it grew. (Two plain loops
+    /// over the slices: both vectorise.)
     fn join(&mut self, other: &State) -> bool {
-        let mut changed = false;
-        for (a, b) in self.k.iter_mut().zip(&other.k) {
-            let j = *a | *b;
-            changed |= j != *a;
-            *a = j;
+        if self.k.iter().zip(&other.k).all(|(a, b)| b & !a == 0) {
+            return false;
         }
-        changed
+        for (a, b) in self.k.iter_mut().zip(&other.k) {
+            *a |= *b;
+        }
+        true
     }
 }
 
@@ -654,13 +656,16 @@ pub fn walk(func: &Function, mut each: impl FnMut(usize, &dyn Fn(Reg) -> Kinds))
     let len = func.code.len();
     let pass = Pass { func, lay: layout(func) };
     // Block starts: the entry, jump targets, handler targets, and after
-    // every instruction that may go elsewhere.
-    let mut start = vec![false; len + 2];
+    // every instruction that may go elsewhere. `back`: some edge goes
+    // back (a loop), so one pass in pc order may not see everything.
+    let mut start = vec![false; len + 1];
     start[0] = true;
+    let mut back = false;
     for (pc, instr) in func.code.iter().enumerate() {
         let mut n = 0;
         successors(instr, pc, |t| {
             n += 1;
+            back |= t <= pc;
             if t != pc + 1 && t < start.len() {
                 start[t] = true;
             }
@@ -674,105 +679,90 @@ pub fn walk(func: &Function, mut each: impl FnMut(usize, &dyn Fn(Reg) -> Kinds))
             *s = true;
         }
     }
-    let mut at: Vec<Option<State>> = vec![None; len + 2];
+    // The state at each block start that is reached.
+    let mut at: Vec<Option<State>> = vec![None; len + 1];
     at[0] = Some(pass.entry());
     for h in &func.handlers {
         let t = h.target as usize;
         if t < len {
+            let e = pass.handler_entry();
             match &mut at[t] {
                 Some(s) => {
-                    s.join(&pass.handler_entry());
+                    s.join(&e);
                 }
-                None => at[t] = Some(pass.handler_entry()),
+                None => at[t] = Some(e),
             }
         }
     }
-    // To a fixpoint: a worklist of block starts.
-    let mut work: Vec<usize> = (0..len).filter(|&pc| at[pc].is_some()).collect();
-    let mut queued = vec![false; len + 2];
-    work.iter().for_each(|&pc| queued[pc] = true);
-    while let Some(b) = work.pop() {
-        queued[b] = false;
-        let Some(mut s) = at[b].clone() else { continue };
-        let mut pc = b;
-        loop {
+    // Passes in pc order (an edge forward is seen in the same pass) until
+    // no edge back changed a start; the last pass reports each pc.
+    let n = pass.lay.n;
+    let mut s = State { k: vec![ANY; n] };
+    let mut e = State { k: vec![ANY; n] };
+    let any = |_: Reg| ANY;
+    let mut report = !back;
+    loop {
+        let mut again = false;
+        let mut live = false;
+        for pc in 0..len {
+            if start[pc] {
+                live = match &at[pc] {
+                    Some(b) => {
+                        s.k.copy_from_slice(&b.k);
+                        true
+                    }
+                    None => false,
+                };
+            }
+            if !live {
+                if report {
+                    each(pc, &any);
+                }
+                continue;
+            }
+            if report {
+                each(pc, &|r| s.get(r));
+            }
             pass.transfer(&mut s, pc);
-            let mut flow = |t: usize, s: &State, at: &mut Vec<Option<State>>, work: &mut Vec<usize>| {
-                if t >= len {
+            let guard = pass.guard(&start, pc);
+            let mut falls = false;
+            successors(&func.code[pc], pc, |t| {
+                if t == pc + 1 {
+                    falls = true;
+                }
+                if t >= len || (t == pc + 1 && !start[t]) {
                     return;
                 }
+                // A type test's branches: what the variable is on each.
+                let from = match guard {
+                    Some((var, taken, other)) => {
+                        e.k.copy_from_slice(&s.k);
+                        let k = e.get(var) & if t == pc + 1 { other } else { taken };
+                        pass.set(&mut e, var, k);
+                        &e
+                    }
+                    None => &s,
+                };
                 let changed = match &mut at[t] {
-                    Some(old) => old.join(s),
+                    Some(old) => old.join(from),
                     None => {
-                        at[t] = Some(s.clone());
+                        at[t] = Some(from.clone());
                         true
                     }
                 };
-                if changed && !queued[t] {
-                    queued[t] = true;
-                    work.push(t);
-                }
-            };
-            let mut targets = [usize::MAX; 3];
-            let mut n = 0;
-            successors(&func.code[pc], pc, |t| {
-                targets[n] = t;
-                n += 1;
+                again |= changed && t <= pc;
             });
-            let falls = targets[..n].contains(&(pc + 1));
-            let guard = pass.guard(&start, pc);
-            for &t in &targets[..n] {
-                if t != pc + 1 || start[t] {
-                    match guard {
-                        // A type test's branches: what the variable is on each.
-                        Some((var, taken, other)) if n == 2 => {
-                            let mut e = s.clone();
-                            let k = e.get(var) & if t == pc + 1 { other } else { taken };
-                            pass.set(&mut e, var, k);
-                            flow(t, &e, &mut at, &mut work);
-                        }
-                        _ => flow(t, &s, &mut at, &mut work),
-                    }
-                }
-            }
             if let Some((var, _, other)) = guard
                 && falls
             {
                 let k = s.get(var) & other;
                 pass.set(&mut s, var, k);
             }
-            if !falls || pc + 1 >= len || start[pc + 1] {
-                break;
-            }
-            pc += 1;
+            live = falls;
         }
+        if report {
+            break;
+        }
+        report = !again;
     }
-    // The pcs in order, with the state before each.
-    let any = |_: Reg| ANY;
-    let mut cur: Option<State> = None;
-    for pc in 0..len {
-        if start[pc] {
-            cur = at[pc].clone();
-        }
-        match &mut cur {
-            Some(s) => {
-                each(pc, &|r| s.get(r));
-                pass.transfer(s, pc);
-                if let Some((var, _, other)) = pass.guard(&start, pc) {
-                    let k = s.get(var) & other;
-                    pass.set(s, var, k);
-                }
-            }
-            None => each(pc, &any),
-        }
-        if !successors_fall(&func.code[pc], pc) {
-            cur = None;
-        }
-    }
-}
-
-fn successors_fall(instr: &Instr, pc: usize) -> bool {
-    let mut falls = false;
-    successors(instr, pc, |t| falls |= t == pc + 1);
-    falls
 }
