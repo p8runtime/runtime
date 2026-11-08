@@ -3,6 +3,7 @@
 //! frames over its one register file (task.rs), calls resolved once per
 //! call site.
 
+mod arms;
 mod arrayaccess;
 mod builtin_classes;
 mod callable;

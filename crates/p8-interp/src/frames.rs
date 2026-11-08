@@ -210,6 +210,14 @@ impl Frames {
         self.slots[..self.len].last()
     }
 
+    /// The running frame (there is one while `execute` runs): one bounds
+    /// check, for the loop's arms that read the frame where they need it
+    /// instead of keeping it live.
+    #[inline(always)]
+    pub(crate) fn top(&self) -> &Frame {
+        &self.slots[self.len - 1]
+    }
+
     #[inline(always)]
     pub(crate) fn last_mut(&mut self) -> Option<&mut Frame> {
         self.slots[..self.len].last_mut()
