@@ -112,6 +112,36 @@ fn errors() {
     assert_eq!(e("(?<=a+)b").as_deref(), Some("length of lookbehind assertion is not limited at offset 0"));
 }
 
+/// The required-literal prefilter rejects only subjects that cannot match
+/// (both engines run behind it, so their agreement does not test it).
+#[test]
+fn required_literal() {
+    let req = |pat: &str, o: &Options| Regex::new(pat.as_bytes(), o).unwrap().prog.required.is_some();
+    assert!(req(r"\s*wp:core", &Options::default()));
+    assert!(req(r"(?i)abc(?-i)D", &Options::default()));
+    assert!(!req(r"ab{2,}c|q", &Options::default()));
+    assert!(!req(r"a(*ACCEPT)bcd", &Options::default()));
+    assert!(!req(r"(?i)k", &utf()));
+    assert!(!req("abc", &Options::default()), "the prefix is the first-bytes search's");
+    assert_eq!(whole(r"\s*wp:core", "<!-- wp:core/image -->").as_deref(), Some(" wp:core"));
+    assert_eq!(whole(r"\s*wp:core", "<!-- wp:paragraph -->"), None);
+    assert_eq!(whole(r"(?i)abc(?-i)D", "xABCd"), None);
+    assert_eq!(whole(r"(?i)abc(?-i)D", "xabcD").as_deref(), Some("abcD"));
+    assert_eq!(whole(r"(?i)abc(?-i)D", "xaBCD").as_deref(), Some("aBCD"));
+    assert_eq!(whole(r"a(*ACCEPT)bcd", "ax").as_deref(), Some("a"));
+    assert_eq!(whole(r"foo\Kbar", "xfoobar").as_deref(), Some("bar"));
+    assert_eq!(whole(r"(?<=foo)bar", "foobar").as_deref(), Some("bar"));
+    assert_eq!(whole(r"\d+px|\d+em", "3em").as_deref(), Some("3em"));
+    assert_eq!(whole(r"x+yz", "xxyz").as_deref(), Some("xxyz"));
+    assert_eq!(whole(r"(ab){2}c", "ababc").as_deref(), Some("ababc"));
+    assert_eq!(whole(r"(ab){2}c", "abc"), None);
+    let mi = Options { multiline: true, caseless: true, ..Options::default() };
+    let header = "<?php\n/**\n * Plugin Name: x\n * post types: a, b\n */";
+    assert_eq!(m_opts(r"^[ \t\/*#@]*Post Types:(.*)$", header, &mi).unwrap()[1].as_deref(), Some(" a, b"));
+    assert_eq!(m_opts(r"^[ \t\/*#@]*Block Types:(.*)$", header, &mi), None);
+    assert_eq!(m_opts(r"(?i)k", "\u{212a}", &utf()).unwrap()[0].as_deref(), Some("\u{212a}"));
+}
+
 /// The DFA (dfa.rs) and the machine agree on every match's bounds, over
 /// the whole subject and for every start offset, with and without
 /// NOTEMPTY_ATSTART. A lowered match limit keeps a search on the machine.
@@ -228,6 +258,21 @@ fn dfa_agrees_with_machine() {
         (r"a?a?a?aaa", "", &["aaa", "aa"]),
         (r"(?:x|y|z)*end", "", &["xyzend", "xyzen"]),
         (r"[a-c]{1,3}d|[a-d]+", "", &["abcd", "aabbd"]),
+        // Lookarounds made of assertions.
+        (r"(?!^)([A-Z])", "", &["fooBarBaz", "Foo", "ab"]),
+        (r"(?<!^)x", "", &["xax", "x"]),
+        (r"(?=$)", "", &["ab", ""]),
+        (r"a(?=\b)", "", &["a b", "ab"]),
+        (r"(?!\B)x", "", &["ax x"]),
+        // Required literals, exact and caseless.
+        (r"^(?:[ \t]*<\?(?:php)?)?[ \t\/*#@]*Post Types:(.*)$", "mi", &["<?php\n/**\n * Plugin Name: x\n * post types: a, b\n */", "<?php\n/**\n * Plugin Name: x\n */", "POST TYPES:", "Post Type"]),
+        (r"\s*wp:core", "", &["<!-- wp:core/image -->", "<!-- wp:paragraph -->"]),
+        (r"\d+px|\d+em", "", &["3px", "3em", "3"]),
+        (r"(?i)abc(?-i)D", "", &["ABCD", "abcd", "ABCd"]),
+        (r"(?i)k", "u", &["\u{212a}", "K"]),
+        (r"(?i)straße", "u", &["STRASSE", "straße"]),
+        (r"(x)?abc", "", &["abc", "xabc", "ab"]),
+        (r"ab{2,}c|q", "", &["abbbc", "abc", "q"]),
     ];
     let vm = MatchOptions { match_limit: 999_999, ..MatchOptions::default() };
     let dfa = MatchOptions::default();

@@ -39,7 +39,8 @@ enum Node {
     /// Try `.0`, then `.1`.
     Split(u32, u32),
     Jmp(u32),
-    Assert(Assert, u32),
+    /// Go on at `next` when the assertion holds (fails, when `neg`).
+    Assert { a: Assert, neg: bool, next: u32 },
     Match,
 }
 
@@ -124,11 +125,40 @@ impl Dfa {
         const INST: u32 = 1 << 30;
         let mut at = vec![0u32; p.insts.len() + 1];
         let mut needs_last = false;
+        // The end of a lookaround whose body was taken as assertions.
+        let mut look_end = usize::MAX;
+        let assertion_ok = |a: &Assert, needs_last: &mut bool| -> bool {
+            match a {
+                Assert::StartLine | Assert::EndLine => simple_newline,
+                Assert::EndOrNewline => {
+                    *needs_last = true;
+                    simple_newline
+                }
+                _ => true,
+            }
+        };
         for (pc, inst) in p.insts.iter().enumerate() {
             at[pc] = nodes.len() as u32;
             let next = INST | (pc as u32 + 1);
             match inst {
                 Inst::Match => nodes.push(Node::Match),
+                // A lookaround made only of assertions is an assertion
+                // (`(?!^)`): zero-width, so looking behind is the same.
+                Inst::Look { neg, next: after, .. } => {
+                    let body = &p.insts[pc + 1..*after as usize];
+                    let [asserts @ .., Inst::SubEnd | Inst::SubEndAt] = body else { return None };
+                    if asserts.is_empty() || (*neg && asserts.len() > 1) || !asserts.iter().all(|i| matches!(i, Inst::Assert(a) if assertion_ok(a, &mut needs_last))) {
+                        return None;
+                    }
+                    for (k, i) in asserts.iter().enumerate() {
+                        let Inst::Assert(a) = i else { unreachable!() };
+                        let n = nodes.len() as u32;
+                        let to = if k + 1 == asserts.len() { INST | after } else { n + 1 };
+                        nodes.push(Node::Assert { a: *a, neg: *neg, next: to });
+                    }
+                    look_end = *after as usize - 1;
+                }
+                Inst::SubEnd | Inst::SubEndAt if pc <= look_end => nodes.push(Node::Jmp(next)),
                 Inst::Char(c) => nodes.push(Node::Atom(Atom::Char(*c), next)),
                 Inst::CharNc(c) => nodes.push(Node::Atom(Atom::CharNc(*c), next)),
                 Inst::CharNcR(c) => nodes.push(Node::Atom(Atom::CharNcR(*c), next)),
@@ -137,17 +167,10 @@ impl Dfa {
                 Inst::Byte => nodes.push(Node::Atom(Atom::Byte, next)),
                 Inst::Set(i) => nodes.push(Node::Atom(Atom::Set(*i), next)),
                 Inst::Assert(a) => {
-                    match a {
-                        Assert::StartLine | Assert::EndLine if !simple_newline => return None,
-                        Assert::EndOrNewline => {
-                            if !simple_newline {
-                                return None;
-                            }
-                            needs_last = true;
-                        }
-                        _ => {}
+                    if !assertion_ok(a, &mut needs_last) {
+                        return None;
                     }
-                    nodes.push(Node::Assert(*a, next));
+                    nodes.push(Node::Assert { a: *a, neg: false, next });
                 }
                 Inst::Split { first, second, .. } => nodes.push(Node::Split(INST | first, INST | second)),
                 Inst::Jmp(t) => nodes.push(Node::Jmp(INST | t)),
@@ -181,8 +204,7 @@ impl Dfa {
                         nodes.push(Node::Jmp(next));
                     }
                 }
-                Inst::Look { .. }
-                | Inst::Atomic { .. }
+                Inst::Atomic { .. }
                 | Inst::SubEnd
                 | Inst::SubEndAt
                 | Inst::BackRef { .. }
@@ -209,7 +231,7 @@ impl Dfa {
         let map = |t: u32| if t & INST != 0 { at[(t & !INST) as usize] } else { t };
         for n in &mut nodes {
             match n {
-                Node::Atom(_, t) | Node::Jmp(t) | Node::Assert(_, t) => *t = map(*t),
+                Node::Atom(_, t) | Node::Jmp(t) | Node::Assert { next: t, .. } => *t = map(*t),
                 Node::Split(a, b) => {
                     *a = map(*a);
                     *b = map(*b);
@@ -326,8 +348,8 @@ impl Dfa {
                         self.stack.push(a);
                     }
                     Node::Jmp(t) => self.stack.push(t),
-                    Node::Assert(a, next) => {
-                        let ok = match a {
+                    Node::Assert { a, neg, next } => {
+                        let holds = match a {
                             Assert::Start => flags & AT_START != 0,
                             // Not after a newline that ends the subject.
                             Assert::StartLine => flags & AT_START != 0 || (c.is_some() && flags & PREV_NL != 0),
@@ -341,7 +363,7 @@ impl Dfa {
                                 (before != after) == matches!(a, Assert::WordBoundary { .. })
                             }
                         };
-                        if ok {
+                        if holds != neg {
                             self.stack.push(next);
                         }
                     }

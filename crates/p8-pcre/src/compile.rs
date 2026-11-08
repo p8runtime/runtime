@@ -160,7 +160,7 @@ pub(crate) struct Prog {
     pub first: First,
     /// Text every match contains, when there is some beyond `first`'s
     /// prefix: a subject without it is settled by one memmem.
-    pub required: Option<Box<memchr::memmem::Finder<'static>>>,
+    pub required: Option<Required>,
     pub match_limit: Option<u64>,
     pub depth_limit: Option<u64>,
     pub not_empty: bool,
@@ -260,9 +260,14 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         literal_prefix(&parsed.node, parsed.utf, &mut prefix);
         // A required literal that is not the prefix the search already
         // looks for (an anchored search decides at the start offset).
-        required = required_literal(&parsed.node, parsed.utf)
-            .filter(|lit| *lit != prefix)
-            .map(|lit| Box::new(memchr::memmem::Finder::new(&lit).into_owned()));
+        required = required_literal(&parsed.node, parsed.utf, parsed.ucp).filter(|lit| lit.caseless || lit.bytes != prefix).map(|mut lit| {
+            if lit.caseless {
+                lit.bytes.make_ascii_lowercase();
+                Required::Caseless(lit.bytes.into_boxed_slice())
+            } else {
+                Required::Exact(Box::new(memchr::memmem::Finder::new(&lit.bytes).into_owned()))
+            }
+        });
         First::of(first_bytes(&parsed.node, &c), prefix)
     };
     Ok(Prog {
@@ -387,19 +392,54 @@ fn literal_prefix(node: &Node, utf: bool, out: &mut Vec<u8>) -> bool {
     }
 }
 
-/// The longest run of case-sensitive characters every match contains
-/// (PCRE2's "required code unit", taken to a string): a subject without
-/// it has no match, which one memmem settles. None with `(*ACCEPT)`,
-/// which can end a match before the rest of the pattern.
-fn required_literal(node: &Node, utf: bool) -> Option<Vec<u8>> {
+/// Text every match contains (PCRE2's "required code unit", taken to a
+/// string): a subject without it has no match, which one scan settles.
+pub(crate) enum Required {
+    Exact(Box<memchr::memmem::Finder<'static>>),
+    /// ASCII-caseless text, in lower case (a pattern without UTF or UCP,
+    /// where caseless matching pairs only ASCII letters).
+    Caseless(Box<[u8]>),
+}
+
+impl Required {
+    pub(crate) fn find(&self, s: &[u8]) -> Option<usize> {
+        match self {
+            Required::Exact(f) => f.find(s),
+            Required::Caseless(lit) => {
+                let (lo, up) = (lit[0], lit[0].to_ascii_uppercase());
+                let mut at = 0;
+                while let Some(i) = if lo == up { memchr::memchr(lo, &s[at..]) } else { memchr::memchr2(lo, up, &s[at..]) } {
+                    let i = at + i;
+                    if s.len() - i >= lit.len() && s[i..i + lit.len()].eq_ignore_ascii_case(lit) {
+                        return Some(i);
+                    }
+                    at = i + 1;
+                }
+                None
+            }
+        }
+    }
+}
+
+/// A run of characters a match contains contiguously: lower-cased when
+/// `caseless` (then only ASCII letters, in a pattern without UTF or UCP).
+#[derive(Default)]
+struct Run {
+    bytes: Vec<u8>,
+    caseless: bool,
+}
+
+/// The longest run of characters every match contains. None with
+/// `(*ACCEPT)`, which can end a match before the rest of the pattern.
+fn required_literal(node: &Node, utf: bool, ucp: bool) -> Option<Run> {
     if has_accept(node) {
         return None;
     }
-    let mut run = Vec::new();
-    let mut best = Vec::new();
-    required(node, utf, &mut run, &mut best);
+    let mut run = Run::default();
+    let mut best = Run::default();
+    required(node, utf || ucp, utf, &mut run, &mut best);
     close_run(&mut run, &mut best);
-    (!best.is_empty()).then_some(best)
+    (!best.bytes.is_empty()).then_some(best)
 }
 
 fn has_accept(node: &Node) -> bool {
@@ -414,46 +454,58 @@ fn has_accept(node: &Node) -> bool {
     }
 }
 
-fn close_run(run: &mut Vec<u8>, best: &mut Vec<u8>) {
-    if run.len() > best.len() {
+fn close_run(run: &mut Run, best: &mut Run) {
+    if run.bytes.len() > best.bytes.len() {
         std::mem::swap(run, best);
     }
-    run.clear();
+    run.bytes.clear();
+    run.caseless = false;
 }
 
 /// Walks the pattern in match order; `run` is the text the match contains
 /// contiguously so far, closed by anything that may match other text.
-fn required(node: &Node, utf: bool, run: &mut Vec<u8>, best: &mut Vec<u8>) {
+/// `unicode_case`: caseless matching pairs non-ASCII characters too.
+fn required(node: &Node, unicode_case: bool, utf: bool, run: &mut Run, best: &mut Run) {
     match node {
-        Node::Char { c, nocase: false, .. } => {
-            if utf {
+        Node::Char { c, nocase, .. } => {
+            if *nocase {
+                // A caseless run holds ASCII (a letter's other case is
+                // ASCII) and is compared caselessly as a whole.
+                if unicode_case || *c >= 128 || run.bytes.iter().any(|b| *b >= 128) {
+                    close_run(run, best);
+                } else {
+                    run.bytes.push((*c as u8).to_ascii_lowercase());
+                    run.caseless = true;
+                }
+            } else if run.caseless && *c >= 128 {
+                close_run(run, best);
+            } else if utf {
                 match char::from_u32(*c) {
                     Some(ch) => {
                         let mut buf = [0u8; 4];
-                        run.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                        run.bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     }
                     None => close_run(run, best),
                 }
             } else if *c < 256 {
-                run.push(*c as u8);
+                run.bytes.push(*c as u8);
             } else {
                 close_run(run, best);
             }
         }
-        Node::Concat(v) => v.iter().for_each(|n| required(n, utf, run, best)),
-        Node::Group(b, _) | Node::Atomic(b) => required(b, utf, run, best),
+        Node::Concat(v) => v.iter().for_each(|n| required(n, unicode_case, utf, run, best)),
+        Node::Group(b, _) | Node::Atomic(b) => required(b, unicode_case, utf, run, best),
         // An optional body's text is required only when it is taken.
         Node::Repeat { min: 0, .. } => close_run(run, best),
         Node::Repeat { node, min, max, .. } => {
-            required(node, utf, run, best);
+            required(node, unicode_case, utf, run, best);
             if !(*min == 1 && *max == Some(1)) {
                 close_run(run, best);
             }
         }
         // Zero-width: the text on either side is contiguous.
         Node::Empty | Node::Assert(_) | Node::Keep | Node::Look { .. } | Node::Verb(_) => {}
-        Node::Char { .. }
-        | Node::Any { .. }
+        Node::Any { .. }
         | Node::Byte
         | Node::Set(_)
         | Node::Alt(_)
