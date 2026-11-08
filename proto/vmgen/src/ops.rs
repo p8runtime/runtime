@@ -27,12 +27,28 @@ use std::rc::Rc;
 
 // ---- shared pieces -----------------------------------------------------
 
-/// Raise a fault: the loop stops with the message.
+/// Raise a fault: the loop stops with the message. (The message is made
+/// here, out of line: a `format!` at the call site would put its code, and
+/// a stack frame for it, into the handler's straight path.)
 #[cold]
 #[inline(never)]
-fn fault(st: &mut State, msg: String) -> u32 {
-    st.event = Event::Fault(msg);
+fn fault<M: Into<String>>(st: &mut State, msg: M) -> u32 {
+    st.event = Event::Fault(msg.into());
     REFRAME
+}
+
+/// A fault naming the kind of the value that was not expected there.
+#[cold]
+#[inline(never)]
+fn fault_kind(st: &mut State, what: &str, v: &Value) -> u32 {
+    fault(st, format!("{what} on a {:?} not in the prototype", v.kind()))
+}
+
+/// A fault for a call with the wrong number of arguments.
+#[cold]
+#[inline(never)]
+fn fault_args(st: &mut State, argc: u8, name: &str) -> u32 {
+    fault(st, format!("{argc} arguments to {name}() not in the prototype"))
 }
 
 /// A PHP warning, as the CLI prints it (display_errors to stdout).
@@ -220,7 +236,7 @@ fn key_of(st: &mut State, k: &Value) -> Option<Key> {
     } else if let Some(s) = k.cloned_str() {
         Some(Key::from_string(s))
     } else {
-        fault(st, format!("array key of kind {:?} not in the prototype", k.kind()));
+        fault_kind(st, "array key", k);
         None
     }
 }
@@ -243,7 +259,7 @@ fn elem<'a, const KEY: u8>(st: &mut State, a: &'a PhpArray, w: &'a Window, k0: &
                     Key::Str(s) => a.get_str(&s),
                 }
             } else {
-                fault(st, format!("array key of kind {:?} not in the prototype", k.kind()));
+                fault_kind(st, "array key", k);
                 return Err(());
             }
         }
@@ -403,10 +419,10 @@ pub fn step_jmp<'p, const STEP: u8, const B: u8>(st: &mut State<'p>, w: &mut Win
                     *v = n;
                     n
                 }
-                None => return fault(st, "++/-- overflow not in the prototype".into()),
+                None => return fault(st, "++/-- overflow not in the prototype"),
             }
         }
-        None => return fault(st, format!("++/-- on a {:?} not in the prototype", r.kind())),
+        None => return fault_kind(st, "++/--", &w[usize::from(i.a)]),
     };
     let bound = view::<B>(w, i.k0, i.b);
     match bound.as_int() {
@@ -494,7 +510,7 @@ pub fn fetch_dim<'p, const ARR: u8, const KEY: u8>(st: &mut State<'p>, w: &mut W
             Err(()) => return REFRAME,
         }
     } else {
-        return fault(st, format!("$a[k] on a {:?} not in the prototype", arr.kind()));
+        return fault_kind(st, "$a[k]", arr);
     };
     wr::<TMP>(w, i.a, v);
     pc + 1
@@ -512,7 +528,7 @@ pub fn isset_dim<'p, const VAR: u8, const KEY: u8>(st: &mut State<'p>, w: &mut W
     } else if var.is_null_or_undef() {
         false
     } else {
-        return fault(st, format!("isset($a[k]) on a {:?} not in the prototype", var.kind()));
+        return fault_kind(st, "isset($a[k])", var);
     };
     wr::<TMP>(w, i.a, Value::bool(set));
     pc + 1
@@ -532,7 +548,7 @@ pub fn assign_dim<'p, const KEY: u8, const VAL: u8, const RES: u8>(st: &mut Stat
     };
     let slot = &mut w[usize::from(i.a)];
     let Some(arr) = slot.array_mut() else {
-        return fault(st, format!("$a[k] = v on a {:?} not in the prototype", slot.kind()));
+        return fault_kind(st, "$a[k] = v", &w[usize::from(i.a)]);
     };
     let e = arr.slot_mut(&key);
     let keep = if RES == USED { Some(v.clone()) } else { None };
@@ -557,12 +573,12 @@ pub fn fetch_prop<'p, const OBJ: u8>(st: &mut State<'p>, w: &mut Window, f: &'p 
         let o: &Rc<Object> = if OBJ == THIS {
             match &st.this {
                 Some(o) => o,
-                None => return fault(st, "Using $this when not in object context".into()),
+                None => return fault(st, "Using $this when not in object context"),
             }
         } else {
             match w[usize::from(i.b)].as_object() {
                 Some(o) => o,
-                None => return fault(st, format!("->prop on a {:?} not in the prototype", w[usize::from(i.b)].kind())),
+                None => return fault_kind(st, "->prop", &w[usize::from(i.b)]),
             }
         };
         let slot = if cache.class.get() == Rc::as_ptr(&o.class) as usize {
@@ -584,7 +600,7 @@ pub fn fetch_prop<'p, const OBJ: u8>(st: &mut State<'p>, w: &mut Window, f: &'p 
         })
     };
     let Some(v) = v else {
-        return fault(st, "read of an unset or uninitialized property not in the prototype".into());
+        return fault(st, "read of an unset or uninitialized property not in the prototype");
     };
     wr::<TMP>(w, i.a, v);
     let _ = pc;
@@ -600,12 +616,12 @@ pub fn assign_prop<'p, const OBJ: u8, const VAL: u8, const MODE: u8, const RES: 
         let o: &Rc<Object> = if OBJ == THIS {
             match &st.this {
                 Some(o) => o,
-                None => return fault(st, "Using $this when not in object context".into()),
+                None => return fault(st, "Using $this when not in object context"),
             }
         } else {
             match w[usize::from(i.a)].as_object() {
                 Some(o) => o,
-                None => return fault(st, format!("->prop = v on a {:?} not in the prototype", w[usize::from(i.a)].kind())),
+                None => return fault_kind(st, "->prop = v", &w[usize::from(i.a)]),
             }
         };
         let slot = if cache.class.get() == Rc::as_ptr(&o.class) as usize {
@@ -617,7 +633,7 @@ pub fn assign_prop<'p, const OBJ: u8, const VAL: u8, const MODE: u8, const RES: 
             }
         };
         if cache.flags.get() & TYPED != 0 && !typed_ok(o, slot, &v) {
-            return fault(st, "typed property coercion or TypeError not in the prototype".into());
+            return fault(st, "typed property coercion or TypeError not in the prototype");
         }
         let keep = if RES == USED { Some(v.clone()) } else { None };
         let s = &o.slots()[slot];
@@ -676,7 +692,7 @@ pub fn send_var_method<'p>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, 
     let cache = &f.caches[i.imm as usize];
     let func = {
         let Some(o) = w[usize::from(i.a)].as_object() else {
-            return fault(st, format!("method call on a {:?}", w[usize::from(i.a)].kind()));
+            return fault_kind(st, "method call", &w[usize::from(i.a)]);
         };
         if cache.class.get() == Rc::as_ptr(&o.class) as usize {
             cache.slot.get()
@@ -688,7 +704,7 @@ pub fn send_var_method<'p>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, 
         }
     };
     if st.prog.funcs[func as usize].src.param_by_ref(usize::from(i.d)) {
-        return fault(st, "by-reference argument not in the prototype".into());
+        return fault(st, "by-reference argument not in the prototype");
     }
     let v = rd::<CV>(st, f, w, i.k0, i.c, pc);
     wr::<TMP>(w, i.b, v);
@@ -704,12 +720,12 @@ pub fn method_call<'p, const OBJ: u8, const RES: u8>(st: &mut State<'p>, w: &mut
         let o: &Rc<Object> = if OBJ == THIS {
             match &st.this {
                 Some(o) => o,
-                None => return fault(st, "Using $this when not in object context".into()),
+                None => return fault(st, "Using $this when not in object context"),
             }
         } else {
             match w[usize::from(i.b)].as_object() {
                 Some(o) => o,
-                None => return fault(st, format!("method call on a {:?}", w[usize::from(i.b)].kind())),
+                None => return fault_kind(st, "method call", &w[usize::from(i.b)]),
             }
         };
         let func = if cache.class.get() == Rc::as_ptr(&o.class) as usize {
@@ -724,7 +740,7 @@ pub fn method_call<'p, const OBJ: u8, const RES: u8>(st: &mut State<'p>, w: &mut
     };
     let callee = &st.prog.funcs[func as usize];
     if u16::from(i.d) < callee.required || u16::from(i.d) > callee.nparams {
-        return fault(st, format!("{} arguments to {}() not in the prototype", i.d, callee.name));
+        return fault_args(st, i.d, &callee.name);
     }
     st.event = Event::Call { func, args: i.c, argc: i.d, dst: i.a, used: RES == USED, this: Some(this) };
     REFRAME | (pc + if RES == USED { 1 } else { 2 })
@@ -736,7 +752,7 @@ pub fn method_call<'p, const OBJ: u8, const RES: u8>(st: &mut State<'p>, w: &mut
 pub fn iter_init<'p, const SRC: u8>(st: &mut State<'p>, w: &mut Window, _f: &'p Func<'p>, i: &Insn<'p>, pc: u32) -> u32 {
     let src = &w[usize::from(i.a)];
     let Some(arr) = src.as_array() else {
-        return fault(st, format!("foreach over a {:?} not in the prototype", src.kind()));
+        return fault_kind(st, "foreach", src);
     };
     if arr.is_empty() {
         return i.imm;
@@ -754,7 +770,7 @@ pub fn iter_next<'p, const WITH_KEY: u8>(st: &mut State<'p>, w: &mut Window, _f:
     let at = usize::from(i.a);
     let pos = w[at + 1].as_int().unwrap_or(0) as usize;
     let Some(arr) = w[at].as_array() else {
-        return fault(st, "iterator is not an array".into());
+        return fault(st, "iterator is not an array");
     };
     let (p, v, k) = if WITH_KEY == KEY {
         match arr.entry_at(pos) {
@@ -790,10 +806,10 @@ pub fn new_obj<'p, const HAS: u8>(st: &mut State<'p>, w: &mut Window, _f: &'p Fu
 #[inline(always)]
 pub fn construct<'p>(st: &mut State<'p>, w: &mut Window, _f: &'p Func<'p>, i: &Insn<'p>, pc: u32) -> u32 {
     if i.imm == u32::MAX {
-        return fault(st, "Construct reached for a class without a constructor".into());
+        return fault(st, "Construct reached for a class without a constructor");
     }
     let Some(o) = w[usize::from(i.a)].cloned_object() else {
-        return fault(st, "Construct on a non-object".into());
+        return fault(st, "Construct on a non-object");
     };
     st.event = Event::Call { func: i.imm, args: i.b, argc: i.c, dst: 0, used: false, this: Some(o) };
     REFRAME | (pc + 1)
@@ -805,7 +821,7 @@ pub fn echo<'p, const SRC: u8>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'
     let v = rd::<SRC>(st, f, w, i.k0, i.a, pc);
     match v.to_php_string() {
         Some(s) => st.out.extend_from_slice(s.as_bytes()),
-        None => return fault(st, "echo of an array or object not in the prototype".into()),
+        None => return fault(st, "echo of an array or object not in the prototype"),
     }
     if st.out.len() > 1 << 16 {
         flush(st);

@@ -189,11 +189,10 @@ pub fn run<'p>(st: &mut State<'p>, regs: &mut Vec<Value>, func: u32, args: Vec<V
                     }
                     continue 'frame;
                 }
-                Event::Fault(msg) => {
-                    let line = f.src.lines.get(pc).copied().unwrap_or(0);
-                    return Err(format!("{msg} ({} at pc {pc}, line {line})", f.name));
-                }
-                Event::None => return Err(format!("handler returned REFRAME with no event ({} at pc {pc})", f.name)),
+                // (The faulting pc is not reported: keeping `pc` live past
+                // the call made the loop spill it on every dispatch.)
+                Event::Fault(msg) => return Err(format!("{msg} (in {})", f.name)),
+                Event::None => return Err(format!("handler returned REFRAME with no event (in {})", f.name)),
             }
         }
     }
