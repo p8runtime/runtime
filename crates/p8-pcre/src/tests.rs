@@ -287,7 +287,10 @@ fn dfa_agrees_with_machine() {
                     continue;
                 }
                 for not_empty_atstart in [false, true] {
-                    let b = re.exec(s, start, &MatchOptions { not_empty_atstart, ..dfa.clone() }).unwrap().map(|c| (c.get(0), c.len()));
+                    let mut caps = Captures::default();
+                    let b = crate::exec::exec_into_dfa(&re.prog, s, start, &MatchOptions { not_empty_atstart, ..dfa.clone() }, &mut caps, true)
+                        .unwrap()
+                        .then(|| (caps.get(0), caps.len()));
                     // The machine may run out of backtracking where the
                     // DFA, which never backtracks, has the answer.
                     let Ok(a) = re.exec(s, start, &MatchOptions { not_empty_atstart, ..vm.clone() }) else { continue };

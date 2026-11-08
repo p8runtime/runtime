@@ -102,6 +102,8 @@ pub(crate) struct Dfa {
     last: HashMap<(u32, u32), u32>,
     /// Empty states that restart at each position, by their flags.
     starts: [u32; 8],
+    /// Initial states by [anchored][flags].
+    inits: [[u32; 64]; 2],
     resets: u32,
     disabled: bool,
     /// Where the last unanchored search last had nothing alive: its match
@@ -263,6 +265,7 @@ impl Dfa {
             wide: HashMap::new(),
             last: HashMap::new(),
             starts: [UNKNOWN; 8],
+            inits: [[UNKNOWN; 64]; 2],
             resets: 0,
             disabled: false,
             restart_at: 0,
@@ -283,6 +286,7 @@ impl Dfa {
         self.wide.clear();
         self.last.clear();
         self.starts = [UNKNOWN; 8];
+        self.inits = [[UNKNOWN; 64]; 2];
         // State 0 is the dead state: nothing alive, no restart.
         self.state(Box::new([]), 0);
     }
@@ -433,7 +437,12 @@ impl Dfa {
         if start == offset {
             flags |= AT_OFFSET | if no_empty { NO_EMPTY } else { 0 };
         }
-        let mut sid = if anchored { self.state(Box::new([self.start]), flags) } else { self.state(Box::new([]), flags | RESTART) };
+        let init = &mut self.inits[usize::from(anchored)][flags as usize];
+        let mut sid = *init;
+        if sid == UNKNOWN {
+            sid = if anchored { self.state(Box::new([self.start]), flags) } else { self.state(Box::new([]), flags | RESTART) };
+            self.inits[usize::from(anchored)][flags as usize] = sid;
+        }
         let mut found = None;
         let mut pos = start;
         let len = s.len();
@@ -448,9 +457,8 @@ impl Dfa {
         } else {
             len
         };
-        // With nothing alive, skip to a byte a match can start with when
-        // memchr finds it (a table scan is no faster than stepping).
-        let skip = !anchored && matches!(p.first, First::One(_) | First::Two(..) | First::Three(..) | First::Text(_));
+        // With nothing alive, skip to a byte a match can start with.
+        let skip = !anchored && !matches!(p.first, First::Any);
         while pos < body {
             if self.restart[sid as usize] {
                 self.restart_at = pos;

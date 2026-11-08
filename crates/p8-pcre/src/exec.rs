@@ -134,6 +134,15 @@ pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Res
 
 /// [`exec`] into `caps` (its room reused): whether there is a match.
 pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures) -> Result<bool, MatchError> {
+    // With captures to recover the DFA path is three passes (forward, at
+    // the candidate starts, then the machine at the start found), which a
+    // short subject does not repay.
+    let worth = p.slots == 2 || s.len() - start >= 32;
+    exec_into_dfa(p, s, start, opts, caps, worth && dfa_allowed(opts))
+}
+
+/// [`exec_into`], with the DFA used (when the program has one) or not.
+pub(crate) fn exec_into_dfa(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures, use_dfa: bool) -> Result<bool, MatchError> {
     let mut slots = std::mem::take(&mut caps.slots);
     slots.clear();
     slots.resize(p.slots, None);
@@ -148,7 +157,7 @@ pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, c
     let mut from = start;
     // The DFA (dfa.rs) finds the match's bounds in one pass; the machine
     // then runs once, at that start, only for the captures.
-    if let Some(dfa) = p.dfa.as_ref().filter(|_| dfa_allowed(opts)) {
+    if let Some(dfa) = p.dfa.as_ref().filter(|_| use_dfa) {
         match dfa.borrow_mut().find(p, s, start, opts.not_empty_atstart || p.not_empty_atstart, anchored) {
             Ok(None) => {
                 caps.slots = slots;
