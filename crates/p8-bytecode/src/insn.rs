@@ -14,6 +14,8 @@
 //! which `step` runs. So the stream stays dense whatever the cold
 //! instructions need.
 
+use crate::infer::{self, Kinds, OBJ, PLAIN, REF, VALUE};
+use p8_runtime::types::TypeDecl;
 use crate::{Cmp, Function, Instr, Rare, Reg, THIS};
 use p8_runtime::ops::BinOp;
 
@@ -142,6 +144,18 @@ pub enum Op {
     /// return a
     Return,
     ReturnNull,
+    // Specialised by the kinds (`infer`, `specialised`):
+    /// a = b, b defined and not a reference
+    MoveVal,
+    /// a = b into a variable that is not a reference, b defined and not one
+    AssignVal,
+    /// AssignTake of that
+    AssignTakeVal,
+    /// Add, Sub into a register that holds nothing to release and no reference
+    AddPlain,
+    SubPlain,
+    /// Nothing (a return type check the kinds prove)
+    Nop,
 }
 
 /// The intrinsics' order in `Op::Intrinsic`'s immediate.
@@ -225,7 +239,16 @@ fn r(reg: Reg) -> Option<u8> {
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
     let consts = (func.consts_at as usize, func.consts.len());
-    (0..code.len()).map(|pc| lower_at(code, pc, consts).unwrap_or(SLOW)).collect()
+    let ret = if func.is_generator { None } else { func.ret_type.as_ref() };
+    let mut out = Vec::with_capacity(code.len());
+    // A file's main code runs once per include, and none of its variables
+    // are followed (`infer::by_name`): the pass would not pay for itself.
+    if func.name.as_bytes() == b"{main}" {
+        out.extend((0..code.len()).map(|pc| lower_at(code, pc, consts, &|_| infer::ANY, ret).unwrap_or(SLOW)));
+    } else {
+        infer::walk(func, |pc, kinds| out.push(lower_at(code, pc, consts, kinds, ret).unwrap_or(SLOW)));
+    }
+    out
 }
 
 /// The property cache entry of a name register: its constant's index.
@@ -234,7 +257,47 @@ fn prop_site(name: Reg, (consts_at, nconsts): (usize, usize)) -> Option<u32> {
     (i < nconsts).then_some(i as u32)
 }
 
-fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
+/// The specialised form of `instr`, where the kinds of its registers
+/// before it (`kinds`) prove what the generic arm tests for (`infer`):
+/// opcode and operands. `ret`: the function's declared return type (not
+/// a generator's).
+///
+/// In safe Rust a value's payload is read through its tag, so an arm on
+/// proven ints still tests the tag; what the kinds remove are the other
+/// tests: an undefined operand (the warning), a reference (read or write
+/// through it), an old value to release on a store, a return type check.
+fn specialised(instr: &Instr, kinds: &dyn Fn(Reg) -> Kinds, ret: Option<&TypeDecl>) -> Option<(Op, Reg, Reg, Reg, u32)> {
+    // Defined, and not a reference: a copy is a clone.
+    let val = |r: Reg| kinds(r) & !VALUE == 0;
+    // A store over it releases nothing, and goes to the register itself.
+    let plain = |r: Reg| kinds(r) & !PLAIN == 0;
+    Some(match *instr {
+        Instr::Move { dst, src } if val(src) => (Op::MoveVal, dst, src, 0, 0),
+        Instr::Assign { var, src } if val(src) && kinds(var) & REF == 0 => (Op::AssignVal, var, src, 0, 0),
+        Instr::AssignTake { var, src } if val(src) && kinds(var) & REF == 0 => (Op::AssignTakeVal, var, src, 0, 0),
+        Instr::Add { dst, a, b } if plain(dst) => (Op::AddPlain, dst, a, b, 0),
+        Instr::Sub { dst, a, b } if plain(dst) => (Op::SubPlain, dst, a, b, 0),
+        Instr::Rare { op: Rare::VerifyReturn, a, .. } if ret.is_some_and(|ty| accepts(ty, kinds(a))) => (Op::Nop, 0, 0, 0, 0),
+        _ => return None,
+    })
+}
+
+/// Whether every value of the kinds `k` passes the return type `ty`
+/// as it is (`TypeDecl::quick`): defined, not a reference, no object,
+/// and a bool only where any bool is.
+fn accepts(ty: &TypeDecl, k: Kinds) -> bool {
+    use p8_runtime::types::{T_ARRAY, T_BOOL, T_FLOAT, T_INT, T_MIXED, T_NULL, T_STRING};
+    if k == 0 || k & !(VALUE & !OBJ) != 0 {
+        return false;
+    }
+    if ty.mask & T_MIXED != 0 {
+        return true;
+    }
+    let need = [(infer::NULL, T_NULL), (infer::BOOL, T_BOOL), (infer::INT, T_INT), (infer::FLOAT, T_FLOAT), (infer::STR, T_STRING), (infer::ARR, T_ARRAY)];
+    need.iter().all(|&(kind, bit)| k & kind == 0 || ty.mask & bit != 0)
+}
+
+fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize), kinds: &dyn Fn(Reg) -> Kinds, ret: Option<&TypeDecl>) -> Option<Insn> {
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     // A block of registers (arguments, a concatenation's parts) is in the
     // window whole: the loop indexes it from its first.
@@ -248,6 +311,13 @@ fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
         _ => {}
     }
     let take = |t: bool| if t { TAKE } else { 0 };
+    // (A Move that starts a CallRegs stays one.)
+    if (!matches!(code[pc], Instr::Move { .. }) || call_regs(code, pc).is_none())
+        && let Some((op, a, b, c, imm)) = specialised(&code[pc], kinds, ret)
+        && let Some(insn) = i(op, a, b, c, imm)
+    {
+        return Some(insn);
+    }
     match code[pc] {
         Instr::This { dst } => i(Op::This, dst, 0, 0, 0),
         Instr::FetchProp { dst, obj, name, .. } => {
@@ -346,6 +416,43 @@ fn call_regs(code: &[Instr], pc: usize) -> Option<Insn> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infer::{ANY, ARR, BOOL, FLOAT, INT, NULL, STR, UNDEF};
+
+    #[test]
+    fn kinds_pick_the_specialised_forms() {
+        let at = |instr: Instr, k: &dyn Fn(Reg) -> Kinds| lower_at(&[instr], 0, (0, 0), k, None).unwrap().op;
+        // Move: a defined source that is not a reference.
+        assert_eq!(at(Instr::Move { dst: 5, src: 1 }, &|_| INT | STR), Op::MoveVal);
+        assert_eq!(at(Instr::Move { dst: 5, src: 1 }, &|r| if r == 1 { INT | UNDEF } else { INT }), Op::Move);
+        assert_eq!(at(Instr::Move { dst: 5, src: 1 }, &|r| if r == 1 { INT | REF } else { INT }), Op::Move);
+        // Assign: also a variable that is not a reference.
+        assert_eq!(at(Instr::Assign { var: 0, src: 1 }, &|_| ARR), Op::AssignVal);
+        assert_eq!(at(Instr::Assign { var: 0, src: 1 }, &|r| if r == 0 { ANY } else { ARR }), Op::Assign);
+        assert_eq!(at(Instr::AssignTake { var: 0, src: 1 }, &|_| STR | UNDEF), Op::AssignTake);
+        assert_eq!(at(Instr::AssignTake { var: 0, src: 1 }, &|_| STR), Op::AssignTakeVal);
+        // Add: a destination with nothing to release.
+        assert_eq!(at(Instr::Add { dst: 0, a: 1, b: 2 }, &|r| if r == 0 { INT | FLOAT | UNDEF } else { ANY }), Op::AddPlain);
+        assert_eq!(at(Instr::Add { dst: 0, a: 1, b: 2 }, &|r| if r == 0 { INT | STR } else { INT }), Op::Add);
+        assert_eq!(at(Instr::Sub { dst: 0, a: 1, b: 2 }, &|r| if r == 0 { NULL } else { ANY }), Op::SubPlain);
+        assert_eq!(at(Instr::Mul { dst: 0, a: 1, b: 2 }, &|_| INT), Op::Mul);
+    }
+
+    #[test]
+    fn a_return_check_goes_only_where_the_type_takes_every_kind() {
+        use p8_runtime::types::{T_BOOL, T_INT, T_NULL, T_TRUE};
+        let ty = |mask| TypeDecl::new(mask, vec![], vec![], false);
+        let at = |ty: &TypeDecl, k: Kinds| lower_at(&[Instr::Rare { op: Rare::VerifyReturn, a: 3, b: 0, c: 0, class: 0 }], 0, (0, 0), &|_| k, Some(ty)).unwrap().op;
+        assert_eq!(at(&ty(T_BOOL), BOOL), Op::Nop);
+        assert_eq!(at(&ty(T_INT | T_NULL), INT | NULL), Op::Nop);
+        // An int may become a float, `true` alone is not every bool, a
+        // float to an int converts, undefined and objects are checked.
+        assert_eq!(at(&ty(T_INT), INT | FLOAT), Op::VerifyReturn);
+        assert_eq!(at(&ty(T_TRUE), BOOL), Op::VerifyReturn);
+        assert_eq!(at(&ty(T_INT), INT | UNDEF), Op::VerifyReturn);
+        assert_eq!(at(&ty(p8_runtime::types::T_OBJECT), crate::infer::OBJ), Op::VerifyReturn);
+        // A generator's (no type given): checked.
+        assert_eq!(lower_at(&[Instr::Rare { op: Rare::VerifyReturn, a: 3, b: 0, c: 0, class: 0 }], 0, (0, 0), &|_| BOOL, None).unwrap().op, Op::VerifyReturn);
+    }
 
     #[test]
     fn immediates_round_trip() {
@@ -369,7 +476,7 @@ mod tests {
             Instr::Move { dst: 11, src: 5 },
             Instr::Call { site: 6, base: 10, argc: 2, dst: 12 },
         ];
-        let at = |pc| lower_at(&code, pc, (0, 0)).unwrap();
+        let at = |pc| lower_at(&code, pc, (0, 0), &|_| ANY, None).unwrap();
         assert_eq!(at(0), Insn { op: Op::CallRegs, a: 2, b: 2, c: 12, imm: 4 | 10 << 16 });
         assert_eq!(at(1).op, Op::Move);
         assert_eq!(at(3), Insn { op: Op::CallRegs, a: 7, b: 1, c: 7, imm: 5 | 10 << 16 });
@@ -381,7 +488,7 @@ mod tests {
     #[test]
     fn wide_registers_are_slow() {
         let code = [Instr::Add { dst: 300, a: 1, b: 2 }, Instr::Add { dst: 3, a: 1, b: 2 }];
-        assert!(lower_at(&code, 0, (0, 0)).is_none());
-        assert_eq!(lower_at(&code, 1, (0, 0)).unwrap().op, Op::Add);
+        assert!(lower_at(&code, 0, (0, 0), &|_| ANY, None).is_none());
+        assert_eq!(lower_at(&code, 1, (0, 0), &|_| ANY, None).unwrap().op, Op::Add);
     }
 }
