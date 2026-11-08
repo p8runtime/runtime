@@ -588,13 +588,9 @@ mod tests {
     /// reference, no undefined value, an object only where it is inert.
     #[test]
     fn plain_call_takes_only_arguments_needing_no_check() {
-        use p8_runtime::args::plain_call;
         use p8_runtime::value::Value;
         let r = registry();
-        let plain = |name: &str, args: &[Value]| {
-            let c = *r.call(r.lookup(name.as_bytes()).expect("registered"));
-            plain_call(c.sig.expect("a signature"), c.counts, c.objects_ok, args)
-        };
+        let plain = |name: &str, args: &[Value]| r.call(r.lookup(name.as_bytes()).expect("registered")).plain(args);
         assert!(plain("strlen", &[Value::str("abc")]));
         assert!(!plain("strlen", &[Value::int(1)]), "an int to a string parameter is converted");
         assert!(!plain("strlen", &[]), "too few");
@@ -606,6 +602,11 @@ mod tests {
         assert!(!plain("substr", &[Value::str("abc"), Value::float(1.0)]), "a float to an int parameter is converted");
         assert!(plain("in_array", &[Value::int(1), Value::array(p8_runtime::array::PhpArray::new())]));
         assert!(plain("sprintf", &[Value::str("%d %d"), Value::int(1), Value::int(2)]), "variadic");
+        let five = [Value::str("%d%d%d%d"), Value::int(1), Value::int(2), Value::int(3), Value::int(4)];
+        assert!(plain("sprintf", &five), "past the precomputed four: from the signature");
+        assert!(!plain("sprintf", &[Value::str("%s"), Value::int(1), Value::int(2), Value::int(3), Value::UNDEF]));
+        // (Objects: the recorded script builtin_frameless.php.)
+        assert!(plain("is_bool", &[Value::FALSE]) && plain("is_bool", &[Value::TRUE]));
     }
 }
 

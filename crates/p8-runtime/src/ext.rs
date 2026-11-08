@@ -499,6 +499,10 @@ pub struct Call {
     /// A frameless call may have object arguments: the builtin runs no PHP
     /// code on them ([`Registry::objects_inert`]).
     pub objects_ok: bool,
+    /// The kinds each of the first [`PLAIN_ARGS`] parameters takes as they
+    /// are ([`crate::args::kinds_taken`]): a frameless call's test is a
+    /// bit test per argument.
+    pub accepts: [u16; PLAIN_ARGS],
     pub sig: Option<&'static p8_stubs::Sig>,
     pub counts: (usize, usize),
     pub deprecated: bool,
@@ -510,6 +514,37 @@ pub struct Call {
     /// Its by-reference parameters take a value too (the stub's
     /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
     pub prefer_ref: bool,
+}
+
+/// How many arguments a frameless call's test reads from [`Call::accepts`]
+/// (a call passing more is tested from the signature).
+pub const PLAIN_ARGS: usize = 4;
+
+impl Call {
+    /// Whether a frameless call may skip the checks for `args`: as many as
+    /// the builtin takes, each plainly of its parameter's type (no
+    /// conversion, warning or refusal), no reference, nothing undefined, an
+    /// object only where it is inert ([`crate::args::plain_call`], read
+    /// from the bits worked out at startup).
+    #[inline(always)]
+    pub fn plain(&self, args: &[Value]) -> bool {
+        let (required, max) = self.counts;
+        if args.len() < required || args.len() > max {
+            return false;
+        }
+        if args.len() > PLAIN_ARGS {
+            return self.sig.is_some_and(|sig| crate::args::plain_call(sig, self.counts, self.objects_ok, args));
+        }
+        args.iter().zip(self.accepts).all(|(a, bits)| (bits >> (a.kind() as u16)) & 1 != 0)
+    }
+
+    fn set_accepts(&mut self) {
+        let Some(sig) = self.sig else { return };
+        for (i, bits) in self.accepts.iter_mut().enumerate() {
+            let param = sig.params.get(i).or_else(|| sig.params.last().filter(|p| p.variadic));
+            *bits = param.map_or(0, |p| crate::args::kinds_taken(p, self.objects_ok));
+        }
+    }
 }
 
 /// Whether a call of `call` may be frameless: the builtin has a signature
@@ -722,6 +757,7 @@ impl Registry {
             run,
             frameless: None,
             objects_ok: false,
+            accepts: [0; PLAIN_ARGS],
             sig,
             counts: sig.map_or((0, 0), crate::args::counts),
             deprecated: deprecation.is_some(),
@@ -730,6 +766,7 @@ impl Registry {
             prefer_ref: false,
         };
         call.frameless = frameless(&call);
+        call.set_accepts();
         self.calls.push(call);
         self.deprecations.push(deprecation);
         let sym = self.symbols.intern(entry.name.as_bytes());
@@ -902,6 +939,7 @@ impl Registry {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].objects_ok = true;
+                self.calls[i].set_accepts();
             }
         }
     }
