@@ -1,0 +1,104 @@
+== round 0
+23 copied str string
+destruct copied
+destruct first
+after the store: SECOND
+int(10)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+int(8)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(6)
+}
+int(2)
+float(-9.223372036854776E+18)
+TypeError
+int(0)
+
+Warning: Undefined variable $undefined in %s on line 61
+int(1)
+destruct sum
+o = 2
+destruct plus
+q = 2
+b = 5
+d = 7
+g = 2
+h = 10,20
+k = 1,2,3
+1 2
+b = 2, d = 9
+
+Warning: Undefined variable $a in %s on line 138
+NULL
+int(1)
+caught: changed
+bool(true)
+bool(false)
+int(4)
+float(5)
+float(6)
+NULL
+int(12)
+int(7)
+int(3)
+int(-1)
+int(42)
+plus(): Return value must be of type int, float returned
+only_bool(): Return value must be of type bool, null returned
+guard(): Return value must be of type int, string returned
+== round 1
+23 copied str string
+destruct copied
+destruct first
+after the store: SECOND
+int(10)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+int(8)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(6)
+}
+int(2)
+float(-9.223372036854776E+18)
+TypeError
+int(0)
+
+Warning: Undefined variable $undefined in %s on line 61
+int(1)
+destruct sum
+o = 2
+destruct plus
+q = 2
+b = 5
+d = 7
+g = 2
+h = 10,20
+k = 1,2,3
+2 3
+b = 2, d = 9
+
+Warning: Undefined variable $a in %s on line 138
+NULL
+int(1)
+caught: changed
+bool(true)
+bool(false)
+int(4)
+float(5)
+float(6)
+NULL
+int(12)
+int(7)
+int(3)
+int(-1)
+int(42)
+plus(): Return value must be of type int, float returned
+only_bool(): Return value must be of type bool, null returned
+guard(): Return value must be of type int, string returned

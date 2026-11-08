@@ -104,12 +104,15 @@ fn return_types_the_kinds_prove_are_not_checked() {
     assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "Nop");
     let src = "<?php function f(string $s): int { return strlen($s); }";
     assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "Nop");
-    // An int sum may be a float (overflow); a float param may hold an
-    // int; anything from a call is checked.
+    // An int sum may be a float (overflow); an int|float param may hold
+    // an int (converted on return), a float one never does (converted on
+    // entry); anything from a call is checked.
     let src = "<?php function f(int $a): int { return $a + 1; }";
     assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "VerifyReturn");
-    let src = "<?php function f(float $a): float { return $a; }";
+    let src = "<?php function f(int|float $a): float { return $a; }";
     assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "VerifyReturn");
+    let src = "<?php function f(float $a): float { return $a; }";
+    assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "Nop");
     let src = "<?php function f(): int { return g(); }";
     assert_eq!(op_of(src, "f", "Rare { op: VerifyReturn", 0), "VerifyReturn");
     // A generator's return is checked where it runs.

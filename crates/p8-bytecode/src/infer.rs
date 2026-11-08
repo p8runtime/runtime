@@ -63,8 +63,9 @@ fn frozen_kinds(c: &Frozen) -> Kinds {
 }
 
 /// What a parameter of declared type `ty` holds once VerifyArgs passed:
-/// the value as checked or converted (`quick` may accept an int for a
-/// float as it is).
+/// the value as accepted (`quick`), or as converted to one of the types
+/// (an int to a float when the type has float but not int, and the weak
+/// mode's scalar conversions).
 fn type_kinds(ty: &TypeDecl) -> Kinds {
     let m = ty.mask;
     if m & T_MIXED != 0 {
@@ -87,8 +88,11 @@ fn type_kinds(ty: &TypeDecl) -> Kinds {
         k |= INT;
     }
     if m & T_FLOAT != 0 {
-        k |= FLOAT | INT;
+        k |= FLOAT;
     }
+    // (Weak mode: a float, int or numeric string for `int` alone may be
+    // converted to that; one for `int|float` stays what it is, a kind
+    // the type has.)
     if m & (T_BOOL | T_FALSE | T_TRUE) != 0 {
         k |= BOOL;
     }
@@ -589,13 +593,16 @@ impl Pass<'_> {
                     self.write(s, key, VALUE);
                 }
             }
+            // A call's result is a value: `returned` reads a reference's,
+            // and an undefined one is `step`'s warning and null; a builtin
+            // returns a value.
             Call { base, argc, dst, .. } => {
                 self.spoil(s, base, usize::from(argc));
-                self.write(s, dst, VALUE | UNDEF);
+                self.write(s, dst, VALUE);
             }
             MethodCall { dst, base, argc, .. } => {
                 self.spoil(s, base, usize::from(argc));
-                self.write(s, dst, VALUE | UNDEF);
+                self.write(s, dst, VALUE);
             }
             ConcatN { dst, start, n } => {
                 self.spoil(s, start, usize::from(n));
