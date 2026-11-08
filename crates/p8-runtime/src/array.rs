@@ -93,6 +93,7 @@ impl Drop for Hashed {
     }
 }
 
+
 /// An array key: PHP normalizes "123" to 123, so a key is an int or a
 /// string that is not a canonical integer.
 #[derive(Debug, Clone, PartialEq, Eq)]

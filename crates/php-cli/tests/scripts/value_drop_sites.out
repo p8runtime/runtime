@@ -1,0 +1,73 @@
+-- property overwritten
+~p0
+set p1
+~p1
+set int
+~p2
+after property
+-- static property overwritten
+~s0
+set s1
+~s1
+after static
+-- global overwritten from a function
+~g0
+set g1
+~g1
+after global
+-- array element overwritten, pushed over, unset
+~a0
+set a2
+~a1
+set k
+~a2
+after element
+-- a reference's value overwritten
+~r0
+set r1
+~r1
+after reference
+-- argument copies
+in take arg0
+~arg0
+after take
+in take arg1
+after take kept
+-- closure capture
+keep cleared, closure holds
+arg1
+~arg1
+after closure
+-- generator locals
+yielded 1
+yielded 2
+gen end
+~gen0
+after generator
+~gen0
+after abandoned generator
+-- object with properties goes
+~Box
+~o1
+~o2
+~o3
+~o0
+after object
+-- string concatenation temporaries
+~c0
+~c1
+ac0bc1
+after concat
+-- compound assignment on an element holding an object
+~ca0
+after compound 2
+-- list() destructuring over objects
+~l0
+~l1
+after list
+-- swap through a temporary
+swapped m1 m0
+~m0
+~m1
+end
+~Box
