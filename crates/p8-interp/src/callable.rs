@@ -109,7 +109,7 @@ impl Context<'_> {
             }
         };
         let (this, scope, called) = match self.frames.last() {
-            Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
+            Some(f) => (if is_static { None } else { f.this.clone() }, f.scope().cloned(), f.called().cloned()),
             None => (None, None, None),
         };
         let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None, fake: false };
@@ -985,7 +985,7 @@ impl Context<'_> {
             crate::classes::method_of(&class, key).cloned().map(|m| {
                 // Code of a class naming its own private method on one of
                 // its instances means that one (as `method_frame` does).
-                match self.frames.last().and_then(|f| f.scope.as_deref()) {
+                match self.frames.last().and_then(|f| f.scope()).map(Rc::as_ref) {
                     Some(scope) if !strict && *m.declaring != *scope.lower && class.is_a(&scope.lower) => match crate::classes::method_of(scope, key) {
                         Some(own) if own.visibility == p8_runtime::object::Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
                         _ => m,

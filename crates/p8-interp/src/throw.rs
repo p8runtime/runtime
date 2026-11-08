@@ -85,7 +85,7 @@ impl Context<'_> {
                 // builtin evaluating it (ReflectionAttribute::newInstance),
                 // or "[constant expression]" (zend_fetch_debug_backtrace's
                 // entry for the filename override).
-                if frame.func.code.own_location && frame.scope.is_some() {
+                if frame.func.code.own_location && frame.scope().is_some() {
                     let line = caller.func.code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
                     let entry = match natives.iter().find(|(depth, _)| *depth == k) {
                         Some(&(_, n)) => native_entry(n, caller, line),
@@ -139,8 +139,8 @@ impl Context<'_> {
             }
             entry.insert(key("function"), Value::str(PhpStr::from(code.name.as_bytes())));
             // A closure made in a class shows that class, as a method does.
-            if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
-                let class = frame.scope.as_ref().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
+            if code.class.is_some() || (frame.scope().is_some() && code.name.as_bytes().starts_with(b"{closure")) {
+                let class = frame.scope().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
                 entry.insert(key("class"), Value::str(class));
                 if objects && let Some(this) = &frame.this {
                     entry.insert(key("object"), Value::object(Rc::clone(this)));
@@ -293,7 +293,7 @@ impl Context<'_> {
 pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     crate::give_back_shared(frames, regs);
     let frame = frames.pop();
-    frame.extra = None;
+    frame.take_extra();
     let base = frame.base as usize;
     let code = &frame.func.code;
     // A constructor an exception left: the object is never destructed.
@@ -308,7 +308,6 @@ pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
         clear(r);
     }
     frame.this = None;
-    frame.scope = None;
-    frame.called = None;
     frame.owner = None;
+    frame.flags = 0;
 }

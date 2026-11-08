@@ -1,0 +1,50 @@
+A::secret
+Error: Call to private method A::secret() from global scope
+A::secret
+A::secret
+A::secret
+A::secret
+Error: Call to private method B::secret() from global scope
+Error: Call to private method A::secret() from global scope
+array(3) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(1) "A"
+  [2]=>
+  string(1) "A"
+}
+array(3) {
+  [0]=>
+  string(1) "B"
+  [1]=>
+  string(1) "A"
+  [2]=>
+  string(1) "B"
+}
+string(1) "B"
+string(1) "A"
+B
+array(2) {
+  ["get_called_class"]=>
+  string(53) "get_called_class() must be called from within a class"
+  ["get_class"]=>
+  string(64) "get_class() without arguments must be called from within a class"
+}
+bool(false)
+bool(false)
+bool(false)
+array(3) {
+  [0]=>
+  string(1) "B"
+  [1]=>
+  string(1) "B"
+  [2]=>
+  string(9) "B::secret"
+}
+G:0
+G:1
+G:2
+D gone
+hi after
+6 4 11

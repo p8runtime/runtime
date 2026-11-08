@@ -10,25 +10,52 @@ pub(crate) struct Frame {
     /// Absolute register of the caller's result (NO_RET for the main frame).
     pub(crate) ret: u32,
     pub(crate) argc: u32,
+    /// What the frame has beyond its registers (`flag::*`): one word the
+    /// common return tests once, as PHP's `zend_leave_helper` tests
+    /// `call_info`. Set with the fields they describe, cleared by `push`.
+    pub(crate) flags: u8,
     /// Arguments past the declared parameters (func_get_args()).
     /// and the variables only named at run time (`$$name`, extract()):
-    /// rare, so one box that is usually none.
+    /// rare, so one box that is usually none. Some iff `flag::EXTRA`.
     pub(crate) extra: Option<Box<Extra>>,
-    /// A method's `$this`, the class its code is in (visibility, self::)
-    /// and the class it was called on (static::); None in a function.
+    /// A method's `$this`: Some iff `flag::THIS`.
     pub(crate) this: Option<Rc<Object>>,
-    pub(crate) scope: Option<Rc<Class>>,
-    pub(crate) called: Option<Rc<Class>>,
+    /// The class the code is in (visibility, self::) and the class it
+    /// was called on (static::), read through `scope()` and `called()`:
+    /// meaningful only with `flag::SCOPE`. Without it they are whatever
+    /// the slot's last method frame left, kept (not released) so that
+    /// the next method call at this depth of the same class finds its
+    /// handles already here and touches no reference count (as `func`
+    /// is kept, see `Frames`). A class lives for the request, so a kept
+    /// handle costs nothing but the slot.
+    scope: Option<Rc<Class>>,
+    called: Option<Rc<Class>>,
     /// The object whose code this frame runs: in a generator function's
     /// code (`func.code.is_generator`) its Generator, which keeps the
     /// Closure it was made by; else the Closure object the frame was
     /// called as, if it was (Closure::getCurrent()). One field, as PHP
     /// keeps neither in the frame: there the closure is the frame's
     /// function, embedded in the zend_closure (ZEND_CLOSURE_OBJECT).
+    /// Some iff `flag::OWNER`.
     pub(crate) owner: Option<Rc<Object>>,
+}
+
+/// `Frame::flags`.
+pub(crate) mod flag {
+    /// `this` is Some.
+    pub(crate) const THIS: u8 = 1;
+    /// `scope` and `called` are this frame's (a method's, or a closure's
+    /// bound to a class).
+    pub(crate) const SCOPE: u8 = 2;
+    /// `owner` is Some.
+    pub(crate) const OWNER: u8 = 4;
     /// Its variables are the global ones: the main script, and a file
     /// included at global scope (at any depth of includes).
-    pub(crate) global: bool,
+    pub(crate) const GLOBAL: u8 = 8;
+    /// `extra` is Some.
+    pub(crate) const EXTRA: u8 = 16;
+    /// What `leave` must do out of line: anything but releasing `$this`.
+    pub(crate) const RARE: u8 = OWNER | EXTRA;
 }
 
 pub(crate) const NO_RET: u32 = u32::MAX;
@@ -64,7 +91,6 @@ pub(crate) enum Origin {
 
 /// The ending frame's variable bindings, back to the scope that included
 /// it (when it is a file's code sharing a function's scope).
-#[inline(always)]
 pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
     let n = frames.len;
     let Some(origins) = frames.slots[n - 1].extra.as_mut().and_then(|e| e.shared.take()) else { return };
@@ -109,7 +135,12 @@ impl Frame {
     /// The Generator this frame runs, taken (its code returns): none in a
     /// frame that is not a generator's (its owner is a Closure, if any).
     pub(crate) fn take_generator(&mut self) -> Option<Rc<Object>> {
-        if self.owner.is_some() && self.func.code.is_generator { self.owner.take() } else { None }
+        if self.flags & flag::OWNER != 0 && self.func.code.is_generator {
+            self.flags &= !flag::OWNER;
+            self.owner.take()
+        } else {
+            None
+        }
     }
 
     /// The arguments past the declared parameters.
@@ -122,7 +153,103 @@ impl Frame {
     }
 
     pub(crate) fn vars_mut(&mut self) -> &mut Vars {
-        &mut self.extra.get_or_insert_with(Default::default).vars
+        &mut self.extra_mut().vars
+    }
+
+    /// The frame's Extra, made if it has none.
+    pub(crate) fn extra_mut(&mut self) -> &mut Extra {
+        self.flags |= flag::EXTRA;
+        self.extra.get_or_insert_with(Default::default)
+    }
+
+    /// The frame's Extra, taken (the flag goes with it).
+    #[inline(always)]
+    pub(crate) fn take_extra(&mut self) -> Option<Box<Extra>> {
+        self.flags &= !flag::EXTRA;
+        self.extra.take()
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_global(&self) -> bool {
+        self.flags & flag::GLOBAL != 0
+    }
+
+    /// The class the frame's code is in, if it is in one.
+    #[inline(always)]
+    pub(crate) fn scope(&self) -> Option<&Rc<Class>> {
+        if self.flags & flag::SCOPE != 0 { self.scope.as_ref() } else { None }
+    }
+
+    /// The class the method was called on (static::), if the frame is a
+    /// method's.
+    #[inline(always)]
+    pub(crate) fn called(&self) -> Option<&Rc<Class>> {
+        if self.flags & flag::SCOPE != 0 { self.called.as_ref() } else { None }
+    }
+
+    /// `(scope, called)`, cloned.
+    pub(crate) fn classes(&self) -> (Option<Rc<Class>>, Option<Rc<Class>>) {
+        (self.scope().cloned(), self.called().cloned())
+    }
+
+    /// The frame as a method's (or a class-bound closure's): its `$this`,
+    /// its scope and its called class; None for each a function has not.
+    #[inline(always)]
+    pub(crate) fn set_classes(&mut self, this: Option<Rc<Object>>, scope: Option<Rc<Class>>, called: Option<Rc<Class>>) {
+        if scope.is_some() || called.is_some() {
+            self.flags |= flag::SCOPE;
+            self.scope = scope;
+            self.called = called;
+        }
+        self.set_this(this);
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_this(&mut self, this: Option<Rc<Object>>) {
+        if this.is_some() {
+            self.flags |= flag::THIS;
+            self.this = this;
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_owner(&mut self, owner: Option<Rc<Object>>) {
+        if owner.is_some() {
+            self.flags |= flag::OWNER;
+            self.owner = owner;
+        }
+    }
+
+    /// Whether the slot's kept scope handle is the class `declaring` (a
+    /// call-site cache's weak handle): compared by address, which a kept
+    /// handle keeps its own.
+    #[inline(always)]
+    pub(crate) fn keeps_scope(&self, declaring: &std::rc::Weak<Class>) -> bool {
+        self.scope.as_ref().is_some_and(|s| Rc::as_ptr(s) == declaring.as_ptr())
+    }
+
+    /// The frame (just pushed) as an instance method's: `$this`, the
+    /// declaring class as its scope (None: the slot's own, `keeps_scope`
+    /// said so), `$this`'s class as the called class (the slot's own
+    /// when it is the same, the usual case: the same call from the same
+    /// depth touches no class reference count).
+    #[inline(always)]
+    pub(crate) fn adopt(&mut self, this: Rc<Object>, declaring: Option<Rc<Class>>) {
+        if let Some(d) = declaring {
+            self.scope = Some(d);
+        }
+        if self.called.as_ref().is_none_or(|c| !Rc::ptr_eq(c, &this.class)) {
+            self.called = Some(Rc::clone(&this.class));
+        }
+        self.this = Some(this);
+        self.flags |= flag::THIS | flag::SCOPE;
+    }
+
+    /// `$this` released (the frame ends): nothing else of the method's.
+    #[inline(always)]
+    pub(crate) fn drop_this(&mut self) {
+        self.flags &= !flag::THIS;
+        self.this = None;
     }
 }
 
@@ -227,7 +354,7 @@ impl Frames {
                 if !Rc::ptr_eq(&slot.func, func) {
                     slot.func = Rc::clone(func);
                 }
-                (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
+                (slot.pc, slot.base, slot.ret, slot.argc, slot.flags) = (0, base as u32, ret, argc as u32, 0);
             }
             None => self.slots.push(Frame {
                 func: Rc::clone(func),
@@ -235,15 +362,32 @@ impl Frames {
                 base: base as u32,
                 ret,
                 argc: argc as u32,
+                flags: 0,
                 extra: None,
                 this: None,
                 scope: None,
                 called: None,
                 owner: None,
-                global: false,
             }),
         }
         self.len += 1;
+    }
+
+    /// The slot the next pushed frame takes, if a frame has used it: what
+    /// it kept (its function, its classes) is the last call's at this depth.
+    #[inline(always)]
+    pub(crate) fn next_slot(&self) -> Option<&Frame> {
+        self.slots.get(self.len)
+    }
+
+    /// `push` of the function the next slot keeps (`next_slot`'s `func`):
+    /// no handle touched.
+    #[inline(always)]
+    pub(crate) fn push_kept(&mut self, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        let slot = &mut self.slots[self.len];
+        (slot.pc, slot.base, slot.ret, slot.argc, slot.flags) = (0, base as u32, ret, argc as u32, 0);
+        self.len += 1;
+        slot
     }
 
     /// Pop the top frame; its slot stays for the next push.

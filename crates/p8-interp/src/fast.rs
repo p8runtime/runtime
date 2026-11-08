@@ -426,7 +426,7 @@ impl Context<'_> {
                             let Some(o) = w[rx!(b)].as_object() else { slow!() };
                             o
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let scope = top.scope().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let Some(v) = cached_prop(site.get(), o, scope) else { slow!() };
                         done!(put(&mut w[rx!(a)], v));
                     }
@@ -448,8 +448,8 @@ impl Context<'_> {
                             let Some(o) = w[rx!(a)].as_object() else { slow!() };
                             o
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope.as_deref()), &w[rx!(val)], !self.reinit.is_empty()) else { slow!() };
+                        let scope = top.scope().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope().map(Rc::as_ref)), &w[rx!(val)], !self.reinit.is_empty()) else { slow!() };
                         let unused = matches!(code.get(pc + 1), Some(next) if next.op == Op::Free && next.a == dst);
                         let written = match o.slots().get(slot) {
                             Some(s)
@@ -562,7 +562,7 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let scope = top.scope().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let by_value = clo.methods[method].borrow().as_ref().is_some_and(|s| {
                             s.class == Rc::as_ptr(&o.class) as usize
                                 && s.scope == scope
@@ -1077,19 +1077,40 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let scope = top.scope().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        // The method's closure and declaring class: the
+                        // frame slot's own when they are what the last call
+                        // at this depth used (compared by address: no
+                        // reference count touched), else upgraded from the
+                        // site's weak handles.
                         let found = {
                             let site = clo.methods[method].borrow();
                             match site.as_ref() {
                                 Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
-                                    MethodCode::User(code) => code.upgrade().zip(s.declaring.upgrade()),
+                                    MethodCode::User(code) => {
+                                        let (func_kept, scope_kept) = match self.frames.next_slot() {
+                                            Some(f) => (Rc::as_ptr(&f.func) == code.as_ptr(), f.keeps_scope(&s.declaring)),
+                                            None => (false, false),
+                                        };
+                                        // (None in the inner Option: the slot's own.)
+                                        let func = if func_kept { Some(None) } else { code.upgrade().map(Some) };
+                                        let declaring = if scope_kept { Some(None) } else { s.declaring.upgrade().map(Some) };
+                                        match (func, declaring) {
+                                            (Some(f), Some(d)) => Some((f, d)),
+                                            _ => None,
+                                        }
+                                    }
                                     MethodCode::Native(..) => None,
                                 },
                                 _ => None,
                             }
                         };
-                        let Some((target, declaring)) = found else { slow!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        let Some((func, declaring)) = found else { slow!() };
+                        let target = match &func {
+                            None => &self.frames.next_slot().expect("the kept slot").func.code,
+                            Some(f) => &f.code,
+                        };
+                        if n < target.required || target.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
                         }
                         let this = Rc::clone(o);
@@ -1101,11 +1122,15 @@ impl Context<'_> {
                         if let Some(caller) = self.frames.last_mut() {
                             caller.pc = (pc + 1) as u32;
                         }
-                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
-                        let frame = self.frames.last_mut().expect("the frame just pushed");
-                        frame.called = Some(Rc::clone(&this.class));
-                        frame.this = Some(this);
-                        frame.scope = Some(declaring);
+                        let (at, ret) = (base + args as usize, (base + dst as usize) as u32);
+                        let frame = match func {
+                            None => self.frames.push_kept(at, n, ret),
+                            Some(f) => {
+                                self.frames.push(&f, at, n, ret);
+                                self.frames.last_mut().expect("the frame just pushed")
+                            }
+                        };
+                        frame.adopt(this, declaring);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1151,9 +1176,7 @@ impl Context<'_> {
                                 }
                                 self.frames.push(&f, base + args as usize, n, NO_RET);
                                 let frame = self.frames.last_mut().expect("the frame just pushed");
-                                frame.this = Some(object);
-                                frame.scope = Some(declaring);
-                                frame.called = Some(class);
+                                frame.set_classes(Some(object), Some(declaring), Some(class));
                                 enter(&mut self.frames, regs);
                                 pc = 0;
                                 continue 'frame;
@@ -1190,10 +1213,8 @@ impl Context<'_> {
                         }
                         self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
                         let frame = self.frames.last_mut().expect("the frame just pushed");
-                        frame.this = m.this;
-                        frame.scope = m.scope;
-                        frame.called = m.called;
-                        frame.owner = m.closure;
+                        frame.set_classes(m.this, m.scope, m.called);
+                        frame.set_owner(m.closure);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1287,7 +1308,9 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
     let nparams = code.params.len();
     if argc > nparams {
-        frame.extra = take_extra(spare, regs, base, nparams, argc);
+        // (The fields, not `set_extra`: `func` stays borrowed.)
+        frame.flags |= flag::EXTRA;
+        frame.extra = Some(take_extra(spare, regs, base, nparams, argc));
     }
     // The variables not passed are undefined (PHP initialises its CVs).
     // Constants are read in place (`const_index`): none is copied in.
@@ -1316,7 +1339,7 @@ pub(crate) fn returned(regs: &mut [Value], frame: &Frame, base: usize, src: Reg)
     let code = &frame.func.code;
     let at = src as usize;
     let temp = at >= code.ncv as usize;
-    let own_var = !temp && !frame.global && frame.extra.is_none();
+    let own_var = !temp && frame.flags & (flag::GLOBAL | flag::EXTRA) == 0;
     let r = &mut regs[base + at];
     if r.is_undef() {
         None
@@ -1357,15 +1380,22 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 
 /// Pop the current frame, putting `value` in the caller's result
 /// register; the caller (if any) resumes at its saved pc.
+///
+/// The common frame (a function's or a method's: `flag::RARE` clear) is
+/// handled here in full; one test of the frame's flags sends the rest
+/// (extra arguments, run-time variables, a shared scope, a Closure owner)
+/// to `leave_rare`, as PHP's `zend_leave_helper` tests `call_info` once.
+/// The frame's scope and called class are not released: the slot keeps
+/// the handles for the next call at this depth (`Frame::scope`).
 #[inline(always)]
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
-    give_back_shared(frames, regs);
-    frames.len -= 1;
-    let (slots, spare) = (&mut frames.slots, &mut frames.spare);
-    let frame = &mut slots[frames.len];
-    if let Some(extra) = frame.extra.take() {
-        crate::frames::recycle_extra(spare, extra);
+    let top = frames.len - 1;
+    let flags = frames.slots[top].flags;
+    if flags & flag::RARE != 0 {
+        return leave_rare(frames, regs, value);
     }
+    frames.len = top;
+    let frame = &mut frames.slots[top];
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;
@@ -1383,18 +1413,45 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     }
     // `$this` goes after the arguments, as in PHP (it decides which
     // object id is free first).
-    if frame.scope.is_some() {
-        frame.this = None;
-        frame.scope = None;
-        frame.called = None;
-    }
-    // The Closure it was called as (a generator's frame gave its
-    // Generator back before it got here).
-    if frame.owner.is_some() {
-        frame.owner = None;
+    if flags & flag::THIS != 0 {
+        frame.drop_this();
     }
     if frame.ret != NO_RET {
         // (The Return arm tests pending after `leave`.)
+        let _ = put(&mut regs[frame.ret as usize], value);
+    }
+}
+
+/// `leave` of a frame with something rare to undo (`flag::RARE`): an
+/// included file's bindings given back, its Extra recycled, its Closure
+/// owner released.
+#[cold]
+#[inline(never)]
+fn leave_rare(frames: &mut Frames, regs: &mut [Value], value: Value) {
+    give_back_shared(frames, regs);
+    frames.len -= 1;
+    let (slots, spare) = (&mut frames.slots, &mut frames.spare);
+    let frame = &mut slots[frames.len];
+    if let Some(extra) = frame.take_extra() {
+        crate::frames::recycle_extra(spare, extra);
+    }
+    let base = frame.base as usize;
+    let code = &frame.func.code;
+    let temps = base + code.ncv as usize;
+    for r in &mut regs[base..temps] {
+        clear(r);
+    }
+    if !code.frees_temps {
+        for r in &mut regs[temps..base + usize::from(code.nregs)] {
+            clear(r);
+        }
+    }
+    frame.drop_this();
+    // The Closure it was called as (a generator's frame gave its
+    // Generator back before it got here).
+    frame.flags &= !flag::OWNER;
+    frame.owner = None;
+    if frame.ret != NO_RET {
         let _ = put(&mut regs[frame.ret as usize], value);
     }
 }
