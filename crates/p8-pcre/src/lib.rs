@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod compile;
+mod dfa;
 mod errors;
 mod exec;
 mod parse;
@@ -129,7 +130,8 @@ impl Regex {
         let groups = parsed.groups;
         let mut names = parsed.names.clone();
         names.sort_by(|a, b| a.0.cmp(&b.0));
-        let prog = compile::compile(parsed, options.anchored, pattern.len())?;
+        let mut prog = compile::compile(parsed, options.anchored, pattern.len())?;
+        prog.dfa = dfa::Dfa::new(&prog).map(std::cell::RefCell::new);
         Ok(Regex { prog, groups, names })
     }
 

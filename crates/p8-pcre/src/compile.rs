@@ -166,6 +166,8 @@ pub(crate) struct Prog {
     pub max_lookbehind: u32,
     /// The backtrack stack's room, kept between matches (exec.rs).
     pub stack: std::cell::Cell<Vec<crate::exec::Bt>>,
+    /// The lazy DFA, for a regular pattern (dfa.rs; set by Regex::new).
+    pub dfa: Option<std::cell::RefCell<crate::dfa::Dfa>>,
 }
 
 /// The bytes a match can start with: few enough to look for with memchr,
@@ -273,6 +275,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         not_empty_atstart: parsed.not_empty_atstart,
         max_lookbehind: c.max_lookbehind,
         stack: Default::default(),
+        dfa: None,
     })
 }
 

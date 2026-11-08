@@ -112,6 +112,153 @@ fn errors() {
     assert_eq!(e("(?<=a+)b").as_deref(), Some("length of lookbehind assertion is not limited at offset 0"));
 }
 
+/// The DFA (dfa.rs) and the machine agree on every match's bounds, over
+/// the whole subject and for every start offset, with and without
+/// NOTEMPTY_ATSTART. A lowered match limit keeps a search on the machine.
+#[test]
+fn dfa_agrees_with_machine() {
+    let o = |s: &str| Options {
+        caseless: s.contains('i'),
+        multiline: s.contains('m'),
+        dotall: s.contains('s'),
+        extended: s.contains('x'),
+        ungreedy: s.contains('U'),
+        anchored: s.contains('A'),
+        dollar_endonly: s.contains('D'),
+        utf: s.contains('u'),
+        ucp: s.contains('u'),
+        ..Options::default()
+    };
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("abc", "", &["xxabcxx", "ab", "", "abcabc"]),
+        ("a|ab|abc", "", &["abc", "xabcx"]),
+        ("(a|ab)(c|bcd)(d*)", "", &["abcd", "abcdd"]),
+        ("x*", "", &["axxb", "", "xxx"]),
+        ("(?:)", "", &["abc"]),
+        ("a.*c", "", &["abcbc", "ab\ncbc", "a"]),
+        ("a.*?c", "", &["abcbc"]),
+        ("a.*c", "s", &["ab\ncbc"]),
+        ("a{2,3}", "", &["aaaa", "a", "aa"]),
+        ("(ab){2}", "", &["ababab", "ab"]),
+        ("(?:a|b)*c", "", &["ababc", "abab"]),
+        ("(a*)*b", "", &["aab", "b", "aaa"]),
+        ("(a*)+b", "", &["aab"]),
+        ("(a|b)*?b", "", &["aabab"]),
+        (r"\d+", "", &["ab 123 c 45", "no digits", "9"]),
+        (r"\d+", "U", &["ab 123 c"]),
+        (r"\d{2,}?", "", &["12345"]),
+        (r"a{,3}", "", &["aaaa", "a{,3}"]),
+        (r"[[:alpha:]]+", "", &["12ab3", "naïve café"]),
+        (r"[[:alpha:]]+", "u", &["naïve café", "日本語!"]),
+        (r"[\w.-]+@\w+", "", &["mail: a.b-c@host!", "@"]),
+        (r"\w+", "u", &["naïve café", "日本語!"]),
+        (r"\w+", "", &["naïve"]),
+        (r"\bfoo\b", "", &["a foo b", "afoo foob foo", "foo"]),
+        (r"\Bo\B", "", &["foo boo o", "ooo"]),
+        (r"\b\w+\b", "", &["Hello, world! foo_bar 42"]),
+        (r"\bé", "u", &["café é", "é"]),
+        (r"\b\w", "u", &["日本 語", "a日"]),
+        ("^b", "", &["ab", "b", "a\nb"]),
+        ("^b", "m", &["a\nb", "ab\nb", "a\n\nb"]),
+        ("^", "m", &["a\nb\nc", "", "\n"]),
+        ("$", "m", &["a\nb\n", "", "\n\n"]),
+        ("a$", "", &["a\n", "a", "a\nb", "ba\n\n", "a\n\n"]),
+        ("a$", "D", &["a\n", "a"]),
+        ("a$", "m", &["a\nb", "ba\na", "a\n"]),
+        (r"a\Z", "", &["a\n", "a", "a\n\n"]),
+        (r"a\z", "", &["a\n", "a"]),
+        (r"\Aa", "", &["aa", "ba"]),
+        (r"^\s*$", "m", &["a\n\n  \nb", "  "]),
+        (r"^(?:(\d+)|(\w+))$", "", &["abc", "123", "a1\n"]),
+        (r"^$", "", &["", "\n", "a"]),
+        (r"^$", "m", &["", "\n", "a\n\nb", "a\n"]),
+        ("(?i)straße", "u", &["STRASSE straße STRAßE"]),
+        ("(?i)ABC", "", &["xabcx", "ABC", "aBc"]),
+        ("(?i)[a-c]+", "", &["ABCabcD"]),
+        ("(?i)[^a-c]+", "", &["ABCxyz"]),
+        ("(?i)k", "u", &["\u{212a} K k"]),
+        ("(?i)école", "u", &["ÉCOLE", "école"]),
+        (r"\p{Lu}\p{Ll}+", "u", &["Été Ölm Ab", "abc"]),
+        (r"\p{N}+", "u", &["x٣٤5", "abc"]),
+        (r"[^\p{L}]+", "u", &["ab12ü!", "abc"]),
+        (r"[\p{Han}]+", "u", &["漢字かな", "abc"]),
+        (r".", "u", &["héllo wörld", "\n", ""]),
+        (r".+", "", &["a\nb", "\n\n"]),
+        (r"(?s).+", "", &["a\nb"]),
+        (r"[^\x00-\x7F]+", "", &["abc\u{e9}d"]),
+        (r"[\d\s]+", "", &["1 2 3x", "x"]),
+        (r"\S+", "", &[" ab  cd ", "   "]),
+        (r"\h+", "", &["a \t b", "\u{a0}"]),
+        (r"\h+", "u", &["a \t\u{a0}b"]),
+        (r"\v", "", &["a\nb", "a\u{85}b"]),
+        (r"(?x) a  b # comment\n c", "", &["abc", "a b c"]),
+        (r"\Qa.b\E+", "", &["a.bbb", "axb"]),
+        (r"[a-z-]+", "", &["foo-bar baz"]),
+        (r"(\d+)(?:px|em)?", "", &["10px 5 3em"]),
+        (r"\d+(?:px|em)", "", &["10px 5 3em", "7p"]),
+        (r"(a+)+$", "", &["aaaa", "aaab"]),
+        (r"(a+)+b", "", &["aaaaaaaaaaaaaaaaab", "aaaaaaaaaaaaaaaaac"]),
+        (r"(?:a|b)+|c", "", &["ababc", "c", "x"]),
+        (r"(a)(?:x|(b))*", "", &["axbxb"]),
+        (r"(?:(a)|b)*", "", &["ab", "ba", ""]),
+        (r"a*?", "", &["aaa"]),
+        (r"a*?b", "", &["aaab"]),
+        (r"(?U)a+", "", &["aaa"]),
+        (r"a+?", "U", &["aaa"]),
+        (r"<!--\s*/?wp:([a-z][a-z0-9_-]*/)?([a-z][a-z0-9_-]*)\s+(/)?-->", "s", &["<!-- wp:paragraph -->text<!-- /wp:paragraph -->", "<!-- wp:core/image /-->", "no blocks"]),
+        (r"^[a-z0-9_-]+$", "", &["my-slug", "Bad Slug", ""]),
+        (r"[^a-z0-9 _-]", "i", &["Hello World!", "ok"]),
+        (r"%[a-zA-Z0-9]{2}", "", &["a%20b%zz", "plain"]),
+        (r"&(#\d+|#x[a-f0-9]+|[a-z]+);", "i", &["a &amp; b &#39; &#x27; &bad"]),
+        (r"<[^>]*>", "", &["<p>hi</p>", "no tags"]),
+        (r"[\r\n\t ]+", "", &["a \n\t b", "abc"]),
+        (r"\s+", "", &["  a  b  ", "abc"]),
+        (r"[^\s]+", "", &["  a  b  "]),
+        (r"^(\d+)\.(\d+)", "", &["8.6.0", "x"]),
+        (r"^([a-z]+):", "i", &["Content-Type: x", "nocolon"]),
+        (r"[A-Z]", "", &["abcDef", "abc"]),
+        (r"\A\s*\z", "", &["   ", "a", ""]),
+        (r"^\s+|\s+$", "", &["  ab  ", "ab"]),
+        (r"\s+$", "", &["ab  \n", "ab"]),
+        (r"[\x{80}-\x{10ffff}]", "u", &["abcé", "abc"]),
+        (r"\x{e9}", "u", &["café"]),
+        (r"\G\d", "", &["123a45", "a1"]),
+        (r"(?:ab|a)(?:bc|c)?", "", &["abc", "abbc"]),
+        (r"(?:a|ab)(?:c|bcd)", "", &["abcd"]),
+        (r"a?a?a?aaa", "", &["aaa", "aa"]),
+        (r"(?:x|y|z)*end", "", &["xyzend", "xyzen"]),
+        (r"[a-c]{1,3}d|[a-d]+", "", &["abcd", "aabbd"]),
+    ];
+    let vm = MatchOptions { match_limit: 999_999, ..MatchOptions::default() };
+    let dfa = MatchOptions::default();
+    for &(pat, flags, subjects) in cases {
+        let opts = o(flags);
+        let re = Regex::new(pat.as_bytes(), &opts).unwrap_or_else(|e| panic!("{pat}: {e}"));
+        assert!(re.prog.dfa.is_some(), "{pat}: no DFA");
+        for subject in subjects {
+            let s = subject.as_bytes();
+            for start in 0..=s.len() {
+                if opts.utf && start < s.len() && s[start] & 0xc0 == 0x80 {
+                    continue;
+                }
+                for not_empty_atstart in [false, true] {
+                    let b = re.exec(s, start, &MatchOptions { not_empty_atstart, ..dfa.clone() }).unwrap().map(|c| (c.get(0), c.len()));
+                    // The machine may run out of backtracking where the
+                    // DFA, which never backtracks, has the answer.
+                    let Ok(a) = re.exec(s, start, &MatchOptions { not_empty_atstart, ..vm.clone() }) else { continue };
+                    let a = a.map(|c| (c.get(0), c.len()));
+                    assert_eq!(a, b, "{pat:?} /{flags} on {subject:?} from {start} (not_empty_atstart {not_empty_atstart})");
+                }
+            }
+        }
+    }
+    // Patterns the DFA does not take.
+    for pat in [r"(a)\1", r"foo(?=bar)", r"(?<=a)b", r"(?>a+)b", r"a++b", r"\R", r"\X", r"foo\Kbar", r"a(*SKIP)b", r"(?R)?x", r"(?(1)a|b)(a)?", r"(*CRLF)a$", r"(*LIMIT_MATCH=100)a"] {
+        let re = Regex::new(pat.as_bytes(), &Options::default()).unwrap_or_else(|e| panic!("{pat}: {e}"));
+        assert!(re.prog.dfa.is_none(), "{pat}: has a DFA");
+    }
+}
+
 #[test]
 fn limits() {
     let re = Regex::new(b".*\\p{N}", &Options::default()).unwrap();
