@@ -100,3 +100,4 @@ object(V)#1 (4) {
   ["f"]=>
   float(2.5)
 }
+lit-class prop true

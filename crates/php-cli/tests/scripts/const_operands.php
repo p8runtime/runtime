@@ -112,3 +112,6 @@ echo st(), ' ', st('x'), ' ', st('y', 1), "\n";
 class V { public int $i = 1; public ?string $s = null; public array $arr = ['a' => 'b']; public $f = 2.5; }
 $o = new V; $o->i = 5; $o->s = 'str'; $o->arr['c'] = 'd';
 var_dump($o);
+
+// A literal as a class name: the reference reads a register.
+echo ('K')::sf('lit', 'class'), ' ', (new ('K'))->p, ' ', var_export($o instanceof ('V'), true), "\n";

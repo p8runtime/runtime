@@ -3343,7 +3343,14 @@ impl<'src> Compiler<'src> {
         let name = match e {
             Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => name,
             _ => {
-                let r = self.expr(f, e)?;
+                let mut r = self.expr(f, e)?;
+                // A literal (`('A')::f()`): the class reference names a
+                // register, so the literal is loaded into one.
+                if r >> KIND_SHIFT == CONST {
+                    let t = f.temp();
+                    f.emit(Instr::Move { dst: t, src: r });
+                    r = t;
+                }
                 return Ok(f.class_ref(ClassRef::Dynamic(r)));
             }
         };
