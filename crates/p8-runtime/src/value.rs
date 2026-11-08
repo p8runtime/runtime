@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt;
-use std::mem::{self, ManuallyDrop};
+use std::mem;
 use std::rc::Rc;
 
 /// A PHP value: 16 bytes, a tag and a payload, as a zval.
@@ -43,14 +43,12 @@ enum Repr {
     /// no count to keep, nothing to release (PHP's interned strings,
     /// which `Z_REFCOUNTED` is false for).
     IStr(&'static IStr) = 5,
-    // The handles below are let go of by `Value`'s `Drop` (inline), never
-    // by drop glue of `Repr`'s (there is none): see there.
-    Str(ManuallyDrop<PhpStr>) = 6,
-    Array(ManuallyDrop<Rc<PhpArray>>) = 7,
+    Str(PhpStr) = 6,
+    Array(Rc<PhpArray>) = 7,
     /// A PHP reference: the shared cell `$a = &$b` makes.
-    Ref(ManuallyDrop<Rc<RefCell<Value>>>) = 8,
+    Ref(Rc<RefCell<Value>>) = 8,
     /// An object: a shared handle (copying the value copies the handle).
-    Object(ManuallyDrop<Rc<Object>>) = 9,
+    Object(Rc<Object>) = 9,
 }
 
 /// A bool's payload, at the payload's offset (8) as every other variant's
@@ -62,12 +60,6 @@ enum Repr {
 struct B(bool);
 
 const _: () = assert!(mem::size_of::<B>() == 8);
-
-/// A handle for the representation.
-#[inline(always)]
-fn held<T>(t: T) -> ManuallyDrop<T> {
-    ManuallyDrop::new(t)
-}
 
 /// The first tag holding memory: tags below it are plain.
 const FIRST_HEAP_TAG: u8 = 6;
@@ -113,42 +105,25 @@ impl fmt::Debug for Value {
 }
 
 impl Drop for Value {
-    /// Inline, as PHP's `zval_ptr_dtor`: the scalars come first (tags
-    /// 0..=5), so for them it is one compare and nothing else; a value
-    /// holding memory is its `Rc` count's decrement, inline, and the free
-    /// out of line only when it was the last handle (PHP's `GC_DELREF`,
-    /// then `rc_dtor_func` at zero): `release`. The handles are the same
-    /// `Rc`s, dropped at the same point, so a destructor is queued where it
-    /// was and the collector sees the same counts.
+    /// Inline, as PHP's `zval_ptr_dtor`. The representation's own drop
+    /// follows this, inline: the scalars come first (tags 0..=4), so for
+    /// them it is one compare and nothing else; a value holding memory is
+    /// its `Rc` count's decrement, and `Rc`'s out-of-line free only when
+    /// it was the last handle (PHP's `GC_DELREF`, then `rc_dtor_func` at
+    /// zero). That is the same `Rc` drop as before the newtype, so a
+    /// destructor is queued at the same point and the collector sees the
+    /// same counts.
     ///
-    /// The representation's handles are `ManuallyDrop`, so `Repr` has no
-    /// drop glue of its own: without that, every drop of a value was also
-    /// a call of the out-of-line `drop_in_place::<Repr>` (the compiler
-    /// would not inline it), whatever this did first.
+    /// Deliberately not an out-of-line call for every heap value: measured
+    /// on addis (#324's PR), that costs WordPress +3.1% and Laravel +2.3%
+    /// instructions, and +1.5% / +1.3% with the call only for the last
+    /// handle. The interpreter's register overwrite (`fast::put`) already
+    /// tests the tag in the slot and makes its one cold call itself.
     ///
     /// Being a `Drop` type also keeps a `Value` from being destructured by
     /// move: the `into_*` take the representation with `mem::replace`.
     #[inline(always)]
-    fn drop(&mut self) {
-        if self.tag() >= FIRST_HEAP_TAG {
-            release_repr(mem::replace(&mut self.0, Repr::Undef));
-        }
-    }
-}
-
-/// Let go of the handles in a representation: their `Rc` drops. Out of
-/// line for the last handle (`free_last`); inline for a shared one, where
-/// the count was just read and is known not to reach zero, so the drop is
-/// the decrement alone.
-#[inline(always)]
-fn drop_handles(r: Repr) {
-    match r {
-        Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
-        Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
-        Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
-        Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
-        _ => {}
-    }
+    fn drop(&mut self) {}
 }
 
 /// The last handle of a string, array, reference or object goes: its free
@@ -156,30 +131,19 @@ fn drop_handles(r: Repr) {
 #[cold]
 #[inline(never)]
 fn free_last(r: Repr) {
-    drop_handles(r);
+    drop(r);
 }
 
-/// `Value::release` of a representation moved out of its value. The count
-/// is read the same way for every kind of handle (the `Rc` count, first in
-/// its allocation), and the decrement is the same for all: one test of the
-/// tag, not a dispatch on it.
+/// A shared handle's drop: the count was just read and is known not to
+/// reach zero, so the `Rc` drop is the decrement alone.
 #[inline(always)]
-fn release_repr(r: Repr) -> bool {
-    let count = match &r {
-        Repr::Str(s) => s.count(),
-        Repr::Array(a) => Rc::strong_count(a),
-        Repr::Ref(c) => Rc::strong_count(c),
-        Repr::Object(o) => Rc::strong_count(o),
-        _ => return false,
-    };
-    if count == 1 {
-        // A string's free cannot run a destructor.
-        let owns = !matches!(r, Repr::Str(_));
-        free_last(r);
-        owns
-    } else {
-        drop_handles(r);
-        false
+fn drop_shared(r: Repr) {
+    match r {
+        Repr::Str(s) => drop(s),
+        Repr::Array(a) => drop(a),
+        Repr::Ref(c) => drop(c),
+        Repr::Object(o) => drop(o),
+        _ => {}
     }
 }
 
@@ -190,15 +154,39 @@ impl Value {
     /// then `rc_dtor_func` at zero). Returns whether a handle that may own
     /// an object went (an array, a reference, an object): the free may
     /// have left a destructor due. A decrement that frees nothing, or a
-    /// string's free, cannot have. (Dropping a value does the same; this
-    /// says what it did.)
+    /// string's free, cannot have.
     ///
-    /// The count is read first, so for a shared handle the `Rc` drop that
-    /// follows is known not to reach zero and is the decrement alone.
+    /// The count is read first, the same way for every kind of handle (the
+    /// `Rc` count, first in its allocation), so for a shared handle the
+    /// `Rc` drop that follows is known not to reach zero and is the
+    /// decrement alone.
+    ///
+    /// (Measured on addis: making every drop of a value do this inline,
+    /// through `ManuallyDrop` handles and a real `Drop`, cost Laravel
+    /// +0.9% instructions; the drop glue's out-of-line call stays for the
+    /// drops outside the interpreter's register writes.)
     #[inline(always)]
     pub fn release(self) -> bool {
-        let mut this = ManuallyDrop::new(self);
-        release_repr(mem::replace(&mut this.0, Repr::Undef))
+        // (Not dropped after: its representation is moved out, and the
+        // drop of what is left would be an out-of-line call of its own.)
+        let mut this = mem::ManuallyDrop::new(self);
+        let r = mem::replace(&mut this.0, Repr::Undef);
+        let count = match &r {
+            Repr::Str(s) => s.count(),
+            Repr::Array(a) => Rc::strong_count(a),
+            Repr::Ref(c) => Rc::strong_count(c),
+            Repr::Object(o) => Rc::strong_count(o),
+            _ => return false,
+        };
+        if count == 1 {
+            // A string's free cannot run a destructor.
+            let owns = !matches!(r, Repr::Str(_));
+            free_last(r);
+            owns
+        } else {
+            drop_shared(r);
+            false
+        }
     }
 
     /// Whether `self` is `other` itself: the same scalar (a float by its
@@ -233,9 +221,9 @@ impl Clone for Value {
             Repr::Float(f) => Repr::Float(*f),
             Repr::IStr(s) => Repr::IStr(s),
             Repr::Str(s) => Repr::Str(s.clone()),
-            Repr::Array(a) => Repr::Array(a.clone()),
-            Repr::Ref(r) => Repr::Ref(r.clone()),
-            Repr::Object(o) => Repr::Object(o.clone()),
+            Repr::Array(a) => Repr::Array(Rc::clone(a)),
+            Repr::Ref(r) => Repr::Ref(Rc::clone(r)),
+            Repr::Object(o) => Repr::Object(Rc::clone(o)),
             Repr::Undef => Repr::Undef,
         })
     }
@@ -295,7 +283,7 @@ impl Value {
     }
 
     pub fn str(s: impl Into<PhpStr>) -> Value {
-        Value(Repr::Str(held(s.into())))
+        Value(Repr::Str(s.into()))
     }
 
     /// A program-memory string's value (a compiled literal): no count,
@@ -318,23 +306,23 @@ impl Value {
     /// or an `Rc<PhpArray>` already shared.
     #[inline(always)]
     pub fn array(a: impl Into<Rc<PhpArray>>) -> Value {
-        Value(Repr::Array(held(a.into())))
+        Value(Repr::Array(a.into()))
     }
 
     #[inline(always)]
     pub fn object(o: impl Into<Rc<Object>>) -> Value {
-        Value(Repr::Object(held(o.into())))
+        Value(Repr::Object(o.into()))
     }
 
     /// A PHP reference to the cell `$a = &$b` shares.
     #[inline(always)]
     pub fn reference(cell: Rc<RefCell<Value>>) -> Value {
-        Value(Repr::Ref(held(cell)))
+        Value(Repr::Ref(cell))
     }
 
     /// A PHP reference to a fresh cell holding `v`.
     pub fn new_reference(v: Value) -> Value {
-        Value(Repr::Ref(held(Rc::new(RefCell::new(v)))))
+        Value(Repr::Ref(Rc::new(RefCell::new(v))))
     }
 
     #[inline(always)]
@@ -530,8 +518,7 @@ impl Value {
     /// A program-memory string is copied out first (it is never written).
     pub fn str_mut(&mut self) -> Option<&mut Vec<u8>> {
         if let Repr::IStr(s) = self.0 {
-            // (What it replaces is plain: nothing is let go of.)
-            self.0 = Repr::Str(held(PhpStr::from(s.as_bytes())));
+            self.0 = Repr::Str(PhpStr::from(s.as_bytes()));
         }
         match &mut self.0 {
             Repr::Str(s) => Some(s.make_mut()),
@@ -549,7 +536,7 @@ impl Value {
             }
             // (One new string of both, as a shared one's append.)
             Repr::IStr(s) => {
-                self.0 = Repr::Str(held(PhpStr::concat(s.as_bytes(), bytes)));
+                self.0 = Repr::Str(PhpStr::concat(s.as_bytes(), bytes));
                 true
             }
             _ => false,
@@ -561,7 +548,7 @@ impl Value {
     #[inline(always)]
     pub fn cloned_str(&self) -> Option<PhpStr> {
         match &self.0 {
-            Repr::Str(s) => Some(PhpStr::clone(s)),
+            Repr::Str(s) => Some(s.clone()),
             Repr::IStr(s) => Some(s.to_php_str()),
             _ => None,
         }
@@ -598,7 +585,7 @@ impl Value {
     #[inline]
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
         match mem::replace(&mut self.0, Repr::Undef) {
-            Repr::Str(s) => Ok(ManuallyDrop::into_inner(s)),
+            Repr::Str(s) => Ok(s),
             Repr::IStr(s) => Ok(s.to_php_str()),
             r => Err(Value(r)),
         }
@@ -607,7 +594,7 @@ impl Value {
     #[inline]
     pub fn into_array(mut self) -> Result<Rc<PhpArray>, Value> {
         match mem::replace(&mut self.0, Repr::Undef) {
-            Repr::Array(a) => Ok(ManuallyDrop::into_inner(a)),
+            Repr::Array(a) => Ok(a),
             r => Err(Value(r)),
         }
     }
@@ -615,7 +602,7 @@ impl Value {
     #[inline]
     pub fn into_object(mut self) -> Result<Rc<Object>, Value> {
         match mem::replace(&mut self.0, Repr::Undef) {
-            Repr::Object(o) => Ok(ManuallyDrop::into_inner(o)),
+            Repr::Object(o) => Ok(o),
             r => Err(Value(r)),
         }
     }
@@ -623,7 +610,7 @@ impl Value {
     #[inline]
     pub fn into_reference(mut self) -> Result<Rc<RefCell<Value>>, Value> {
         match mem::replace(&mut self.0, Repr::Undef) {
-            Repr::Ref(cell) => Ok(ManuallyDrop::into_inner(cell)),
+            Repr::Ref(cell) => Ok(cell),
             r => Err(Value(r)),
         }
     }
@@ -653,35 +640,35 @@ impl From<f64> for Value {
 impl From<PhpStr> for Value {
     #[inline(always)]
     fn from(s: PhpStr) -> Value {
-        Value(Repr::Str(held(s)))
+        Value(Repr::Str(s))
     }
 }
 
 impl From<Rc<PhpArray>> for Value {
     #[inline(always)]
     fn from(a: Rc<PhpArray>) -> Value {
-        Value(Repr::Array(held(a)))
+        Value(Repr::Array(a))
     }
 }
 
 impl From<PhpArray> for Value {
     #[inline(always)]
     fn from(a: PhpArray) -> Value {
-        Value(Repr::Array(held(Rc::new(a))))
+        Value(Repr::Array(Rc::new(a)))
     }
 }
 
 impl From<Rc<Object>> for Value {
     #[inline(always)]
     fn from(o: Rc<Object>) -> Value {
-        Value(Repr::Object(held(o)))
+        Value(Repr::Object(o))
     }
 }
 
 impl From<Rc<RefCell<Value>>> for Value {
     #[inline(always)]
     fn from(cell: Rc<RefCell<Value>>) -> Value {
-        Value(Repr::Ref(held(cell)))
+        Value(Repr::Ref(cell))
     }
 }
 
@@ -789,7 +776,7 @@ impl Value {
             Repr::Bool(B(true)) => PhpStr::from("1"),
             Repr::Int(i) => PhpStr::from_int(*i),
             Repr::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
-            Repr::Str(s) => PhpStr::clone(s),
+            Repr::Str(s) => s.clone(),
             Repr::IStr(s) => s.to_php_str(),
             Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
             Repr::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
