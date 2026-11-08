@@ -141,6 +141,22 @@ impl Context<'_> {
                 }};
             }
             let mut w = window!();
+            // `arm!` for an arm that borrows the context (`&self`): the code
+            // slice stays borrowed across it, so nothing is read again.
+            macro_rules! arm_ro {
+                ($e:expr) => {
+                    match $e {
+                        Arm::Go(next) => pc = next,
+                        Arm::Pending(next) => pending_at!(next, pc),
+                        Arm::Switch(next) => {
+                            pc = next;
+                            continue 'frame;
+                        }
+                        Arm::Slow => slow!(),
+                        Arm::Fault => return Err(self.arm_throw.take().expect("the arm's throw")),
+                    }
+                };
+            }
             // `arm!` for an arm that had the whole register file (a call,
             // which may keep the frame: a frameless builtin's); the window is
             // read again too.
@@ -284,11 +300,16 @@ impl Context<'_> {
                     // once when the result is freed next (a statement's is).
                     // An unset slot of a class with __set and its kin, and
                     // anything `plain_slot` declines, is `step`'s.
-                    Op::AssignProp | Op::AssignPropThis => arm!(self.arm_assign_prop(w, pc, *insn)),
+                    Op::AssignProp | Op::AssignPropThis => arm_ro!(self.arm_assign_prop(w, pc, *insn)),
                     // Function entry, when every passed argument is plainly of
                     // its declared type (`verify_args` would accept each as it
                     // is); a conversion, a class check or a variadic: `step`.
-                    Op::VerifyArgs => arm!(self.arm_verify_args(w, pc)),
+                    Op::VerifyArgs => {
+                        if !args_plain(clo!(), &w[..], top!().argc as usize) {
+                            slow!();
+                        }
+                        pc += 1;
+                    }
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     Op::VerifyReturn => match &clo!().code.ret_type {
@@ -301,12 +322,12 @@ impl Context<'_> {
                     // disabled function, are `step`'s); the arguments are
                     // consumed as a call's are. Anything else is the call.
                     // (The kinds are numbered as `insn::INTRINSICS`.)
-                    Op::Intrinsic => arm!(self.arm_intrinsic(w, pc, *insn)),
+                    Op::Intrinsic => arm_ro!(self.arm_intrinsic(w, pc, *insn)),
                     // `$o->m($v)`: an argument the method the call site's cache
                     // names for this class and scope takes by value is copied
                     // (by reference, a miss, or an undefined or reference
                     // variable: `step`, which looks the method up by name).
-                    Op::SendVarMethod => arm!(self.arm_send_var_method(w, pc, *insn)),
+                    Op::SendVarMethod => arm_ro!(self.arm_send_var_method(w, pc, *insn)),
                     Op::Jump => {
                         let imm = insn.imm;
                         if back!(imm) {
@@ -375,11 +396,11 @@ impl Context<'_> {
                             slow!();
                         }
                     }
-                    Op::Binary => arm!(self.arm_binary(w, pc, *insn)),
+                    Op::Binary => arm_ro!(self.arm_binary(w, pc, *insn)),
                     Op::Add => arith!(BinOp::Add, insn.a, insn.b, insn.c, i64::checked_add),
                     Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, insn.c, i64::checked_sub),
                     Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, insn.c, i64::checked_mul),
-                    Op::ConcatN => arm!(self.arm_concat_n(w, pc, *insn)),
+                    Op::ConcatN => arm_ro!(self.arm_concat_n(w, pc, *insn)),
                     // A copy of a register (a reference's value read through
                     // it; undefined: `step` warns). A write that freed an object
                     // with a destructor stops here: it runs before the next
@@ -488,14 +509,14 @@ impl Context<'_> {
                     // key with any defined, non-reference value; an int key
                     // with a plain value. The element replaced may have been
                     // an object's last holder: tested as for any write.
-                    Op::AssignDim => arm!(self.arm_assign_dim(w, pc, *insn)),
+                    Op::AssignDim => arm_ro!(self.arm_assign_dim(w, pc, *insn)),
                     // $a[int] op= number, $a an array holding a number at
                     // that key
-                    Op::AssignDimOp => arm!(self.arm_assign_dim_op(w, pc, *insn)),
+                    Op::AssignDimOp => arm_ro!(self.arm_assign_dim_op(w, pc, *insn)),
                     // The loop variable's old value may have been an object's
                     // last holder: a destructor due runs before the body, at
                     // this instruction.
-                    Op::IterNext | Op::IterNextKey => arm!(self.arm_iter_next(w, pc, *insn)),
+                    Op::IterNext | Op::IterNextKey => arm_ro!(self.arm_iter_next(w, pc, *insn)),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
@@ -573,8 +594,8 @@ impl Context<'_> {
                         let arr = Value::array(PhpArray::list_with_capacity(imm as usize));
                         done!(put(&mut w[rx!(a)], arr));
                     }
-                    Op::ArrayPush => arm!(self.arm_array_push(w, pc, *insn)),
-                    Op::ArraySet => arm!(self.arm_array_set(w, pc, *insn)),
+                    Op::ArrayPush => arm_ro!(self.arm_array_push(w, pc, *insn)),
+                    Op::ArraySet => arm_ro!(self.arm_array_set(w, pc, *insn)),
                     // A constant the site resolved (a deprecated one is never
                     // cached: it warns on every fetch).
                     Op::FetchConst => {
@@ -587,11 +608,25 @@ impl Context<'_> {
                     // register): the iterator is the array and position 0;
                     // an empty one jumps past the loop. (An object, a
                     // reference, anything that warns: `step`.)
-                    Op::IterInit => arm!(self.arm_iter_init(w, pc, *insn)),
+                    Op::IterInit => arm_ro!(self.arm_iter_init(w, pc, *insn)),
                     // An argument a user function or builtin the call site
                     // resolved to takes by value: a copy (by reference, an
                     // unresolved site, an undefined variable: `step`).
-                    Op::SendVar => arm!(self.arm_send_var(w, pc, *insn)),
+                    Op::SendVar => {
+                        ops!(a, b, c, imm);
+                        let n = (imm >> 16) as usize;
+                        let by_value = match clo!().sites[(imm & 0xffff) as usize].get() {
+                            Some(&Callee::User(f)) => !self.codes[f as usize].param_by_ref(n),
+                            Some(&Callee::Builtin(i)) => !self.isolate.registry.by_ref(i, n),
+                            Some(Callee::Constant(_)) => true,
+                            None => false,
+                        };
+                        if !by_value {
+                            slow!();
+                        }
+                        let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
                     // `C::NAME` the site's cache holds (filled by `step`).
                     Op::ClassConst => {
                         ops!(a, b, c, imm);
@@ -631,8 +666,7 @@ impl Context<'_> {
                     // A return to the calling frame. The main frame's return
                     // ends the run, and the bottom frame of this `execute`
                     // returns to the builtin that called it: `step` does those.
-                    Op::Return => arm_regs!(self.arm_return(regs, *insn, false)),
-                    Op::ReturnNull => arm_regs!(self.arm_return(regs, *insn, true)),
+                    Op::Return | Op::ReturnNull => arm_regs!(self.arm_return(regs, *insn, op == Op::ReturnNull)),
                 }
             }
         }

@@ -1,16 +1,18 @@
 //! The interpreter loop's out-of-line arms: the instructions whose common
-//! case needs more than the registers and a few loads (calls and returns,
-//! which switch frames; property and element writes; the array literals;
-//! the frameless builtins). Each is a function the loop calls with the
+//! case calls out or switches frames (calls and returns; property, element
+//! and array-literal writes; the iterators, the intrinsics, the frameless
+//! builtins, `new`). Each is a function the loop calls with the
 //! instruction, and goes on as its `Arm` says.
 //!
-//! They are out of line so that the loop itself stays small: every value
-//! an arm keeps live across a call competes with the loop's own (`pc`, the
-//! window, the code) for the six callee-saved registers, and with these
-//! arms inlined the loop reloaded its own values from the stack on every
-//! instruction (#352). The straight-line arms stay in `execute`.
+//! They are out of line so that the loop keeps its own values in registers:
+//! every value an arm holds live across a call competes with the loop's
+//! `pc`, window and code slice for the six callee-saved registers, and with
+//! these arms inlined the loop reloaded its own values from the stack on
+//! every instruction (#352). The arms that keep the frame borrow the
+//! context (`&self`), so that the loop's borrow of the code slice stays
+//! valid across them and need not be read again.
 
-use super::fast::{Arm, WINDOW, args_plain, arith, clear, copied, enter, leave, put, put_var, returned, set_int_elem, taken};
+use super::fast::{Arm, WINDOW, arith, clear, copied, enter, leave, put, put_var, returned, set_int_elem, taken};
 use super::*;
 use p8_bytecode::{Insn, Op, insn};
 
@@ -50,85 +52,13 @@ impl Context<'_> {
         Arm::Fault
     }
 
-    /// `$o->name = v` the name's cache entry answers, on a property with
-    /// nothing to check (`plain_slot`): the slots borrowed once, nothing
-    /// cloned but the value, and that once when the result is freed next
-    /// (a statement's is). An unset slot of a class with __set and its
-    /// kin, and anything `plain_slot` declines, is `step`'s.
-    #[inline(never)]
-    pub(crate) fn arm_assign_prop(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
-        let (a, val, dst, imm) = (insn.a, insn.b, insn.c, insn.imm);
-        let top = self.frames.top();
-        let clo = &*top.func;
-        let code = &clo.code.insns[..];
-        let Some(site) = clo.props.get((imm & !insn::TAKE) as usize) else { return Arm::Slow };
-        // AssignPropThis: the method's own `$this`, from the frame.
-        let o = if insn.op == Op::AssignPropThis {
-            let Some(o) = &top.this else { return Arm::Slow };
-            o
-        } else {
-            let Some(o) = w[rx(a)].as_object() else { return Arm::Slow };
-            o
-        };
-        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope.as_deref()), &w[rx(val)], !self.reinit.is_empty()) else { return Arm::Slow };
-        let unused = matches!(code.get(pc + 1), Some(next) if next.op == Op::Free && next.a == dst);
-        let written = match o.slots().get(slot) {
-            Some(s)
-                if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
-                    || {
-                        let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
-                        if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
-                    } =>
-            {
-                // The slot's value out, written as a register is, back
-                // in. (Pending is tested below, whatever this released.)
-                let mut cur = s.replace(Value::UNDEF);
-                let _ = put_var(&mut cur, w[rx(val)].clone());
-                p8_runtime::object::put_slot(s, cur);
-                true
-            }
-            _ => false,
-        };
-        if !written {
-            return Arm::Slow;
-        }
-        let next = if unused {
-            pc + 2
-        } else {
-            let v = w[rx(val)].clone();
-            let _ = put(&mut w[rx(dst)], v);
-            pc + 1
-        };
-        if imm & insn::TAKE != 0 {
-            let _ = clear(&mut w[rx(val)]);
-        }
-        // (The slot's old value may have been the last holder.)
-        if self.ids.has_pending() {
-            return Arm::Pending(next);
-        }
-        Arm::Go(next)
-    }
-
-    /// Function entry, when every passed argument is plainly of its
-    /// declared type (`verify_args` would accept each as it is); a
-    /// conversion, a class check or a variadic: `step`.
-    #[inline(never)]
-    pub(crate) fn arm_verify_args(&mut self, w: &mut [Value; WINDOW], pc: usize) -> Arm {
-        let top = self.frames.top();
-        if !args_plain(&top.func, &w[..], top.argc as usize) {
-            return Arm::Slow;
-        }
-        Arm::Go(pc + 1)
-    }
-
     /// A builtin PHP compiles to an opcode (strlen, count, the type tests,
     /// array_key_exists): the plain case here, once the site resolved to
     /// the builtin (the first run, and a disabled function, are `step`'s);
     /// the arguments are consumed as a call's are. Anything else is the
     /// call. (The kinds are numbered as `insn::INTRINSICS`.)
     #[inline(never)]
-    pub(crate) fn arm_intrinsic(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_intrinsic(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (dst, args, argc, imm) = (insn.a, rx(insn.b), insn.c, insn.imm);
         let clo = &*self.frames.top().func;
         if !matches!(clo.sites[(imm & 0xffff) as usize].get(), Some(Callee::Builtin(_))) {
@@ -179,7 +109,7 @@ impl Context<'_> {
     /// miss, or an undefined or reference variable: `step`, which looks
     /// the method up by name).
     #[inline(never)]
-    pub(crate) fn arm_send_var_method(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_send_var_method(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (obj, arg, var, method, n) = (insn.a, insn.b, insn.c, (insn.imm & 0xffff) as usize, (insn.imm >> 16) as usize);
         let Some(o) = w[rx(obj)].as_object() else { return Arm::Slow };
         let top = self.frames.top();
@@ -196,30 +126,9 @@ impl Context<'_> {
         done(&self.ids, pc, put(&mut w[rx(arg)], v))
     }
 
-    /// An argument a user function or builtin the call site resolved to
-    /// takes by value: a copy (by reference, an unresolved site, an
-    /// undefined variable: `step`).
-    #[inline(never)]
-    pub(crate) fn arm_send_var(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
-        let (a, b, imm) = (insn.a, insn.b, insn.imm);
-        let n = (imm >> 16) as usize;
-        let clo = &*self.frames.top().func;
-        let by_value = match clo.sites[(imm & 0xffff) as usize].get() {
-            Some(&Callee::User(f)) => !self.codes[f as usize].param_by_ref(n),
-            Some(&Callee::Builtin(i)) => !self.isolate.registry.by_ref(i, n),
-            Some(Callee::Constant(_)) => true,
-            None => false,
-        };
-        if !by_value {
-            return Arm::Slow;
-        }
-        let Some(v) = copied(&w[rx(b)]) else { return Arm::Slow };
-        done(&self.ids, pc, put(&mut w[rx(a)], v))
-    }
-
     /// `dst = a op b` for the operators without an int fast path.
     #[inline(never)]
-    pub(crate) fn arm_binary(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_binary(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         if !arith(&mut w[..], insn::binop(insn.imm), Reg::from(insn.a), Reg::from(insn.b), Reg::from(insn.c)) {
             return Arm::Slow;
         }
@@ -227,7 +136,7 @@ impl Context<'_> {
     }
 
     #[inline(never)]
-    pub(crate) fn arm_concat_n(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_concat_n(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         if !concat_n(&mut w[..], Reg::from(insn.a), Reg::from(insn.b), insn.c) {
             return Arm::Slow;
         }
@@ -239,7 +148,7 @@ impl Context<'_> {
     /// The element replaced may have been an object's last holder: tested
     /// as for any write.
     #[inline(never)]
-    pub(crate) fn arm_assign_dim(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_assign_dim(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (var, keys, val, dst) = (insn.a, insn.b, insn.c, insn.imm as u8);
         if w[rx(keys)].is_str() {
             if !set_str_elem(&mut w[..], Reg::from(var), Reg::from(keys), Reg::from(val), Reg::from(dst)) {
@@ -265,7 +174,7 @@ impl Context<'_> {
 
     /// $a[int] op= number, $a an array holding a number at that key
     #[inline(never)]
-    pub(crate) fn arm_assign_dim_op(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_assign_dim_op(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let imm = insn.imm;
         if !dim_op(&mut w[..], insn::binop(imm >> 8), Reg::from(insn.a), Reg::from(insn.b), Reg::from(insn.c), Reg::from(imm as u8)) {
             return Arm::Slow;
@@ -276,7 +185,7 @@ impl Context<'_> {
     /// The loop variable's old value may have been an object's last
     /// holder: a destructor due runs before the body, at this instruction.
     #[inline(never)]
-    pub(crate) fn arm_iter_next(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_iter_next(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (a, b, c, imm) = (insn.a, insn.b, insn.c, insn.imm);
         // An object (a generator, an Iterator) is `step`'s.
         if !w[rx(a)].is_array() {
@@ -293,7 +202,7 @@ impl Context<'_> {
     /// iterator is the array and position 0; an empty one jumps past the
     /// loop. (An object, a reference, anything that warns: `step`.)
     #[inline(never)]
-    pub(crate) fn arm_iter_init(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_iter_init(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (a, b, imm) = (insn.a, insn.b, insn.imm);
         let Some(arr) = w[rx(a)].as_array() else { return Arm::Slow };
         if arr.is_empty() {
@@ -308,7 +217,7 @@ impl Context<'_> {
     /// value defined and read through a reference; anything else, a next
     /// key occupied included, is `step`'s).
     #[inline(never)]
-    pub(crate) fn arm_array_push(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_array_push(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (a, b, imm) = (insn.a, insn.b, insn.imm);
         let Some(arr) = w[rx(a)].as_array() else { return Arm::Slow };
         if arr.next_key().is_none() {
@@ -321,7 +230,7 @@ impl Context<'_> {
     }
 
     #[inline(never)]
-    pub(crate) fn arm_array_set(&mut self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+    pub(crate) fn arm_array_set(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
         let (a, b, c, imm) = (insn.a, insn.b, insn.c, insn.imm);
         if !w[rx(a)].is_array() {
             return Arm::Slow;
@@ -431,31 +340,6 @@ impl Context<'_> {
             }
             _ => Arm::Slow,
         }
-    }
-
-    /// `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI reads its
-    /// arguments from the variables (or constants) themselves, framelessly,
-    /// and the Moves into the argument registers are not run. Anything
-    /// else runs the first Move as `Op::Move` does, and goes on with the
-    /// next.
-    #[inline(never)]
-    pub(crate) fn arm_call_regs(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Arm {
-        let (start, n, c, imm) = (rx(insn.a), rx(insn.b), insn.c, insn.imm);
-        let top = self.frames.top();
-        let base = top.base as usize;
-        if let Some(&Callee::Builtin(i)) = top.func.sites[(imm & 0xffff) as usize].get() {
-            let call = self.isolate.registry.call(i);
-            if let Some(run) = call.frameless
-                && matches!(run, Imp::Lent(_))
-                && call.plain(&regs[base + start..base + start + n])
-                && (!self.header_callback_set || self.out.started)
-            {
-                return self.frameless(regs, i, run, (start, n, rx(c), false), pc + n);
-            }
-        }
-        let w = window(regs, base);
-        let Some(v) = copied(&w[start]) else { return Arm::Slow };
-        done(&self.ids, pc, put(&mut w[rk((imm >> 16) as usize)], v))
     }
 
     /// A user method the call site's cache names for this class and scope,
@@ -606,5 +490,90 @@ impl Context<'_> {
             };
         }
         Arm::Switch(pc)
+    }
+
+    /// `$o->name = v` the name's cache entry answers, on a property with
+    /// nothing to check (`plain_slot`): the slots borrowed once, nothing
+    /// cloned but the value, and that once when the result is freed next
+    /// (a statement's is). An unset slot of a class with __set and its
+    /// kin, and anything `plain_slot` declines, is `step`'s.
+    #[inline(never)]
+    pub(crate) fn arm_assign_prop(&self, w: &mut [Value; WINDOW], pc: usize, insn: Insn) -> Arm {
+        let (a, val, dst, imm) = (insn.a, insn.b, insn.c, insn.imm);
+        let top = self.frames.top();
+        let clo = &*top.func;
+        let code = &clo.code.insns[..];
+        let Some(site) = clo.props.get((imm & !insn::TAKE) as usize) else { return Arm::Slow };
+        // AssignPropThis: the method's own `$this`, from the frame.
+        let o = if insn.op == Op::AssignPropThis {
+            let Some(o) = &top.this else { return Arm::Slow };
+            o
+        } else {
+            let Some(o) = w[rx(a)].as_object() else { return Arm::Slow };
+            o
+        };
+        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope.as_deref()), &w[rx(val)], !self.reinit.is_empty()) else { return Arm::Slow };
+        let unused = matches!(code.get(pc + 1), Some(next) if next.op == Op::Free && next.a == dst);
+        let written = match o.slots().get(slot) {
+            Some(s)
+                if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
+                    || {
+                        let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
+                        if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
+                    } =>
+            {
+                // The slot's value out, written as a register is, back
+                // in. (Pending is tested below, whatever this released.)
+                let mut cur = s.replace(Value::UNDEF);
+                let _ = put_var(&mut cur, w[rx(val)].clone());
+                p8_runtime::object::put_slot(s, cur);
+                true
+            }
+            _ => false,
+        };
+        if !written {
+            return Arm::Slow;
+        }
+        let next = if unused {
+            pc + 2
+        } else {
+            let v = w[rx(val)].clone();
+            let _ = put(&mut w[rx(dst)], v);
+            pc + 1
+        };
+        if imm & insn::TAKE != 0 {
+            let _ = clear(&mut w[rx(val)]);
+        }
+        // (The slot's old value may have been the last holder.)
+        if self.ids.has_pending() {
+            return Arm::Pending(next);
+        }
+        Arm::Go(next)
+    }
+
+    /// `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI reads its
+    /// arguments from the variables (or constants) themselves, framelessly,
+    /// and the Moves into the argument registers are not run. Anything
+    /// else runs the first Move as `Op::Move` does, and goes on with the
+    /// next.
+    #[inline(never)]
+    pub(crate) fn arm_call_regs(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Arm {
+        let (start, n, c, imm) = (rx(insn.a), rx(insn.b), insn.c, insn.imm);
+        let top = self.frames.top();
+        let base = top.base as usize;
+        if let Some(&Callee::Builtin(i)) = top.func.sites[(imm & 0xffff) as usize].get() {
+            let call = self.isolate.registry.call(i);
+            if let Some(run) = call.frameless
+                && matches!(run, Imp::Lent(_))
+                && call.plain(&regs[base + start..base + start + n])
+                && (!self.header_callback_set || self.out.started)
+            {
+                return self.frameless(regs, i, run, (start, n, rx(c), false), pc + n);
+            }
+        }
+        let w = window(regs, base);
+        let Some(v) = copied(&w[start]) else { return Arm::Slow };
+        done(&self.ids, pc, put(&mut w[rk((imm >> 16) as usize)], v))
     }
 }
