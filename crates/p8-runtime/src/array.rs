@@ -297,10 +297,35 @@ impl Bucket {
         self.h == h
             && match (key, &self.key) {
                 (Probe::Int, None) => true,
-                (Probe::Str(s), Some(k)) => std::ptr::eq(s, &**k) || s.as_bytes() == k.as_bytes(),
+                (Probe::Str(s), Some(k)) => std::ptr::eq(s, &**k) || same_bytes(s.as_bytes(), k.as_bytes()),
                 _ => false,
             }
     }
+}
+
+/// Whether two keys' bytes are the same, compared in place, eight bytes
+/// at a time: no `bcmp` call, so a lookup (`Hashed::find`, `scan`) is a
+/// leaf function and saves no registers. A literal's key and a literal
+/// probe are two heads (a table's string keys are handles of their own),
+/// so most hits get here, and a key is short. The two hashes matched
+/// already, so the bytes are the same but for a hash collision; one pass
+/// with no early exit is the cheapest confirmation.
+#[inline(always)]
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let (ac, bc) = (a.chunks_exact(8), b.chunks_exact(8));
+    let (ar, br) = (ac.remainder(), bc.remainder());
+    let mut d = 0u64;
+    for (x, y) in ac.zip(bc) {
+        d |= u64::from_ne_bytes(x.try_into().expect("eight bytes")) ^ u64::from_ne_bytes(y.try_into().expect("eight bytes"));
+    }
+    let mut t = 0u8;
+    for (x, y) in ar.iter().zip(br) {
+        t |= x ^ y;
+    }
+    d == 0 && t == 0
 }
 
 /// A key looked for, borrowed: an int key (its hash `h` is the int), or a
@@ -387,14 +412,9 @@ impl Hashed {
     /// fast loop inlines array reads, and only their packed part belongs
     /// there.
     ///
-    /// A leaf: it compares hashes, and a string key by its head's address
-    /// (a program-memory string is one head wherever it is written). The
-    /// first entry whose hash matches and whose head does not is handed to
-    /// [`Hashed::find_bytes`], which compares bytes from there on. Most
-    /// lookups never get there (one in five on WordPress), and a function
-    /// that calls `bcmp` itself has to save and restore every register the
-    /// loop uses around it, in every call: that was a third of this
-    /// function's cost.
+    /// A leaf (see [`same_bytes`]): a function that calls `bcmp` itself
+    /// has to save and restore every register the loop uses around it, in
+    /// every call; that was a third of this function's cost.
     #[inline(never)]
     fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         if self.small() {
@@ -403,29 +423,7 @@ impl Hashed {
         let mut i = self.buckets[self.slot(h)].head;
         while i != NONE {
             let b = &self.buckets[i as usize];
-            if b.h == h {
-                match (key, &b.key) {
-                    (Probe::Int, None) => return Some(i as usize),
-                    (Probe::Str(s), Some(k)) => {
-                        if std::ptr::eq(s, &**k) {
-                            return Some(i as usize);
-                        }
-                        return self.find_bytes(h, s, i);
-                    }
-                    _ => {}
-                }
-            }
-            i = b.next;
-        }
-        None
-    }
-
-    /// `find` from chain entry `i` on, the string key compared by bytes.
-    #[inline(never)]
-    fn find_bytes(&self, h: u64, s: &StrHead, mut i: u32) -> Option<usize> {
-        while i != NONE {
-            let b = &self.buckets[i as usize];
-            if b.is(h, Probe::Str(s)) {
+            if b.is(h, key) {
                 return Some(i as usize);
             }
             i = b.next;
@@ -471,34 +469,14 @@ impl Hashed {
     /// A small table's position of `key`: one pass over the stored hashes,
     /// the key compared only where the hash matches. An unset entry has no
     /// string key, so only an int key needs the unset mark.
-    ///
-    /// A leaf, as `find` is: the byte compare of a string key is out of
-    /// line (`scan_bytes`), reached from the first entry whose hash
-    /// matches and whose head is another.
+    /// A leaf, as `find` is (see [`same_bytes`]).
     #[inline(always)]
     fn scan(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         let taken = &self.buckets[..self.used];
         match key {
-            Probe::Str(s) => {
-                for (i, b) in taken.iter().enumerate() {
-                    if b.h == h && let Some(k) = &b.key {
-                        if std::ptr::eq(s, &**k) {
-                            return Some(i);
-                        }
-                        return self.scan_bytes(h, s, i);
-                    }
-                }
-                None
-            }
+            Probe::Str(s) => taken.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| std::ptr::eq(s, &**k) || same_bytes(s.as_bytes(), k.as_bytes()))),
             Probe::Int => taken.iter().position(|b| b.h == h && b.key.is_none() && b.next != UNSET),
         }
-    }
-
-    /// `scan` from position `from` on, the string key compared by bytes.
-    #[inline(never)]
-    fn scan_bytes(&self, h: u64, s: &StrHead, from: usize) -> Option<usize> {
-        let taken = &self.buckets[from..self.used];
-        taken.iter().position(|b| b.is(h, Probe::Str(s))).map(|i| from + i)
     }
 
     /// Set `key` to `value`: in place if present, else last in order. One
@@ -1052,6 +1030,19 @@ mod tests {
             assert_eq!(got(a.get_str(i)), Some(7));
             assert_eq!(got(a.get_str(&PhpStr::from("istr key"))), Some(7));
         }
+    }
+
+    #[test]
+    fn same_bytes_compares_whole_chunks_and_the_tail() {
+        assert!(same_bytes(b"", b""));
+        assert!(same_bytes(b"k", b"k"));
+        assert!(same_bytes(b"12345678", b"12345678"));
+        assert!(same_bytes(b"12345678abcdefgh_tail", b"12345678abcdefgh_tail"));
+        assert!(!same_bytes(b"12345678abcdefgh_tail", b"12345678abcdefgh_taiL"));
+        assert!(!same_bytes(b"12345678abcdefgh_tail", b"12345678Abcdefgh_tail"));
+        assert!(!same_bytes(b"12345678abcdefgh_tail", b"12345678abcdefgh_tai"));
+        assert!(!same_bytes(b"k", b"K"));
+        assert!(!same_bytes(b"k", b""));
     }
 
     #[test]
