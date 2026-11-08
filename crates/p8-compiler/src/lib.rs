@@ -9,6 +9,8 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
+mod live;
+
 use p8_bytecode::{
     AttrArg, AttrDef, Meta, CastKind, ClassDef, ClassRef, Cmp, ConstDef, Function, Handler, IncludeKind, Instr, MethodDef, Param, PartialArg, PartialSite, PropDef, Reg, Site, Sym, TraitRule,
     ClassName, CompileDiag, NO_VARS,
@@ -70,6 +72,9 @@ struct Loop {
     id: usize,
     breaks: Vec<usize>,
     continues: Vec<usize>,
+    /// What a jump out of it (a `break` or `continue` past it, a
+    /// `return`) releases: a foreach's iterated value (PHP's FE_FREE there).
+    frees: Vec<Reg>,
 }
 
 /// A `try` body (or its `catch` bodies, when it has a `finally`) being
@@ -256,7 +261,26 @@ impl FnBuilder<'_> {
 
     fn push_loop(&mut self) {
         self.loops_made += 1;
-        self.loops.push(Loop { id: self.loops_made, breaks: Vec::new(), continues: Vec::new() });
+        self.loops.push(Loop { id: self.loops_made, breaks: Vec::new(), continues: Vec::new(), frees: Vec::new() });
+    }
+
+    /// A foreach just pushed (`push_loop`): what leaving it early releases.
+    fn loop_frees(&mut self, frees: Vec<Reg>) {
+        self.loops.last_mut().expect("the loop just pushed").frees = frees;
+    }
+
+    /// Leaving the loops `from..to` (a `break` or `continue` past them, a
+    /// `return`): each one's iterated value released, innermost first, as
+    /// PHP's FE_FREE before the jump. (So it is live through the whole
+    /// loop, whichever way the loop is left.) `leave_tries` places these
+    /// around the `finally` blocks left with them.
+    fn free_loops(&mut self, from: usize, to: usize) {
+        for i in (from..to).rev() {
+            for k in 0..self.loops[i].frees.len() {
+                let reg = self.loops[i].frees[k];
+                self.emit(Instr::Free { reg });
+            }
+        }
     }
 
     fn open_loops(&self) -> Vec<usize> {
@@ -519,6 +543,17 @@ impl FnBuilder<'_> {
                 *r = map(*r);
             }
         }
+        let frees_temps = live::free_temps(
+            &mut self.code,
+            &mut self.lines,
+            &mut self.handlers,
+            &mut self.silences,
+            (ncv + nconst, self.max_temps),
+            &self.classes,
+            &self.arg_vars,
+            &self.partials,
+            &mut order.live,
+        );
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
@@ -537,6 +572,7 @@ impl FnBuilder<'_> {
             consts_at: ncv as Reg,
             value_consts: value_consts as Reg,
             nregs: (ncv + nconst + self.max_temps) as Reg,
+            frees_temps,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
             line: self.decl_line,
@@ -832,6 +868,8 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 struct ConstOrder {
     position: Vec<u32>,
     work: Vec<u32>,
+    /// The live-range analysis's (`live::free_temps`).
+    live: live::Scratch,
 }
 
 /// The operand of `instr` that only names something (a property, a class
@@ -1566,7 +1604,7 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::rare(Rare::VerifyReturn, value, u16::from(expr.is_none()), 0, 0));
                 }
                 let n = f.tries.len();
-                let left = self.leave_tries(f, n)?;
+                let left = self.leave_tries(f, n, 0)?;
                 f.emit(Instr::Return { src: value });
                 reenter_tries(f, left);
             }
@@ -1588,6 +1626,7 @@ impl<'src> Compiler<'src> {
                         } =>
                 {
                     let (r, _) = self.ref_source(f, e, e.span())?;
+                    f.free_loops(0, f.loops.len());
                     f.emit(Instr::rare(Rare::ReturnRef, r, 0, 0, 0));
                 }
                 Some(e) => {
@@ -1598,6 +1637,7 @@ impl<'src> Compiler<'src> {
                     if f.ret_type.is_some() {
                         f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
                     }
+                    f.free_loops(0, f.loops.len());
                     f.emit(Instr::Return { src: r });
                 }
                 None => {
@@ -1605,6 +1645,7 @@ impl<'src> Compiler<'src> {
                         let null = f.constant(Frozen::Null);
                         f.emit(Instr::rare(Rare::VerifyReturn, null, 2, 0, 0));
                     }
+                    f.free_loops(0, f.loops.len());
                     f.emit(Instr::ReturnNull);
                 }
             },
@@ -1728,6 +1769,8 @@ impl<'src> Compiler<'src> {
                 };
                 let next = f.emit(Instr::IterNextRef { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
+                // (The position, and the reference to what it goes through.)
+                f.loop_frees(if src >> KIND_SHIFT == TEMP { vec![iter, iter + 1, src] } else { vec![iter, iter + 1] });
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some((items, r)) = pattern {
                     self.destructure(f, items, r, Some((r, &[])))?;
@@ -1784,6 +1827,7 @@ impl<'src> Compiler<'src> {
                 };
                 let next = f.emit(Instr::IterNext { iter, val, key: key.unwrap_or(val), has_key: key.is_some(), end: 0 });
                 f.push_loop();
+                f.loop_frees(if src >> KIND_SHIFT == TEMP { vec![iter, src] } else { vec![iter] });
                 let outer_floor = std::mem::replace(&mut f.floor, saved);
                 if let Some(t) = value_place {
                     self.assign_from(f, value_var, t)?;
@@ -1850,9 +1894,10 @@ impl<'src> Compiler<'src> {
                     });
                 }
                 let target = f.loops.len() - depth;
-                // `try` blocks inside the loop it leaves run their `finally`.
+                // `try` blocks inside the loop it leaves run their `finally`;
+                // the loops left inside it release what they iterate.
                 let n = f.tries.iter().rev().take_while(|t| t.loops > target).count();
-                let left = self.leave_tries(f, n)?;
+                let left = self.leave_tries(f, n, target + 1)?;
                 let at = f.emit(Instr::Jump { target: 0 });
                 reenter_tries(f, left);
                 if is_break {
@@ -2171,25 +2216,40 @@ impl<'src> Compiler<'src> {
         }
     }
 
-    /// Leave the innermost `n` try blocks (for a return, break or
-    /// continue): each one's protected range ends here and its `finally`
-    /// runs, innermost first. The caller emits the exit, then reenters.
-    fn leave_tries<'a>(&mut self, f: &mut FnBuilder<'a>, n: usize) -> Result<Vec<TryCtx<'a>>> {
+    /// Leave the innermost `n` try blocks and the loops from `loops_from`
+    /// on (for a return, break or continue): each try's protected range
+    /// ends here and its `finally` runs, innermost first, and each loop's
+    /// iterated value is released where its nesting puts it (as PHP's
+    /// zend_handle_loops_and_finally emits FE_FREE and FAST_CALL from the
+    /// innermost out: a loop inside a `try` is released before its
+    /// `finally` runs, one around it after). The caller emits the exit,
+    /// then reenters.
+    fn leave_tries<'a>(&mut self, f: &mut FnBuilder<'a>, n: usize, loops_from: usize) -> Result<Vec<TryCtx<'a>>> {
         let mut left = Vec::with_capacity(n);
-        if !f.tries.iter().rev().take(n).any(|t| t.finally.is_some()) {
-            return Ok(left);
-        }
-        // What the exit uses (a return's value) stays live.
-        let outer_floor = std::mem::replace(&mut f.floor, f.temps);
-        for _ in 0..n {
-            let mut t = f.tries.pop().expect("a try block to leave");
-            t.close(f.here());
-            if let Some(body) = t.finally {
-                self.finally_body(f, body)?;
+        // The loops from `freed` on are released so far.
+        let mut freed = f.loops.len();
+        if f.tries.iter().rev().take(n).any(|t| t.finally.is_some()) {
+            // What the exit uses (a return's value) stays live.
+            let outer_floor = std::mem::replace(&mut f.floor, f.temps);
+            for _ in 0..n {
+                let mut t = f.tries.pop().expect("a try block to leave");
+                // The loops opened inside it go before its finally.
+                let inner = t.loops.max(loops_from);
+                if inner < freed {
+                    f.free_loops(inner, freed);
+                    freed = inner;
+                }
+                t.close(f.here());
+                if let Some(body) = t.finally {
+                    self.finally_body(f, body)?;
+                }
+                left.push(t);
             }
-            left.push(t);
+            f.floor = outer_floor;
         }
-        f.floor = outer_floor;
+        if loops_from < freed {
+            f.free_loops(loops_from, freed);
+        }
         Ok(left)
     }
 

@@ -148,6 +148,13 @@ pub enum Op {
     CallRegs,
     /// a = b->(method site imm & 0xffff) with the imm >> 16 arguments at c
     MethodCall,
+    /// a = a new object of class reference imm (its constructor not run)
+    New,
+    /// the constructor of the object in a, with the c arguments at b
+    Construct,
+    /// a = class reference imm >> 16's method (site imm & 0xffff) with
+    /// the c arguments at b; sends no variables itself (`vars` is NO_VARS)
+    StaticCall,
     /// return a
     Return,
     ReturnNull,
@@ -251,7 +258,7 @@ fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
     match code[pc] {
         Instr::Rare { op, b, c, .. } if op.is_intrinsic() => block(b, u8::try_from(c).ok()?)?,
         Instr::ConcatN { start, n, .. } => block(start, n)?,
-        Instr::Call { base, argc, .. } | Instr::MethodCall { base, argc, .. } => block(base, argc)?,
+        Instr::Call { base, argc, .. } | Instr::MethodCall { base, argc, .. } | Instr::Construct { base, argc, .. } | Instr::StaticCall { base, argc, .. } => block(base, argc)?,
         // (The position is the register after the iterator's.)
         Instr::IterNext { iter, .. } => block(iter, 2)?,
         _ => {}
@@ -328,6 +335,9 @@ fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
         }
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
+        Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
+        Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
+        Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
         Instr::Return { src } => i(Op::Return, src, 0, 0, 0),
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,

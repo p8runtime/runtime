@@ -1,0 +1,201 @@
+-- method on a temporary
+m a
+~a
+after a
+-- property of a temporary, then echo
+~b
+b
+after b
+-- concatenation
+~c
+x c y
+after c
+-- __toString of a temporary
+~d
+s <d>
+after d
+-- argument
+~e
+after e
+-- nested call result as argument
+m f
+~f
+1
+after f
+-- chained
+~g
+got g
+-- exception with a temporary in flight
+~h
+caught
+after h
+-- exception in a method of a temporary
+m i
+~i
+caught i
+end t2
+-- break out of foreach over a temporary
+it p1
+~p2
+after break
+~p1
+after unset
+-- continue
+~k1
+continue 1
+~k2
+body 2
+after continue
+-- return from inside foreach over a temporary
+~p2
+~local
+~p1
+p1
+after inloop
+-- loop condition
+~w0
+body w0
+~w1
+body w1
+~w2
+after while
+-- ternary and coalesce
+~t
+t
+~u
+u
+after t u
+-- match subject
+~mm
+matched
+after match
+-- switch subject
+~sw
+case sw
+after switch
+-- finally with a temporary return value
+~r
+finally
+r
+finally2
+~r2
+r2
+after fin
+-- generator with a temporary across yield
+suspended
+~gy
+after gen destroyed
+two
+~gy
+gen end
+after gen ran
+-- generator destroyed inside foreach over a temporary
+y p1
+~p1
+~p2
+after gen2
+-- array literal of temporaries
+~l1
+~l2
+2
+after literal
+-- static call result
+~st
+st
+after static
+-- new in an argument
+~nw
+nw
+after new
+-- isset and empty on a temporary
+~is
+bool(true)
+~em
+bool(false)
+after isset
+-- instanceof
+~io
+bool(true)
+after instanceof
+-- exception out of a foreach over a temporary, caught outside it
+~p1
+~p2
+caught loop
+end loopthrow
+-- break 2 out of nested foreach over temporaries
+nested p1 in1
+~in2
+~p2
+after break 2
+~p1
+~in1
+after unset 2
+-- continue 2 through a switch on a temporary
+~sc1
+switch 1
+~sc2
+default 2
+after switch 2
+after continue 2
+-- return from a switch on a temporary
+~sws
+~swl
+ret
+-- finally while an exception carries a temporary
+~f3
+finally3
+caught fin3
+-- nested finally around a return of a temporary's method
+m f4
+~f4
+inner finally
+outer finally
+f4
+-- a temporary across calls in one expression
+~x1
+~x2
+x1x2
+after x
+-- a generator yielding temporaries, closed early
+~gy1
+got gy1
+after gen3
+-- return inside try/finally inside foreach over a temporary
+finally in loop
+~p2
+~p1
+p1
+-- break inside try/finally inside foreach over a temporary
+finally before break
+~p2
+~p1
+after break fin
+-- return from foreach over a temporary inside try/finally
+~p2
+finally around loop
+~p1
+p1
+-- loop in try in loop, break 2
+~n2
+finally between
+~p2
+~p1
+~n1
+after nested
+-- exception caught inside a foreach over a temporary
+caught in loop p1
+caught in loop p2
+~p1
+~p2
+after caught in loop
+-- for loop with a temporary in its condition, continue
+~c0
+~c1
+for body 1
+~c2
+after for
+-- a temporary live across a call that catches its own exception
+~ac
+acc
+after ac
+-- end

@@ -905,6 +905,94 @@ impl Context<'_> {
                         pc = 0;
                         continue 'frame;
                     }
+                    // `new C` of a class the site's cache has, whose objects
+                    // need only their slots (`make_plain`): anything else
+                    // (a Throwable, a constructor to check) is `step`'s.
+                    Op::New => {
+                        ops!(a, b, c, imm);
+                        let Some(info) = Self::cached_new(clo, imm as u16) else { slow!() };
+                        let Some(object) = self.make_plain(&info) else { slow!() };
+                        // Not destructed unless constructed (an argument may throw first).
+                        object.destructed.set(true);
+                        self.last_new = Some(info);
+                        done!(put(&mut w[rx!(a)], Value::object(object)));
+                    }
+                    // The constructor `new` found: a PHP one's frame pushed
+                    // here, on the arguments where they are; none, the
+                    // arguments released. Anything else is `step`'s.
+                    Op::Construct => {
+                        ops!(a, b, c, imm);
+                        let (obj, args, n) = (a, b, rx!(c));
+                        let Some(object) = w[rx!(obj)].as_object() else { slow!() };
+                        // Its class's NewInfo: the one its `new` left, else the
+                        // kept one (a `new` in the arguments took `last_new`).
+                        let info = match self.last_new.as_ref() {
+                            Some(i) if Rc::ptr_eq(&i.class, &object.class) => i,
+                            _ => match self.new_infos.get(&(Rc::as_ptr(&object.class) as usize)) {
+                                Some(i) => i,
+                                None => slow!(),
+                            },
+                        };
+                        match &info.ctor {
+                            Some(crate::instances::Ctor { func: classes::Code::User(f), declaring, .. })
+                                if !f.code.is_generator && n >= f.code.required && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT =>
+                            {
+                                let (f, declaring, class) = (Rc::clone(f), Rc::clone(declaring), Rc::clone(&info.class));
+                                let object = Rc::clone(object);
+                                self.last_new = None;
+                                object.destructed.set(false);
+                                if let Some(caller) = self.frames.last_mut() {
+                                    caller.pc = (pc + 1) as u32;
+                                }
+                                self.frames.push(&f, base + args as usize, n, NO_RET);
+                                let frame = self.frames.last_mut().expect("the frame just pushed");
+                                frame.this = Some(object);
+                                frame.scope = Some(declaring);
+                                frame.called = Some(class);
+                                enter(&mut self.frames, regs);
+                                pc = 0;
+                                continue 'frame;
+                            }
+                            None => {
+                                object.destructed.set(false);
+                                self.last_new = None;
+                                let start = rx!(args);
+                                let mut released = false;
+                                for r in &mut w[start..start + n] {
+                                    released |= clear(r);
+                                }
+                                done!(released);
+                            }
+                            Some(_) => slow!(),
+                        }
+                    }
+                    // `C::f()` the site's cache has for this class and scope:
+                    // a PHP method's frame pushed here. Anything else (a
+                    // property hook's `parent::$p::get()`, a native method,
+                    // __callStatic (`remember_static` caches no trampoline),
+                    // the first call) is `step`'s.
+                    Op::StaticCall => {
+                        ops!(a, b, c, imm);
+                        let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
+                        let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
+                        let classes::Code::User(target) = &m.func else { slow!() };
+                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            slow!();
+                        }
+                        let target = Rc::clone(target);
+                        if let Some(caller) = self.frames.last_mut() {
+                            caller.pc = (pc + 1) as u32;
+                        }
+                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.last_mut().expect("the frame just pushed");
+                        frame.this = m.this;
+                        frame.scope = m.scope;
+                        frame.called = m.called;
+                        frame.owner = m.closure;
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }
                     // A return to the calling frame. The main frame's return
                     // ends the run, and the bottom frame of this `execute`
                     // returns to the builtin that called it: `step` does those.
@@ -1028,7 +1116,12 @@ pub(crate) fn returned(regs: &mut [Value], frame: &Frame, base: usize, src: Reg)
     if r.is_undef() {
         None
     } else if let Some(cell) = r.as_reference() {
-        Some(cell.borrow().clone())
+        let v = cell.borrow().clone();
+        // A temporary lets go of the reference (none is left at exit).
+        if temp {
+            drop(std::mem::take(r));
+        }
+        Some(v)
     } else if temp || own_var {
         Some(std::mem::take(r))
     } else {
@@ -1072,14 +1165,17 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     // register may be inside the window).
     let base = frame.base as usize;
     let code = &frame.func.code;
-    // Variables and temporaries; the constants' registers are left as
-    // they are (the next frame there overwrites them).
+    // The variables; the constants' registers are left as they are (the
+    // next frame there overwrites them). The temporaries are empty when the
+    // code frees each where it dies (`frees_temps`), as PHP's are.
     let consts = base + code.consts_at as usize..base + code.consts_at as usize + code.value_consts as usize;
     for r in &mut regs[base..consts.start] {
         clear(r);
     }
-    for r in &mut regs[consts.end..base + usize::from(code.nregs)] {
-        clear(r);
+    if !code.frees_temps {
+        for r in &mut regs[consts.end..base + usize::from(code.nregs)] {
+            clear(r);
+        }
     }
     // `$this` goes after the arguments, as in PHP (it decides which
     // object id is free first).
