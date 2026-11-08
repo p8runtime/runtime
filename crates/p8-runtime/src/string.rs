@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What a string handle points at: the bytes and the cached hash. This is
@@ -90,6 +90,19 @@ struct Pool {
 
 static POOL: Mutex<Option<Pool>> = Mutex::new(None);
 
+/// The program-memory strings by id, in chunks made as the pool grows
+/// (#391): what a value's id word reads back through.
+const ID_CHUNK: usize = 4096;
+const ID_CHUNKS: usize = 1024;
+type IdChunk = Box<[OnceLock<&'static IStr>; ID_CHUNK]>;
+static BY_ID: [OnceLock<IdChunk>; ID_CHUNKS] = [const { OnceLock::new() }; ID_CHUNKS];
+
+#[cold]
+#[inline(never)]
+fn no_such_istr() -> ! {
+    panic!("a program-memory string id that was never handed out")
+}
+
 /// What the pool may hold, in bytes (PHP's opcache.interned_strings_buffer
 /// is 8 MB by default, for names as well; past it PHP too makes literals
 /// per request). Bounded so that code compiled again and again (eval,
@@ -128,11 +141,37 @@ impl IStr {
         } else {
             Bytes::Heap(bytes.to_vec())
         };
+        let chunk = BY_ID.get(id as usize / ID_CHUNK)?;
         let s: &'static IStr = Box::leak(Box::new(IStr { head: StrHead::of(bytes), id }));
         s.head.hash();
+        // (Published before the id is handed out: a value holding the id
+        // finds the string, on any thread.)
+        let slots = chunk.get_or_init(|| Box::new([const { OnceLock::new() }; ID_CHUNK]));
+        let _ = slots[id as usize % ID_CHUNK].set(s);
         pool.by_bytes.insert(s.as_bytes(), s);
         pool.size += size;
         Some(s)
+    }
+
+    /// Its id: a value holds a program-memory string by it (#391), so that
+    /// every plain payload is one word of one type.
+    #[inline(always)]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The program-memory string of an id [`IStr::id`] gave: two loads
+    /// through the id table, each a published `OnceLock`.
+    #[inline(always)]
+    pub fn by_id(id: u32) -> &'static IStr {
+        let id = id as usize;
+        match BY_ID.get(id / ID_CHUNK).and_then(OnceLock::get) {
+            Some(slots) => match slots[id % ID_CHUNK].get() {
+                Some(s) => s,
+                None => no_such_istr(),
+            },
+            None => no_such_istr(),
+        }
     }
 
     /// The program-memory string of `bytes` if one was made (none is made here).
