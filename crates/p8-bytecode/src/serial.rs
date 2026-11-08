@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 17;
+pub const FORMAT: u32 = 18;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -510,7 +510,7 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 // `insns` is the code's executed form, made again from `code`.
 record!(Function {
-    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
+    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, frees_temps, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
 } made insns by Function::lowered);
 record!(CompileDiag { level, message, line });

@@ -2129,6 +2129,7 @@ impl Context<'_> {
                     }
                     self.report_diags();
                     regs[base + dst as usize] = Value::str(PhpStr::new(bytes));
+                    free_parts(&mut regs[base..], start, n);
                 }
                 Instr::ConcatN { dst, start, n } => {
                     let parts = start as usize..start as usize + n as usize;
@@ -2143,6 +2144,7 @@ impl Context<'_> {
                     }
                     self.report_diags();
                     reg!(dst) = Value::str(PhpStr::new(bytes));
+                    free_parts(w, start, n);
                 }
                 Instr::BindGlobal { var, name } => {
                     // The name's constant, shared (not copied).
@@ -2493,6 +2495,10 @@ impl Context<'_> {
                             self.ref_wanted.retain(|&r| r != ret as usize);
                         }
                         let v = if wanted { Value::reference(make_ref(w, src)) } else { self.operand(w, func, src) };
+                        // A temporary's handle goes (none is left at exit).
+                        if is_temp(func, src) {
+                            clear(&mut reg!(src));
+                        }
                         if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
                             self.finish(&g, v);
                             leave(&mut self.frames, regs, Value::NULL);
@@ -3547,7 +3553,8 @@ impl Context<'_> {
         // __call / __callStatic: the arguments become (name, [arguments]).
         let argc = match m.trampoline.take() {
             Some(name) => {
-                let packed: Vec<Value> = regs[args..args + argc as usize].iter().map(Value::deref).collect();
+                // (Moved out: no argument register keeps a value.)
+                let packed: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::take(r).deref()).collect();
                 if regs.len() < args + 2 {
                     regs.resize(args + 2, Value::UNDEF);
                 }
@@ -5886,7 +5893,16 @@ fn concat_n(w: &mut [Value], dst: Reg, start: Reg, n: u8) -> bool {
         ops::push_string(&mut bytes, v, &mut diags);
     }
     w[dst as usize] = Value::str(PhpStr::from_scratch(bytes));
+    free_parts(w, start, n);
     true
+}
+
+/// A concatenation's parts (its own temporaries) are released once it is
+/// made, as ZEND_ROPE_END frees them.
+fn free_parts(w: &mut [Value], start: Reg, n: u8) {
+    for r in &mut w[start as usize..start as usize + n as usize] {
+        clear(r);
+    }
 }
 
 /// How UnhandledMatchError names the value no arm matched, as PHP's

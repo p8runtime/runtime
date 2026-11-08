@@ -708,8 +708,7 @@ impl Context<'_> {
         if class.flags & (CLASS_INTERFACE | CLASS_ABSTRACT | CLASS_TRAIT | CLASS_ENUM) != 0 {
             return Err(self.cannot_instantiate(class));
         }
-        let data = class.make_data.map(|make| make());
-        let object = Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults));
+        let object = self.new_object(info);
         if info.throwable {
             // Where it was made, and the calls that led there.
             let (file, line) = self.location();
@@ -740,6 +739,28 @@ impl Context<'_> {
             return Ok((object, None));
         }
         Ok((Rc::clone(&object), Some(ctor.frame(object, class))))
+    }
+
+    /// A new object of `info`'s class: its slots copied from the prepared defaults.
+    #[inline]
+    fn new_object(&self, info: &crate::instances::NewInfo) -> Rc<Object> {
+        let class = &info.class;
+        let data = class.make_data.map(|make| make());
+        Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults))
+    }
+
+    /// `new C` (the loop's) for a class `make_from` has nothing more to do
+    /// for: one that can be instantiated, not a Throwable (no location or
+    /// trace to record), with a public constructor or none. None: `make_from`'s.
+    #[inline]
+    pub(crate) fn make_plain(&self, info: &crate::instances::NewInfo) -> Option<Rc<Object>> {
+        if info.throwable
+            || info.class.flags & (CLASS_INTERFACE | CLASS_ABSTRACT | CLASS_TRAIT | CLASS_ENUM) != 0
+            || info.ctor.as_ref().is_some_and(|c| c.visibility != Visibility::Public)
+        {
+            return None;
+        }
+        Some(self.new_object(info))
     }
 
     #[cold]

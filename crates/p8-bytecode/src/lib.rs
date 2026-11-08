@@ -834,6 +834,11 @@ pub struct Function {
     pub value_consts: Reg,
     /// Registers the frame needs.
     pub nregs: Reg,
+    /// The code frees each temporary where it is no longer live (the
+    /// compiler's live ranges): none holds anything at a return, so frame
+    /// exit clears only the variables. False for a function with too many
+    /// temporaries to analyse: exit clears them all.
+    pub frees_temps: bool,
     /// Names of the compiled variables, by register (params first).
     pub cv_names: Vec<Text>,
     pub sites: Vec<Site>,

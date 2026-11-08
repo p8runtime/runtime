@@ -140,6 +140,7 @@ impl Closure {
             consts_at: 0,
             value_consts: 0,
             nregs: 0,
+            frees_temps: true,
             cv_names: Vec::new(),
             sites: Vec::new(),
             file: Arc::from(""),
@@ -397,6 +398,25 @@ impl Context<'_> {
     /// `parent::m()`, `static::m()`) the site's cache answers: the method
     /// `static_frame` found for this target class from this scope, with
     /// `$this` and the called class worked out as it does.
+    /// For the loop's StaticCall: the method the site's cache has for
+    /// class reference `class` from this scope, the class known without
+    /// a lookup (a named one its cache has, `self`, `parent`, `static`).
+    /// None for anything else, and for a hook's `parent::$p::get()` site.
+    #[inline]
+    pub(crate) fn cached_static_call(&self, clo: &Closure, class: u16, method: usize) -> Option<crate::classes::MethodFrame> {
+        if clo.code.sites[method].display.as_bytes().first() == Some(&b'$') {
+            return None;
+        }
+        let target = match &clo.code.classes[class as usize] {
+            p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => clo.class_refs[class as usize].borrow().upgrade()?,
+            p8_bytecode::ClassRef::Scope => self.scope().0?,
+            p8_bytecode::ClassRef::ParentScope => self.scope().0?.parent.clone()?,
+            p8_bytecode::ClassRef::Static => self.scope().1?,
+            p8_bytecode::ClassRef::Dynamic(_) => return None,
+        };
+        self.cached_static(&clo.methods[method], &target, &clo.code, class)
+    }
+
     pub(crate) fn cached_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, func: &Function, class: u16) -> Option<crate::classes::MethodFrame> {
         let site = site.borrow();
         let s = site.as_ref()?;

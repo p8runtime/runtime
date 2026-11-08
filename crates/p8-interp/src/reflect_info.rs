@@ -78,7 +78,10 @@ impl Context<'_> {
                         (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
                             code.consts[*src as usize - consts.start].to_value()
                         }
-                        (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src })) if v == var && src == dst => {
+                        // (Assigned from its temporary: taken.)
+                        (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src } | p8_bytecode::Instr::AssignTake { var: v, src }))
+                            if v == var && src == dst =>
+                        {
                             Value::array(PhpArray::new())
                         }
                         _ => Value::NULL,
