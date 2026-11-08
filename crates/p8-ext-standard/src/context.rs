@@ -31,7 +31,7 @@ const OPTIONS: &[u8] = b"\0options";
 const NOTIFICATION: &[u8] = b"\0notification";
 
 fn key(k: &[u8]) -> Key {
-    Key::Str(PhpStr::from(k))
+    Key::str(PhpStr::from(k))
 }
 
 fn options(o: &Object) -> PhpArray {

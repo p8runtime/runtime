@@ -468,7 +468,7 @@ impl Context<'_> {
         for (name, value, known) in &request.server {
             let value = Value::str(PhpStr::from(value.as_slice()));
             if *known {
-                server.insert(Key::Str(PhpStr::from(name.as_slice())), value);
+                server.insert(Key::str(PhpStr::from(name.as_slice())), value);
             } else {
                 request::register_variable(&mut server, name, value, false, limits.max_input_nesting_level, &mut warnings);
             }
@@ -478,18 +478,18 @@ impl Context<'_> {
                 if let Some(decoded) = request::base64_decode(&auth[6..])
                     && let Some(colon) = decoded.iter().position(|&c| c == b':')
                 {
-                    server.insert(Key::Str(PhpStr::from("PHP_AUTH_USER")), Value::str(PhpStr::from(&decoded[..colon])));
+                    server.insert(Key::str(PhpStr::from("PHP_AUTH_USER")), Value::str(PhpStr::from(&decoded[..colon])));
                     if colon + 1 < decoded.len() {
-                        server.insert(Key::Str(PhpStr::from("PHP_AUTH_PW")), Value::str(PhpStr::from(&decoded[colon + 1..])));
+                        server.insert(Key::str(PhpStr::from("PHP_AUTH_PW")), Value::str(PhpStr::from(&decoded[colon + 1..])));
                     }
                 }
             } else if auth.len() > 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-                server.insert(Key::Str(PhpStr::from("PHP_AUTH_DIGEST")), Value::str(PhpStr::from(&auth[7..])));
+                server.insert(Key::str(PhpStr::from("PHP_AUTH_DIGEST")), Value::str(PhpStr::from(&auth[7..])));
             }
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        server.insert(Key::Str(PhpStr::from("REQUEST_TIME_FLOAT")), Value::float(now.as_secs_f64()));
-        server.insert(Key::Str(PhpStr::from("REQUEST_TIME")), Value::int(now.as_secs() as i64));
+        server.insert(Key::str(PhpStr::from("REQUEST_TIME_FLOAT")), Value::float(now.as_secs_f64()));
+        server.insert(Key::str(PhpStr::from("REQUEST_TIME")), Value::int(now.as_secs() as i64));
         let register_argv = !matches!(ini(&self.inner, "register_argc_argv").as_deref(), Some("" | "0" | "off" | "no" | "false"));
         if register_argv {
             // php_build_argv(): the query string split on '+'.
@@ -498,8 +498,8 @@ impl Context<'_> {
                 _ => Vec::new(),
             };
             let argc = argv.len() as i64;
-            server.insert(Key::Str(PhpStr::from("argv")), Value::array(PhpArray::from_list(argv)));
-            server.insert(Key::Str(PhpStr::from("argc")), Value::int(argc));
+            server.insert(Key::str(PhpStr::from("argv")), Value::array(PhpArray::from_list(argv)));
+            server.insert(Key::str(PhpStr::from("argc")), Value::int(argc));
         }
         let mut globals = p8_interp::RequestGlobals { server, get: parsed.get, post: parsed.post, cookie: parsed.cookie, files: parsed.files, request: parsed.request };
         // A router that declined the request left its arrays as they were.

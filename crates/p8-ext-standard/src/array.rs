@@ -137,7 +137,7 @@ fn array_merge(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn key_of(v: &Value) -> Option<Key> {
     if v.is_null_or_undef() {
-        return Some(Key::Str(p8_runtime::string::PhpStr::empty()));
+        return Some(Key::str(p8_runtime::string::PhpStr::empty()));
     }
     match v.as_float() {
         Some(f) => Some(Key::Int(f as i64)),

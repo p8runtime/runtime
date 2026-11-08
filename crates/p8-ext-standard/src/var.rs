@@ -507,7 +507,7 @@ fn entries(o: &Object) -> Vec<Entry> {
             let numeric = matches!(k, Key::Int(_));
             let name = match k {
                 Key::Int(i) => PhpStr::from(i.to_string()),
-                Key::Str(s) => s,
+                Key::Str(s) => s.to_php_str(),
             };
             // Mangled names, as PHP's debug info gives them: "\0Class\0name"
             // (private) and "\0*\0name" (protected).
@@ -537,7 +537,7 @@ fn entries(o: &Object) -> Vec<Entry> {
     for (k, v) in o.dynamic.borrow().iter() {
         let name = match k {
             Key::Int(i) => PhpStr::from(i.to_string()),
-            Key::Str(s) => s,
+            Key::Str(s) => s.to_php_str(),
         };
         list.push(Entry { numeric: false, name, visibility: Visibility::Public, declaring: PhpStr::empty(), value: Some(v.clone()), ty: None });
     }

@@ -294,10 +294,8 @@ impl Isolate {
         if thawed.len() >= 1 << 18 {
             thawed.clear();
         }
-        let v = match f {
-            Frozen::Str(t) if program => p8_runtime::string::IStr::intern(t.as_bytes()).map_or_else(|| f.to_value(), Value::istr),
-            _ => f.to_value(),
-        };
+        // (A program's array: its keys and strings in program memory too.)
+        let v = if program { f.to_program_value() } else { f.to_value() };
         thawed.insert(at, (f.clone(), v.clone()));
         v
     }

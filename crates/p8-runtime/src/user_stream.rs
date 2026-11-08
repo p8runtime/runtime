@@ -106,7 +106,7 @@ impl Stat {
     /// statbuf_from_array: the fields an array names (others 0), cut to
     /// the C types (mode, uid and gid are 32 bits).
     fn from_array(a: &PhpArray) -> Stat {
-        let get = |k: &str| a.get(&Key::Str(PhpStr::from(k))).map_or(0, Value::to_int);
+        let get = |k: &str| a.get(&Key::str(PhpStr::from(k))).map_or(0, Value::to_int);
         Stat {
             dev: get("dev"),
             ino: get("ino"),
@@ -132,7 +132,7 @@ impl Stat {
             out.insert(Key::Int(i as i64), Value::int(*v));
         }
         for (k, v) in Stat::NAMES.iter().zip(values) {
-            out.insert(Key::Str(PhpStr::from(*k)), Value::int(v));
+            out.insert(Key::str(PhpStr::from(*k)), Value::int(v));
         }
         out
     }
@@ -392,7 +392,7 @@ fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<Rc<
     match o.class.slot(b"context", None) {
         Some(i) => o.slots()[i].set(context),
         None => {
-            let key = Key::Str(PhpStr::from("context"));
+            let key = Key::str(PhpStr::from("context"));
             if !o.dynamic.borrow().contains_key(&key) && o.class.flags & CLASS_ALLOW_DYNAMIC == 0 && o.class.lower != b"stdclass" {
                 ctx.deprecated(&format!("Creation of dynamic property {}::$context is deprecated", class_name(&o)));
             }

@@ -420,7 +420,7 @@ impl Context<'_> {
             let mut env = PhpArray::new();
             if order.contains(&b'E') {
                 for (k, v) in std::env::vars_os() {
-                    env.insert(Key::Str(PhpStr::from(k.as_encoded_bytes())), Value::str(v.as_encoded_bytes()));
+                    env.insert(Key::str(PhpStr::from(k.as_encoded_bytes())), Value::str(v.as_encoded_bytes()));
                 }
             }
             let array = |a: PhpArray| Value::array(a);
@@ -436,12 +436,12 @@ impl Context<'_> {
         }
         let Some(argv) = self.argv.clone() else { return Vec::new() };
         let text = |s: &str| Value::str(s);
-        let key = |s: &str| Key::Str(PhpStr::from(s));
+        let key = |s: &str| Key::str(PhpStr::from(s));
         let args = Value::array(PhpArray::from_list(argv.iter().map(|a| text(a)).collect()));
         let argc = Value::int(argv.len() as i64);
         let mut env = PhpArray::new();
         for (k, v) in std::env::vars_os() {
-            env.insert(Key::Str(PhpStr::from(k.as_encoded_bytes())), Value::str(v.as_encoded_bytes()));
+            env.insert(Key::str(PhpStr::from(k.as_encoded_bytes())), Value::str(v.as_encoded_bytes()));
         }
         let mut server = env.clone();
         let script = argv.first().cloned().unwrap_or_default();
@@ -1899,8 +1899,8 @@ impl Context<'_> {
                             let kv = &key_regs[i as usize];
                             let k = if let Some(i) = kv.as_int() {
                                 Key::Int(i)
-                            } else if let Some(s) = kv.cloned_str() {
-                                Key::from_string(s)
+                            } else if let Some(k) = Key::from_str_value(kv) {
+                                k
                             } else {
                                 let other = kv.clone();
                                 self.isset_key(&other, last)?
@@ -4424,7 +4424,7 @@ impl Context<'_> {
             }
             // from_value reports illegal keys as errors only
             Ok((k, Some(KeyIssue::Illegal(_)))) => Ok(k),
-            Err(KeyIssue::NullOffset) => Ok(Key::Str(PhpStr::empty())),
+            Err(KeyIssue::NullOffset) => Ok(Key::str(PhpStr::empty())),
             Err(KeyIssue::Illegal(t)) => {
                 // (Only here, off the common path: a resource is a key.)
                 if let Some(k) = self.resource_key(v) {
@@ -4461,7 +4461,7 @@ impl Context<'_> {
             }
             Ok((k, _)) => Ok(k),
             Err(KeyIssue::LosesPrecision(f)) => Ok(Key::Int(f as i64)),
-            Err(KeyIssue::NullOffset) => Ok(Key::Str(PhpStr::empty())),
+            Err(KeyIssue::NullOffset) => Ok(Key::str(PhpStr::empty())),
             Err(KeyIssue::Illegal(t)) => {
                 if let Some(k) = self.resource_key(v) {
                     return Ok(k);
@@ -5823,10 +5823,9 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
             None => return false,
         }
         r
-    } else if let Some(s) = key.cloned_str() {
+    } else if let Some(key) = Key::from_str_value(key) {
         // One lookup: the array is made writable first (a copy, if it is
         // shared, is invisible to PHP code even when nothing is written).
-        let key = Key::from_string(s);
         let v = w[val as usize].clone();
         let Some(a) = w[var as usize].array_mut() else { return false };
         let Some(slot) = a.get_mut(&key) else { return false };

@@ -194,7 +194,7 @@ fn session_cache_expire(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn session_get_cookie_params(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     make(ctx);
     let mut a = PhpArray::new();
-    let mut set = |k: &str, v: Value| a.insert(Key::Str(PhpStr::from(k)), v);
+    let mut set = |k: &str, v: Value| a.insert(Key::str(PhpStr::from(k)), v);
     set("lifetime", Value::int(int(ctx, "session.cookie_lifetime")));
     set("path", string(&text(ctx, "session.cookie_path")));
     set("domain", string(&text(ctx, "session.cookie_domain")));

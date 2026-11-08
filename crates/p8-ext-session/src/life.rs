@@ -331,7 +331,7 @@ pub(crate) fn decode(ctx: &mut dyn Ctx, s: &Shared, data: &[u8]) -> Res<bool> {
 }
 
 fn set_var(s: &Shared, name: Vec<u8>, value: Value) {
-    s.borrow().edit_vars(|a| a.insert(Key::Str(PhpStr::new(name)), value));
+    s.borrow().edit_vars(|a| a.insert(Key::str(PhpStr::new(name)), value));
 }
 
 fn decode_with(ctx: &mut dyn Ctx, s: &Shared, ser: Serializer, data: &[u8]) -> Res<bool> {
@@ -428,7 +428,7 @@ fn last_modified(ctx: &mut dyn Ctx) {
     let path = match server.as_ref().and_then(Value::as_array) {
         Some(server) => ["PATH_TRANSLATED", "SCRIPT_FILENAME"]
             .iter()
-            .find_map(|k| server.get(&Key::Str(PhpStr::from(*k))).and_then(|v| v.deref().to_php_string())),
+            .find_map(|k| server.get(&Key::str(PhpStr::from(*k))).and_then(|v| v.deref().to_php_string())),
         _ => None,
     };
     let Some(path) = path else { return };
@@ -755,7 +755,7 @@ pub(crate) fn start(ctx: &mut dyn Ctx, s: &Shared) -> Res<bool> {
             if s.borrow().id.is_some() && !referer_check.is_empty() {
                 let server = ctx.global_value(b"_SERVER").map(|v| v.deref());
                 let referer = match server.as_ref().and_then(Value::as_array) {
-                    Some(server) => server.get(&Key::Str(PhpStr::from("HTTP_REFERER"))).map(Value::deref).as_ref().and_then(Value::as_str).map(|r| r.as_bytes().to_vec()),
+                    Some(server) => server.get(&Key::str(PhpStr::from("HTTP_REFERER"))).map(Value::deref).as_ref().and_then(Value::as_str).map(|r| r.as_bytes().to_vec()),
                     None => None,
                 };
                 if referer.is_some_and(|r| !r.is_empty() && !r.windows(referer_check.len()).any(|w| w == referer_check.as_slice())) {
