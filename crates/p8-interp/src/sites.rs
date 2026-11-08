@@ -236,20 +236,10 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    // (A named function, not a closure: the closure was compiled out of
-    // line, and the value came back through memory, in the loop's hottest
-    // property read.)
-    #[inline(always)]
-    fn value(v: &Value) -> Option<Value> {
-        if v.is_undef() {
-            None
-        } else if let Some(cell) = v.as_reference() {
-            Some(cell.borrow().clone())
-        } else {
-            Some(v.clone())
-        }
-    }
-    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, value)
+    // (`Slot::read`, not `peek` with a callback: the callback was compiled
+    // as a call, and the value came back through memory, in the loop's
+    // hottest property read.)
+    p8_runtime::object::Slot::read(o.slots().get(site.slot as usize)?)
 }
 
 /// The declared slot a property write the cache answers goes to: as for

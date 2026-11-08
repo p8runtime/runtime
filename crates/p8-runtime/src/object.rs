@@ -855,6 +855,11 @@ pub trait Slot {
     fn peek<R>(&self, f: impl FnOnce(&Value) -> R) -> R;
     /// A copy of the value in the slot.
     fn cloned(&self) -> Value;
+    /// A copy of the value a read of the slot sees: through the reference
+    /// it holds, if it holds one; None when it is unset. Not generic: the
+    /// interpreter's property read calls this in its loop, and a callback
+    /// passed to `peek` was compiled as a call (its `FnOnce` shim).
+    fn read(&self) -> Option<Value>;
     /// `f` of the value in the slot, which it may change in place.
     fn modify<R>(&self, f: impl FnOnce(&mut Value) -> R) -> R;
     /// Store `v` as an assignment does: into the reference the slot
@@ -890,6 +895,20 @@ impl Slot for Cell<Value> {
     #[inline(always)]
     fn cloned(&self) -> Value {
         self.peek(Value::clone)
+    }
+
+    #[inline(always)]
+    fn read(&self) -> Option<Value> {
+        let v = self.replace(Value::UNDEF);
+        let r = if v.is_undef() {
+            None
+        } else if let Some(cell) = v.as_reference() {
+            Some(cell.borrow().clone())
+        } else {
+            Some(v.clone())
+        };
+        put_back(self, v);
+        r
     }
 
     #[inline(always)]
