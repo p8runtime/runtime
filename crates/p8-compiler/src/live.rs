@@ -20,7 +20,8 @@
 use p8_bytecode::{CastKind, ClassRef, Handler, Instr, NO_VARS, PartialSite, Rare as RareOp, Reg};
 use p8_runtime::ops::BinOp;
 
-/// What one instruction does to the temporaries, one bit each.
+/// What one instruction does to the temporaries, one bit each, and where
+/// control goes after it (worked out once: the passes read it per round).
 #[derive(Clone, Copy, Default)]
 struct Ops {
     /// Read (or possibly read).
@@ -33,7 +34,13 @@ struct Ops {
     plain: u64,
     /// Left empty by it (moved out, consumed by a call, freed).
     clean: u64,
+    /// Goes on to the next instruction.
+    falls: bool,
+    /// A jump's target (`NO_TARGET`: none).
+    target: u32,
 }
+
+const NO_TARGET: u32 = u32::MAX;
 
 /// The function being analysed: where its temporaries start, how many,
 /// and the tables instructions name registers through.
@@ -54,9 +61,14 @@ pub(crate) const MAX_TEMPS: usize = 64;
 pub(crate) struct Scratch {
     ops: Vec<Ops>,
     live: Vec<u64>,
+    /// Live after each instruction (its handlers' needs included).
+    out: Vec<u64>,
     inflow: Vec<u64>,
     frees: Vec<u64>,
     exc: Vec<u64>,
+    /// Read by a jump (or a handler) from at or after it: a backward
+    /// pass that changes one of these needs another round.
+    back_target: Vec<bool>,
 }
 
 impl Frame<'_> {
@@ -441,6 +453,9 @@ impl Frame<'_> {
                 }
             }
         }
+        let (falls, target) = flow(instr);
+        o.falls = falls;
+        o.target = target.unwrap_or(NO_TARGET);
         o
     }
 }
@@ -488,63 +503,65 @@ pub(crate) fn free_temps(
     let n = code.len();
     s.ops.clear();
     s.ops.extend(code.iter().map(|i| frame.ops(i)));
-    let mut back = false;
-    for (pc, i) in code.iter().enumerate() {
-        if let (_, Some(t)) = flow(i)
-            && t as usize <= pc
-        {
-            back = true;
+    let has_handlers = !handlers.is_empty();
+    let handler_bits = |h: &Handler| frame.bit(h.slot);
+    // Going backward, a forward jump's target (and a handler after its
+    // range) is done before what jumps there. A target at or before the
+    // jump is read before it is done: a round that changes one of those
+    // needs another.
+    s.back_target.clear();
+    s.back_target.resize(n, false);
+    for (pc, o) in s.ops.iter().enumerate() {
+        if o.target != NO_TARGET && o.target as usize <= pc {
+            s.back_target[o.target as usize] = true;
         }
     }
-    let handler_bits = |h: &Handler| frame.bit(h.slot);
+    for h in handlers.iter() {
+        if h.target < h.end {
+            s.back_target[h.target as usize] = true;
+        }
+    }
 
-    // Liveness, backward: live[pc] is what is live going into pc.
+    // Liveness, backward: live[pc] is what is live going into pc, out[pc]
+    // what is live after it (its handlers' needs included).
     s.live.clear();
     s.live.resize(n + 1, 0);
+    s.out.clear();
+    s.out.resize(n, 0);
     s.exc.clear();
     s.exc.resize(n, 0);
-    // Going backward, a forward jump's target (and a handler after its
-    // range) is done before what jumps there: one round is exact unless
-    // some jump goes back.
-    let forward = !back && handlers.iter().all(|h| h.target >= h.end);
     loop {
-        let mut changed = false;
-        for pc in (0..n).rev() {
-            let (falls, target) = flow(&code[pc]);
-            let mut out = if falls { s.live[pc + 1] } else { 0 };
-            if let Some(t) = target {
-                out |= s.live[t as usize];
+        let mut again = false;
+        for (pc, o) in s.ops.iter().enumerate().rev() {
+            let mut out = if o.falls { s.live[pc + 1] } else { 0 };
+            if o.target != NO_TARGET {
+                out |= s.live[o.target as usize];
             }
             // What a handler's code needs is live wherever it may be
             // entered from (the instruction may throw before it writes
             // anything: not ended by its kills).
             let mut exc = 0;
-            for h in handlers.iter().filter(|h| h.start as usize <= pc && pc < h.end as usize) {
-                exc |= s.live[h.target as usize] & !handler_bits(h);
+            if has_handlers {
+                for h in handlers.iter().filter(|h| h.start as usize <= pc && pc < h.end as usize) {
+                    exc |= s.live[h.target as usize] & !handler_bits(h);
+                }
+                s.exc[pc] = exc;
             }
-            s.exc[pc] = exc;
-            let o = &s.ops[pc];
+            s.out[pc] = out | exc;
             let live = o.uses | (out & !o.kills) | exc;
             if live != s.live[pc] {
                 s.live[pc] = live;
-                changed = true;
+                again |= s.back_target[pc];
             }
         }
-        if !changed || forward {
+        if !again {
             break;
         }
     }
 
     // A value stored from a temporary that dies there is moved (taken).
     for (pc, instr) in code.iter_mut().enumerate() {
-        let (falls, target) = flow(instr);
-        let mut out = s.exc[pc];
-        if falls {
-            out |= s.live[pc + 1];
-        }
-        if let Some(t) = target {
-            out |= s.live[t as usize];
-        }
+        let out = s.out[pc];
         let dies = |r: Reg| frame.bit(r) != 0 && out & frame.bit(r) == 0;
         let taken = match *instr {
             Instr::Assign { var, src } if var != src && dies(src) => Instr::AssignTake { var, src },
@@ -571,14 +588,12 @@ pub(crate) fn free_temps(
     }
     loop {
         let mut changed = false;
-        for (pc, instr) in code.iter().enumerate() {
+        for (pc, o) in s.ops.iter().enumerate() {
             let e = s.inflow[pc];
             let free = e & !s.live[pc];
             s.frees[pc] = free;
             let e = e & s.live[pc];
-            let o = &s.ops[pc];
             let out = (e & !o.clean & !o.plain) | o.dirty;
-            let (falls, target) = flow(instr);
             let mut merge = |at: usize, m: u64| {
                 let new = s.inflow[at] | m;
                 if new != s.inflow[at] {
@@ -587,14 +602,14 @@ pub(crate) fn free_temps(
                     s.inflow[at] = new;
                 }
             };
-            if falls {
+            if o.falls {
                 merge(pc + 1, out);
             }
-            if let Some(t) = target {
-                merge(t as usize, out);
+            if o.target != NO_TARGET {
+                merge(o.target as usize, out);
             }
             // An exception may leave it anywhere between its start and its end.
-            if e | out != 0 {
+            if has_handlers && e | out != 0 {
                 for h in handlers.iter().filter(|h| h.start as usize <= pc && pc < h.end as usize) {
                     merge(h.target as usize, e | out);
                 }
