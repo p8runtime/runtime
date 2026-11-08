@@ -277,10 +277,16 @@ impl Context<'_> {
                             o
                         };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let Some(slot) = plain_slot(site.get(), o, scope, &w[rx!(val)]) else { slow!() };
+                        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope.as_deref()), &w[rx!(val)], !self.reinit.is_empty()) else { slow!() };
                         let unused = matches!(code.get(pc + 1), Some(next) if next.op == Op::Free && next.a == dst);
                         let written = match o.slots().get(slot) {
-                            Some(s) if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 || !p8_runtime::object::Slot::peek(s, Value::is_undef) => {
+                            Some(s)
+                                if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
+                                    || {
+                                        let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
+                                        if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
+                                    } =>
+                            {
                                 // The slot's value out, written as a register
                                 // is, back in. (Pending is tested below,
                                 // whatever this released.)
@@ -314,7 +320,7 @@ impl Context<'_> {
                     // its declared type (`verify_args` would accept each as it
                     // is); a conversion, a class check or a variadic: `step`.
                     Op::VerifyArgs => {
-                        if !args_plain(&clo.code.params, &w[..], top.argc as usize) {
+                        if !args_plain(clo, &w[..], top.argc as usize) {
                             slow!();
                         }
                         pc += 1;
@@ -322,7 +328,7 @@ impl Context<'_> {
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     Op::VerifyReturn => match &clo.code.ret_type {
-                        Some(ty) if clo.code.is_generator || !ty.quick(&w[rx!(insn.a)]) => slow!(),
+                        Some(ty) if clo.code.is_generator || !ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)]) => slow!(),
                         _ => pc += 1,
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
@@ -751,6 +757,48 @@ impl Context<'_> {
                         let v = v.clone();
                         done!(put(&mut w[rx!(a)], v));
                     }
+                    // foreach over an array (a defined, non-reference
+                    // register): the iterator is the array and position 0;
+                    // an empty one jumps past the loop. (An object, a
+                    // reference, anything that warns: `step`.)
+                    Op::IterInit => {
+                        ops!(a, b, c, imm);
+                        let Some(arr) = w[rx!(a)].as_array() else { slow!() };
+                        if arr.is_empty() {
+                            pc = imm as usize;
+                        } else {
+                            let v = w[rx!(a)].clone();
+                            let released = put(&mut w[rx!(b)], v) | put(&mut w[rk!(rx!(b) + 1)], Value::int(0));
+                            done!(released);
+                        }
+                    }
+                    // An argument a user function or builtin the call site
+                    // resolved to takes by value: a copy (by reference, an
+                    // unresolved site, an undefined variable: `step`).
+                    Op::SendVar => {
+                        ops!(a, b, c, imm);
+                        let n = (imm >> 16) as usize;
+                        let by_value = match clo.sites[(imm & 0xffff) as usize].get() {
+                            Some(&Callee::User(f)) => !self.codes[f as usize].param_by_ref(n),
+                            Some(&Callee::Builtin(i)) => !self.isolate.registry.by_ref(i, n),
+                            Some(Callee::Constant(_)) => true,
+                            None => false,
+                        };
+                        if !by_value {
+                            slow!();
+                        }
+                        let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `C::NAME` the site's cache holds (filled by `step`).
+                    Op::ClassConst => {
+                        ops!(a, b, c, imm);
+                        let v = match clo.class_consts.get((imm & 0xffff) as usize).and_then(OnceCell::get) {
+                            Some((class, v)) if u32::from(*class) == imm >> 16 => v.clone(),
+                            _ => slow!(),
+                        };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
                     // A call of a user function the call site resolved, with
                     // its required arguments, and no interrupt pending: its
                     // frame pushed here. A builtin it resolved: frameless when
@@ -904,15 +952,16 @@ pub(crate) enum Flow {
 }
 
 /// Whether the first `argc` registers of `w` are each plainly of their
-/// parameter's declared type (`TypeDecl::quick`), so `verify_args` has
-/// nothing to check or convert. A typed variadic is left to it.
+/// parameter's declared type (`TypeDecl::quick`, an object's class test
+/// through the closure's memo), so `verify_args` has nothing to check or
+/// convert. A typed variadic is left to it.
 #[inline]
-pub(crate) fn args_plain(params: &[p8_bytecode::Param], w: &[Value], argc: usize) -> bool {
-    params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
+pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
+    clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
         Some(_) if p.variadic => false,
         Some(_) if i >= argc || v.is_undef() => true,
-        Some(ty) => ty.quick(v),
+        Some(ty) => ClassMemo::quick(clo.type_memo.get(i), ty, v),
     })
 }
 
@@ -944,11 +993,21 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
     // Only the constants read as values (names stay in the constants).
     let values = code.value_consts as usize;
+    // A register still holding the very constant (the same function called
+    // again at this base: `leave` leaves the constants in place) is kept.
     for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
-        clear(r);
-        // `r` is undefined now: nothing to drop.
-        std::mem::forget(std::mem::replace(r, c.clone()));
+        if !r.same_handle(c) {
+            enter_const(r, c);
+        }
     }
+}
+
+/// A constant copied into its register, the register's old value released.
+#[inline(never)]
+fn enter_const(r: &mut Value, c: &Value) {
+    let _ = clear(r);
+    // `r` is undefined now: nothing to drop.
+    std::mem::forget(std::mem::replace(r, c.clone()));
 }
 
 /// The value `return` hands back from register `src` of `frame` (at
@@ -1048,23 +1107,17 @@ pub(crate) fn is_plain(v: &Value) -> bool {
     v.is_plain()
 }
 
-/// Release what a value holds (a string, an array, a reference, an
-/// object): the one call an overwrite makes, and only for those.
-#[cold]
-#[inline(never)]
-pub(crate) fn release(v: Value) {
-    drop(v);
-}
-
 /// Write `v` over a register's value: the old value's tag is tested
-/// here, and only one holding memory is released, out of line (PHP's
-/// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then a call).
+/// here, and only one holding memory is released (PHP's
+/// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then `GC_DELREF`): its count's
+/// decrement inline, the free out of line for the last handle only
+/// (`Value::release`).
 ///
-/// Returns whether the old value held memory: the release may have freed
-/// the last holder of an object with a destructor, which the loop runs
-/// before the next instruction (`done!`), at this instruction's pc, as
-/// PHP runs it where the value went. A plain old value cannot have, so
-/// that test is on the release path only.
+/// Returns whether the release freed the last handle of something that
+/// may hold an object with a destructor, which the loop runs before the
+/// next instruction (`done!`), at this instruction's pc, as PHP runs it
+/// where the value went. A plain old value, or a decrement that freed
+/// nothing, cannot have, so that test is on the freeing path only.
 #[inline(always)]
 #[must_use = "a released value may leave a destructor due: test `ids.has_pending()`"]
 pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
@@ -1074,8 +1127,7 @@ pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
         std::mem::forget(std::mem::replace(slot, v));
         false
     } else {
-        release(std::mem::replace(slot, v));
-        true
+        std::mem::replace(slot, v).release()
     }
 }
 
@@ -1091,10 +1143,7 @@ pub(crate) fn put_var(slot: &mut Value, v: Value) -> bool {
     }
     match slot.as_reference() {
         Some(cell) => write_ref(cell, v),
-        None => {
-            release(std::mem::replace(slot, v));
-            true
-        }
+        None => std::mem::replace(slot, v).release(),
     }
 }
 

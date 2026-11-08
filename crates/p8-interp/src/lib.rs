@@ -3341,6 +3341,7 @@ impl Context<'_> {
                     return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
                 }
                 Instr::ClassConst { dst, class, name } => {
+                    let name_reg = name;
                     let name = name!(name).clone();
                     // `self::class` with no class to name (zend_compile's
                     // ZEND_FETCH_CLASS_NAME): its own error.
@@ -3366,7 +3367,14 @@ impl Context<'_> {
                         self.eval_constant(regs, &thunk, scope, key)?;
                         return Ok(Next::Go(at));
                     }
-                    reg!(dst) = self.class_constant(func, class, &name, w)?;
+                    let v = self.class_constant(func, class, &name, w)?;
+                    if let Some(site) = (name_reg as usize).checked_sub(func.consts_at as usize).and_then(|i| clo.class_consts.get(i))
+                        && site.get().is_none()
+                        && self.class_const_cacheable(clo, class, &name, w)
+                    {
+                        let _ = site.set((class, v.clone()));
+                    }
+                    reg!(dst) = v;
                 }
                 Instr::FetchStaticProp { dst, class, name } => {
                     if let Some(c) = self.lazy_class(func, class, w)? {

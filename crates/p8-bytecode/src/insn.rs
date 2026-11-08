@@ -128,6 +128,15 @@ pub enum Op {
     ArraySet,
     /// a = constant of site imm
     FetchConst,
+    /// a = class constant: class reference imm >> 16, the name the
+    /// constant imm & 0xffff (its cache entry, as a property name's)
+    ClassConst,
+    /// foreach over a: the array (b, b + 1 = it and its position 0), or to
+    /// imm when it is empty
+    IterInit,
+    /// argument n (imm >> 16) of call site imm & 0xffff: a = b, when the
+    /// function takes it by value
+    SendVar,
     /// call site imm with the b arguments at a, result to c
     Call,
     /// `f(x0, .., xn-1)`, x the b registers from a (one for any register,
@@ -308,6 +317,15 @@ fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
         Instr::ArrayPush { arr, val, take: t } => i(Op::ArrayPush, arr, val, 0, take(t)),
         Instr::ArraySet { arr, key, val, take: t } => i(Op::ArraySet, arr, key, val, take(t)),
         Instr::FetchConst { site, dst } => i(Op::FetchConst, dst, 0, 0, u32::from(site)),
+        Instr::IterInit { src, iter, end } => {
+            r(iter + 1)?;
+            i(Op::IterInit, src, iter, 0, end)
+        }
+        Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
+        Instr::ClassConst { dst, class, name } => {
+            let site = prop_site(name, consts).filter(|&s| s <= 0xffff)?;
+            i(Op::ClassConst, dst, 0, 0, site | u32::from(class) << 16)
+        }
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
         Instr::Return { src } => i(Op::Return, src, 0, 0, 0),

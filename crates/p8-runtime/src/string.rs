@@ -447,6 +447,12 @@ impl PhpStr {
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Rc::ptr_eq(&a.0, &b.0)
     }
+
+    /// How many handles share the string (1: dropping this one frees it).
+    #[inline(always)]
+    pub fn count(&self) -> usize {
+        Rc::strong_count(&self.0)
+    }
 }
 
 /// A handle reads as its head: `s.as_bytes()`, `s.len()`, `s.hash()`.

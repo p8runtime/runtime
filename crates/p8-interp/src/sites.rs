@@ -30,6 +30,50 @@ pub struct Closure {
     /// as the frame is entered (`fill_defaults`), as PHP's RECV_INIT does
     /// for a constant default. The compiler leaves no code for a literal.
     pub(crate) defaults: Box<[Option<Value>]>,
+    /// The class each declared type last accepted an object of (`quick`'s
+    /// class test, an `instanceof` walk by name, made once per class):
+    /// one per parameter, then the return type's; empty when no type
+    /// names a class.
+    pub(crate) type_memo: Box<[ClassMemo]>,
+    /// `C::NAME` of a named class, a public constant (or `C::class`):
+    /// its value, once read, by the name's constant (one entry per
+    /// constant, as `props`), with the class reference it was read
+    /// through (another class with the same name reads past it). A
+    /// class's constants never change, and a name is always the same
+    /// class (`class_refs`): PHP's runtime cache slot of FETCH_CLASS_CONSTANT.
+    pub(crate) class_consts: Box<[OnceCell<(u16, Value)>]>,
+}
+
+/// A class a declared type accepted (`Closure::type_memo`): its address,
+/// compared; and a weak handle, which keeps the address from being reused
+/// by another class while the memo holds it.
+#[derive(Default)]
+pub(crate) struct ClassMemo {
+    addr: Cell<usize>,
+    keep: Cell<std::rc::Weak<Class>>,
+}
+
+impl ClassMemo {
+    /// `ty.quick(v)`, an object's class test answered by the memo when it
+    /// is the class accepted last (an object's verdict depends on its
+    /// class alone).
+    #[inline(always)]
+    pub(crate) fn quick(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+        match (v.as_object(), memo) {
+            (Some(o), Some(m)) => m.addr.get() == Rc::as_ptr(&o.class) as usize || m.learn(ty, o),
+            _ => ty.quick(v),
+        }
+    }
+
+    #[inline(never)]
+    fn learn(&self, ty: &p8_runtime::types::TypeDecl, o: &Rc<Object>) -> bool {
+        if !ty.quick_object(o) {
+            return false;
+        }
+        self.addr.set(Rc::as_ptr(&o.class) as usize);
+        self.keep.set(Rc::downgrade(&o.class));
+        true
+    }
 }
 
 impl Closure {
@@ -64,7 +108,14 @@ impl Closure {
         } else {
             Box::default()
         };
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults })
+        let names_class = |t: &Option<p8_runtime::types::TypeDecl>| t.as_ref().is_some_and(|t| !t.lower.is_empty());
+        let type_memo = if code.params.iter().any(|p| names_class(&p.ty)) || names_class(&code.ret_type) {
+            (0..=code.params.len()).map(|_| ClassMemo::default()).collect()
+        } else {
+            Box::default()
+        };
+        let class_consts = code.consts.iter().map(|_| OnceCell::new()).collect();
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -176,8 +227,10 @@ fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
 
 /// A property read the cache answers: the same class, a scope that may
 /// see it, an object not lazy, and a value there (an unset one takes the
-/// full path: its warning, __get).
-#[inline]
+/// full path: its warning, __get). Inline: the loop's property reads are
+/// its most frequent instructions after moves and jumps, and a call
+/// returned the value through memory.
+#[inline(always)]
 pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
@@ -210,11 +263,16 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
 /// write is a plain store (`write_cached`'s test): `cached_slot`'s
 /// conditions but the slot's own state (the caller looks at the slot
 /// once, to write it), a defined value that is not a reference, and a
-/// property that is not readonly, has no set visibility, and is untyped
-/// or plainly of its type. Everything else is the full write's.
+/// property untyped or plainly of its type. A property with a set
+/// visibility only from code of its declaring class (`may_set`'s first
+/// test, which every set visibility passes); a readonly one the same, and
+/// only for its first write (`Plain::Unset`: the caller tests the slot is
+/// unset) outside any clone's re-initialization (`reinit` empty):
+/// `write_slot`'s rules where they pass with nothing to report. Everything
+/// else is the full write's.
 #[inline(always)]
-pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: usize, v: &Value) -> Option<usize> {
-    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: (usize, Option<&Class>), v: &Value, reinit: bool) -> Option<(usize, Plain)> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope.0) || o.lazy.get() != 0 {
         return None;
     }
     if v.is_undef() || v.is_reference() {
@@ -222,10 +280,37 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
     }
     let slot = site.slot as usize;
     let prop = o.class.properties.get(slot)?;
-    if prop.readonly || prop.set_visibility.is_some() || prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
+    let mut plain = Plain::Any;
+    if prop.readonly || prop.set_visibility.is_some() {
+        plain = guarded_write(prop, scope.1, reinit)?;
+    }
+    if prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
         return None;
     }
-    Some(slot)
+    Some((slot, plain))
+}
+
+/// What a plain write to a slot needs of the slot's state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Plain {
+    Any,
+    /// A readonly property's first write: the slot must be unset.
+    Unset,
+}
+
+/// `plain_slot`'s test of a readonly or set-visibility property: written
+/// from its declaring class (and a readonly one with no clone being
+/// re-initialized). Out of line: the common property has neither.
+#[inline(never)]
+fn guarded_write(prop: &p8_runtime::object::Property, scope: Option<&Class>, reinit: bool) -> Option<Plain> {
+    let scope = scope?;
+    if scope.lower != prop.declaring {
+        return None;
+    }
+    if prop.readonly {
+        return (!reinit).then_some(Plain::Unset);
+    }
+    Some(Plain::Any)
 }
 
 impl Context<'_> {

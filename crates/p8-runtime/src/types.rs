@@ -77,19 +77,22 @@ impl TypeDecl {
             // A named class or interface the object's class is or extends
             // (`self`/`parent` never match a class name here: `verify`
             // resolves them), or a Closure where a callable is wanted.
-            Kind::Object => {
-                let o = v.as_object().expect("an object");
-                return self.mask & (T_OBJECT | T_MIXED) != 0
-                    || (self.mask & T_CALLABLE != 0 && o.class.lower.as_slice() == b"closure")
-                    || if self.intersection {
-                        !self.lower.is_empty() && self.lower.iter().all(|c| o.class.is_a(c.as_bytes()))
-                    } else {
-                        self.lower.iter().any(|c| o.class.is_a(c.as_bytes()))
-                    };
-            }
+            Kind::Object => return self.quick_object(v.as_object().expect("an object")),
             Kind::Undef | Kind::Ref => return false,
         };
         self.mask & (bit | T_MIXED) != 0
+    }
+
+    /// `quick` of an object: its verdict depends on the object's class
+    /// alone (callers may remember it per class).
+    pub fn quick_object(&self, o: &Object) -> bool {
+        self.mask & (T_OBJECT | T_MIXED) != 0
+            || (self.mask & T_CALLABLE != 0 && o.class.lower.as_slice() == b"closure")
+            || if self.intersection {
+                !self.lower.is_empty() && self.lower.iter().all(|c| o.class.is_a(c.as_bytes()))
+            } else {
+                self.lower.iter().any(|c| o.class.is_a(c.as_bytes()))
+            }
     }
 
     /// Check `v`. `is_a(o, class)`: whether object `o` is an instance of
