@@ -495,12 +495,24 @@ macro_rules! record {
             }
         }
     };
+    // A record with a field made from the others when it is read (not stored).
+    ($t:ident { $($f:ident),* $(,)? } made $m:ident by $by:path) => {
+        impl Code for $t {
+            fn put(&self, w: &mut Writer) {
+                $(self.$f.put(w);)*
+            }
+            fn get(r: &mut Reader) -> Got<Self> {
+                Ok($by($t { $($f: Code::get(r)?,)* $m: Default::default() }))
+            }
+        }
+    };
 }
 record!(Program { main, functions, classes });
+// `insns` is the code's executed form, made again from `code`.
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
-});
+} made insns by Function::lowered);
 record!(CompileDiag { level, message, line });
 record!(PartialSite { args, variadic, name, line });
 record!(PartialArg { name, placeholder });

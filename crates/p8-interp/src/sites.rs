@@ -83,6 +83,7 @@ impl Closure {
             params: Vec::new(),
             returns_ref: false,
             code: Vec::new(),
+            insns: Vec::new(),
             lines: Vec::new(),
             consts: Vec::new(),
             consts_at: 0,
