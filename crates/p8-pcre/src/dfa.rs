@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 
-use crate::compile::{Atom, Inst, Prog, RepeatKind};
+use crate::compile::{Atom, First, Inst, Prog, RepeatKind};
 use crate::exec::{atom_matches, is_word, newline_char};
 use crate::parse::{Assert, Newline};
 
@@ -73,10 +73,6 @@ const NO_EMPTY: u8 = 32;
 struct State {
     kernel: Box<[u32]>,
     flags: u8,
-    /// Transitions by byte (by code point only below 0x80 in UTF mode):
-    /// the next state's id, with MATCH_BIT when a match ends before the
-    /// character.
-    trans: Box<[u32; 256]>,
     /// Whether a match ends at the end of the subject from here.
     eof: Option<bool>,
 }
@@ -87,8 +83,18 @@ pub(crate) struct Dfa {
     /// The program has `$` outside multiline mode: the last character
     /// steps differently from the others.
     needs_last: bool,
+    /// The program looks at the character before a position (`\b`, `^`
+    /// in multiline mode): states carry what it was.
+    uses_prev: bool,
     utf: bool,
     states: Vec<State>,
+    /// Each state's transitions by byte (by code point only below 0x80 in
+    /// UTF mode), 256 per state: the next state's id, with MATCH_BIT when
+    /// a match ends before the character.
+    trans: Vec<u32>,
+    /// Per state: nothing alive, and a new alternative starts at each
+    /// position (where the first-byte search may skip ahead).
+    restart: Vec<bool>,
     index: HashMap<(Box<[u32]>, u8), u32>,
     /// Transitions on a non-ASCII character in UTF mode, by (state, code point).
     wide: HashMap<(u32, u32), u32>,
@@ -243,12 +249,16 @@ impl Dfa {
             }
         }
         let count = nodes.len();
+        let uses_prev = nodes.iter().any(|n| matches!(n, Node::Assert { a: Assert::StartLine | Assert::WordBoundary { .. } | Assert::NotWordBoundary { .. }, .. }));
         let mut dfa = Dfa {
             nodes,
             start: 0,
             needs_last,
+            uses_prev,
             utf: p.utf,
             states: Vec::new(),
+            trans: Vec::new(),
+            restart: Vec::new(),
             index: HashMap::new(),
             wide: HashMap::new(),
             last: HashMap::new(),
@@ -267,6 +277,8 @@ impl Dfa {
 
     fn clear(&mut self) {
         self.states.clear();
+        self.trans.clear();
+        self.restart.clear();
         self.index.clear();
         self.wide.clear();
         self.last.clear();
@@ -281,7 +293,9 @@ impl Dfa {
             return id;
         }
         let id = self.states.len() as u32;
-        self.states.push(State { kernel: kernel.clone(), flags, trans: Box::new([UNKNOWN; 256]), eof: None });
+        self.restart.push(kernel.is_empty() && flags & RESTART != 0);
+        self.states.push(State { kernel: kernel.clone(), flags, eof: None });
+        self.trans.resize(self.states.len() * 256, UNKNOWN);
         self.index.insert((kernel, flags), id);
         id
     }
@@ -297,14 +311,20 @@ impl Dfa {
     }
 
     /// What the state after a character knows about it.
-    fn flags_after(p: &Prog, c: u32) -> u8 {
+    fn flags_after(&self, p: &Prog, c: u32) -> u8 {
+        if !self.uses_prev {
+            return 0;
+        }
         (if is_word(p, Some(c)) { PREV_WORD } else { 0 }) | (if newline_char(p, c) { PREV_NL } else { 0 })
     }
 
     /// What a state at `pos` knows about the character before it.
-    fn flags_at(p: &Prog, s: &[u8], pos: usize) -> u8 {
+    fn flags_at(&self, p: &Prog, s: &[u8], pos: usize) -> u8 {
         if pos == 0 {
             return AT_START;
+        }
+        if !self.uses_prev {
+            return 0;
         }
         let mut i = pos - 1;
         if p.utf {
@@ -312,7 +332,7 @@ impl Dfa {
                 i -= 1;
             }
         }
-        Self::flags_after(p, crate::decode(s, i, p.utf).0)
+        self.flags_after(p, crate::decode(s, i, p.utf).0)
     }
 
     /// The transition from `sid` on `c` (None at the end of the subject):
@@ -384,7 +404,7 @@ impl Dfa {
         let Some(c) = c else {
             return Ok(if matched { MATCH_BIT } else { 0 });
         };
-        let mut next_flags = Self::flags_after(p, c);
+        let mut next_flags = self.flags_after(p, c);
         if flags & RESTART != 0 && !matched {
             next_flags |= RESTART;
         }
@@ -409,7 +429,7 @@ impl Dfa {
     /// starting only at `start` when `anchored`. `offset` is the search's
     /// start offset (`\G`); `no_empty` rejects an empty match there.
     fn find_end(&mut self, p: &Prog, s: &[u8], start: usize, offset: usize, no_empty: bool, anchored: bool) -> Result<Option<usize>, Overflow> {
-        let mut flags = Self::flags_at(p, s, start);
+        let mut flags = self.flags_at(p, s, start);
         if start == offset {
             flags |= AT_OFFSET | if no_empty { NO_EMPTY } else { 0 };
         }
@@ -418,52 +438,79 @@ impl Dfa {
         let mut pos = start;
         let len = s.len();
         self.restart_at = start;
-        while pos < len {
-            let st = &self.states[sid as usize];
-            if st.kernel.is_empty() && st.flags & RESTART != 0 {
-                self.restart_at = pos;
+        // The last character steps apart when `$` must know it is last.
+        let body = if self.needs_last && len > start {
+            let mut i = len - 1;
+            while self.utf && i > start && s[i] & 0xc0 == 0x80 {
+                i -= 1;
             }
-            if st.kernel.is_empty() && st.flags & RESTART != 0 && !matches!(p.first, crate::compile::First::Any) {
-                // Nothing alive: skip to where a match can start.
-                match crate::exec::next_start(p, s, pos) {
-                    Some(n) if n == pos => {}
-                    Some(n) => {
-                        pos = n;
-                        sid = self.restart_state(Self::flags_at(p, s, pos));
-                        continue;
+            i
+        } else {
+            len
+        };
+        // With nothing alive, skip to a byte a match can start with when
+        // memchr finds it (a table scan is no faster than stepping).
+        let skip = !anchored && matches!(p.first, First::One(_) | First::Two(..) | First::Three(..) | First::Text(_));
+        while pos < body {
+            if self.restart[sid as usize] {
+                self.restart_at = pos;
+                if skip {
+                    match crate::exec::next_start(p, s, pos) {
+                        Some(n) if n == pos => {}
+                        Some(n) => {
+                            pos = n;
+                            sid = self.restart_state(self.flags_at(p, s, pos));
+                            self.restart_at = pos;
+                            continue;
+                        }
+                        None => return Ok(found),
                     }
-                    None => return Ok(found),
                 }
             }
             let b = s[pos];
-            let (c, n) = if self.utf && b >= 0x80 { crate::decode(s, pos, true) } else { (b as u32, 1) };
-            let last = self.needs_last && pos + n >= len;
-            let tr = if last {
-                match self.last.get(&(sid, c)) {
-                    Some(&t) => t,
-                    None => {
-                        let t = self.step(p, sid, Some(c), true)?;
-                        self.last.insert((sid, c), t);
-                        t
-                    }
-                }
-            } else if n == 1 {
-                let t = self.states[sid as usize].trans[b as usize];
-                if t == UNKNOWN {
-                    let t = self.step(p, sid, Some(c), false)?;
-                    self.states[sid as usize].trans[b as usize] = t;
+            let (tr, n) = if !self.utf || b < 0x80 {
+                let i = ((sid as usize) << 8) | b as usize;
+                let t = self.trans[i];
+                let t = if t == UNKNOWN {
+                    let t = self.step(p, sid, Some(b as u32), false)?;
+                    self.trans[i] = t;
                     t
                 } else {
                     t
-                }
+                };
+                (t, 1)
             } else {
-                match self.wide.get(&(sid, c)) {
+                let (c, n) = crate::decode(s, pos, true);
+                let t = match self.wide.get(&(sid, c)) {
                     Some(&t) => t,
                     None => {
                         let t = self.step(p, sid, Some(c), false)?;
                         self.wide.insert((sid, c), t);
                         t
                     }
+                };
+                (t, n)
+            };
+            if tr & MATCH_BIT != 0 {
+                found = Some(pos);
+            }
+            sid = tr & !MATCH_BIT;
+            if sid == DEAD {
+                return Ok(found);
+            }
+            pos += n;
+        }
+        if pos < len {
+            if self.restart[sid as usize] {
+                self.restart_at = pos;
+            }
+            let (c, n) = if self.utf { crate::decode(s, pos, true) } else { (s[pos] as u32, 1) };
+            let tr = match self.last.get(&(sid, c)) {
+                Some(&t) => t,
+                None => {
+                    let t = self.step(p, sid, Some(c), true)?;
+                    self.last.insert((sid, c), t);
+                    t
                 }
             };
             if tr & MATCH_BIT != 0 {
@@ -475,6 +522,7 @@ impl Dfa {
             }
             pos += n;
         }
+        debug_assert_eq!(pos, len);
         let eof = match self.states[sid as usize].eof {
             Some(m) => m,
             None => {
