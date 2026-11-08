@@ -28,7 +28,11 @@ pub enum Heap {
     Array(PhpArray) = 1,
     /// A PHP reference: the shared cell `$a = &$b` makes.
     Ref(RefCell<Value>) = 2,
-    Object(Object) = 3,
+    /// Boxed: an object's body is 200 bytes, and an enum is as big as its
+    /// biggest variant, so unboxed every string's and array's allocation
+    /// was 224 bytes (measured: `concat` +11 cycles per iteration, store
+    /// forwards from moving the 208-byte body into its `Rc`).
+    Object(Box<Object>) = 3,
 }
 
 impl fmt::Debug for Heap {
@@ -84,7 +88,34 @@ macro_rules! kind {
 kind!(StrHead, Str);
 kind!(PhpArray, Array);
 kind!(RefCell<Value>, Ref);
-kind!(Object, Object);
+
+impl HeapKind for Object {
+    #[inline(always)]
+    fn wrap(self) -> Heap {
+        Heap::Object(Box::new(self))
+    }
+    #[inline(always)]
+    fn get(h: &Heap) -> Option<&Self> {
+        match h {
+            Heap::Object(x) => Some(x),
+            _ => None,
+        }
+    }
+    #[inline(always)]
+    fn get_mut(h: &mut Heap) -> Option<&mut Self> {
+        match h {
+            Heap::Object(x) => Some(x),
+            _ => None,
+        }
+    }
+    #[inline(always)]
+    fn take(h: Heap) -> Result<Self, Heap> {
+        match h {
+            Heap::Object(x) => Ok(*x),
+            h => Err(h),
+        }
+    }
+}
 
 #[cold]
 #[inline(never)]
@@ -233,5 +264,30 @@ impl<T: HeapKind> fmt::Debug for HWeak<T> {
 impl<T: HeapKind> Clone for HWeak<T> {
     fn clone(&self) -> Self {
         HWeak(self.0.clone(), PhantomData)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    /// The sizes the one heap type costs: every allocation is the biggest
+    /// body's (printed for #391's PR; run with --nocapture).
+    #[test]
+    fn sizes() {
+        println!(
+            "Value {} Option<Value> {} Heap {} StrHead {} PhpArray {} RefCell<Value> {} Object {}",
+            size_of::<Value>(),
+            size_of::<Option<Value>>(),
+            size_of::<Heap>(),
+            size_of::<StrHead>(),
+            size_of::<PhpArray>(),
+            size_of::<RefCell<Value>>(),
+            size_of::<Object>()
+        );
+        let s = HRc::new(StrHead::clone(&crate::string::PhpStr::from("x")));
+        assert_eq!(HRc::strong_count(&s), 1);
+        assert_eq!(s.as_bytes(), b"x");
     }
 }
