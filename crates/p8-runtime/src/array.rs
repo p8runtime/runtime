@@ -386,6 +386,15 @@ impl Hashed {
     /// The position of `key` (its hash `h`). Out of line: the interpreter's
     /// fast loop inlines array reads, and only their packed part belongs
     /// there.
+    ///
+    /// A leaf: it compares hashes, and a string key by its head's address
+    /// (a program-memory string is one head wherever it is written). The
+    /// first entry whose hash matches and whose head does not is handed to
+    /// [`Hashed::find_bytes`], which compares bytes from there on. Most
+    /// lookups never get there (one in five on WordPress), and a function
+    /// that calls `bcmp` itself has to save and restore every register the
+    /// loop uses around it, in every call: that was a third of this
+    /// function's cost.
     #[inline(never)]
     fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         if self.small() {
@@ -394,7 +403,29 @@ impl Hashed {
         let mut i = self.buckets[self.slot(h)].head;
         while i != NONE {
             let b = &self.buckets[i as usize];
-            if b.is(h, key) {
+            if b.h == h {
+                match (key, &b.key) {
+                    (Probe::Int, None) => return Some(i as usize),
+                    (Probe::Str(s), Some(k)) => {
+                        if std::ptr::eq(s, &**k) {
+                            return Some(i as usize);
+                        }
+                        return self.find_bytes(h, s, i);
+                    }
+                    _ => {}
+                }
+            }
+            i = b.next;
+        }
+        None
+    }
+
+    /// `find` from chain entry `i` on, the string key compared by bytes.
+    #[inline(never)]
+    fn find_bytes(&self, h: u64, s: &StrHead, mut i: u32) -> Option<usize> {
+        while i != NONE {
+            let b = &self.buckets[i as usize];
+            if b.is(h, Probe::Str(s)) {
                 return Some(i as usize);
             }
             i = b.next;
@@ -440,13 +471,34 @@ impl Hashed {
     /// A small table's position of `key`: one pass over the stored hashes,
     /// the key compared only where the hash matches. An unset entry has no
     /// string key, so only an int key needs the unset mark.
+    ///
+    /// A leaf, as `find` is: the byte compare of a string key is out of
+    /// line (`scan_bytes`), reached from the first entry whose hash
+    /// matches and whose head is another.
     #[inline(always)]
     fn scan(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         let taken = &self.buckets[..self.used];
         match key {
-            Probe::Str(s) => taken.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| std::ptr::eq(s, &**k) || s.as_bytes() == k.as_bytes())),
+            Probe::Str(s) => {
+                for (i, b) in taken.iter().enumerate() {
+                    if b.h == h && let Some(k) = &b.key {
+                        if std::ptr::eq(s, &**k) {
+                            return Some(i);
+                        }
+                        return self.scan_bytes(h, s, i);
+                    }
+                }
+                None
+            }
             Probe::Int => taken.iter().position(|b| b.h == h && b.key.is_none() && b.next != UNSET),
         }
+    }
+
+    /// `scan` from position `from` on, the string key compared by bytes.
+    #[inline(never)]
+    fn scan_bytes(&self, h: u64, s: &StrHead, from: usize) -> Option<usize> {
+        let taken = &self.buckets[from..self.used];
+        taken.iter().position(|b| b.is(h, Probe::Str(s))).map(|i| from + i)
     }
 
     /// Set `key` to `value`: in place if present, else last in order. One

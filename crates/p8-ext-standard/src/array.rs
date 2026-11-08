@@ -453,13 +453,31 @@ fn text(v: &Value) -> Vec<u8> {
     v.deref().to_str_view().map(|s| s.as_bytes().to_vec()).unwrap_or_else(|| b"Array".to_vec())
 }
 
+/// The key `(string) $v` makes: a string's own handle (its hash cached in
+/// it, so the sets below hash a string once, as PHP's do), anything else
+/// converted.
+fn text_key(v: &Value) -> Key {
+    Key::from_string(v.deref().to_php_string().unwrap_or_else(|| p8_runtime::string::PhpStr::from("Array")))
+}
+
 fn by_values(args: &[Value], keep_if_found: bool) -> Result<Value, Throw> {
-    let others: Vec<std::collections::HashSet<Vec<u8>>> =
-        (1..args.len()).map(|i| arr(args, i).values().map(text).collect()).collect();
+    // The other arrays' values as sets: PHP arrays keyed by them (zend's
+    // array_diff does the same), not Rust sets that would hash the bytes
+    // again with a slower hasher and copy every value.
+    let others: Vec<PhpArray> = (1..args.len())
+        .map(|i| {
+            let a = arr(args, i);
+            let mut set = PhpArray::hashed(a.len());
+            for v in a.values() {
+                set.insert(text_key(v), Value::NULL);
+            }
+            set
+        })
+        .collect();
     let mut out = PhpArray::new();
     for (k, v) in arr(args, 0).iter() {
-        let t = text(v);
-        let keep = if keep_if_found { others.iter().all(|o| o.contains(&t)) } else { !others.iter().any(|o| o.contains(&t)) };
+        let t = text_key(v);
+        let keep = if keep_if_found { others.iter().all(|o| o.contains_key(&t)) } else { !others.iter().any(|o| o.contains_key(&t)) };
         if keep {
             out.insert(k, v.clone());
         }

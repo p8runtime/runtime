@@ -58,6 +58,10 @@ pub mod known {
     pub const TO_STRING: Sym = Sym(8);
     pub const INVOKE: Sym = Sym(9);
     pub const CLONE: Sym = Sym(10);
+    pub const CURRENT: Sym = Sym(18);
+    pub const KEY: Sym = Sym(19);
+    pub const NEXT: Sym = Sym(20);
+    pub const VALID: Sym = Sym(21);
 }
 
 /// The fixed symbol of a `KNOWN` name (as given: lowercase): one match,
