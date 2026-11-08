@@ -1,0 +1,37 @@
+[package]
+name = "aot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Prototype V4 (#370): the AOT ceiling, hand-written straight-line Rust over p8's real values, for the micro programs V1 (#366) runs"
+publish = false
+
+# A root of its own (the engine's workspace excludes it too).
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+# V4a: "dumb AOT", every operation a call of a generic, out-of-line helper.
+[[bin]]
+name = "aot-a"
+path = "src/bin/aot_a.rs"
+
+# V4b: "kind-aware AOT", V1's specialisations inlined, no dispatch.
+[[bin]]
+name = "aot-b"
+path = "src/bin/aot_b.rs"
+
+[dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+p8-bytecode = { path = "../../crates/p8-bytecode" }
+p8-compiler = { path = "../../crates/p8-compiler" }
+p8-runtime = { path = "../../crates/p8-runtime" }
+p8-syntax = { path = "../../crates/p8-syntax" }
+
+# The same profile as V1 (and the engine's release profile), with line
+# tables for callgrind and perf.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = true
