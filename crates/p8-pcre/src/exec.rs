@@ -138,11 +138,11 @@ pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, c
     slots.clear();
     slots.resize(p.slots, None);
     caps.mark = None;
-    if let Some(required) = &p.required {
-        if required.find(&s[start..]).is_none() {
-            caps.slots = slots;
-            return Ok(false);
-        }
+    if let Some(required) = &p.required
+        && required.find(&s[start..]).is_none()
+    {
+        caps.slots = slots;
+        return Ok(false);
     }
     let mut anchored = p.anchored || opts.anchored;
     let mut from = start;
