@@ -20,7 +20,8 @@ use crate::stream::{Stream, Target};
 use crate::string::PhpStr;
 use crate::value::Value;
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
+use crate::heap::{HRc, HWeak};
+use std::rc::Rc;
 
 /// stream_open's options: STREAM_USE_PATH, and what include adds
 /// (STREAM_OPEN_FOR_INCLUDE, STREAM_OPEN_FOR_ZEND_STREAM).
@@ -154,7 +155,7 @@ impl Stat {
 /// keeps in front of stream_read. The stream's `buffer` holds the bytes
 /// not yet read; `pos` is PHP's position.
 pub struct UserStream {
-    pub object: Rc<Object>,
+    pub object: HRc<Object>,
     /// Opened by dir_opendir (read with dir_readdir), not stream_open.
     pub dir: bool,
     /// The read buffer's size and where its unread bytes start in it
@@ -168,7 +169,7 @@ pub struct UserStream {
 }
 
 impl UserStream {
-    fn new(object: Rc<Object>, dir: bool) -> UserStream {
+    fn new(object: HRc<Object>, dir: bool) -> UserStream {
         UserStream { object, dir, buf_len: 0, buf_start: 0, written: false, no_seek: false }
     }
 
@@ -193,7 +194,7 @@ struct State {
     lstat: Option<(Vec<u8>, Stat)>,
     /// The stream resources open through a wrapper: the request's end
     /// closes those still open.
-    open: Vec<Weak<Object>>,
+    open: Vec<HWeak<Object>>,
 }
 
 const KEY: &str = "user stream wrappers";
@@ -382,7 +383,7 @@ fn class_name(o: &Object) -> String {
 /// user_stream_create_object: an instance of the wrapper's class with
 /// `$context` set, then its constructor run; None for a class that
 /// cannot be instantiated.
-fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<Rc<Object>>, Throw> {
+fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<HRc<Object>>, Throw> {
     if w.class.flags & (CLASS_INTERFACE | CLASS_TRAIT | CLASS_ABSTRACT) != 0 {
         return Ok(None);
     }
@@ -400,14 +401,14 @@ fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<Rc<
         }
     }
     if o.class.method(b"__construct").is_some() {
-        ctx.invoke(&crate::reflect::Callee::Method(Rc::clone(&w.class), PhpStr::from("__construct")), Some(Rc::clone(&o)), &mut [])?;
+        ctx.invoke(&crate::reflect::Callee::Method(Rc::clone(&w.class), PhpStr::from("__construct")), Some(HRc::clone(&o)), &mut [])?;
     }
     Ok(Some(o))
 }
 
 /// call_method_if_exists: the method's result, None when the object has
 /// no such public method (and no __call).
-fn call(ctx: &mut dyn Ctx, o: &Rc<Object>, name: &str, args: &mut [Value]) -> Result<Option<Value>, Throw> {
+fn call(ctx: &mut dyn Ctx, o: &HRc<Object>, name: &str, args: &mut [Value]) -> Result<Option<Value>, Throw> {
     let public = o.class.method(name.as_bytes()).is_some_and(|m| m.visibility == Visibility::Public && !m.is_abstract);
     if !public {
         if o.class.method(b"__call").is_none() {
@@ -416,10 +417,10 @@ fn call(ctx: &mut dyn Ctx, o: &Rc<Object>, name: &str, args: &mut [Value]) -> Re
         // __call gets the arguments as an array, a reference (stream_open's
         // fourth) kept one, as PHP's trampoline copies them.
         let packed = Value::array(PhpArray::from_list(args.to_vec()));
-        let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__call")]));
+        let callable = Value::array(PhpArray::from_list(vec![Value::object(HRc::clone(o)), Value::str("__call")]));
         return ctx.call(&callable, &mut [Value::str(name), packed]).map(Some);
     }
-    let callable = Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str(name)]));
+    let callable = Value::array(PhpArray::from_list(vec![Value::object(HRc::clone(o)), Value::str(name)]));
     ctx.call(&callable, args).map(Some)
 }
 
@@ -437,7 +438,7 @@ fn to_bytes(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw> {
     }
     if let Some(o) = v.as_object() {
         if o.class.method(b"__tostring").is_some() {
-            let s = ctx.call(&Value::array(PhpArray::from_list(vec![Value::object(Rc::clone(o)), Value::str("__toString")])), &mut [])?;
+            let s = ctx.call(&Value::array(PhpArray::from_list(vec![v.clone(), Value::str("__toString")])), &mut [])?;
             return Ok(s.to_php_string().map(|s| s.as_bytes().to_vec()).unwrap_or_default());
         }
         if o.class.cast_string.is_none() && o.class.flags & crate::object::CLASS_RESOURCE == 0 {
@@ -481,10 +482,10 @@ pub fn open(ctx: &mut dyn Ctx, w: &Rc<Wrapper>, url: &str, mode: &str, options: 
 
 /// Keep a stream resource a wrapper opened, for the request's end.
 pub fn adopt(ctx: &mut dyn Ctx, resource: &Value) {
-    if let Some(o) = resource.as_object() {
+    if let Some(o) = resource.cloned_object() {
         let st = state(ctx);
         st.open.retain(|w| w.strong_count() > 0);
-        st.open.push(Rc::downgrade(o));
+        st.open.push(HRc::downgrade(&o));
     }
 }
 
@@ -493,7 +494,7 @@ pub fn adopt(ctx: &mut dyn Ctx, resource: &Value) {
 pub fn close_open(ctx: &mut dyn Ctx) -> Result<(), Throw> {
     let Some(st) = ctx.ext_data(KEY).as_mut().and_then(|s| s.downcast_mut::<State>()) else { return Ok(()) };
     let open = std::mem::take(&mut st.open);
-    for o in open.iter().filter_map(Weak::upgrade) {
+    for o in open.iter().filter_map(HWeak::upgrade) {
         free(ctx, &o, &mut [])?;
     }
     Ok(())
@@ -501,7 +502,7 @@ pub fn close_open(ctx: &mut dyn Ctx) -> Result<(), Throw> {
 
 /// A stream resource a wrapper opened goes (its last reference): closed
 /// as fclose would.
-pub fn free(ctx: &mut dyn Ctx, o: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+pub fn free(ctx: &mut dyn Ctx, o: &HRc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let Some(r) = crate::stream::resource(o) else { return Ok(Value::NULL) };
     if r.closed.replace(true) {
         return Ok(Value::NULL);
@@ -526,7 +527,7 @@ fn running(ctx: &dyn Ctx, func: &str) -> String {
 /// php_userstreamop_read: up to `count` bytes, then stream_eof asked
 /// whether that was the end. None: the read failed.
 fn op_read(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, count: usize) -> Result<Option<Vec<u8>>, Throw> {
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     let Some(v) = call(ctx, &o, "stream_read", &mut [Value::int(count as i64)])? else {
         not_implemented(ctx, func, &o, "stream_read");
         return Ok(None);
@@ -703,7 +704,7 @@ pub fn write(ctx: &mut dyn Ctx, s: &mut Stream, bytes: &[u8]) -> Result<Option<u
         return Ok(Some(0));
     }
     let func = running(ctx, "");
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     if user(s).dir {
         ctx.notice(&format!("{func}(): Stream is not writable"));
         return Ok(None);
@@ -754,7 +755,7 @@ pub fn write(ctx: &mut dyn Ctx, s: &mut Stream, bytes: &[u8]) -> Result<Option<u
 /// php_userstreamop_seek: stream_seek, then stream_tell for where it
 /// went. Ok(None) when stream_seek is missing.
 fn op_seek(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, offset: i64, whence: i64) -> Result<Option<bool>, Throw> {
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     let Some(moved) = call(ctx, &o, "stream_seek", &mut [Value::int(offset), Value::int(whence)])? else {
         user(s).no_seek = true;
         return Ok(None);
@@ -782,7 +783,7 @@ pub fn seek(ctx: &mut dyn Ctx, s: &mut Stream, offset: i64, whence: i64) -> Resu
     let func = running(ctx, "");
     if user(s).dir {
         // rewinddir.
-        let o = Rc::clone(&user(s).object);
+        let o = HRc::clone(&user(s).object);
         call(ctx, &o, "dir_rewinddir", &mut [])?;
         return Ok(true);
     }
@@ -840,7 +841,7 @@ pub fn at_end(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<bool, Throw> {
         return Ok(false);
     }
     if !s.eof {
-        let o = Rc::clone(&user(s).object);
+        let o = HRc::clone(&user(s).object);
         match call(ctx, &o, "stream_eof", &mut [])?.and_then(|v| v.as_bool()) {
             Some(b) => s.eof = b,
             None => {
@@ -859,7 +860,7 @@ pub fn flush(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<bool, Throw> {
         return Ok(false);
     }
     user(s).written = false;
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     Ok(call(ctx, &o, "stream_flush", &mut [])?.is_some_and(|v| v.to_bool()))
 }
 
@@ -873,7 +874,7 @@ pub fn close(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<(), Throw> {
         flush(ctx, s)?;
     }
     let u = user(s);
-    let (o, method) = (Rc::clone(&u.object), if u.dir { "dir_closedir" } else { "stream_close" });
+    let (o, method) = (HRc::clone(&u.object), if u.dir { "dir_closedir" } else { "stream_close" });
     let r = call(ctx, &o, method, &mut []);
     s.target = Target::Memory(Vec::new());
     s.buffer.clear();
@@ -884,7 +885,7 @@ pub fn close(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<(), Throw> {
 /// gives none.
 pub fn stat(ctx: &mut dyn Ctx, func: &str, s: &mut Stream) -> Result<Option<Stat>, Throw> {
     let func = running(ctx, func);
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     Ok(match call(ctx, &o, "stream_stat", &mut [])? {
         Some(v) if v.is_array() => Some(Stat::from_array(v.as_array().expect("an array"))),
         Some(_) => None,
@@ -898,7 +899,7 @@ pub fn stat(ctx: &mut dyn Ctx, func: &str, s: &mut Stream) -> Result<Option<Stat
 /// ftruncate: whether the wrapper can (it has stream_truncate), and
 /// whether it did.
 pub fn truncate(ctx: &mut dyn Ctx, s: &mut Stream, size: i64) -> Result<Option<bool>, Throw> {
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     let public = o.class.method(b"stream_truncate").is_some_and(|m| m.visibility == Visibility::Public);
     if !public && o.class.method(b"__call").is_none() {
         return Ok(None);
@@ -920,7 +921,7 @@ pub fn truncate(ctx: &mut dyn Ctx, s: &mut Stream, size: i64) -> Result<Option<b
 /// flock (`operation`: LOCK_SH 1, LOCK_EX 2, LOCK_UN 3, LOCK_NB 4 added):
 /// stream_lock's answer; operation 0 only asks whether locking works.
 pub fn lock(ctx: &mut dyn Ctx, s: &mut Stream, operation: i64) -> Result<bool, Throw> {
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     match call(ctx, &o, "stream_lock", &mut [Value::int(operation)])? {
         Some(v) if v.is_bool() => Ok(v.as_bool().expect("a bool")),
         Some(_) => Ok(false),
@@ -938,7 +939,7 @@ pub fn lock(ctx: &mut dyn Ctx, s: &mut Stream, operation: i64) -> Result<bool, T
 /// OPTION_WRITE_BUFFER): stream_set_option's answer.
 pub fn set_option(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, option: i64, arg1: Value, arg2: Option<i64>) -> Result<bool, Throw> {
     let func = running(ctx, func);
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     let arg2 = match option {
         OPTION_READ_BUFFER | OPTION_WRITE_BUFFER => Value::int(arg2.unwrap_or(BUFSIZ)),
         _ => arg2.map_or(Value::NULL, Value::int),
@@ -955,7 +956,7 @@ pub fn set_option(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, option: i64, ar
 /// readdir: dir_readdir's next name (cut to 255 bytes, as a dirent
 /// holds it); None at the end.
 pub fn readdir(ctx: &mut dyn Ctx, s: &mut Stream) -> Result<Option<Vec<u8>>, Throw> {
-    let o = Rc::clone(&user(s).object);
+    let o = HRc::clone(&user(s).object);
     match call(ctx, &o, "dir_readdir", &mut [])? {
         Some(v) if v.is_bool() => Ok(None),
         Some(v) => {
@@ -1037,8 +1038,8 @@ pub fn dir_options(recursive: bool) -> i64 {
 /// the stream resource stream_cast hands over, which is what is waited
 /// on; None (warned of) when it gives none. `this` is the stream's own
 /// resource, which it must not give back.
-pub fn cast(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, this: &Rc<Object>) -> Result<Option<Value>, Throw> {
-    let o = Rc::clone(&user(s).object);
+pub fn cast(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, this: &HRc<Object>) -> Result<Option<Value>, Throw> {
+    let o = HRc::clone(&user(s).object);
     let Some(v) = call(ctx, &o, "stream_cast", &mut [Value::int(3)])? else {
         not_implemented(ctx, func, &o, "stream_cast");
         return Ok(None);
@@ -1048,7 +1049,7 @@ pub fn cast(ctx: &mut dyn Ctx, func: &str, s: &mut Stream, this: &Rc<Object>) ->
     }
     match crate::stream::resource_of(&v) {
         Some(r) if crate::stream::resource(&r).is_some_and(|r| r.kind == "stream") => {
-            if Rc::ptr_eq(&r, this) {
+            if HRc::ptr_eq(&r, this) {
                 ctx.warn(&format!("{func}(): {}::stream_cast must not return itself", class_name(&o)));
                 return Ok(None);
             }

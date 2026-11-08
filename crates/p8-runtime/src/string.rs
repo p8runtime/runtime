@@ -5,7 +5,8 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::ops::Deref;
-use std::rc::Rc;
+// (#391: a string's handle is the one heap pointer type, typed.)
+use crate::heap::HRc as Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -89,7 +90,6 @@ struct Pool {
 }
 
 static POOL: Mutex<Option<Pool>> = Mutex::new(None);
-
 /// What the pool may hold, in bytes (PHP's opcache.interned_strings_buffer
 /// is 8 MB by default, for names as well; past it PHP too makes literals
 /// per request). Bounded so that code compiled again and again (eval,
@@ -133,6 +133,12 @@ impl IStr {
         pool.by_bytes.insert(s.as_bytes(), s);
         pool.size += size;
         Some(s)
+    }
+
+    /// Its id (one per bytes).
+    #[inline(always)]
+    pub fn id(&self) -> u32 {
+        self.id
     }
 
     /// The program-memory string of `bytes` if one was made (none is made here).
@@ -236,9 +242,59 @@ impl Bytes {
     }
 }
 
-/// A PHP string value.
+/// The bytes of the string a heap value holds, for writing, with room for
+/// `more` (zend_string_extend): in place when this is the only reference
+/// and its buffer is on the heap; else one new buffer, with room to grow,
+/// holding a copy. On the untyped handle, so that a value's string is
+/// written where it is (#391).
+pub(crate) fn writable_heap(rc: &mut std::rc::Rc<crate::heap::Heap>, more: usize) -> &mut Vec<u8> {
+    use crate::heap::Heap;
+    let heap = match &**rc {
+        Heap::Str(s) => matches!(s.bytes, Bytes::Heap(_)),
+        _ => unreachable!("a string's handle"),
+    };
+    match std::rc::Rc::get_mut(rc) {
+        Some(_) if heap => {}
+        Some(Heap::Str(inner)) => {
+            let old = inner.bytes.as_slice();
+            let mut v = Vec::with_capacity(grown(old.len(), more));
+            v.extend_from_slice(old);
+            inner.bytes = Bytes::Heap(v);
+        }
+        Some(_) => unreachable!("a string's handle"),
+        None => {
+            let Heap::Str(s) = &**rc else { unreachable!("a string's handle") };
+            let old = s.as_bytes();
+            let mut v = Vec::with_capacity(grown(old.len(), more));
+            v.extend_from_slice(old);
+            *rc = std::rc::Rc::new(Heap::Str(Inner::of(Bytes::Heap(v))));
+        }
+    }
+    let Some(Heap::Str(inner)) = std::rc::Rc::get_mut(rc) else { unreachable!("unshared above") };
+    *inner.hash.get_mut() = 0;
+    match &mut inner.bytes {
+        Bytes::Heap(v) => v,
+        Bytes::Inline { .. } => unreachable!("moved to the heap above"),
+    }
+}
+
+/// A PHP string value: the one heap pointer type (#391), holding a string.
 #[derive(Clone)]
 pub struct PhpStr(Rc<Inner>);
+
+impl PhpStr {
+    /// The untyped heap handle (a value holds a string as this).
+    #[inline(always)]
+    pub(crate) fn into_heap(self) -> std::rc::Rc<crate::heap::Heap> {
+        Rc::into_heap(self.0)
+    }
+
+    /// A string's handle from a heap value known to hold one.
+    #[inline(always)]
+    pub(crate) fn from_heap(h: std::rc::Rc<crate::heap::Heap>) -> Result<PhpStr, std::rc::Rc<crate::heap::Heap>> {
+        Rc::from_heap(h).map(PhpStr)
+    }
+}
 
 impl Default for PhpStr {
     fn default() -> Self {
@@ -414,28 +470,7 @@ impl PhpStr {
     /// in place when this is the only reference and its buffer is on the
     /// heap; else one new buffer, with room to grow, holding a copy.
     fn writable(&mut self, more: usize) -> &mut Vec<u8> {
-        let heap = matches!(self.0.bytes, Bytes::Heap(_));
-        match Rc::get_mut(&mut self.0) {
-            Some(_) if heap => {}
-            Some(inner) => {
-                let old = inner.bytes.as_slice();
-                let mut v = Vec::with_capacity(grown(old.len(), more));
-                v.extend_from_slice(old);
-                inner.bytes = Bytes::Heap(v);
-            }
-            None => {
-                let old = self.as_bytes();
-                let mut v = Vec::with_capacity(grown(old.len(), more));
-                v.extend_from_slice(old);
-                self.0 = Rc::new(Inner::of(Bytes::Heap(v)));
-            }
-        }
-        let inner = Rc::get_mut(&mut self.0).expect("unshared above");
-        *inner.hash.get_mut() = 0;
-        match &mut inner.bytes {
-            Bytes::Heap(v) => v,
-            Bytes::Inline { .. } => unreachable!("moved to the heap above"),
-        }
+        writable_heap(Rc::heap_mut(&mut self.0), more)
     }
 
     /// Append, as `.=` does (in place when this is the only reference).

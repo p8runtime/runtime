@@ -23,7 +23,7 @@ pub struct Resource {
 }
 
 /// The resource a value is, if it is one.
-pub fn resource_of(v: &Value) -> Option<std::rc::Rc<Object>> {
+pub fn resource_of(v: &Value) -> Option<crate::heap::HRc<Object>> {
     v.deref().into_object().ok().filter(|o| o.class.flags & crate::object::CLASS_RESOURCE != 0)
 }
 

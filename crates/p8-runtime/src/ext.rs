@@ -28,7 +28,7 @@ pub enum Throw {
     Exit(i32),
     /// A thrown object (a Throwable): what `throw` throws, and what an
     /// Error becomes once the engine makes its object.
-    Object(Rc<crate::object::Object>),
+    Object(crate::heap::HRc<crate::object::Object>),
 }
 
 /// The output buffer operations (ob_*).
@@ -208,12 +208,12 @@ pub trait Ctx {
     fn why_not_callable(&mut self, v: &Value) -> Option<String>;
     /// A copy of a Closure bound to `new_this` (null: unbound) and the
     /// class scope `scope` names (None: its own).
-    fn bind_closure(&mut self, closure: &Rc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
+    fn bind_closure(&mut self, closure: &crate::heap::HRc<crate::object::Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw>;
     /// Closure::fromCallable: a Closure calling `callable`.
     fn closure_from(&mut self, callable: &Value) -> Result<Value, Throw>;
     /// A new object of class `class` (declared), its constructor not run
     /// (unserialize, json_decode's stdClass).
-    fn new_object(&mut self, class: &Rc<Class>) -> Rc<crate::object::Object>;
+    fn new_object(&mut self, class: &Rc<Class>) -> crate::heap::HRc<crate::object::Object>;
     /// The calling code's arguments (func_get_args).
     fn call_args(&self) -> Vec<Value>;
     /// The calling code's variable `name` (None: not set).
@@ -242,7 +242,7 @@ pub trait Ctx {
     /// The value of `o`'s property at `slot` as `$o->name` reads it here:
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).
-    fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
+    fn prop_value(&mut self, o: &crate::heap::HRc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
     /// A class constant's value, its code run first if it has not run yet
     /// (as `C::NAME` does); None when the class has no such constant.
     fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw>;
@@ -257,13 +257,13 @@ pub trait Ctx {
         crate::array::PhpArray::new()
     }
     /// Reflection: call it (whatever its visibility), with `this` for a method.
-    fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
+    fn invoke(&mut self, callee: &crate::reflect::Callee, this: Option<crate::heap::HRc<crate::object::Object>>, args: &mut [Value]) -> Result<Value, Throw>;
     /// `new C(...args)` as the engine makes it (the instantiation checks,
     /// computed defaults), its constructor run when `construct`.
-    fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<Rc<crate::object::Object>, Throw>;
+    fn new_instance(&mut self, class: &Rc<Class>, args: &mut [Value], construct: bool) -> Result<crate::heap::HRc<crate::object::Object>, Throw>;
     /// `new C(...args)` with the arguments placed by name (string keys)
     /// and position, as a call with named arguments does.
-    fn new_instance_named(&mut self, class: &Rc<Class>, args: &crate::array::PhpArray) -> Result<Rc<crate::object::Object>, Throw>;
+    fn new_instance_named(&mut self, class: &Rc<Class>, args: &crate::array::PhpArray) -> Result<crate::heap::HRc<crate::object::Object>, Throw>;
     /// A declaration's doc comment, attribute names and lines (reflection).
     fn reflect_meta(&mut self, subject: &crate::reflect::Subject) -> crate::reflect::Meta;
     /// The arguments of attribute `index` of a declaration, evaluated:
@@ -273,7 +273,7 @@ pub trait Ctx {
     /// object, constant-expression defaults computed (Undef: none).
     fn class_defaults(&mut self, class: &Rc<Class>) -> Result<Vec<Value>, Throw>;
     /// Reflection: a Closure of it (bound to `this` for a method).
-    fn closure_of(&mut self, callee: &crate::reflect::Callee, this: Option<Rc<crate::object::Object>>) -> Result<Value, Throw>;
+    fn closure_of(&mut self, callee: &crate::reflect::Callee, this: Option<crate::heap::HRc<crate::object::Object>>) -> Result<Value, Throw>;
     /// The class `static::` names in the running code.
     fn called_class(&self) -> Option<Rc<Class>>;
     /// The class a static builtin method (an enum's cases()) was called on.
@@ -323,7 +323,7 @@ pub trait Ctx {
     fn iterate(&mut self, v: &Value) -> Result<Vec<(Value, Value)>, Throw>;
     /// A Generator method (`op`: current, key, next, send, valid, rewind,
     /// getreturn, throw).
-    fn generator(&mut self, generator: &Rc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
+    fn generator(&mut self, generator: &crate::heap::HRc<crate::object::Object>, op: &str, arg: Value) -> Result<Value, Throw>;
 
     /// gc_collect_cycles(): garbage cycles freed; how many values they held.
     fn gc_collect(&mut self) -> Result<i64, Throw> {
@@ -370,14 +370,14 @@ pub trait Ctx {
 
     /// Fibers: start, resume, throw, suspend, getCurrent (op), for
     /// `fiber` (None for the static ones).
-    fn fiber_op(&mut self, fiber: Option<&Rc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
+    fn fiber_op(&mut self, fiber: Option<&crate::heap::HRc<crate::object::Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
         let _ = (fiber, op, args);
         Err(self.throw("Error", "Fibers are not supported here".into()))
     }
 
     /// Lazy objects (ReflectionClass::newLazyGhost and the rest): `obj`, or
     /// a new instance of `class`, made lazy.
-    fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<Rc<crate::object::Object>>, initializer: Value, options: i64, proxy: bool) -> Result<Rc<crate::object::Object>, Throw> {
+    fn lazy_make(&mut self, class: &Rc<Class>, obj: Option<crate::heap::HRc<crate::object::Object>>, initializer: Value, options: i64, proxy: bool) -> Result<crate::heap::HRc<crate::object::Object>, Throw> {
         let _ = (class, obj, initializer, options, proxy);
         Err(self.throw("Error", "Lazy objects are not supported here".into()))
     }
@@ -385,24 +385,24 @@ pub trait Ctx {
     /// clone($object, $withProperties) (ZEND_FUNCTION(clone)): a clone of
     /// `object`, its __clone run, then each of `with`'s properties
     /// assigned to it as the calling code would assign it.
-    fn clone_with(&mut self, object: &Rc<crate::object::Object>, with: &crate::array::PhpArray) -> Result<Value, Throw> {
+    fn clone_with(&mut self, object: &crate::heap::HRc<crate::object::Object>, with: &crate::array::PhpArray) -> Result<Value, Throw> {
         let _ = (object, with);
         Err(self.throw("Error", "clone() is not supported here".into()))
     }
 
     /// A lazy object initialized: the object its accesses go to.
-    fn lazy_initialize(&mut self, o: &Rc<crate::object::Object>) -> Result<Rc<crate::object::Object>, Throw> {
-        Ok(Rc::clone(o))
+    fn lazy_initialize(&mut self, o: &crate::heap::HRc<crate::object::Object>) -> Result<crate::heap::HRc<crate::object::Object>, Throw> {
+        Ok(crate::heap::HRc::clone(o))
     }
 
     /// A lazy object marked initialized (lazy properties take defaults).
-    fn lazy_mark_initialized(&mut self, o: &Rc<crate::object::Object>) -> Result<(), Throw> {
+    fn lazy_mark_initialized(&mut self, o: &crate::heap::HRc<crate::object::Object>) -> Result<(), Throw> {
         let _ = o;
         Ok(())
     }
 
     /// A lazy object's slot stops being lazy (skipLazyInitialization).
-    fn lazy_slot_done(&mut self, o: &Rc<crate::object::Object>, slot: usize) {
+    fn lazy_slot_done(&mut self, o: &crate::heap::HRc<crate::object::Object>, slot: usize) {
         let _ = (o, slot);
     }
 }

@@ -17,6 +17,7 @@
 use crate::kinds::*;
 use crate::vm::*;
 use p8_runtime::array::{Key, PhpArray};
+use p8_runtime::heap::HRc;
 use p8_runtime::object::{Object, Slot, Visibility};
 use p8_runtime::ops::{self as rops, BinOp};
 use p8_runtime::string::PhpStr;
@@ -570,7 +571,7 @@ pub fn assign_dim<'p, const KEY: u8, const VAL: u8, const RES: u8>(st: &mut Stat
 pub fn fetch_prop<'p, const OBJ: u8>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, i: &Insn<'p>, pc: u32) -> u32 {
     let cache = &f.caches[i.imm as usize];
     let v = {
-        let o: &Rc<Object> = if OBJ == THIS {
+        let o: &Object = if OBJ == THIS {
             match &st.this {
                 Some(o) => o,
                 None => return fault(st, "Using $this when not in object context"),
@@ -613,7 +614,7 @@ pub fn assign_prop<'p, const OBJ: u8, const VAL: u8, const MODE: u8, const RES: 
     let v = if MODE == TAKE { take(st, f, w, i.b, pc) } else { rd::<VAL>(st, f, w, i.k0, i.b, pc) };
     let cache = &f.caches[i.imm as usize];
     let keep = {
-        let o: &Rc<Object> = if OBJ == THIS {
+        let o: &Object = if OBJ == THIS {
             match &st.this {
                 Some(o) => o,
                 None => return fault(st, "Using $this when not in object context"),
@@ -717,17 +718,19 @@ pub fn send_var_method<'p>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, 
 pub fn method_call<'p, const OBJ: u8, const RES: u8>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, i: &Insn<'p>, pc: u32) -> u32 {
     let cache = &f.caches[i.imm as usize];
     let (func, this) = {
-        let o: &Rc<Object> = if OBJ == THIS {
+        // (The handle the callee's frame keeps: one count, as before.)
+        let this: HRc<Object> = if OBJ == THIS {
             match &st.this {
-                Some(o) => o,
+                Some(o) => HRc::clone(o),
                 None => return fault(st, "Using $this when not in object context"),
             }
         } else {
-            match w[usize::from(i.b)].as_object() {
+            match w[usize::from(i.b)].cloned_object() {
                 Some(o) => o,
                 None => return fault_kind(st, "method call", &w[usize::from(i.b)]),
             }
         };
+        let o: &Object = &this;
         let func = if cache.class.get() == Rc::as_ptr(&o.class) as usize {
             cache.slot.get()
         } else {
@@ -736,7 +739,7 @@ pub fn method_call<'p, const OBJ: u8, const RES: u8>(st: &mut State<'p>, w: &mut
                 Err(e) => return fault(st, e),
             }
         };
-        (func, Rc::clone(o))
+        (func, this)
     };
     let callee = &st.prog.funcs[func as usize];
     if u16::from(i.d) < callee.required || u16::from(i.d) > callee.nparams {

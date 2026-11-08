@@ -5,6 +5,7 @@
 //! straight-line handler gets the frame's window as a plain argument.
 
 use crate::link::Linked;
+use p8_runtime::heap::HRc;
 use p8_runtime::object::{Ids, Object};
 use p8_runtime::value::Value;
 use std::cell::Cell;
@@ -85,14 +86,14 @@ pub struct FrameRec {
     pub pc: u32,
     /// The caller's result register (absolute), or NO_RET.
     pub ret: u32,
-    pub this: Option<Rc<Object>>,
+    pub this: Option<HRc<Object>>,
 }
 
 pub const NO_RET: u32 = u32::MAX;
 
 pub enum Event {
     None,
-    Call { func: u32, args: u8, argc: u8, dst: u8, used: bool, this: Option<Rc<Object>> },
+    Call { func: u32, args: u8, argc: u8, dst: u8, used: bool, this: Option<HRc<Object>> },
     Return(Value),
     Fault(String),
 }
@@ -101,7 +102,7 @@ pub struct State<'p> {
     pub prog: &'p Linked<'p>,
     pub frames: Vec<FrameRec>,
     /// The running frame's `$this`.
-    pub this: Option<Rc<Object>>,
+    pub this: Option<HRc<Object>>,
     pub event: Event,
     pub ids: Rc<Ids>,
     pub out: Vec<u8>,

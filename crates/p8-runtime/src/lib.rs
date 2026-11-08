@@ -11,6 +11,7 @@ pub mod fast;
 pub mod frozen;
 pub mod gc;
 pub mod glob;
+pub mod heap;
 pub mod info;
 pub mod ini;
 pub mod lent;

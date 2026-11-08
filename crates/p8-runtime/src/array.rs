@@ -329,7 +329,7 @@ impl Key {
 #[inline]
 pub(crate) fn dup(v: &Value) -> Value {
     match v.as_reference() {
-        Some(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
+        Some(cell) if v.heap_count() == 1 => cell.borrow().clone(),
         _ => v.clone(),
     }
 }
