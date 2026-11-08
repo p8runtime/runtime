@@ -236,7 +236,11 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, |v| {
+    // (A named function, not a closure: the closure was compiled out of
+    // line, and the value came back through memory, in the loop's hottest
+    // property read.)
+    #[inline(always)]
+    fn value(v: &Value) -> Option<Value> {
         if v.is_undef() {
             None
         } else if let Some(cell) = v.as_reference() {
@@ -244,7 +248,8 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
         } else {
             Some(v.clone())
         }
-    })
+    }
+    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, value)
 }
 
 /// The declared slot a property write the cache answers goes to: as for

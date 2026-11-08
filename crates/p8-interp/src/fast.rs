@@ -98,12 +98,13 @@ impl Context<'_> {
                             pc = next;
                             code = &clo!().code.insns[..];
                         }
-                        Arm::Pending { next, at } => pending_at!(next, at),
+                        Arm::Pending(next) => pending_at!(next, pc),
                         Arm::Switch(next) => {
                             pc = next;
                             continue 'frame;
                         }
                         Arm::Slow => slow!(),
+                        Arm::Fault => return Err(self.arm_throw.take().expect("the arm's throw")),
                     }
                 };
             }
@@ -151,12 +152,13 @@ impl Context<'_> {
                             code = &clo!().code.insns[..];
                             w = window!();
                         }
-                        Arm::Pending { next, at } => pending_at!(next, at),
+                        Arm::Pending(next) => pending_at!(next, pc),
                         Arm::Switch(next) => {
                             pc = next;
                             continue 'frame;
                         }
                         Arm::Slow => slow!(),
+                        Arm::Fault => return Err(self.arm_throw.take().expect("the arm's throw")),
                     }
                 };
             }
@@ -604,13 +606,13 @@ impl Context<'_> {
                     // frame pushed here. A builtin it resolved: frameless when
                     // it can be (the frame and window kept), else called out of
                     // line. Anything else (a miss, a generator) is `step`'s.
-                    Op::Call => arm_regs!(self.arm_call(regs, pc, *insn)?),
+                    Op::Call => arm_regs!(self.arm_call(regs, pc, *insn)),
                     // `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI
                     // reads its arguments from the variables (or constants)
                     // themselves, framelessly, and the Moves into the
                     // argument registers are not run. Anything else runs the
                     // first Move as `Op::Move` does, and goes on with the next.
-                    Op::CallRegs => arm_regs!(self.arm_call_regs(regs, pc, *insn)?),
+                    Op::CallRegs => arm_regs!(self.arm_call_regs(regs, pc, *insn)),
                     // A user method the call site's cache names for this class
                     // and scope, on an object, with its required arguments, and
                     // no interrupt pending: anything else is `step`'s.
@@ -629,8 +631,8 @@ impl Context<'_> {
                     // A return to the calling frame. The main frame's return
                     // ends the run, and the bottom frame of this `execute`
                     // returns to the builtin that called it: `step` does those.
-                    Op::Return => arm_regs!(self.arm_return(regs, *insn, false)?),
-                    Op::ReturnNull => arm_regs!(self.arm_return(regs, *insn, true)?),
+                    Op::Return => arm_regs!(self.arm_return(regs, *insn, false)),
+                    Op::ReturnNull => arm_regs!(self.arm_return(regs, *insn, true)),
                 }
             }
         }
@@ -651,19 +653,25 @@ pub(crate) enum Flow {
     Done,
 }
 
-/// What an out-of-line arm (`arms.rs`) leaves the loop to do.
+/// What an out-of-line arm (`arms.rs`) leaves the loop to do. Two words,
+/// so that it comes back in registers: a `Result<_, Throw>` came back
+/// through memory, four loads per call and return.
 pub(crate) enum Arm {
     /// Go on at this pc, the frame as it was.
     Go(usize),
-    /// Go on at `next`, once the destructors due have run (raised at the
-    /// instruction `at`).
-    Pending { next: usize, at: usize },
+    /// Go on at this pc, once the destructors due have run (raised at the
+    /// instruction the arm ran).
+    Pending(usize),
     /// The frame changed (a call, a return): go on at this pc of the frame
     /// now on top.
     Switch(usize),
     /// The instruction is `step`'s.
     Slow,
+    /// The arm raised: the Throw waits in `Context::arm_throw`.
+    Fault,
 }
+
+const _: () = assert!(std::mem::size_of::<Arm>() == 16, "an arm's result comes back in two registers");
 
 /// Whether the first `argc` registers of `w` are each plainly of their
 /// parameter's declared type (`TypeDecl::quick`, an object's class test

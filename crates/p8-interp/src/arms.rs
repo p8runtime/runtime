@@ -38,10 +38,18 @@ fn window(regs: &mut [Value], base: usize) -> &mut [Value; WINDOW] {
 /// says whether its write may have left a destructor due.
 #[inline(always)]
 fn done(ids: &Ids, pc: usize, released: bool) -> Arm {
-    if released && ids.has_pending() { Arm::Pending { next: pc + 1, at: pc } } else { Arm::Go(pc + 1) }
+    if released && ids.has_pending() { Arm::Pending(pc + 1) } else { Arm::Go(pc + 1) }
 }
 
 impl Context<'_> {
+    /// The arm raised `t`: parked for the loop to return (`Arm::Fault`).
+    #[cold]
+    #[inline(never)]
+    fn fault(&mut self, t: Throw) -> Arm {
+        self.arm_throw = Some(t);
+        Arm::Fault
+    }
+
     /// `$o->name = v` the name's cache entry answers, on a property with
     /// nothing to check (`plain_slot`): the slots borrowed once, nothing
     /// cloned but the value, and that once when the result is freed next
@@ -97,7 +105,7 @@ impl Context<'_> {
         }
         // (The slot's old value may have been the last holder.)
         if self.ids.has_pending() {
-            return Arm::Pending { next, at: pc };
+            return Arm::Pending(next);
         }
         Arm::Go(next)
     }
@@ -276,7 +284,7 @@ impl Context<'_> {
         }
         let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), insn.op == Op::IterNextKey) { pc + 1 } else { imm as usize };
         if self.ids.has_pending() {
-            return Arm::Pending { next, at: pc };
+            return Arm::Pending(next);
         }
         Arm::Go(next)
     }
@@ -354,7 +362,7 @@ impl Context<'_> {
     /// left as they are. A fault, a diagnostic or a destructor due goes
     /// out of line.
     #[inline(always)]
-    fn frameless(&mut self, regs: &mut Vec<Value>, i: usize, run: Imp, (start, n, dst, temps): (usize, usize, usize, bool), at: usize) -> Result<Arm, Throw> {
+    fn frameless(&mut self, regs: &mut Vec<Value>, i: usize, run: Imp, (start, n, dst, temps): (usize, usize, usize, bool), at: usize) -> Arm {
         self.pc = at + 1;
         let base = self.frames.top().base as usize;
         let w = window(regs, base);
@@ -369,11 +377,14 @@ impl Context<'_> {
                 // (A tag test, not the out-of-line drop an assignment calls.)
                 let _ = put(&mut w[dst], v);
                 if self.ids.has_pending() {
-                    return Ok(Arm::Pending { next: at + 1, at });
+                    return Arm::Pending(at + 1);
                 }
-                Ok(Arm::Go(at + 1))
+                Arm::Go(at + 1)
             }
-            r => Ok(Arm::Switch(self.frameless_tail(regs, at, i, r, (base + start, n, base + dst, temps))?)),
+            r => match self.frameless_tail(regs, at, i, r, (base + start, n, base + dst, temps)) {
+                Ok(next) => Arm::Switch(next),
+                Err(t) => self.fault(t),
+            },
         }
     }
 
@@ -383,7 +394,7 @@ impl Context<'_> {
     /// kept), else called out of line. Anything else (a miss, a generator)
     /// is `step`'s.
     #[inline(never)]
-    pub(crate) fn arm_call(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Result<Arm, Throw> {
+    pub(crate) fn arm_call(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Arm {
         let (args, n, dst, imm) = (insn.a, insn.b, insn.c, insn.imm);
         let top = self.frames.top();
         let base = top.base as usize;
@@ -391,14 +402,14 @@ impl Context<'_> {
             Some(&Callee::User(target)) => {
                 let target = &self.closures[target as usize];
                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                    return Ok(Arm::Slow);
+                    return Arm::Slow;
                 }
                 if let Some(caller) = self.frames.last_mut() {
                     caller.pc = (pc + 1) as u32;
                 }
                 self.frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
                 enter(&mut self.frames, regs);
-                Ok(Arm::Switch(0))
+                Arm::Switch(0)
             }
             Some(&Callee::Builtin(i)) => {
                 // Frameless when the builtin can be and its arguments need
@@ -412,10 +423,13 @@ impl Context<'_> {
                 {
                     self.frameless(regs, i, run, (start, n, rx(dst), true), pc)
                 } else {
-                    Ok(Arm::Switch(self.builtin_call(regs, pc, base, i, (Reg::from(args), n as u8, Reg::from(dst)))?))
+                    match self.builtin_call(regs, pc, base, i, (Reg::from(args), n as u8, Reg::from(dst))) {
+                        Ok(next) => Arm::Switch(next),
+                        Err(t) => self.fault(t),
+                    }
                 }
             }
-            _ => Ok(Arm::Slow),
+            _ => Arm::Slow,
         }
     }
 
@@ -425,7 +439,7 @@ impl Context<'_> {
     /// else runs the first Move as `Op::Move` does, and goes on with the
     /// next.
     #[inline(never)]
-    pub(crate) fn arm_call_regs(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Result<Arm, Throw> {
+    pub(crate) fn arm_call_regs(&mut self, regs: &mut Vec<Value>, pc: usize, insn: Insn) -> Arm {
         let (start, n, c, imm) = (rx(insn.a), rx(insn.b), insn.c, insn.imm);
         let top = self.frames.top();
         let base = top.base as usize;
@@ -440,12 +454,8 @@ impl Context<'_> {
             }
         }
         let w = window(regs, base);
-        let Some(v) = copied(&w[start]) else { return Ok(Arm::Slow) };
-        let released = put(&mut w[rk((imm >> 16) as usize)], v);
-        if released && self.ids.has_pending() {
-            return Ok(Arm::Pending { next: pc + 1, at: pc });
-        }
-        Ok(Arm::Go(pc + 1))
+        let Some(v) = copied(&w[start]) else { return Arm::Slow };
+        done(&self.ids, pc, put(&mut w[rk((imm >> 16) as usize)], v))
     }
 
     /// A user method the call site's cache names for this class and scope,
@@ -576,22 +586,25 @@ impl Context<'_> {
     /// return ends the run, and the bottom frame of this `execute` returns
     /// to the builtin that called it: `step` does those.
     #[inline(never)]
-    pub(crate) fn arm_return(&mut self, regs: &mut Vec<Value>, insn: Insn, null: bool) -> Result<Arm, Throw> {
+    pub(crate) fn arm_return(&mut self, regs: &mut Vec<Value>, insn: Insn, null: bool) -> Arm {
         if self.frames.len() == self.frames.floor + 1 {
-            return Ok(Arm::Slow);
+            return Arm::Slow;
         }
         let value = if null {
             Value::NULL
         } else {
             let top = self.frames.top();
-            let Some(value) = returned(regs, top, top.base as usize, Reg::from(insn.a)) else { return Ok(Arm::Slow) };
+            let Some(value) = returned(regs, top, top.base as usize, Reg::from(insn.a)) else { return Arm::Slow };
             value
         };
         leave(&mut self.frames, regs, value);
-        let mut pc = self.frames.top().pc as usize;
+        let pc = self.frames.top().pc as usize;
         if self.ids.has_pending() {
-            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+            return match self.after_errors(regs, pc, pc.saturating_sub(1)) {
+                Ok(next) => Arm::Switch(next),
+                Err(t) => self.fault(t),
+            };
         }
-        Ok(Arm::Switch(pc))
+        Arm::Switch(pc)
     }
 }

@@ -396,6 +396,7 @@ impl Isolate {
             result_reg: 0,
             header_throw: None,
             fault: None,
+            arm_throw: None,
             deferred_write: None,
             fibers: Vec::new(),
             fiber_suspended: None,
@@ -587,6 +588,10 @@ pub struct Context<'i> {
     /// What a builtin on the borrowed ABI raised (`Ctx::fault`), until
     /// its call takes it when the builtin returns `Err(Fault)`.
     pub(crate) fault: Option<Throw>,
+    /// What an out-of-line arm of the loop raised (`Arm::Fault`): kept
+    /// here so that the arm's result fits two registers; the loop takes it
+    /// as it returns.
+    pub(crate) arm_throw: Option<Throw>,
     /// A write held back until the error handler has run (`$undef op= v`).
     pub(crate) deferred_write: Option<(usize, Value)>,
     /// The fibers running, innermost last.
