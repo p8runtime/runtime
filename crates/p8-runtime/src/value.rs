@@ -8,9 +8,9 @@
 //! the compiler (not a grep) keeps it that way.
 //!
 //! #391 (prototype): every plain payload is one word of one type (`i64`:
-//! an int, a float's bits, a bool, a program-memory string's id), under
-//! one variant, `Plain`, so copying a plain value is one arm that copies
-//! two words, whatever kind it is.
+//! an int, a float's bits, a bool, a program-memory string's id), so
+//! copying a plain value is a copy of two words whatever its kind, and
+//! the value is a scalar pair (two registers) to the compiler.
 
 use crate::array::PhpArray;
 use crate::object::Object;
@@ -32,34 +32,32 @@ pub struct Value(Repr);
 /// (one tag test inline; PHP's `zval_ptr_dtor_nogc`).
 type Handle<T> = ManuallyDrop<T>;
 
-/// A plain value's kind: the tag word of `Repr::Plain`. Its spare values
-/// (6 and up) are the tags of the heap variants (rustc's niche), so the
-/// tag is one word at offset 0 and `is_plain` is `tag < 6`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The representation: a tag word and one payload word in every variant,
+/// the plain ones first (tags 0..=5), each holding an `i64` (an int, a
+/// float's bits, a bool, a program-memory string's id), the ones holding
+/// memory after. One word in every variant at the same offset is what
+/// makes the value a scalar pair to rustc: passed and returned in two
+/// registers, never through a stack slot (#391's layout experiment: an
+/// enum whose variants hold two fields, or a niche-encoded one with a
+/// pointer variant, is an aggregate, returned through memory).
+#[derive(Debug)]
 #[repr(u64)]
-enum PTag {
-    Null = 0,
-    Bool = 1,
-    Int = 2,
-    Float = 3,
+enum Repr {
+    Null(i64) = 0,
+    Bool(i64) = 1,
+    Int(i64) = 2,
+    Float(i64) = 3,
     /// A variable never assigned (only in registers; reads warn and give null).
-    Undef = 4,
+    Undef(i64) = 4,
     /// A string in program memory (a compiled literal), by its id
     /// ([`IStr::by_id`]): no count, nothing to release.
-    IStr = 5,
-}
-
-/// The representation: one plain variant whose payload is one word of
-/// one type, and the heap variants after it.
-#[derive(Debug)]
-enum Repr {
-    Plain(PTag, i64),
-    Str(Handle<PhpStr>),
-    Array(Handle<Rc<PhpArray>>),
+    IStr(i64) = 5,
+    Str(Handle<PhpStr>) = 6,
+    Array(Handle<Rc<PhpArray>>) = 7,
     /// A PHP reference: the shared cell `$a = &$b` makes.
-    Ref(Handle<Rc<RefCell<Value>>>),
+    Ref(Handle<Rc<RefCell<Value>>>) = 8,
     /// An object: a shared handle (copying the value copies the handle).
-    Object(Handle<Rc<Object>>),
+    Object(Handle<Rc<Object>>) = 9,
 }
 
 // The layout the engine is tuned for: a zval's 16 bytes, and `Option<Value>`
@@ -121,7 +119,7 @@ impl Drop for Value {
     }
 }
 
-const UNDEF_REPR: Repr = Repr::Plain(PTag::Undef, 0);
+const UNDEF_REPR: Repr = Repr::Undef(0);
 
 /// A value holding memory is let go of: the count's decrement, and the
 /// free when this was the last handle (PHP's `i_zval_ptr_dtor`).
@@ -132,7 +130,7 @@ fn release_heap(r: &mut Repr) {
         Repr::Array(a) => Rc::strong_count(a),
         Repr::Ref(c) => Rc::strong_count(c),
         Repr::Object(o) => Rc::strong_count(o),
-        Repr::Plain(..) => return,
+        _ => return,
     };
     if count == 1 {
         free_last(mem::replace(r, UNDEF_REPR));
@@ -150,7 +148,7 @@ fn release_repr(r: Repr) -> bool {
         Repr::Array(a) => Rc::strong_count(a),
         Repr::Ref(c) => Rc::strong_count(c),
         Repr::Object(o) => Rc::strong_count(o),
-        Repr::Plain(..) => return false,
+        _ => return false,
     };
     if count == 1 {
         // A string's free cannot run a destructor.
@@ -173,7 +171,7 @@ fn free_last(r: Repr) {
         Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
         Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
         Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
-        Repr::Plain(..) => {}
+        _ => {}
     }
 }
 
@@ -185,7 +183,7 @@ fn drop_shared(r: Repr) {
         Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
         Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
         Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
-        Repr::Plain(..) => {}
+        _ => {}
     }
 }
 
@@ -202,51 +200,76 @@ impl Value {
     #[inline(always)]
     pub fn same_handle(&self, other: &Value) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Plain(a, x), Repr::Plain(b, y)) => a == b && x == y,
             (Repr::Str(a), Repr::Str(b)) => PhpStr::ptr_eq(a, b),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b),
             (Repr::Ref(a), Repr::Ref(b)) => Rc::ptr_eq(a, b),
             (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
-            _ => false,
+            _ => match (self.plain_word(), other.plain_word()) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
+        }
+    }
+
+    /// A plain value's tag and payload word.
+    #[inline(always)]
+    fn plain_word(&self) -> Option<(Kind, i64)> {
+        match self.0 {
+            Repr::Null(w) => Some((Kind::Null, w)),
+            Repr::Bool(w) => Some((Kind::Bool, w)),
+            Repr::Int(w) => Some((Kind::Int, w)),
+            Repr::Float(w) => Some((Kind::Float, w)),
+            Repr::Undef(w) => Some((Kind::Undef, w)),
+            Repr::IStr(w) => Some((Kind::Str, w)),
+            _ => None,
         }
     }
 
     #[inline(always)]
     fn view(&self) -> V<'_> {
         match &self.0 {
-            Repr::Plain(t, w) => match t {
-                PTag::Null => V::Null,
-                PTag::Bool => V::Bool(*w != 0),
-                PTag::Int => V::Int(*w),
-                PTag::Float => V::Float(f64::from_bits(*w as u64)),
-                PTag::Undef => V::Undef,
-                PTag::IStr => V::IStr(IStr::by_id(*w as u32)),
-            },
+            Repr::Null(_) => V::Null,
+            Repr::Bool(w) => V::Bool(*w != 0),
+            Repr::Int(w) => V::Int(*w),
+            Repr::Float(w) => V::Float(f64::from_bits(*w as u64)),
+            Repr::Undef(_) => V::Undef,
+            Repr::IStr(w) => V::IStr(IStr::by_id(*w as u32)),
             Repr::Str(s) => V::Str(s),
             Repr::Array(a) => V::Array(a),
             Repr::Ref(c) => V::Ref(c),
             Repr::Object(o) => V::Object(o),
         }
     }
-
-    #[inline(always)]
-    const fn plain(t: PTag, w: i64) -> Value {
-        Value(Repr::Plain(t, w))
-    }
 }
 
 impl Clone for Value {
-    /// Inline: copying a value is on every register move. A plain value is
-    /// one arm, whatever its kind: the tag word and the payload word.
+    /// Inline: copying a value is on every register move. The plain test
+    /// first (one compare of the tag); the plain arms then fold into a
+    /// copy of both words (every payload is an `i64`), and the heap arms
+    /// into one increment (every handle's count is first in its
+    /// allocation). Written as one match, LLVM makes a ten-entry jump
+    /// table of it (#391's layout experiment).
     #[inline(always)]
     fn clone(&self) -> Self {
-        Value(match &self.0 {
-            Repr::Plain(t, w) => Repr::Plain(*t, *w),
-            Repr::Str(s) => Repr::Str(s.clone()),
-            Repr::Array(a) => Repr::Array(a.clone()),
-            Repr::Ref(r) => Repr::Ref(r.clone()),
-            Repr::Object(o) => Repr::Object(o.clone()),
-        })
+        if self.is_plain() {
+            Value(match self.0 {
+                Repr::Null(w) => Repr::Null(w),
+                Repr::Bool(w) => Repr::Bool(w),
+                Repr::Int(w) => Repr::Int(w),
+                Repr::Float(w) => Repr::Float(w),
+                Repr::Undef(w) => Repr::Undef(w),
+                Repr::IStr(w) => Repr::IStr(w),
+                _ => UNDEF_REPR,
+            })
+        } else {
+            Value(match &self.0 {
+                Repr::Str(s) => Repr::Str(s.clone()),
+                Repr::Array(a) => Repr::Array(a.clone()),
+                Repr::Ref(r) => Repr::Ref(r.clone()),
+                Repr::Object(o) => Repr::Object(o.clone()),
+                _ => UNDEF_REPR,
+            })
+        }
     }
 }
 
@@ -269,24 +292,24 @@ pub enum Kind {
 /// The accessor API: the only way code outside this module reads, writes
 /// or builds a `Value` (the representation is private).
 impl Value {
-    pub const NULL: Value = Value::plain(PTag::Null, 0);
-    pub const UNDEF: Value = Value::plain(PTag::Undef, 0);
-    pub const TRUE: Value = Value::plain(PTag::Bool, 1);
-    pub const FALSE: Value = Value::plain(PTag::Bool, 0);
+    pub const NULL: Value = Value(Repr::Null(0));
+    pub const UNDEF: Value = Value(UNDEF_REPR);
+    pub const TRUE: Value = Value(Repr::Bool(1));
+    pub const FALSE: Value = Value(Repr::Bool(0));
 
     #[inline(always)]
     pub const fn bool(b: bool) -> Value {
-        Value::plain(PTag::Bool, b as i64)
+        Value(Repr::Bool(b as i64))
     }
 
     #[inline(always)]
     pub const fn int(i: i64) -> Value {
-        Value::plain(PTag::Int, i)
+        Value(Repr::Int(i))
     }
 
     #[inline(always)]
     pub const fn float(f: f64) -> Value {
-        Value::plain(PTag::Float, f.to_bits() as i64)
+        Value(Repr::Float(f.to_bits() as i64))
     }
 
     pub fn str(s: impl Into<PhpStr>) -> Value {
@@ -297,14 +320,14 @@ impl Value {
     /// count, nothing to release.
     #[inline(always)]
     pub fn istr(s: &'static IStr) -> Value {
-        Value::plain(PTag::IStr, i64::from(s.id()))
+        Value(Repr::IStr(i64::from(s.id())))
     }
 
     /// The program-memory string this value holds, if it holds one.
     #[inline(always)]
     pub fn as_istr(&self) -> Option<&'static IStr> {
         match self.0 {
-            Repr::Plain(PTag::IStr, w) => Some(IStr::by_id(w as u32)),
+            Repr::IStr(w) => Some(IStr::by_id(w as u32)),
             _ => None,
         }
     }
@@ -333,15 +356,12 @@ impl Value {
     #[inline(always)]
     pub fn kind(&self) -> Kind {
         match self.0 {
-            Repr::Plain(t, _) => match t {
-                PTag::Null => Kind::Null,
-                PTag::Bool => Kind::Bool,
-                PTag::Int => Kind::Int,
-                PTag::Float => Kind::Float,
-                PTag::Undef => Kind::Undef,
-                PTag::IStr => Kind::Str,
-            },
-            Repr::Str(_) => Kind::Str,
+            Repr::Null(_) => Kind::Null,
+            Repr::Bool(_) => Kind::Bool,
+            Repr::Int(_) => Kind::Int,
+            Repr::Float(_) => Kind::Float,
+            Repr::Undef(_) => Kind::Undef,
+            Repr::IStr(_) | Repr::Str(_) => Kind::Str,
             Repr::Array(_) => Kind::Array,
             Repr::Ref(_) => Kind::Ref,
             Repr::Object(_) => Kind::Object,
@@ -349,53 +369,45 @@ impl Value {
     }
 
     #[inline(always)]
-    fn ptag(&self) -> Option<PTag> {
-        match self.0 {
-            Repr::Plain(t, _) => Some(t),
-            _ => None,
-        }
-    }
-
-    #[inline(always)]
     pub fn is_null(&self) -> bool {
-        self.ptag() == Some(PTag::Null)
+        matches!(self.0, Repr::Null(_))
     }
 
     #[inline(always)]
     pub fn is_undef(&self) -> bool {
-        self.ptag() == Some(PTag::Undef)
+        matches!(self.0, Repr::Undef(_))
     }
 
     /// Null or undefined: what reads as null.
     #[inline(always)]
     pub fn is_null_or_undef(&self) -> bool {
-        matches!(self.ptag(), Some(PTag::Null | PTag::Undef))
+        matches!(self.0, Repr::Null(_) | Repr::Undef(_))
     }
 
     #[inline(always)]
     pub fn is_bool(&self) -> bool {
-        self.ptag() == Some(PTag::Bool)
+        matches!(self.0, Repr::Bool(_))
     }
 
     #[inline(always)]
     pub fn is_int(&self) -> bool {
-        self.ptag() == Some(PTag::Int)
+        matches!(self.0, Repr::Int(_))
     }
 
     #[inline(always)]
     pub fn is_float(&self) -> bool {
-        self.ptag() == Some(PTag::Float)
+        matches!(self.0, Repr::Float(_))
     }
 
     /// An int or a float.
     #[inline(always)]
     pub fn is_number(&self) -> bool {
-        matches!(self.ptag(), Some(PTag::Int | PTag::Float))
+        matches!(self.0, Repr::Int(_) | Repr::Float(_))
     }
 
     #[inline(always)]
     pub fn is_str(&self) -> bool {
-        matches!(self.0, Repr::Plain(PTag::IStr, _) | Repr::Str(_))
+        matches!(self.0, Repr::IStr(_) | Repr::Str(_))
     }
 
     #[inline(always)]
@@ -416,13 +428,13 @@ impl Value {
     /// Whether the value holds nothing to release: one compare of the tag.
     #[inline(always)]
     pub fn is_plain(&self) -> bool {
-        matches!(self.0, Repr::Plain(..))
+        matches!(self.0, Repr::Null(_) | Repr::Bool(_) | Repr::Int(_) | Repr::Float(_) | Repr::Undef(_) | Repr::IStr(_))
     }
 
     #[inline(always)]
     pub fn as_bool(&self) -> Option<bool> {
         match self.0 {
-            Repr::Plain(PTag::Bool, w) => Some(w != 0),
+            Repr::Bool(w) => Some(w != 0),
             _ => None,
         }
     }
@@ -430,7 +442,7 @@ impl Value {
     #[inline(always)]
     pub fn as_int(&self) -> Option<i64> {
         match self.0 {
-            Repr::Plain(PTag::Int, i) => Some(i),
+            Repr::Int(i) => Some(i),
             _ => None,
         }
     }
@@ -438,7 +450,7 @@ impl Value {
     #[inline(always)]
     pub fn as_float(&self) -> Option<f64> {
         match self.0 {
-            Repr::Plain(PTag::Float, w) => Some(f64::from_bits(w as u64)),
+            Repr::Float(w) => Some(f64::from_bits(w as u64)),
             _ => None,
         }
     }
@@ -447,7 +459,7 @@ impl Value {
     #[inline(always)]
     pub fn as_int_mut(&mut self) -> Option<&mut i64> {
         match &mut self.0 {
-            Repr::Plain(PTag::Int, i) => Some(i),
+            Repr::Int(i) => Some(i),
             _ => None,
         }
     }
@@ -456,7 +468,7 @@ impl Value {
     #[inline(always)]
     pub fn as_str(&self) -> Option<&StrHead> {
         match &self.0 {
-            Repr::Plain(PTag::IStr, w) => Some(IStr::by_id(*w as u32)),
+            Repr::IStr(w) => Some(IStr::by_id(*w as u32)),
             Repr::Str(s) => Some(s),
             _ => None,
         }
@@ -532,7 +544,7 @@ impl Value {
     pub fn cloned_str(&self) -> Option<PhpStr> {
         match &self.0 {
             Repr::Str(s) => Some(PhpStr::clone(s)),
-            Repr::Plain(PTag::IStr, w) => Some(IStr::by_id(*w as u32).to_php_str()),
+            Repr::IStr(w) => Some(IStr::by_id(*w as u32).to_php_str()),
             _ => None,
         }
     }
@@ -568,7 +580,7 @@ impl Value {
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
         match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Str(s) => Ok(ManuallyDrop::into_inner(s)),
-            Repr::Plain(PTag::IStr, w) => Ok(IStr::by_id(w as u32).to_php_str()),
+            Repr::IStr(w) => Ok(IStr::by_id(w as u32).to_php_str()),
             r => Err(Value(r)),
         }
     }
