@@ -82,10 +82,10 @@ echo pick(true, "yes", "no"), pick(false, "yes", "no"), "\n";
 
 // A builtin that throws: the trace names it, at the call's line.
 function repeat($s, $n) {
-    return str_repeat($s, $n);
+    return str_split($s, $n);
 }
 try {
-    repeat("x", -1);
+    repeat("x", 0);
 } catch (ValueError $e) {
     echo get_class($e), ": ", $e->getMessage(), " at line ", $e->getLine(), "\n";
     echo $e->getTraceAsString(), "\n";

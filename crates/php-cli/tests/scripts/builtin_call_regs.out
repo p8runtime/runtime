@@ -34,9 +34,9 @@ array(3) {
 }
 uu
 YESNO
-ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0 at line 85
-#0 %s(85): str_repeat('x', -1)
-#1 %s(88): repeat('x', -1)
+ValueError: str_split(): Argument #2 ($length) must be greater than 0 at line 85
+#0 %s(85): str_split('x', 0)
+#1 %s(88): repeat('x', 0)
 #2 {main}
 strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
 still here: D
