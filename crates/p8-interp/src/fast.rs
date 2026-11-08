@@ -924,7 +924,15 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let (obj, args, n) = (a, b, rx!(c));
                         let Some(object) = w[rx!(obj)].as_object() else { slow!() };
-                        let Some(info) = self.last_new.as_ref().filter(|i| Rc::ptr_eq(&i.class, &object.class)) else { slow!() };
+                        // Its class's NewInfo: the one its `new` left, else the
+                        // kept one (a `new` in the arguments took `last_new`).
+                        let info = match self.last_new.as_ref() {
+                            Some(i) if Rc::ptr_eq(&i.class, &object.class) => i,
+                            _ => match self.new_infos.get(&(Rc::as_ptr(&object.class) as usize)) {
+                                Some(i) => i,
+                                None => slow!(),
+                            },
+                        };
                         match &info.ctor {
                             Some(crate::instances::Ctor { func: classes::Code::User(f), declaring, .. })
                                 if !f.code.is_generator && n >= f.code.required && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT =>
@@ -961,13 +969,14 @@ impl Context<'_> {
                     // `C::f()` the site's cache has for this class and scope:
                     // a PHP method's frame pushed here. Anything else (a
                     // property hook's `parent::$p::get()`, a native method,
-                    // __callStatic, the first call) is `step`'s.
+                    // __callStatic (`remember_static` caches no trampoline),
+                    // the first call) is `step`'s.
                     Op::StaticCall => {
                         ops!(a, b, c, imm);
                         let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
                         let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
                         let classes::Code::User(target) = &m.func else { slow!() };
-                        if m.trampoline.is_some() || n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
                         }
                         let target = Rc::clone(target);

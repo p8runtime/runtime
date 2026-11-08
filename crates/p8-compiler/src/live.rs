@@ -536,8 +536,8 @@ pub(crate) fn free_temps(
     }
 
     // A value stored from a temporary that dies there is moved (taken).
-    for pc in 0..n {
-        let (falls, target) = flow(&code[pc]);
+    for (pc, instr) in code.iter_mut().enumerate() {
+        let (falls, target) = flow(instr);
         let mut out = s.exc[pc];
         if falls {
             out |= s.live[pc + 1];
@@ -546,7 +546,7 @@ pub(crate) fn free_temps(
             out |= s.live[t as usize];
         }
         let dies = |r: Reg| frame.bit(r) != 0 && out & frame.bit(r) == 0;
-        let taken = match code[pc] {
+        let taken = match *instr {
             Instr::Assign { var, src } if var != src && dies(src) => Instr::AssignTake { var, src },
             Instr::ArrayPush { arr, val, take: false } if arr != val && dies(val) => Instr::ArrayPush { arr, val, take: true },
             Instr::ArraySet { arr, key, val, take: false } if arr != val && key != val && dies(val) => Instr::ArraySet { arr, key, val, take: true },
@@ -555,7 +555,7 @@ pub(crate) fn free_temps(
             }
             _ => continue,
         };
-        code[pc] = taken;
+        *instr = taken;
         s.ops[pc] = frame.ops(&taken);
     }
 
@@ -571,14 +571,14 @@ pub(crate) fn free_temps(
     }
     loop {
         let mut changed = false;
-        for pc in 0..n {
+        for (pc, instr) in code.iter().enumerate() {
             let e = s.inflow[pc];
             let free = e & !s.live[pc];
             s.frees[pc] = free;
             let e = e & s.live[pc];
             let o = &s.ops[pc];
             let out = (e & !o.clean & !o.plain) | o.dirty;
-            let (falls, target) = flow(&code[pc]);
+            let (falls, target) = flow(instr);
             let mut merge = |at: usize, m: u64| {
                 let new = s.inflow[at] | m;
                 if new != s.inflow[at] {

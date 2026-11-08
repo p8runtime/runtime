@@ -160,4 +160,42 @@ after x
 ~gy1
 got gy1
 after gen3
+-- return inside try/finally inside foreach over a temporary
+finally in loop
+~p2
+~p1
+p1
+-- break inside try/finally inside foreach over a temporary
+finally before break
+~p2
+~p1
+after break fin
+-- return from foreach over a temporary inside try/finally
+~p2
+finally around loop
+~p1
+p1
+-- loop in try in loop, break 2
+~n2
+finally between
+~p2
+~p1
+~n1
+after nested
+-- exception caught inside a foreach over a temporary
+caught in loop p1
+caught in loop p2
+~p1
+~p2
+after caught in loop
+-- for loop with a temporary in its condition, continue
+~c0
+~c1
+for body 1
+~c2
+after for
+-- a temporary live across a call that catches its own exception
+~ac
+acc
+after ac
 -- end

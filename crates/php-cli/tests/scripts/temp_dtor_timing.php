@@ -267,4 +267,77 @@ foreach (gen3() as $v) {
 }
 echo "after gen3\n";
 
+echo "-- return inside try/finally inside foreach over a temporary\n";
+function loopfin() {
+    foreach (pairs() as $p) {
+        try {
+            return $p->name;
+        } finally {
+            echo "finally in loop\n";
+        }
+    }
+}
+echo loopfin(), "\n";
+
+echo "-- break inside try/finally inside foreach over a temporary\n";
+foreach (pairs() as $p) {
+    try {
+        break;
+    } finally {
+        echo "finally before break\n";
+    }
+}
+unset($p);
+echo "after break fin\n";
+
+echo "-- return from foreach over a temporary inside try/finally\n";
+function finloop() {
+    try {
+        foreach (pairs() as $p) {
+            return $p->name;
+        }
+    } finally {
+        echo "finally around loop\n";
+    }
+}
+echo finloop(), "\n";
+
+echo "-- loop in try in loop, break 2\n";
+foreach (pairs() as $o) {
+    try {
+        foreach ([mk('n1'), mk('n2')] as $i) {
+            break 2;
+        }
+    } finally {
+        echo "finally between\n";
+    }
+}
+unset($o, $i);
+echo "after nested\n";
+
+echo "-- exception caught inside a foreach over a temporary\n";
+foreach (pairs() as $p) {
+    try {
+        thrower();
+    } catch (Exception $e) {
+        echo "caught in loop {$p->name}\n";
+    }
+}
+unset($p);
+echo "after caught in loop\n";
+
+echo "-- for loop with a temporary in its condition, continue\n";
+for ($i = 0; mk("c$i")->name !== 'c2'; $i++) {
+    if ($i == 0) {
+        continue;
+    }
+    echo "for body $i\n";
+}
+echo "after for\n";
+
+echo "-- a temporary live across a call that catches its own exception\n";
+function catcher() { try { thrower(); } catch (Exception $e) { return "c"; } }
+echo mk('ac')->name . catcher() . "\n";
+echo "after ac\n";
+
 echo "-- end\n";

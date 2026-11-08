@@ -1,4 +1,5 @@
 ~arg0
+noctor made
 made 0 2
 ctor 0 dflt
 ctor 0 b0
@@ -7,16 +8,17 @@ Base Child Child Child
 inst Child Child
 callStatic nothing 2
 g1 g2 
-ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 43 and at least 1 expected
+ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 44 and at least 1 expected
 Call to private PrivCtor::__construct() from global scope
 priv
 PrivCtor
 Cannot instantiate abstract class Abs
 Cannot instantiate interface Ifc
-63 e0
+64 e0
 caught ctor throws
 end 0
 ~arg1
+noctor made
 made 1 2
 ctor 1 dflt
 ctor 1 b1
@@ -26,16 +28,17 @@ inst Child Child
 callStatic nothing 2
 g1 g2 
 ~held0
-ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 43 and at least 1 expected
+ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 44 and at least 1 expected
 Call to private PrivCtor::__construct() from global scope
 priv
 PrivCtor
 Cannot instantiate abstract class Abs
 Cannot instantiate interface Ifc
-63 e1
+64 e1
 caught ctor throws
 end 1
 ~arg2
+noctor made
 made 2 2
 ctor 2 dflt
 ctor 2 b2
@@ -45,13 +48,13 @@ inst Child Child
 callStatic nothing 2
 g1 g2 
 ~held1
-ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 43 and at least 1 expected
+ArgumentCountError: Too few arguments to function WithCtor::__construct(), 0 passed in %s on line 44 and at least 1 expected
 Call to private PrivCtor::__construct() from global scope
 priv
 PrivCtor
 Cannot instantiate abstract class Abs
 Cannot instantiate interface Ifc
-63 e2
+64 e2
 caught ctor throws
 end 2
 done

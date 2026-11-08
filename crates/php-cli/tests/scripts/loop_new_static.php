@@ -30,6 +30,7 @@ for ($i = 0; $i < 3; $i++) {
     // No constructor: arguments are still evaluated and released (the
     // object made for one is destroyed before the next statement).
     $o = new NoCtor(new D("arg$i"));
+    echo "noctor made\n";
     echo "made $i ", count($o->p), "\n";
     $w = new WithCtor($i);
     $w2 = new WithCtor($i, "b$i");
