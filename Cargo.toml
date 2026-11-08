@@ -12,7 +12,7 @@ repository = "https://github.com/p8runtime/runtime"
 members = ["crates/*"]
 # proto/: measured prototypes (#365), crates of their own that depend on
 # the engine's crates by path; not members, so no gate builds them.
-exclude = ["proto/vmgen"]
+exclude = ["proto/vmgen", "proto/aot"]
 
 [lib]
 # The legacy tree imports this crate as `php_rs`. The package name is `runtime`.
