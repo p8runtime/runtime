@@ -9,6 +9,7 @@ use crate::value::{Kind, Value};
 use crate::number::dval_to_lval;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::rc::Rc;
 
 /// Freed array buffers of the two sizes most arrays have (8 and 16
 /// entries), kept for the next array on this thread (an isolate's): a new
@@ -90,6 +91,37 @@ impl Drop for Packed {
 impl Drop for Hashed {
     fn drop(&mut self) {
         give(&BUCKETS, std::mem::take(&mut self.buckets));
+    }
+}
+
+impl Packed {
+    /// Every value let go of, in one walk (`zend_array_destroy`): a plain
+    /// one by its tag alone, one holding memory released
+    /// (`Value::release`: the decrement inline, the free out of line for
+    /// the last handle); then the buffer to its pool.
+    fn destroy(&mut self) {
+        let mut slots = std::mem::take(&mut self.slots);
+        for v in slots.drain(..) {
+            let _ = v.release();
+        }
+        self.holes = 0;
+        give(&VALUES, slots);
+    }
+}
+
+impl Hashed {
+    /// Every entry let go of, in one walk (`zend_array_destroy`): a string
+    /// key's handle, then the value as [`Packed::destroy`] does; then the
+    /// table to its pool.
+    fn destroy(&mut self) {
+        let mut buckets = std::mem::take(&mut self.buckets);
+        for Bucket { key, value, .. } in buckets.drain(..) {
+            drop(key);
+            let _ = value.release();
+        }
+        self.used = 0;
+        self.live = 0;
+        give(&BUCKETS, buckets);
     }
 }
 
@@ -645,6 +677,22 @@ impl Default for PhpArray {
 impl PhpArray {
     pub fn new() -> Self {
         PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
+    }
+
+    /// Free an array whose last handle is going (PHP's `zend_array_destroy`
+    /// from `rc_dtor_func`): its values walked once, a plain one skipped
+    /// by its tag, one holding memory released; its buffer back to its
+    /// pool. (The generic drop glue did the same work one value at a
+    /// time through an out-of-line call per element.) `a`'s count is 1;
+    /// were it not, the handle is simply dropped.
+    pub fn destroy_last(a: Rc<PhpArray>) {
+        match Rc::try_unwrap(a) {
+            Ok(mut array) => match &mut array.storage {
+                Storage::Packed(p) => p.destroy(),
+                Storage::Hashed(h) => h.destroy(),
+            },
+            Err(a) => drop(a),
+        }
     }
 
     /// An empty list with room for `capacity` elements pushed onto it.
