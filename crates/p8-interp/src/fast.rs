@@ -944,11 +944,21 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     }
     // Only the constants read as values (names stay in the constants).
     let values = code.value_consts as usize;
+    // A register still holding the very constant (the same function called
+    // again at this base: `leave` leaves the constants in place) is kept.
     for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
-        clear(r);
-        // `r` is undefined now: nothing to drop.
-        std::mem::forget(std::mem::replace(r, c.clone()));
+        if !r.same_handle(c) {
+            enter_const(r, c);
+        }
     }
+}
+
+/// A constant copied into its register, the register's old value released.
+#[inline(never)]
+fn enter_const(r: &mut Value, c: &Value) {
+    let _ = clear(r);
+    // `r` is undefined now: nothing to drop.
+    std::mem::forget(std::mem::replace(r, c.clone()));
 }
 
 /// The value `return` hands back from register `src` of `frame` (at

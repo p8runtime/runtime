@@ -176,6 +176,26 @@ impl Value {
             _ => false,
         }
     }
+
+    /// Whether `self` is `other` itself: the same scalar (a float by its
+    /// bits) or the same handle (one string, array, reference or object,
+    /// not equal contents). A register already holding a frame's constant
+    /// this way needs no fresh copy of it.
+    #[inline(always)]
+    pub fn same_handle(&self, other: &Value) -> bool {
+        match (&self.0, &other.0) {
+            (Repr::Null, Repr::Null) | (Repr::Undef, Repr::Undef) => true,
+            (Repr::Bool(a), Repr::Bool(b)) => a == b,
+            (Repr::Int(a), Repr::Int(b)) => a == b,
+            (Repr::Float(a), Repr::Float(b)) => a.to_bits() == b.to_bits(),
+            (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
+            (Repr::Str(a), Repr::Str(b)) => PhpStr::ptr_eq(a, b),
+            (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b),
+            (Repr::Ref(a), Repr::Ref(b)) => Rc::ptr_eq(a, b),
+            (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 impl Clone for Value {
