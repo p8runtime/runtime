@@ -191,6 +191,7 @@ fn register(registry: &mut Registry) {
     registry.add_classes(hash::CLASSES);
     registry.add_functions(info::BUILTINS);
     registry.add_functions(string2::BUILTINS);
+    registry.add_fast(string2::FAST);
     registry.add_functions(random::BUILTINS);
     registry.add_functions(scan::BUILTINS);
     registry.add_functions(dates::BUILTINS);
