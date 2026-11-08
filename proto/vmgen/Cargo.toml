@@ -1,0 +1,29 @@
+[package]
+name = "vmgen"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Prototype (#366): generated specialised handlers for p8's hot instructions, over p8's real values and compiler"
+publish = false
+
+# A root of its own (the engine's workspace excludes it too).
+[workspace]
+
+[[bin]]
+name = "vmgen"
+path = "src/main.rs"
+
+[dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+p8-bytecode = { path = "../../crates/p8-bytecode" }
+p8-compiler = { path = "../../crates/p8-compiler" }
+p8-runtime = { path = "../../crates/p8-runtime" }
+p8-syntax = { path = "../../crates/p8-syntax" }
+
+# The same shape as the engine's release profile (whole-program inlining
+# of the value operations into the handlers), with line tables for
+# callgrind and perf.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = true
