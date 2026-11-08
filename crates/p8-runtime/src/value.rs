@@ -27,11 +27,15 @@ pub struct Value(Repr);
 /// anything to release" is one compare of the tag (PHP's
 /// `Z_REFCOUNTED`): what `Drop` and `is_plain` test.
 ///
-/// `repr(u8)` with explicit discriminants makes the tag a byte with
+/// `repr(u64)` with explicit discriminants makes the tag a word with
 /// exactly these values (the reference's primitive-representation
 /// layout), so `is_plain` is `tag < 6` by definition, not by codegen.
+/// A word, not a byte: the value is then two words with no padding, and
+/// a copy of one is two moves. With a byte tag the seven bytes after it
+/// are padding the compiler copies field by field (four more loads and
+/// stores, through the stack, on every register copy).
 #[derive(Debug)]
-#[repr(u8)]
+#[repr(u64)]
 enum Repr {
     Null = 0,
     Bool(B) = 1,
