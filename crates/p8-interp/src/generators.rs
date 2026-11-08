@@ -14,6 +14,7 @@ use p8_bytecode::Reg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Object, Slot};
+use p8_runtime::symbol::{Sym, known};
 use p8_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -439,7 +440,20 @@ impl Context<'_> {
 
     /// Call method `name` of an object with no arguments (Iterator's).
     pub(crate) fn call_named(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, name: &[u8]) -> Result<Value, Throw> {
-        let m = self.method_frame(&Value::object(Rc::clone(object)), self.method_key(name), name)?;
+        let key = self.method_key(name);
+        self.call_method_key(regs, object, key, name)
+    }
+
+    /// `call_named` of a method whose symbol is fixed ([`known`]): the
+    /// name is not looked up.
+    ///
+    /// [`known`]: p8_runtime::symbol::known
+    pub(crate) fn call_known(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<Value, Throw> {
+        self.call_method_key(regs, object, Some(sym), name)
+    }
+
+    fn call_method_key(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, key: Option<Sym>, name: &[u8]) -> Result<Value, Throw> {
+        let m = self.method_frame(&Value::object(Rc::clone(object)), key, name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
             std::mem::swap(&mut self.isolate.regs, regs);
@@ -505,13 +519,13 @@ impl Context<'_> {
             return Ok(Some((value, key)));
         }
         if !first {
-            self.call_named(regs, object, b"next")?;
+            self.call_known(regs, object, known::NEXT, b"next")?;
         }
-        if !self.call_named(regs, object, b"valid")?.to_bool() {
+        if !self.call_known(regs, object, known::VALID, b"valid")?.to_bool() {
             return Ok(None);
         }
-        let value = self.call_named(regs, object, b"current")?;
-        let key = self.call_named(regs, object, b"key")?;
+        let value = self.call_known(regs, object, known::CURRENT, b"current")?;
+        let key = self.call_known(regs, object, known::KEY, b"key")?;
         Ok(Some((value, key)))
     }
 

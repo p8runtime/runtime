@@ -261,7 +261,10 @@ impl Isolate {
             },
             names,
             ini_texts: RefCell::new(HashMap::default()),
-            thawed: RefCell::new(HashMap::default()),
+            // Sized for an application's constants from the start (a
+            // WordPress page thaws tens of thousands): the table grew
+            // through 27 rehashes otherwise.
+            thawed: RefCell::new(HashMap::with_capacity_and_hasher(1 << 15, Default::default())),
             unbuilt: Closure::unbuilt(&registry),
             partials: RefCell::new(HashMap::default()),
             registry,

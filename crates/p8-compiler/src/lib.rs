@@ -123,7 +123,8 @@ struct FnBuilder<'a> {
     /// temporary's next value is not written into the global through it.
     ref_temps: Vec<usize>,
     sites: Vec<Site>,
-    site_index: HashMap<(bool, Vec<u8>), u16>,
+    /// The site of each spelling: `[0]` the calls', `[1]` the constants'.
+    site_index: [HashMap<Vec<u8>, u16>; 2],
     loops: Vec<Loop>,
     params: Vec<Param>,
     returns_ref: bool,
@@ -169,6 +170,29 @@ struct FnBuilder<'a> {
     in_finally: bool,
 }
 
+/// A function's name tables, kept from one function to the next (see
+/// `Scratch::tables`): emptied, their room stays, so a function's
+/// first constants, variables and call sites do not each grow a fresh
+/// table (one WordPress page compiled 8.9k functions, and their tables'
+/// regrowth was 15k rehashes of the constants alone).
+#[derive(Default)]
+struct Tables {
+    const_index: HashMap<ConstKey, usize>,
+    cvs: IndexMap<Vec<u8>, usize>,
+    site_index: [HashMap<Vec<u8>, u16>; 2],
+    class_index: HashMap<Vec<u8>, u16>,
+}
+
+impl Tables {
+    fn clear(&mut self) {
+        self.const_index.clear();
+        self.cvs.clear();
+        self.site_index[0].clear();
+        self.site_index[1].clear();
+        self.class_index.clear();
+    }
+}
+
 /// A `goto` waiting for its label (which may come later).
 struct Goto {
     label: Vec<u8>,
@@ -178,7 +202,9 @@ struct Goto {
 }
 
 impl FnBuilder<'_> {
-    fn new(name: Text, sym: Sym) -> Self {
+    /// `tables`: a finished function's, emptied (`Scratch::tables`), or
+    /// new ones.
+    fn new(name: Text, sym: Sym, tables: Tables) -> Self {
         FnBuilder {
             ret_type: None,
             strict: false,
@@ -189,21 +215,21 @@ impl FnBuilder<'_> {
             code: Vec::with_capacity(32),
             lines: Vec::with_capacity(32),
             consts: Vec::new(),
-            const_index: HashMap::default(),
-            cvs: IndexMap::default(),
+            const_index: tables.const_index,
+            cvs: tables.cvs,
             temps: 0,
             floor: 0,
             max_temps: 0,
             ref_temps: Vec::new(),
             sites: Vec::new(),
-            site_index: HashMap::default(),
+            site_index: tables.site_index,
             loops: Vec::new(),
             params: Vec::new(),
             returns_ref: false,
             line: 1,
             decl_line: 1,
             classes: Vec::new(),
-            class_index: HashMap::default(),
+            class_index: tables.class_index,
             class: None,
             auto_globals: false,
             is_static: false,
@@ -228,20 +254,23 @@ impl FnBuilder<'_> {
 
     /// The index of a class the code names (one entry per class).
     fn class_ref(&mut self, class: ClassRef) -> u16 {
-        let key = match &class {
-            ClassRef::Named(name) => name.lower.as_bytes().to_vec(),
-            ClassRef::Forward(name) => [b"forward:", name.lower.as_bytes()].concat(),
-            ClassRef::Static => b"static".to_vec(),
-            ClassRef::Scope => b"scope".to_vec(),
-            ClassRef::ParentScope => b"parent scope".to_vec(),
-            ClassRef::Dynamic(r) => format!("dynamic:{r}").into_bytes(),
+        // (A named class, the common one, is looked up by its name as it
+        // is: the key is copied only for a class not referred to before.)
+        let key: std::borrow::Cow<'_, [u8]> = match &class {
+            ClassRef::Named(name) => name.lower.as_bytes().into(),
+            ClassRef::Forward(name) => [b"forward:", name.lower.as_bytes()].concat().into(),
+            ClassRef::Static => b"static"[..].into(),
+            ClassRef::Scope => b"scope"[..].into(),
+            ClassRef::ParentScope => b"parent scope"[..].into(),
+            ClassRef::Dynamic(r) => format!("dynamic:{r}").into_bytes().into(),
         };
-        let next = self.classes.len() as u16;
-        let i = *self.class_index.entry(key).or_insert(next);
-        if i == next {
-            self.classes.push(class);
+        if let Some(&i) = self.class_index.get(&*key) {
+            return i;
         }
-        i
+        let next = self.classes.len() as u16;
+        self.class_index.insert(key.into_owned(), next);
+        self.classes.push(class);
+        next
     }
 
     fn emit(&mut self, instr: Instr) -> usize {
@@ -403,13 +432,14 @@ impl FnBuilder<'_> {
     fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
         // One site per spelling: a call's messages name it as written
         // (`$o->foobar()` after `$o->FooBar()` says "foobar").
-        let key = (constant, display.as_bytes().to_vec());
-        if let Some(&i) = self.site_index.get(&key) {
+        // (The spelling is copied only for a site not seen before.)
+        let index = &mut self.site_index[usize::from(constant)];
+        if let Some(&i) = index.get(display.as_bytes()) {
             return i;
         }
+        let i = self.sites.len() as u16;
+        index.insert(display.as_bytes().to_vec(), i);
         self.sites.push(Site { name, sym, fallback: None, display });
-        let i = (self.sites.len() - 1) as u16;
-        self.site_index.insert(key, i);
         i
     }
 
@@ -478,6 +508,10 @@ impl FnBuilder<'_> {
         let mut cv_names: Vec<(usize, Text)> =
             self.cvs.iter().map(|(n, &i)| (i, Text::from(n.as_slice()))).collect();
         cv_names.sort_by_key(|(i, _)| *i);
+        // The name tables go to the next function, emptied.
+        let mut tables = Tables { const_index: self.const_index, cvs: self.cvs, site_index: self.site_index, class_index: self.class_index };
+        tables.clear();
+        scratch.tables.push(tables);
         let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
         Function {
             name: self.name,
@@ -806,6 +840,9 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
 struct Scratch {
     /// The constant-placement pass's (`consts::place_consts`).
     loads: consts::Scratch,
+    /// Finished functions' name tables, emptied, for the next functions
+    /// (a stack: functions nest).
+    tables: Vec<Tables>,
     /// The live-range analysis's (`live::free_temps`).
     live: live::Scratch,
 }
@@ -1462,7 +1499,7 @@ impl<'src> Compiler<'src> {
                 other => scan(&mut self, &ns, other),
             }
         }
-        let mut f = FnBuilder::new(Text::from("{main}"), self.sym(b"{main}"));
+        let mut f = FnBuilder::new(Text::from("{main}"), self.sym(b"{main}"), self.scratch.tables.pop().unwrap_or_default());
         f.strict = self.strict;
         // A file's code runs in the scope that includes it, a function's
         // too: its superglobals are bound like a function's.
@@ -2337,7 +2374,7 @@ impl<'src> Compiler<'src> {
         uses: &[p8_syntax::ast::ClosureUse],
     ) -> Result<(Function, Vec<Text>)> {
         let sym = self.sym_lower(name.as_bytes());
-        let mut f = FnBuilder::new(name, sym);
+        let mut f = FnBuilder::new(name, sym, self.scratch.tables.pop().unwrap_or_default());
         f.meta = self.pending_meta.take().unwrap_or_default();
         f.returns_ref = by_ref;
         f.strict = self.strict;
@@ -5935,6 +5972,11 @@ impl<'src> Compiler<'src> {
             f.emit(Instr::Clone { dst, src });
             return Ok(dst);
         }
+        // The names' symbols, once (the site's), and the builtin the
+        // global one names, if any: resolved here, not once per argument.
+        let sym = self.sym(&lower);
+        let fallback_sym = fallback.as_ref().map(|g| self.sym(g));
+        let builtin = self.registry.builtin(fallback_sym.unwrap_or(sym));
         // Whether argument n is passed by reference, when the callee is known now.
         let by_ref = |n: usize| -> Option<bool> {
             if let Some((modes, rest)) = self.by_ref.get(&lower) {
@@ -5944,15 +5986,15 @@ impl<'src> Compiler<'src> {
             if let Some((modes, rest)) = self.by_ref.get(global) {
                 return Some(modes.get(n).copied().unwrap_or(*rest));
             }
-            self.registry.lookup(global).map(|i| self.registry.by_ref(i, n))
+            builtin.map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
         // One text for both when the name is written in lowercase.
         let display = Text::from(text);
         let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
-        let site = f.site(false, lower_text, self.sym(&lower), display);
-        if let Some(global) = &fallback {
-            f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), self.sym(global)));
+        let site = f.site(false, lower_text, sym, display);
+        if let (Some(global), Some(fallback_sym)) = (&fallback, fallback_sym) {
+            f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), fallback_sym));
         }
         // assert() gets its source as a hidden last argument (the message
         // of the AssertionError it throws).

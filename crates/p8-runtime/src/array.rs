@@ -386,6 +386,15 @@ impl Hashed {
     /// The position of `key` (its hash `h`). Out of line: the interpreter's
     /// fast loop inlines array reads, and only their packed part belongs
     /// there.
+    ///
+    /// A leaf: it compares hashes, and a string key by its head's address
+    /// (a program-memory string is one head wherever it is written). The
+    /// first entry whose hash matches and whose head does not is handed to
+    /// [`Hashed::find_bytes`], which compares bytes from there on. Most
+    /// lookups never get there (one in five on WordPress), and a function
+    /// that calls `bcmp` itself has to save and restore every register the
+    /// loop uses around it, in every call: that was a third of this
+    /// function's cost.
     #[inline(never)]
     fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         if self.small() {
@@ -394,7 +403,29 @@ impl Hashed {
         let mut i = self.buckets[self.slot(h)].head;
         while i != NONE {
             let b = &self.buckets[i as usize];
-            if b.is(h, key) {
+            if b.h == h {
+                match (key, &b.key) {
+                    (Probe::Int, None) => return Some(i as usize),
+                    (Probe::Str(s), Some(k)) => {
+                        if std::ptr::eq(s, &**k) {
+                            return Some(i as usize);
+                        }
+                        return self.find_bytes(h, s, i);
+                    }
+                    _ => {}
+                }
+            }
+            i = b.next;
+        }
+        None
+    }
+
+    /// `find` from chain entry `i` on, the string key compared by bytes.
+    #[inline(never)]
+    fn find_bytes(&self, h: u64, s: &StrHead, mut i: u32) -> Option<usize> {
+        while i != NONE {
+            let b = &self.buckets[i as usize];
+            if b.is(h, Probe::Str(s)) {
                 return Some(i as usize);
             }
             i = b.next;
@@ -440,13 +471,34 @@ impl Hashed {
     /// A small table's position of `key`: one pass over the stored hashes,
     /// the key compared only where the hash matches. An unset entry has no
     /// string key, so only an int key needs the unset mark.
+    ///
+    /// A leaf, as `find` is: the byte compare of a string key is out of
+    /// line (`scan_bytes`), reached from the first entry whose hash
+    /// matches and whose head is another.
     #[inline(always)]
     fn scan(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         let taken = &self.buckets[..self.used];
         match key {
-            Probe::Str(s) => taken.iter().position(|b| b.h == h && b.key.as_ref().is_some_and(|k| std::ptr::eq(s, &**k) || s.as_bytes() == k.as_bytes())),
+            Probe::Str(s) => {
+                for (i, b) in taken.iter().enumerate() {
+                    if b.h == h && let Some(k) = &b.key {
+                        if std::ptr::eq(s, &**k) {
+                            return Some(i);
+                        }
+                        return self.scan_bytes(h, s, i);
+                    }
+                }
+                None
+            }
             Probe::Int => taken.iter().position(|b| b.h == h && b.key.is_none() && b.next != UNSET),
         }
+    }
+
+    /// `scan` from position `from` on, the string key compared by bytes.
+    #[inline(never)]
+    fn scan_bytes(&self, h: u64, s: &StrHead, from: usize) -> Option<usize> {
+        let taken = &self.buckets[from..self.used];
+        taken.iter().position(|b| b.is(h, Probe::Str(s))).map(|i| from + i)
     }
 
     /// Set `key` to `value`: in place if present, else last in order. One
@@ -939,6 +991,7 @@ impl PhpArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::string::IStr;
 
     fn int(i: i64) -> Value {
         Value::int(i)
@@ -969,6 +1022,36 @@ mod tests {
         let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![Key::Int(0), Key::Int(1), Key::Str(PhpStr::from("x"))]);
         assert_eq!(a.get(&Key::Int(0)).map(Value::to_int), Some(9));
+    }
+
+    /// A string key is found from another handle of the same bytes (the
+    /// byte compare `find` and `scan` hand off), in a scanned table and a
+    /// chained one, by every lookup and by `set`; other bytes find nothing.
+    #[test]
+    fn string_keys_found_from_another_handle() {
+        let got = |v: Option<&Value>| v.and_then(Value::as_int);
+        for n in [4usize, 40] {
+            let mut a = PhpArray::new();
+            for i in 0..n {
+                a.insert(Key::Str(PhpStr::from(format!("key{i}"))), int(i as i64));
+            }
+            for i in 0..n {
+                let other = PhpStr::from(format!("key{i}"));
+                assert_eq!(got(a.get(&Key::Str(other.clone()))), Some(i as i64), "get, {n} keys");
+                assert_eq!(got(a.get_str(&other)), Some(i as i64), "get_str, {n} keys");
+                assert!(a.get_mut(&Key::Str(other.clone())).is_some(), "get_mut, {n} keys");
+                assert_eq!(got(a.get(&Key::Str(PhpStr::from(format!("key{i}x"))))), None, "a miss, {n} keys");
+            }
+            // set() finds the entry too: no second one is made.
+            a.insert(Key::Str(PhpStr::from("key1")), int(-1));
+            assert_eq!(a.len(), n);
+            assert_eq!(got(a.get_str(&PhpStr::from("key1"))), Some(-1));
+            // A program-memory key (one head): found by its head, and by its bytes.
+            let i = IStr::intern(b"istr key").expect("room in the pool");
+            a.insert(Key::Str(i.to_php_str()), int(7));
+            assert_eq!(got(a.get_str(i)), Some(7));
+            assert_eq!(got(a.get_str(&PhpStr::from("istr key"))), Some(7));
+        }
     }
 
     #[test]
