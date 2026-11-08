@@ -227,8 +227,10 @@ fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
 
 /// A property read the cache answers: the same class, a scope that may
 /// see it, an object not lazy, and a value there (an unset one takes the
-/// full path: its warning, __get).
-#[inline]
+/// full path: its warning, __get). Inline: the loop's property reads are
+/// its most frequent instructions after moves and jumps, and a call
+/// returned the value through memory.
+#[inline(always)]
 pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
