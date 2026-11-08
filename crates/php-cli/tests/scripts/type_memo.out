@@ -8,10 +8,10 @@ shape(Sub) = Sub
 maybe(Sub) = Sub
 both(Sub) = 'Sub'
 ret(Sub) = Sub
-take: take(): Argument #1 ($b) must be of type Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-shape: shape(): Argument #1 ($s) must be of type Shape, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-maybe: maybe(): Argument #1 ($b) must be of type ?Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-both: both(): Argument #1 ($x) must be of type Base&Shape, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+take: take(): Argument #1 ($b) must be of type Base, Other given, called in %s on line 23
+shape: shape(): Argument #1 ($s) must be of type Shape, Other given, called in %s on line 23
+maybe: maybe(): Argument #1 ($b) must be of type ?Base, Other given, called in %s on line 23
+both: both(): Argument #1 ($x) must be of type Base&Shape, Other given, called in %s on line 23
 ret: ret(): Return value must be of type Base, Other returned
 take(Base) = Base
 shape(Base) = Base
@@ -23,11 +23,11 @@ shape(Sub) = Sub
 maybe(Sub) = Sub
 both(Sub) = 'Sub'
 ret(Sub) = Sub
-take: take(): Argument #1 ($b) must be of type Base, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-shape: shape(): Argument #1 ($s) must be of type Shape, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+take: take(): Argument #1 ($b) must be of type Base, null given, called in %s on line 23
+shape: shape(): Argument #1 ($s) must be of type Shape, null given, called in %s on line 23
 maybe(null) = NULL
-both: both(): Argument #1 ($x) must be of type Base&Shape, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-ret: ret(): Argument #1 ($o) must be of type object, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+both: both(): Argument #1 ($x) must be of type Base&Shape, null given, called in %s on line 23
+ret: ret(): Argument #1 ($o) must be of type object, null given, called in %s on line 23
 take(Base) = Base
 shape(Base) = Base
 maybe(Base) = Base
@@ -35,10 +35,10 @@ both(Base) = 'Base'
 ret(Base) = Base
 str
 SubBaseOther
-many(): Argument #3 ($c) must be of type Other, Sub given, called in /home/sami/p8-perf/exec/type_memo.php on line 31
+many(): Argument #3 ($c) must be of type Other, Sub given, called in %s on line 31
 Base
 Sub
-{closure:/home/sami/p8-perf/exec/type_memo.php:32}(): Argument #1 ($b) must be of type Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 34
+{closure:%s:32}(): Argument #1 ($b) must be of type Base, Other given, called in %s on line 34
 take(Base) = Base
 shape(Base) = Base
 maybe(Base) = Base
@@ -49,10 +49,10 @@ shape(Sub) = Sub
 maybe(Sub) = Sub
 both(Sub) = 'Sub'
 ret(Sub) = Sub
-take: take(): Argument #1 ($b) must be of type Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-shape: shape(): Argument #1 ($s) must be of type Shape, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-maybe: maybe(): Argument #1 ($b) must be of type ?Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-both: both(): Argument #1 ($x) must be of type Base&Shape, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+take: take(): Argument #1 ($b) must be of type Base, Other given, called in %s on line 23
+shape: shape(): Argument #1 ($s) must be of type Shape, Other given, called in %s on line 23
+maybe: maybe(): Argument #1 ($b) must be of type ?Base, Other given, called in %s on line 23
+both: both(): Argument #1 ($x) must be of type Base&Shape, Other given, called in %s on line 23
 ret: ret(): Return value must be of type Base, Other returned
 take(Base) = Base
 shape(Base) = Base
@@ -64,11 +64,11 @@ shape(Sub) = Sub
 maybe(Sub) = Sub
 both(Sub) = 'Sub'
 ret(Sub) = Sub
-take: take(): Argument #1 ($b) must be of type Base, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-shape: shape(): Argument #1 ($s) must be of type Shape, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+take: take(): Argument #1 ($b) must be of type Base, null given, called in %s on line 23
+shape: shape(): Argument #1 ($s) must be of type Shape, null given, called in %s on line 23
 maybe(null) = NULL
-both: both(): Argument #1 ($x) must be of type Base&Shape, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
-ret: ret(): Argument #1 ($o) must be of type object, null given, called in /home/sami/p8-perf/exec/type_memo.php on line 23
+both: both(): Argument #1 ($x) must be of type Base&Shape, null given, called in %s on line 23
+ret: ret(): Argument #1 ($o) must be of type object, null given, called in %s on line 23
 take(Base) = Base
 shape(Base) = Base
 maybe(Base) = Base
@@ -76,7 +76,7 @@ both(Base) = 'Base'
 ret(Base) = Base
 str
 SubBaseOther
-many(): Argument #3 ($c) must be of type Other, Sub given, called in /home/sami/p8-perf/exec/type_memo.php on line 31
+many(): Argument #3 ($c) must be of type Other, Sub given, called in %s on line 31
 Base
 Sub
-{closure:/home/sami/p8-perf/exec/type_memo.php:32}(): Argument #1 ($b) must be of type Base, Other given, called in /home/sami/p8-perf/exec/type_memo.php on line 34
+{closure:%s:32}(): Argument #1 ($b) must be of type Base, Other given, called in %s on line 34
