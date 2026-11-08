@@ -10,6 +10,7 @@ use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Fault, FastBuiltin, Throw};
 use p8_runtime::lent;
 use p8_runtime::object::CLASS_ENUM;
+use p8_runtime::string::{PhpStr, StrView};
 use p8_runtime::value::{Kind, Value};
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -247,11 +248,25 @@ fn array_unique(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let input = arr(args, 0);
     let mut out = PhpArray::new();
     if flags == 2 {
-        let mut seen: std::collections::HashSet<Option<Vec<u8>>> = std::collections::HashSet::with_capacity(input.len());
-        for (k, v) in input.iter() {
-            let v = v.deref();
-            if seen.insert(v.to_php_string().map(|x| x.as_bytes().to_vec())) {
-                out.insert(k, v);
+        // The strings seen, as a set of their bytes borrowed from the
+        // array (see `by_values`); values with no string (arrays) are one
+        // kind, kept once.
+        let texts: Vec<Option<StrView<'_>>> = input
+            .iter()
+            .map(|(_, v)| match v.as_str() {
+                Some(s) => Some(StrView::Borrowed(s)),
+                None => v.deref().to_php_string().map(StrView::Owned),
+            })
+            .collect();
+        let mut seen: p8_runtime::fast::HashSet<&[u8]> = p8_runtime::fast::HashSet::with_capacity_and_hasher(texts.len(), Default::default());
+        let mut seen_none = false;
+        for ((k, v), t) in input.iter().zip(&texts) {
+            let new = match t {
+                Some(t) => seen.insert(t.as_bytes()),
+                None => !std::mem::replace(&mut seen_none, true),
+            };
+            if new {
+                out.insert(k, v.deref());
             }
         }
         return array(out);
@@ -453,31 +468,28 @@ fn text(v: &Value) -> Vec<u8> {
     v.deref().to_str_view().map(|s| s.as_bytes().to_vec()).unwrap_or_else(|| b"Array".to_vec())
 }
 
-/// The key `(string) $v` makes: a string's own handle (its hash cached in
-/// it, so the sets below hash a string once, as PHP's do), anything else
-/// converted.
-fn text_key(v: &Value) -> Key {
-    Key::from_string(v.deref().to_php_string().unwrap_or_else(|| p8_runtime::string::PhpStr::from("Array")))
+/// `(string) $v` to read: a string as it is (no copy, no handle made),
+/// anything else converted; an array is "Array".
+fn text_view(v: &Value) -> StrView<'_> {
+    match v.as_str() {
+        Some(s) => StrView::Borrowed(s),
+        None => StrView::Owned(v.deref().to_php_string().unwrap_or_else(|| PhpStr::from("Array"))),
+    }
 }
 
 fn by_values(args: &[Value], keep_if_found: bool) -> Result<Value, Throw> {
-    // The other arrays' values as sets: PHP arrays keyed by them (zend's
-    // array_diff does the same), not Rust sets that would hash the bytes
-    // again with a slower hasher and copy every value.
-    let others: Vec<PhpArray> = (1..args.len())
-        .map(|i| {
-            let a = arr(args, i);
-            let mut set = PhpArray::hashed(a.len());
-            for v in a.values() {
-                set.insert(text_key(v), Value::NULL);
-            }
-            set
-        })
-        .collect();
+    // The other arrays' values as sets of their bytes, borrowed from the
+    // arrays (a string is not copied), hashed by the name tables' hasher:
+    // not `std` sets of `Vec<u8>`, which copied every value and hashed it
+    // with SipHash (a third of a Laravel collection test run's hashing).
+    let arrays: Vec<Rc<PhpArray>> = (1..args.len()).map(|i| arr(args, i)).collect();
+    let views: Vec<Vec<StrView<'_>>> = arrays.iter().map(|a| a.values().map(text_view).collect()).collect();
+    let others: Vec<p8_runtime::fast::HashSet<&[u8]>> = views.iter().map(|vs| vs.iter().map(|s| s.as_bytes()).collect()).collect();
     let mut out = PhpArray::new();
     for (k, v) in arr(args, 0).iter() {
-        let t = text_key(v);
-        let keep = if keep_if_found { others.iter().all(|o| o.contains_key(&t)) } else { !others.iter().any(|o| o.contains_key(&t)) };
+        let t = text_view(v);
+        let t = t.as_bytes();
+        let keep = if keep_if_found { others.iter().all(|o| o.contains(t)) } else { !others.iter().any(|o| o.contains(t)) };
         if keep {
             out.insert(k, v.clone());
         }
