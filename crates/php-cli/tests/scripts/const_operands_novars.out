@@ -1,0 +1,16 @@
+array(1) {
+  [0]=>
+  string(1) "v"
+}
+v/v
+new: before
+new: from_file
+new: also
+new: from_global
+from-file/global
+from-file/global/global
+int(5)
+bool(true)
+bool(true)
+bool(true)
+DONE

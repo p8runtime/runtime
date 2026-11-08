@@ -20,8 +20,35 @@ pub mod serial;
 
 pub use insn::{Insn, Op};
 
-/// A register index within the current frame.
+/// A register index within the current frame, or a constant operand (see
+/// `const_index`).
 pub type Reg = u16;
+
+/// A constant operand: bits 15..14 are `10`, the constant's index is the
+/// low 14 bits (`MAX_CONSTS`). A frame's registers are below 1 << 14 (the
+/// compiler's limit per kind), and `THIS` has both top bits set, so the
+/// three never meet. The constant is read in place from the function's
+/// table (`Function::consts`, thawed once per closure), never from a
+/// register: the loop's constant forms (`insn::Op::*C`) and `step` do so
+/// for the operands `p8_compiler` leaves constant; every other use goes
+/// through a `LoadConst` into a temporary.
+pub const CONST_OPERAND: Reg = 1 << 15;
+
+/// The most constants a function may have (a constant operand's index).
+pub const MAX_CONSTS: usize = 1 << 14;
+
+/// The constant index a constant operand names (None for a register).
+#[inline(always)]
+pub fn const_index(r: Reg) -> Option<usize> {
+    if r >> 14 == 2 { Some(usize::from(r & (MAX_CONSTS as Reg - 1))) } else { None }
+}
+
+/// The operand naming constant `k`.
+#[inline(always)]
+pub fn const_operand(k: usize) -> Reg {
+    debug_assert!(k < MAX_CONSTS);
+    CONST_OPERAND | k as Reg
+}
 
 /// The `obj` operand of a property access (FetchProp, AssignProp,
 /// AssignPropOp, PropIncDec) that is the running method's `$this`, read
@@ -72,6 +99,11 @@ pub enum Instr {
     /// there, and a destructor may be due).
     Free { reg: Reg },
     LoadNull { dst: Reg },
+    /// dst = constant `k` (`Function::consts[k]`), for an instruction that
+    /// reads its operand from a register only (the compiler emits it right
+    /// before that instruction; the hot instructions read a constant
+    /// operand in place instead: `const_index`).
+    LoadConst { dst: Reg, k: u16 },
     Binary { op: BinOp, dst: Reg, a: Reg, b: Reg },
     /// `Binary` for `+`, `-` and `*`, one opcode each (the commonest
     /// arithmetic, so the interpreter does not dispatch on the operator)
@@ -823,15 +855,14 @@ pub struct Function {
     pub insns: Vec<Insn>,
     /// Source line of each instruction.
     pub lines: Vec<u32>,
+    /// The literals the code names (`const_index` operands, `LoadConst`,
+    /// the names of properties and class constants): read in place, as
+    /// PHP reads a literal from the op_array; no register holds one.
     pub consts: Vec<Frozen>,
-    /// First constant register (constants occupy consts_at..consts_at+consts.len()).
-    pub consts_at: Reg,
-    /// How many constants (the first ones) are values the code reads from
-    /// registers: a call copies these into its frame. The rest are only
-    /// names (of properties, class constants, static properties) that
-    /// their instructions read from the constants directly (as PHP reads
-    /// a literal in place); their registers are never written or read.
-    pub value_consts: Reg,
+    /// The compiled variables' registers: the first `ncv` (parameters
+    /// first); the temporaries follow them (from register 1 at least: a
+    /// frame but the main one never starts at register 0), up to `nregs`.
+    pub ncv: Reg,
     /// Registers the frame needs.
     pub nregs: Reg,
     /// The code frees each temporary where it is no longer live (the

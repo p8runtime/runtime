@@ -103,15 +103,39 @@ impl Context<'_> {
                 regs.resize(base + WINDOW, Value::UNDEF);
             }
             let w: &mut [Value; WINDOW] = (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers");
+            // A constant operand (an `Op::*C` form): the closure's constant
+            // (`Function::consts`, thawed once), read in place as PHP reads a
+            // CONST operand from the op_array. `lower` keeps the index in
+            // range; the check is the slice's.
+            macro_rules! cst {
+                ($k:expr) => {
+                    &clo.consts[$k as usize]
+                };
+            }
+            // A register operand of a two-operand arm, or a constant one, for
+            // the helpers that take either (`Src`).
+            macro_rules! reg_src {
+                ($r:expr) => {
+                    Src::Reg(Reg::from($r))
+                };
+            }
+            macro_rules! cst_src {
+                ($k:expr) => {
+                    Src::Const(cst!($k))
+                };
+            }
             // A compare-and-branch: two ints inline, anything else (floats,
             // references, strings, null) through `test`; an undefined
-            // variable (its warning) is `step`'s.
+            // variable (its warning) is `step`'s. `$x` and `$y` are the
+            // operands' values (a register's, or a constant's for the
+            // constant forms, whose K is `wide`: the b and c bytes).
             macro_rules! jump_if {
-                ($cmp:expr, $when:expr, $a:expr, $b:expr, $target:expr) => {{
-                    let t = if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), w[rx!($b)].as_int()) {
+                ($cmp:expr, $when:expr, $x:expr, $y:expr, $target:expr) => {{
+                    let (x, y): (&Value, &Value) = ($x, $y);
+                    let t = if let (Some(x), Some(y)) = (x.as_int(), y.as_int()) {
                         int_test($cmp, x, y)
                     } else {
-                        match test(&w[..], $cmp, Reg::from($a), Reg::from($b)) {
+                        match test($cmp, x, y) {
                             Some(t) => t,
                             None => slow!(),
                         }
@@ -127,14 +151,17 @@ impl Context<'_> {
                 }};
             }
             // `dst = a op b`: two ints inline, the rest (floats, references,
-            // `.` on strings) through `arith`; what may warn or throw is `step`'s.
+            // `.` on strings) through `arith`; what may warn or throw is
+            // `step`'s. `$b` is the right operand as a `Src` (a register, or
+            // a constant for the `C` forms).
             macro_rules! arith {
                 ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
-                    let released = if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), w[rx!($b)].as_int())
+                    let b: Src = $b;
+                    let released = if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), src(&w[..], b).as_int())
                         && let Some(n) = $int(x, y)
                     {
                         put_var(&mut w[rx!($dst)], Value::int(n))
-                    } else if arith(&mut w[..], $op, Reg::from($dst), Reg::from($a), Reg::from($b)) {
+                    } else if arith(&mut w[..], $op, Reg::from($dst), Reg::from($a), b) {
                         true
                     } else {
                         slow!()
@@ -142,10 +169,155 @@ impl Context<'_> {
                     done!(released);
                 }};
             }
+            // `var op= src`: two ints inline, the rest (floats, references,
+            // `.=` on strings) through `assign_op`; `$b` a `Src` as `arith!`'s.
+            macro_rules! assign_op {
+                ($op:expr, $var:expr, $b:expr) => {{
+                    let b: Src = $b;
+                    let released = if let (Some(x), Some(y)) = (w[rx!($var)].as_int(), src(&w[..], b).as_int())
+                        && let Some(n) = int_op($op, x, y)
+                    {
+                        put(&mut w[rx!($var)], Value::int(n))
+                    } else if assign_op(&mut w[..], $op, Reg::from($var), b) {
+                        true
+                    } else {
+                        slow!()
+                    };
+                    done!(released);
+                }};
+            }
+            // `dst = a cmp b` (`<=>` is `step`'s): two ints inline, the rest
+            // through `test`; `$y` the right operand's value.
+            macro_rules! compare {
+                ($cmp:expr, $dst:expr, $a:expr, $y:expr) => {{
+                    let cmp: Cmp = $cmp;
+                    let (x, y): (&Value, &Value) = (&w[rx!($a)], $y);
+                    let t = if let (Some(x), Some(y)) = (x.as_int(), y.as_int())
+                        && cmp != Cmp::Spaceship
+                    {
+                        int_test(cmp, x, y)
+                    } else if cmp == Cmp::Spaceship {
+                        slow!()
+                    } else {
+                        match test(cmp, x, y) {
+                            Some(t) => t,
+                            None => slow!(),
+                        }
+                    };
+                    done!(put_var(&mut w[rx!($dst)], Value::bool(t)));
+                }};
+            }
+            // $a[k] on an array (or a reference to one) holding a plain value
+            // at that key: an int key inline, a string key (and a reference)
+            // through `elem`; `$key` a `Src`.
+            macro_rules! fetch_dim {
+                ($dst:expr, $arr:expr, $key:expr) => {{
+                    let key: Src = $key;
+                    let v = if let (Some(arr), Some(k)) = (w[rx!($arr)].as_array(), src(&w[..], key).as_int()) {
+                        match arr.get_int(k) {
+                            Some(v) if !v.is_reference() => v.clone(),
+                            _ => slow!(),
+                        }
+                    } else {
+                        match elem(&w[..], Reg::from($arr), key) {
+                            Some(v) => v,
+                            None => slow!(),
+                        }
+                    };
+                    done!(put(&mut w[rx!($dst)], v));
+                    if self.ids.has_pending() {
+                        pending!();
+                    }
+                }};
+            }
+            // isset($a[k]) on an array (or a reference to one), k an int or a
+            // string; the rest (an object, a string's offset, a key of
+            // another type) is `step`'s.
+            macro_rules! isset_dim {
+                ($dst:expr, $var:expr, $key:expr) => {{
+                    let key: Src = $key;
+                    let set = if let (Some(arr), Some(k)) = (w[rx!($var)].as_array(), src(&w[..], key).as_int()) {
+                        arr.get_int(k).is_some_and(is_set)
+                    } else {
+                        match isset_elem(&w[..], Reg::from($var), key) {
+                            Some(set) => set,
+                            None => slow!(),
+                        }
+                    };
+                    done!(put(&mut w[rx!($dst)], Value::bool(set)));
+                }};
+            }
+            // $a[k] = v, $a an array (or a reference to one): a string key
+            // with any defined, non-reference value; an int key with a plain
+            // value. The element replaced may have been an object's last
+            // holder: tested as for any write. `$key` and `$val` are `Src`s.
+            macro_rules! assign_dim {
+                ($var:expr, $key:expr, $val:expr, $dst:expr) => {{
+                    let (key, val): (Src, Src) = ($key, $val);
+                    if src(&w[..], key).is_str() {
+                        if !set_str_elem(&mut w[..], Reg::from($var), key, val, Reg::from($dst)) {
+                            slow!();
+                        }
+                    } else {
+                        let (Some(k), Some(v)) = (src(&w[..], key).as_int(), plain(src(&w[..], val))) else { slow!() };
+                        let slot = &mut w[rx!($var)];
+                        let done = if slot.is_array() {
+                            set_int_elem(slot, k, &v)
+                        } else if let Some(cell) = slot.as_reference() {
+                            set_int_elem(&mut cell.borrow_mut(), k, &v)
+                        } else {
+                            false
+                        };
+                        if !done {
+                            slow!();
+                        }
+                        let _ = put(&mut w[rx!($dst)], v);
+                    }
+                    done!(true);
+                }};
+            }
+            // An array literal's elements pushed or set (an int or string
+            // key; a value defined and read through a reference; anything
+            // else, a next key occupied included, is `step`'s); the value a
+            // `Src` (taken when it is a temporary read for the last time).
+            macro_rules! array_push {
+                ($arr:expr, $val:expr, $take:expr) => {{
+                    let val: Src = $val;
+                    let Some(arr) = w[rx!($arr)].as_array() else { slow!() };
+                    if arr.next_key().is_none() {
+                        slow!();
+                    }
+                    let Some(v) = taken(&mut w[..], val, $take) else { slow!() };
+                    let _ = w[rx!($arr)].array_mut().expect("checked above").push(v);
+                    // (A taken temporary that held a reference let go of it.)
+                    done!(true);
+                }};
+            }
+            macro_rules! array_set {
+                ($arr:expr, $key:expr, $val:expr, $take:expr) => {{
+                    let (key, val): (Src, Src) = ($key, $val);
+                    if !w[rx!($arr)].is_array() {
+                        slow!();
+                    }
+                    let key = src(&w[..], key);
+                    let k = if let Some(k) = key.as_int() {
+                        Key::Int(k)
+                    } else if let Some(s) = key.cloned_str() {
+                        Key::from_string(s)
+                    } else {
+                        slow!()
+                    };
+                    let Some(v) = taken(&mut w[..], val, $take) else { slow!() };
+                    // (A key written twice in one literal replaces the first value.)
+                    w[rx!($arr)].array_mut().expect("checked above").insert(k, v);
+                    done!(true);
+                }};
+            }
             // A fused step and test (`IncJumpLt` and co.) on ints (through a
             // reference too): step, then jump or go past the test. A non-int
             // bound leaves the test to the next instruction; a non-int
-            // variable (or an overflow) leaves both to `step`.
+            // variable (or an overflow) leaves both to `step`. `$b` is the
+            // bound's value.
             macro_rules! step_jump {
                 ($var:expr, $b:expr, $target:expr, $step:expr, $holds:expr) => {{
                     let r = &mut w[rx!($var)];
@@ -166,7 +338,7 @@ impl Context<'_> {
                     } else {
                         slow!()
                     };
-                    match int_of(&w[rx!($b)]) {
+                    match int_of($b) {
                         Some(b) if $holds(n, b) => {
                             if back!($target) {
                                 // The step is done: the test (next) sees the interrupt.
@@ -409,32 +581,37 @@ impl Context<'_> {
                         }
                         pc = imm as usize;
                     }
-                    Op::JumpLt => jump_if!(Cmp::Lt, true, insn.a, insn.b, insn.imm),
-                    Op::JumpNotLt => jump_if!(Cmp::Lt, false, insn.a, insn.b, insn.imm),
-                    Op::JumpLe => jump_if!(Cmp::Le, true, insn.a, insn.b, insn.imm),
-                    Op::JumpNotLe => jump_if!(Cmp::Le, false, insn.a, insn.b, insn.imm),
-                    Op::JumpEq => jump_if!(Cmp::Eq, true, insn.a, insn.b, insn.imm),
-                    Op::JumpNotEq => jump_if!(Cmp::Eq, false, insn.a, insn.b, insn.imm),
-                    Op::JumpIdentical => jump_if!(Cmp::Identical, true, insn.a, insn.b, insn.imm),
-                    Op::JumpNotIdentical => jump_if!(Cmp::Identical, false, insn.a, insn.b, insn.imm),
+                    Op::JumpLt => jump_if!(Cmp::Lt, true, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpNotLt => jump_if!(Cmp::Lt, false, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpLe => jump_if!(Cmp::Le, true, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpNotLe => jump_if!(Cmp::Le, false, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpEq => jump_if!(Cmp::Eq, true, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpNotEq => jump_if!(Cmp::Eq, false, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpIdentical => jump_if!(Cmp::Identical, true, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    Op::JumpNotIdentical => jump_if!(Cmp::Identical, false, &w[rx!(insn.a)], &w[rx!(insn.b)], insn.imm),
+                    // The same against a literal (`$x === null`, `$n > 0`): the
+                    // constant read in place.
+                    Op::JumpLtC => jump_if!(Cmp::Lt, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotLtC => jump_if!(Cmp::Lt, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpLeC => jump_if!(Cmp::Le, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotLeC => jump_if!(Cmp::Le, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpGtC => jump_if!(Cmp::Gt, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotGtC => jump_if!(Cmp::Gt, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpGeC => jump_if!(Cmp::Ge, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotGeC => jump_if!(Cmp::Ge, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpEqC => jump_if!(Cmp::Eq, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotEqC => jump_if!(Cmp::Eq, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpIdenticalC => jump_if!(Cmp::Identical, true, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
+                    Op::JumpNotIdenticalC => jump_if!(Cmp::Identical, false, &w[rx!(insn.a)], cst!(insn::wide(insn)), insn.imm),
                     // A comparison (`<=>` is `step`'s): two ints inline, the
                     // rest through `test`.
                     Op::Compare => {
                         ops!(a, b, c, imm);
-                        let cmp = insn::cmp(imm);
-                        let t = if let (Some(x), Some(y)) = (w[rx!(b)].as_int(), w[rx!(c)].as_int())
-                            && cmp != Cmp::Spaceship
-                        {
-                            int_test(cmp, x, y)
-                        } else if cmp == Cmp::Spaceship {
-                            slow!()
-                        } else {
-                            match test(&w[..], cmp, Reg::from(b), Reg::from(c)) {
-                                Some(t) => t,
-                                None => slow!(),
-                            }
-                        };
-                        done!(put_var(&mut w[rx!(a)], Value::bool(t)));
+                        compare!(insn::cmp(imm), a, b, &w[rx!(c)]);
+                    }
+                    Op::CompareC => {
+                        ops!(a, b, c, imm);
+                        compare!(insn::cmp(imm), a, b, cst!(imm >> 8));
                     }
                     Op::IncVar => {
                         let r = &mut w[rx!(insn.a)];
@@ -451,10 +628,15 @@ impl Context<'_> {
                             slow!();
                         }
                     }
-                    Op::IncJumpLt => step_jump!(insn.a, insn.b, insn.imm, i64::checked_add, |n, b| n < b),
-                    Op::IncJumpLe => step_jump!(insn.a, insn.b, insn.imm, i64::checked_add, |n, b| n <= b),
-                    Op::DecJumpGt => step_jump!(insn.a, insn.b, insn.imm, i64::checked_sub, |n, b| n > b),
-                    Op::DecJumpGe => step_jump!(insn.a, insn.b, insn.imm, i64::checked_sub, |n, b| n >= b),
+                    Op::IncJumpLt => step_jump!(insn.a, &w[rx!(insn.b)], insn.imm, i64::checked_add, |n, b| n < b),
+                    Op::IncJumpLe => step_jump!(insn.a, &w[rx!(insn.b)], insn.imm, i64::checked_add, |n, b| n <= b),
+                    Op::DecJumpGt => step_jump!(insn.a, &w[rx!(insn.b)], insn.imm, i64::checked_sub, |n, b| n > b),
+                    Op::DecJumpGe => step_jump!(insn.a, &w[rx!(insn.b)], insn.imm, i64::checked_sub, |n, b| n >= b),
+                    // The same against a literal bound (`$i < 10`).
+                    Op::IncJumpLtC => step_jump!(insn.a, cst!(insn::wide(insn)), insn.imm, i64::checked_add, |n, b| n < b),
+                    Op::IncJumpLeC => step_jump!(insn.a, cst!(insn::wide(insn)), insn.imm, i64::checked_add, |n, b| n <= b),
+                    Op::DecJumpGtC => step_jump!(insn.a, cst!(insn::wide(insn)), insn.imm, i64::checked_sub, |n, b| n > b),
+                    Op::DecJumpGeC => step_jump!(insn.a, cst!(insn::wide(insn)), insn.imm, i64::checked_sub, |n, b| n >= b),
                     Op::DecVar => {
                         let r = &mut w[rx!(insn.a)];
                         if let Some(i) = r.as_int_mut()
@@ -472,14 +654,30 @@ impl Context<'_> {
                     }
                     Op::Binary => {
                         ops!(a, b, c, imm);
-                        if !arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), Reg::from(c)) {
+                        if !arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), reg_src!(c)) {
                             slow!();
                         }
                         done!(true);
                     }
-                    Op::Add => arith!(BinOp::Add, insn.a, insn.b, insn.c, i64::checked_add),
-                    Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, insn.c, i64::checked_sub),
-                    Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, insn.c, i64::checked_mul),
+                    // `b op K`, or `K op b` (CONST_LEFT: `"prefix" . $s`).
+                    Op::BinaryC => {
+                        ops!(a, b, c, imm);
+                        let done = if imm & insn::CONST_LEFT != 0 {
+                            arith_left(&mut w[..], insn::binop(imm), Reg::from(a), cst!(imm >> 8), Reg::from(b))
+                        } else {
+                            arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), cst_src!(imm >> 8))
+                        };
+                        if !done {
+                            slow!();
+                        }
+                        done!(true);
+                    }
+                    Op::Add => arith!(BinOp::Add, insn.a, insn.b, reg_src!(insn.c), i64::checked_add),
+                    Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, reg_src!(insn.c), i64::checked_sub),
+                    Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, reg_src!(insn.c), i64::checked_mul),
+                    Op::AddC => arith!(BinOp::Add, insn.a, insn.b, cst_src!(insn.imm), i64::checked_add),
+                    Op::SubC => arith!(BinOp::Sub, insn.a, insn.b, cst_src!(insn.imm), i64::checked_sub),
+                    Op::MulC => arith!(BinOp::Mul, insn.a, insn.b, cst_src!(insn.imm), i64::checked_mul),
                     Op::ConcatN => {
                         ops!(a, b, c, imm);
                         if !concat_n(&mut w[..], Reg::from(a), Reg::from(b), c) {
@@ -502,6 +700,19 @@ impl Context<'_> {
                     Op::Assign => {
                         ops!(a, b, c, imm);
                         let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                        done!(put_var(&mut w[rx!(a)], v));
+                    }
+                    // A literal into a temporary (`LoadConst`: the one
+                    // instruction a constant costs where nothing reads it in
+                    // place), or into a variable (`$x = 1`).
+                    Op::LoadConst => {
+                        ops!(a, b, c, imm);
+                        let v = cst!(imm).clone();
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    Op::AssignC => {
+                        ops!(a, b, c, imm);
+                        let v = cst!(imm).clone();
                         done!(put_var(&mut w[rx!(a)], v));
                     }
                     Op::AssignTake => {
@@ -560,64 +771,33 @@ impl Context<'_> {
                     // a reference) through `elem`.
                     Op::FetchDim => {
                         ops!(a, b, c, imm);
-                        let v = if let (Some(arr), Some(k)) = (w[rx!(b)].as_array(), w[rx!(c)].as_int()) {
-                            match arr.get_int(k) {
-                                Some(v) if !v.is_reference() => v.clone(),
-                                _ => slow!(),
-                            }
-                        } else {
-                            match elem(&w[..], Reg::from(b), Reg::from(c)) {
-                                Some(v) => v,
-                                None => slow!(),
-                            }
-                        };
-                        done!(put(&mut w[rx!(a)], v));
-                        if self.ids.has_pending() {
-                            pending!();
-                        }
+                        fetch_dim!(a, b, reg_src!(c));
                     }
-                    // isset($a[k]) on an array (or a reference to one), k an int
-                    // or a string; the rest (an object, a string's offset, a
-                    // key of another type) is `step`'s.
+                    // `$a['key']`: the key read in place.
+                    Op::FetchDimC => {
+                        ops!(a, b, c, imm);
+                        fetch_dim!(a, b, cst_src!(imm));
+                    }
                     Op::IssetDim => {
                         ops!(a, b, c, imm);
-                        let set = if let (Some(arr), Some(k)) = (w[rx!(b)].as_array(), w[rx!(c)].as_int()) {
-                            arr.get_int(k).is_some_and(is_set)
-                        } else {
-                            match isset_elem(&w[..], Reg::from(b), Reg::from(c)) {
-                                Some(set) => set,
-                                None => slow!(),
-                            }
-                        };
-                        done!(put(&mut w[rx!(a)], Value::bool(set)));
+                        isset_dim!(a, b, reg_src!(c));
                     }
-                    // $a[k] = v, $a an array (or a reference to one): a string
-                    // key with any defined, non-reference value; an int key
-                    // with a plain value. The element replaced may have been
-                    // an object's last holder: tested as for any write.
+                    Op::IssetDimC => {
+                        ops!(a, b, c, imm);
+                        isset_dim!(a, b, cst_src!(imm));
+                    }
                     Op::AssignDim => {
                         ops!(a, b, c, imm);
-                        let (var, keys, val, dst) = (a, b, c, imm as u8);
-                        if w[rx!(keys)].is_str() {
-                            if !set_str_elem(&mut w[..], Reg::from(var), Reg::from(keys), Reg::from(val), Reg::from(dst)) {
-                                slow!();
-                            }
-                        } else {
-                            let (Some(k), Some(v)) = (w[rx!(keys)].as_int(), plain(&w[rx!(val)])) else { slow!() };
-                            let slot = &mut w[rx!(var)];
-                            let done = if slot.is_array() {
-                                set_int_elem(slot, k, &v)
-                            } else if let Some(cell) = slot.as_reference() {
-                                set_int_elem(&mut cell.borrow_mut(), k, &v)
-                            } else {
-                                false
-                            };
-                            if !done {
-                                slow!();
-                            }
-                            let _ = put(&mut w[rx!(dst)], v);
-                        }
-                        done!(true);
+                        assign_dim!(a, reg_src!(b), reg_src!(c), imm as u8);
+                    }
+                    // `$a['key'] = $v` and `$a[$k] = 1`.
+                    Op::AssignDimCK => {
+                        ops!(a, b, c, imm);
+                        assign_dim!(a, cst_src!(imm >> 8), reg_src!(c), imm as u8);
+                    }
+                    Op::AssignDimCV => {
+                        ops!(a, b, c, imm);
+                        assign_dim!(a, reg_src!(b), cst_src!(imm >> 8), imm as u8);
                     }
                     // $a[int] op= number, $a an array holding a number at
                     // that key
@@ -647,17 +827,12 @@ impl Context<'_> {
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
                         ops!(a, b, c, imm);
-                        let op = insn::binop(imm);
-                        let released = if let (Some(x), Some(y)) = (w[rx!(a)].as_int(), w[rx!(b)].as_int())
-                            && let Some(n) = int_op(op, x, y)
-                        {
-                            put(&mut w[rx!(a)], Value::int(n))
-                        } else if assign_op(&mut w[..], op, Reg::from(a), Reg::from(b)) {
-                            true
-                        } else {
-                            slow!()
-                        };
-                        done!(released);
+                        assign_op!(insn::binop(imm), a, reg_src!(b));
+                    }
+                    // `$s .= 'literal'`, `$n += 1`.
+                    Op::AssignOpC => {
+                        ops!(a, b, c, imm);
+                        assign_op!(insn::binop(imm), a, cst_src!(imm >> 8));
                     }
                     // $i++ / ++$i (and --) whose value is used, on an int
                     Op::IncDec => {
@@ -722,32 +897,22 @@ impl Context<'_> {
                     }
                     Op::ArrayPush => {
                         ops!(a, b, c, imm);
-                        let Some(arr) = w[rx!(a)].as_array() else { slow!() };
-                        if arr.next_key().is_none() {
-                            slow!();
-                        }
-                        let Some(v) = taken(&mut w[..], Reg::from(b), imm & insn::TAKE != 0) else { slow!() };
-                        let _ = w[rx!(a)].array_mut().expect("checked above").push(v);
-                        // (A taken temporary that held a reference let go of it.)
-                        done!(true);
+                        array_push!(a, reg_src!(b), imm & insn::TAKE != 0);
+                    }
+                    Op::ArrayPushC => {
+                        ops!(a, b, c, imm);
+                        array_push!(a, cst_src!(imm), false);
                     }
                     Op::ArraySet => {
                         ops!(a, b, c, imm);
-                        if !w[rx!(a)].is_array() {
-                            slow!();
-                        }
-                        let key = &w[rx!(b)];
-                        let k = if let Some(k) = key.as_int() {
-                            Key::Int(k)
-                        } else if let Some(s) = key.cloned_str() {
-                            Key::from_string(s)
-                        } else {
-                            slow!()
-                        };
-                        let Some(v) = taken(&mut w[..], Reg::from(c), imm & insn::TAKE != 0) else { slow!() };
-                        // (A key written twice in one literal replaces the first value.)
-                        w[rx!(a)].array_mut().expect("checked above").insert(k, v);
-                        done!(true);
+                        array_set!(a, reg_src!(b), reg_src!(c), imm & insn::TAKE != 0);
+                    }
+                    // `['key' => 1]`: the key, the value or both literals.
+                    Op::ArraySetC => {
+                        ops!(a, b, c, imm);
+                        let key = if imm & insn::KEY_CONST != 0 { cst_src!(imm & 0x3fff) } else { reg_src!(b) };
+                        let val = if imm & insn::VAL_CONST != 0 { cst_src!(imm >> 14 & 0x3fff) } else { reg_src!(c) };
+                        array_set!(a, key, val, imm & insn::TAKE != 0);
                     }
                     // A constant the site resolved (a deprecated one is never
                     // cached: it warns on every fetch).
@@ -850,7 +1015,42 @@ impl Context<'_> {
                         let (start, n) = (rx!(a), rx!(b));
                         if let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() {
                             let call = self.isolate.registry.call(i);
-                            if let Some(run) = call.frameless
+                            if imm & insn::ARG_CONST != 0 {
+                                // `f('literal')`: the one argument is the
+                                // constant, lent from the closure's table (a
+                                // copy of it: the builtin takes the slice
+                                // mutably, as the moved ABI's do).
+                                if let Some(run) = call.frameless
+                                    && matches!(run, Imp::Lent(_))
+                                    && call.plain(std::slice::from_ref(cst!(start)))
+                                    && (!self.header_callback_set || self.out.started)
+                                {
+                                    let mut arg = [cst!(start).clone()];
+                                    self.pc = pc + 2;
+                                    let r = self.frameless_run(i, run, &mut arg);
+                                    match r {
+                                        Some(v) if self.diags.is_empty() && self.pending_errors.is_empty() => {
+                                            let _ = put(&mut w[rx!(c)], v);
+                                            pc += 2;
+                                            if self.ids.has_pending() {
+                                                pending_at!(pc, pc - 1);
+                                            }
+                                            top = self.frames.last().expect("a frame");
+                                            clo = &*top.func;
+                                            code = &clo.code.insns[..];
+                                        }
+                                        r => {
+                                            // The argument register as the
+                                            // checked path would have it.
+                                            let at = rk!((imm >> 16) as usize);
+                                            let _ = put(&mut w[at], arg[0].clone());
+                                            pc = self.frameless_tail(regs, pc + 1, i, r, (base + at, 1, base + rx!(c), true))?;
+                                            continue 'frame;
+                                        }
+                                    }
+                                    continue;
+                                }
+                            } else if let Some(run) = call.frameless
                                 && matches!(run, Imp::Lent(_))
                                 && call.plain(&w[start..start + n])
                                 && (!self.header_callback_set || self.out.started)
@@ -859,10 +1059,15 @@ impl Context<'_> {
                                 continue;
                             }
                         }
-                        let Some(v) = copied(&w[start]) else { slow!() };
-                        done!(put(&mut w[rk!((imm >> 16) as usize)], v));
-                        if self.ids.has_pending() {
-                            pending!();
+                        if imm & insn::ARG_CONST != 0 {
+                            let v = cst!(start).clone();
+                            done!(put(&mut w[rk!((imm >> 16) as usize)], v));
+                        } else {
+                            let Some(v) = copied(&w[start]) else { slow!() };
+                            done!(put(&mut w[rk!((imm >> 16) as usize)], v));
+                            if self.ids.has_pending() {
+                                pending!();
+                            }
                         }
                     }
                     // A user method the call site's cache names for this class
@@ -1008,6 +1213,19 @@ impl Context<'_> {
                         }
                         continue 'frame;
                     }
+                    // `return 'literal'`, `return true`.
+                    Op::ReturnC => {
+                        if self.frames.len() == self.frames.floor + 1 {
+                            slow!();
+                        }
+                        let value = cst!(insn.imm).clone();
+                        leave(&mut self.frames, regs, value);
+                        pc = self.frames.last().expect("the caller's frame").pc as usize;
+                        if self.ids.has_pending() {
+                            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                        }
+                        continue 'frame;
+                    }
                     Op::ReturnNull => {
                         if self.frames.len() == self.frames.floor + 1 {
                             slow!();
@@ -1071,47 +1289,34 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     if argc > nparams {
         frame.extra = take_extra(spare, regs, base, nparams, argc);
     }
-    let consts_at = code.consts_at as usize;
-    for r in &mut regs[base + argc.min(nparams)..base + consts_at] {
+    // The variables not passed are undefined (PHP initialises its CVs).
+    // Constants are read in place (`const_index`): none is copied in.
+    for r in &mut regs[base + argc.min(nparams)..base + code.ncv as usize] {
         clear(r);
     }
     // Arguments not passed: their constant defaults.
     if argc < nparams && !func.defaults.is_empty() {
         fill_defaults(&func.defaults, &mut regs[base..base + nparams], argc);
     }
-    // Only the constants read as values (names stay in the constants).
-    let values = code.value_consts as usize;
-    // A register still holding the very constant (the same function called
-    // again at this base: `leave` leaves the constants in place) is kept.
-    for (r, c) in regs[base + consts_at..base + consts_at + values].iter_mut().zip(func.consts.iter()) {
-        if !r.same_handle(c) {
-            enter_const(r, c);
-        }
-    }
-}
-
-/// A constant copied into its register, the register's old value released.
-#[inline(never)]
-fn enter_const(r: &mut Value, c: &Value) {
-    let _ = clear(r);
-    // `r` is undefined now: nothing to drop.
-    std::mem::forget(std::mem::replace(r, c.clone()));
 }
 
 /// The value `return` hands back from register `src` of `frame` (at
-/// `base`); None when it is undefined (`step` warns). The frame ends with
-/// the return, so the value is moved out of its register (no copy, and
-/// no drop of the register's copy at `leave`) unless something still
-/// reads the register: a constant (a name's stays for every call), a reference's
-/// target, or a variable of a frame whose variables are not its own (the
-/// global scope's, or a file's included in a function, given back at
-/// `leave`).
+/// `base`); None when it is undefined (`step` warns) or a constant
+/// operand (`step` reads it in place). The frame ends with the return,
+/// so the value is moved out of its register (no copy, and no drop of
+/// the register's copy at `leave`) unless something still reads the
+/// register: a reference's target, or a variable of a frame whose
+/// variables are not its own (the global scope's, or a file's included in
+/// a function, given back at `leave`).
 #[inline(always)]
 pub(crate) fn returned(regs: &mut [Value], frame: &Frame, base: usize, src: Reg) -> Option<Value> {
+    if const_index(src).is_some() {
+        return None;
+    }
     let code = &frame.func.code;
     let at = src as usize;
-    let temp = at >= code.consts_at as usize + frame.func.consts.len();
-    let own_var = at < code.consts_at as usize && !frame.global && frame.extra.is_none();
+    let temp = at >= code.ncv as usize;
+    let own_var = !temp && !frame.global && frame.extra.is_none();
     let r = &mut regs[base + at];
     if r.is_undef() {
         None
@@ -1165,15 +1370,14 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     // register may be inside the window).
     let base = frame.base as usize;
     let code = &frame.func.code;
-    // The variables; the constants' registers are left as they are (the
-    // next frame there overwrites them). The temporaries are empty when the
-    // code frees each where it dies (`frees_temps`), as PHP's are.
-    let consts = base + code.consts_at as usize..base + code.consts_at as usize + code.value_consts as usize;
-    for r in &mut regs[base..consts.start] {
+    // The variables. The temporaries are empty when the code frees each
+    // where it dies (`frees_temps`), as PHP's are.
+    let temps = base + code.ncv as usize;
+    for r in &mut regs[base..temps] {
         clear(r);
     }
     if !code.frees_temps {
-        for r in &mut regs[consts.end..base + usize::from(code.nregs)] {
+        for r in &mut regs[temps..base + usize::from(code.nregs)] {
             clear(r);
         }
     }
@@ -1268,12 +1472,34 @@ pub(crate) fn clear(r: &mut Value) -> bool {
     put(r, Value::UNDEF)
 }
 
+/// The right operand of a two-operand arm: a register of the window, or a
+/// constant read in place (the `Op::*C` forms), for the helpers that
+/// serve both.
+#[derive(Clone, Copy)]
+pub(crate) enum Src<'c> {
+    Reg(Reg),
+    Const(&'c Value),
+}
+
+/// The operand's value.
+#[inline(always)]
+pub(crate) fn src<'w, 'c: 'w>(w: &'w [Value], s: Src<'c>) -> &'w Value {
+    match s {
+        Src::Reg(r) => &w[usize::from(r)],
+        Src::Const(c) => c,
+    }
+}
+
 /// An operand to store (`operand_take`): moved out of its register when
 /// `take` (a temporary read for the last time), else copied; a reference's
 /// value is read through it (the taken register lets go of the
-/// reference). None when undefined (`step` warns).
+/// reference); a constant is copied. None when undefined (`step` warns).
 #[inline(always)]
-fn taken(w: &mut [Value], r: Reg, take: bool) -> Option<Value> {
+fn taken(w: &mut [Value], r: Src, take: bool) -> Option<Value> {
+    let r = match r {
+        Src::Reg(r) => r,
+        Src::Const(c) => return Some(c.clone()),
+    };
     let slot = &w[usize::from(r)];
     if slot.is_undef() {
         return None;
@@ -1350,11 +1576,10 @@ fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<
 /// variable (`step` warns) or `<=>`.
 #[cold]
 #[inline(never)]
-fn test(w: &[Value], cmp: Cmp, a: Reg, b: Reg) -> Option<bool> {
+fn test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
     if cmp == Cmp::Spaceship {
         return None;
     }
-    let (x, y) = (&w[usize::from(a)], &w[usize::from(b)]);
     if x.is_undef() || y.is_undef() {
         None
     } else if x.is_reference() || y.is_reference() {
@@ -1370,17 +1595,8 @@ fn test(w: &[Value], cmp: Cmp, a: Reg, b: Reg) -> Option<bool> {
 /// warning, an error, a conversion with side effects, an overflow.
 #[cold]
 #[inline(never)]
-fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
-    let (x, y) = (&w[usize::from(a)], &w[usize::from(b)]);
-    let r = if x.is_reference() || y.is_reference() {
-        match (num_of(x), num_of(y)) {
-            (Some(x), Some(y)) => num_op(op, &x, &y),
-            _ => None,
-        }
-    } else {
-        num_op(op, x, y)
-    };
-    match r {
+fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Src) -> bool {
+    match num_pair(op, &w[usize::from(a)], src(w, b)) {
         Some(r) => {
             // (Reported as released whatever the old value: the arm tests pending.)
             let _ = put_var(&mut w[usize::from(dst)], r);
@@ -1390,26 +1606,43 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Reg) -> bool {
     }
 }
 
-/// `var op= src` beyond two ints: numbers (through references), `.=` on
-/// strings. False when `step` must run it.
+/// `arith` with the literal on the left (`K op b`: BinaryC's CONST_LEFT).
 #[cold]
 #[inline(never)]
-fn assign_op(w: &mut [Value], op: BinOp, var: Reg, src: Reg) -> bool {
-    let (x, y) = (&w[usize::from(var)], &w[usize::from(src)]);
-    let r = if x.is_reference() || y.is_reference() {
+fn arith_left(w: &mut [Value], op: BinOp, dst: Reg, x: &Value, b: Reg) -> bool {
+    match num_pair(op, x, &w[usize::from(b)]) {
+        Some(r) => {
+            let _ = put_var(&mut w[usize::from(dst)], r);
+            true
+        }
+        None => op == BinOp::Concat && concat_left(w, dst, x, b),
+    }
+}
+
+/// `x op y` on two numbers, each read through a reference if it is one.
+#[inline(always)]
+fn num_pair(op: BinOp, x: &Value, y: &Value) -> Option<Value> {
+    if x.is_reference() || y.is_reference() {
         match (num_of(x), num_of(y)) {
             (Some(x), Some(y)) => num_op(op, &x, &y),
             _ => None,
         }
     } else {
         num_op(op, x, y)
-    };
-    match r {
+    }
+}
+
+/// `var op= src` beyond two ints: numbers (through references), `.=` on
+/// strings. False when `step` must run it.
+#[cold]
+#[inline(never)]
+fn assign_op(w: &mut [Value], op: BinOp, var: Reg, b: Src) -> bool {
+    match num_pair(op, &w[usize::from(var)], src(w, b)) {
         Some(r) => {
             let _ = put_var(&mut w[usize::from(var)], r);
             true
         }
-        None => op == BinOp::Concat && append_str(w, var, src),
+        None => op == BinOp::Concat && append_str(w, var, b),
     }
 }
 
@@ -1432,9 +1665,9 @@ fn truth(v: &Value) -> Option<bool> {
 /// offset) otherwise. The element must not be a reference.
 #[cold]
 #[inline(never)]
-fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
+fn elem(w: &[Value], arr: Reg, key: Src) -> Option<Value> {
     let at = |a: &PhpArray| {
-        let key = &w[usize::from(key)];
+        let key = src(w, key);
         if let Some(k) = key.as_int() {
             a.get_int(k).cloned()
         } else if let Some(s) = key.as_str() {
@@ -1458,9 +1691,9 @@ fn elem(w: &[Value], arr: Reg, key: Reg) -> Option<Value> {
 /// held through a reference; None (`step`) otherwise.
 #[cold]
 #[inline(never)]
-fn isset_elem(w: &[Value], var: Reg, keys: Reg) -> Option<bool> {
+fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
     let at = |a: &PhpArray| {
-        let key = &w[usize::from(keys)];
+        let key = src(w, keys);
         if let Some(k) = key.as_int() {
             Some(a.get_int(k).is_some_and(is_set))
         } else {
