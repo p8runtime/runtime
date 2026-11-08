@@ -448,10 +448,10 @@ impl PhpStr {
         Rc::ptr_eq(&a.0, &b.0)
     }
 
-    /// Whether this is the string's only handle (dropping it frees it).
+    /// How many handles share the string (1: dropping this one frees it).
     #[inline(always)]
-    pub fn is_last(&self) -> bool {
-        Rc::strong_count(&self.0) == 1
+    pub fn count(&self) -> usize {
+        Rc::strong_count(&self.0)
     }
 }
 

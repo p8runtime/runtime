@@ -34,7 +34,7 @@ pub struct Value(Repr);
 #[repr(u8)]
 enum Repr {
     Null = 0,
-    Bool(bool) = 1,
+    Bool(B) = 1,
     Int(i64) = 2,
     Float(f64) = 3,
     /// A variable never assigned (only in registers; reads warn and give null).
@@ -52,6 +52,16 @@ enum Repr {
     /// An object: a shared handle (copying the value copies the handle).
     Object(ManuallyDrop<Rc<Object>>) = 9,
 }
+
+/// A bool's payload, at the payload's offset (8) as every other variant's
+/// is: a copy of any value is then its tag and one word. (A plain `bool`
+/// sits at offset 1, and copying a value had to move bytes 1..8 too, one
+/// by one through the stack: most of what a register copy cost.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(align(8))]
+struct B(bool);
+
+const _: () = assert!(mem::size_of::<B>() == 8);
 
 /// A handle for the representation.
 #[inline(always)]
@@ -126,11 +136,12 @@ impl Drop for Value {
     }
 }
 
-/// The last handle of a string, array, reference or object goes: its free
-/// (and an object's destructor queued), out of line.
-#[cold]
-#[inline(never)]
-fn free_last(r: Repr) {
+/// Let go of the handles in a representation: their `Rc` drops. Out of
+/// line for the last handle (`free_last`); inline for a shared one, where
+/// the count was just read and is known not to reach zero, so the drop is
+/// the decrement alone.
+#[inline(always)]
+fn drop_handles(r: Repr) {
     match r {
         Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
         Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
@@ -140,46 +151,35 @@ fn free_last(r: Repr) {
     }
 }
 
-/// `Value::release` of a representation moved out of its value.
+/// The last handle of a string, array, reference or object goes: its free
+/// (and an object's destructor queued), out of line.
+#[cold]
+#[inline(never)]
+fn free_last(r: Repr) {
+    drop_handles(r);
+}
+
+/// `Value::release` of a representation moved out of its value. The count
+/// is read the same way for every kind of handle (the `Rc` count, first in
+/// its allocation), and the decrement is the same for all: one test of the
+/// tag, not a dispatch on it.
 #[inline(always)]
 fn release_repr(r: Repr) -> bool {
-    match r {
-        Repr::Str(s) => {
-            if s.is_last() {
-                free_last(Repr::Str(s));
-            } else {
-                drop(ManuallyDrop::into_inner(s));
-            }
-            false
-        }
-        Repr::Array(a) => {
-            if Rc::strong_count(&a) == 1 {
-                free_last(Repr::Array(a));
-                true
-            } else {
-                drop(ManuallyDrop::into_inner(a));
-                false
-            }
-        }
-        Repr::Ref(r) => {
-            if Rc::strong_count(&r) == 1 {
-                free_last(Repr::Ref(r));
-                true
-            } else {
-                drop(ManuallyDrop::into_inner(r));
-                false
-            }
-        }
-        Repr::Object(o) => {
-            if Rc::strong_count(&o) == 1 {
-                free_last(Repr::Object(o));
-                true
-            } else {
-                drop(ManuallyDrop::into_inner(o));
-                false
-            }
-        }
-        _ => false,
+    let count = match &r {
+        Repr::Str(s) => s.count(),
+        Repr::Array(a) => Rc::strong_count(a),
+        Repr::Ref(c) => Rc::strong_count(c),
+        Repr::Object(o) => Rc::strong_count(o),
+        _ => return false,
+    };
+    if count == 1 {
+        // A string's free cannot run a destructor.
+        let owns = !matches!(r, Repr::Str(_));
+        free_last(r);
+        owns
+    } else {
+        drop_handles(r);
+        false
     }
 }
 
@@ -276,12 +276,12 @@ pub enum Kind {
 impl Value {
     pub const NULL: Value = Value(Repr::Null);
     pub const UNDEF: Value = Value(Repr::Undef);
-    pub const TRUE: Value = Value(Repr::Bool(true));
-    pub const FALSE: Value = Value(Repr::Bool(false));
+    pub const TRUE: Value = Value(Repr::Bool(B(true)));
+    pub const FALSE: Value = Value(Repr::Bool(B(false)));
 
     #[inline(always)]
     pub const fn bool(b: bool) -> Value {
-        Value(Repr::Bool(b))
+        Value(Repr::Bool(B(b)))
     }
 
     #[inline(always)]
@@ -439,7 +439,7 @@ impl Value {
     #[inline(always)]
     pub fn as_bool(&self) -> Option<bool> {
         match self.0 {
-            Repr::Bool(b) => Some(b),
+            Repr::Bool(b) => Some(b.0),
             _ => None,
         }
     }
@@ -632,7 +632,7 @@ impl Value {
 impl From<bool> for Value {
     #[inline(always)]
     fn from(b: bool) -> Value {
-        Value(Repr::Bool(b))
+        Value(Repr::Bool(B(b)))
     }
 }
 
@@ -715,7 +715,7 @@ impl Value {
     pub fn to_bool(&self) -> bool {
         match &self.0 {
             Repr::Null | Repr::Undef => false,
-            Repr::Bool(b) => *b,
+            Repr::Bool(b) => b.0,
             Repr::Int(i) => *i != 0,
             Repr::Float(f) => *f != 0.0,
             Repr::IStr(s) => !(s.is_empty() || s.as_bytes() == b"0"),
@@ -742,7 +742,7 @@ impl Value {
     pub fn to_int(&self) -> i64 {
         match &self.0 {
             Repr::Null | Repr::Undef => 0,
-            Repr::Bool(b) => i64::from(*b),
+            Repr::Bool(b) => i64::from(b.0),
             Repr::Int(i) => *i,
             Repr::Float(f) => dval_to_lval(*f),
             Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
@@ -765,7 +765,7 @@ impl Value {
     pub fn to_float(&self) -> f64 {
         match &self.0 {
             Repr::Null | Repr::Undef => 0.0,
-            Repr::Bool(b) => f64::from(u8::from(*b)),
+            Repr::Bool(b) => f64::from(u8::from(b.0)),
             Repr::Int(i) => *i as f64,
             Repr::Float(f) => *f,
             Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
@@ -785,8 +785,8 @@ impl Value {
     /// which the engine reports ("Array to string conversion").
     pub fn to_php_string(&self) -> Option<PhpStr> {
         Some(match &self.0 {
-            Repr::Null | Repr::Undef | Repr::Bool(false) => PhpStr::empty(),
-            Repr::Bool(true) => PhpStr::from("1"),
+            Repr::Null | Repr::Undef | Repr::Bool(B(false)) => PhpStr::empty(),
+            Repr::Bool(B(true)) => PhpStr::from("1"),
             Repr::Int(i) => PhpStr::from_int(*i),
             Repr::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
             Repr::Str(s) => PhpStr::clone(s),
@@ -887,14 +887,14 @@ impl Value {
                 return a.dynamic.borrow().compare(&b.dynamic.borrow());
             }
             (Null, Null) => Ordering::Equal,
-            (Null, Bool(b)) | (Bool(false), Bool(b)) => false.cmp(b),
-            (Bool(a), Null) => a.cmp(&false),
-            (Bool(true), Bool(b)) => true.cmp(b),
+            (Null, Bool(b)) | (Bool(B(false)), Bool(b)) => false.cmp(&b.0),
+            (Bool(a), Null) => a.0.cmp(&false),
+            (Bool(B(true)), Bool(b)) => true.cmp(&b.0),
             (Null, IStr(_) | Str(_)) => if other.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Less },
             (IStr(_) | Str(_), Null) => if self.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Greater },
             (IStr(_) | Str(_), IStr(_) | Str(_)) => smart_strcmp(self.as_str().expect("a string"), other.as_str().expect("a string")),
-            (Bool(a), _) => a.cmp(&other.to_bool()),
-            (_, Bool(b)) => self.to_bool().cmp(b),
+            (Bool(a), _) => a.0.cmp(&other.to_bool()),
+            (_, Bool(b)) => self.to_bool().cmp(&b.0),
             (Null, _) => false.cmp(&other.to_bool()),
             (_, Null) => self.to_bool().cmp(&false),
             // NAN against a string is "greater" either way round (zend_compare)
