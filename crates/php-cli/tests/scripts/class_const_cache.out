@@ -1,0 +1,30 @@
+-- 0
+["A-x","B-x",[1,2,3],"A-x+B-y","A-x+B-y","A","B","H","Spades",3,true]
+["A-x","A-x","A-p","A-q"]["A-x","B-x","A-p","A-q"]
+A-pA-qA-p
+Error: Cannot access private constant A::Q
+Error: Cannot access protected constant A::P
+Error: Undefined constant A::NOPE
+Error: Cannot access protected constant A::P
+A-p
+Error: Cannot access protected constant A::P
+-- 1
+["A-x","B-x",[1,2,3],"A-x+B-y","A-x+B-y","A","B","H","Spades",3,true]
+["A-x","A-x","A-p","A-q"]["A-x","B-x","A-p","A-q"]
+A-pA-qA-p
+Error: Cannot access private constant A::Q
+Error: Cannot access protected constant A::P
+Error: Undefined constant A::NOPE
+Error: Cannot access protected constant A::P
+A-p
+Error: Cannot access protected constant A::P
+-- 2
+["A-x","B-x",[1,2,3],"A-x+B-y","A-x+B-y","A","B","H","Spades",3,true]
+["A-x","A-x","A-p","A-q"]["A-x","B-x","A-p","A-q"]
+A-pA-qA-p
+Error: Cannot access private constant A::Q
+Error: Cannot access protected constant A::P
+Error: Undefined constant A::NOPE
+Error: Cannot access protected constant A::P
+A-p
+Error: Cannot access protected constant A::P

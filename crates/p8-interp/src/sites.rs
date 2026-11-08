@@ -35,6 +35,13 @@ pub struct Closure {
     /// one per parameter, then the return type's; empty when no type
     /// names a class.
     pub(crate) type_memo: Box<[ClassMemo]>,
+    /// `C::NAME` of a named class, a public constant (or `C::class`):
+    /// its value, once read, by the name's constant (one entry per
+    /// constant, as `props`), with the class reference it was read
+    /// through (another class with the same name reads past it). A
+    /// class's constants never change, and a name is always the same
+    /// class (`class_refs`): PHP's runtime cache slot of FETCH_CLASS_CONSTANT.
+    pub(crate) class_consts: Box<[OnceCell<(u16, Value)>]>,
 }
 
 /// A class a declared type accepted (`Closure::type_memo`): its address,
@@ -107,7 +114,8 @@ impl Closure {
         } else {
             Box::default()
         };
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo })
+        let class_consts = code.consts.iter().map(|_| OnceCell::new()).collect();
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts })
     }
 
     /// The stand-in for a declared function or method whose closure has not

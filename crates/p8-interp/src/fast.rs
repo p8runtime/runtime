@@ -757,6 +757,15 @@ impl Context<'_> {
                         let v = v.clone();
                         done!(put(&mut w[rx!(a)], v));
                     }
+                    // `C::NAME` the site's cache holds (filled by `step`).
+                    Op::ClassConst => {
+                        ops!(a, b, c, imm);
+                        let v = match clo.class_consts.get((imm & 0xffff) as usize).and_then(OnceCell::get) {
+                            Some((class, v)) if u32::from(*class) == imm >> 16 => v.clone(),
+                            _ => slow!(),
+                        };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
                     // A call of a user function the call site resolved, with
                     // its required arguments, and no interrupt pending: its
                     // frame pushed here. A builtin it resolved: frameless when

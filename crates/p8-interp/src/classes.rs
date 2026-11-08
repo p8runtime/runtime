@@ -1421,6 +1421,23 @@ impl Context<'_> {
         }
     }
 
+    /// Whether `class::name`, just read, is the same value every time this
+    /// code reads it (`Closure::class_consts`): a named class (always the
+    /// same one), and `::class` or a public constant that is not an enum
+    /// case (a private or protected one's access depends on the scope a
+    /// closure is bound to). Its value, if it is code, has been computed.
+    pub(crate) fn class_const_cacheable(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> bool {
+        if !matches!(clo.code.classes[class as usize], p8_bytecode::ClassRef::Named(..)) {
+            return false;
+        }
+        let Ok(c) = self.class_at(clo, class, w) else { return false };
+        let name = name_view(name);
+        if name.as_bytes().eq_ignore_ascii_case(b"class") {
+            return true;
+        }
+        c.constants.get(name.as_bytes()).is_some_and(|k| k.visibility == Visibility::Public && !k.is_case)
+    }
+
     /// A class constant whose value is code not yet run: the code, the
     /// class it runs in, and its cache key.
     #[allow(clippy::type_complexity)] // reason: one use, the ClassConst instruction
