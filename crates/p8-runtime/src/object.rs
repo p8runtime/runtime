@@ -1111,12 +1111,14 @@ impl Drop for Object {
         // Its properties go before its id does (PHP frees an object, and
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
-        // (A buffer of their own kept for the next object or array.)
-        self.slots.release();
+        // (A buffer of their own kept for the next object or array.) The
+        // dynamic ones first, then the declared, as zend_object_std_dtor
+        // destroys `properties` before walking `properties_table`.
         let dynamic = self.dynamic.get_mut();
         if !dynamic.is_empty() {
             drop(std::mem::take(dynamic));
         }
+        self.slots.release();
         if self.data.is_some() || self.lazy_info.get_mut().is_some() {
             drop((self.data.take(), self.lazy_info.get_mut().take()));
         }

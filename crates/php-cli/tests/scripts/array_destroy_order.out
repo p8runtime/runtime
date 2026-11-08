@@ -1,0 +1,59 @@
+-- packed list, overwritten
+~p0
+~p1
+~p2
+after packed
+-- hashed, unset
+~h0
+~h1
+~h2
+after hashed
+-- nested arrays and an object in an object
+~n0
+~n1
+~n2
+after nested
+-- shared: the second handle keeps everything
+s gone, t holds
+~s0
+~s1
+after shared
+-- an element shared outside the array survives
+~e0
+~e2
+array gone, e1 lives
+~e1
+after element
+-- a reference inside an array
+~r1
+array gone, r0 lives
+~r0
+after reference
+-- large list (past the pooled sizes)
+~b0
+~b1
+after large
+-- a large hash with string keys
+~bh0
+unset o0
+~bh1
+after large hash
+-- returned from a function, dropped as a temporary
+~t0
+~t1
+after temporary
+~t0
+~t1
+after count
+-- the array held by an object that goes
+~H
+~i0
+~i1
+after holder
+-- foreach over a temporary list of objects
+body f0
+body f1
+~f0
+after foreach
+~f1
+end
