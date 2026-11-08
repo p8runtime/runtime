@@ -18,6 +18,7 @@
 //! range; a register it might write is one that may hold a counted value.
 
 use p8_bytecode::{CastKind, ClassRef, Handler, Instr, NO_VARS, PartialSite, Rare as RareOp, Reg};
+use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
 
 /// What one instruction does to the temporaries, one bit each, and where
@@ -50,6 +51,8 @@ struct Frame<'a> {
     classes: &'a [ClassRef],
     arg_vars: &'a [Vec<(u8, Reg)>],
     partials: &'a [PartialSite],
+    /// The constants `LoadConst` loads.
+    consts: &'a [Frozen],
 }
 
 /// The most temporaries a function may have for the analysis (one word of
@@ -125,6 +128,13 @@ impl Frame<'_> {
                 o.clean |= b(reg);
             }
             LoadNull { dst } => defp!(dst),
+            // A scalar holds nothing to release; a string literal of
+            // program memory neither, but one that could not be interned
+            // (or eval's) is counted, so a string is taken as counted.
+            LoadConst { dst, k } => match self.consts.get(k as usize) {
+                Some(Frozen::Null | Frozen::Bool(_) | Frozen::Int(_) | Frozen::Float(_)) => defp!(dst),
+                _ => def!(dst),
+            },
             Binary { op, dst, a, b: y } => {
                 u!(a, y);
                 if matches!(op, BinOp::Div | BinOp::Mod | BinOp::Pow | BinOp::Shl | BinOp::Shr | BinOp::Sub | BinOp::Mul) {
@@ -491,6 +501,7 @@ pub(crate) fn free_temps(
     classes: &[ClassRef],
     arg_vars: &[Vec<(u8, Reg)>],
     partials: &[PartialSite],
+    consts: &[Frozen],
     s: &mut Scratch,
 ) -> bool {
     if ntemps == 0 {
@@ -499,7 +510,7 @@ pub(crate) fn free_temps(
     if ntemps > MAX_TEMPS {
         return false;
     }
-    let frame = Frame { tbase, ntemps, classes, arg_vars, partials };
+    let frame = Frame { tbase, ntemps, classes, arg_vars, partials, consts };
     let n = code.len();
     s.ops.clear();
     s.ops.extend(code.iter().map(|i| frame.ops(i)));

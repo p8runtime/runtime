@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 18;
+pub const FORMAT: u32 = 19;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -510,7 +510,7 @@ macro_rules! record {
 record!(Program { main, functions, classes });
 // `insns` is the code's executed form, made again from `code`.
 record!(Function {
-    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, frees_temps, cv_names, sites, file, required, line,
+    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, ncv, nregs, frees_temps, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
 } made insns by Function::lowered);
 record!(CompileDiag { level, message, line });
@@ -850,6 +850,7 @@ impl Code for Instr {
             Instr::InstanceOf { dst, src, class } => { w.byte(105); dst.put(w); src.put(w); class.put(w); }
             Instr::Clone { dst, src } => { w.byte(106); dst.put(w); src.put(w); }
             Instr::Rare { op, a, b, c, class } => { w.byte(107); op.put(w); a.put(w); b.put(w); c.put(w); class.put(w); }
+            Instr::LoadConst { dst, k } => { w.byte(108); dst.put(w); k.put(w); }
         }
     }
     fn get(r: &mut Reader) -> Got<Self> {
@@ -962,6 +963,7 @@ impl Code for Instr {
             105 => Instr::InstanceOf { dst: Code::get(r)?, src: Code::get(r)?, class: Code::get(r)? },
             106 => Instr::Clone { dst: Code::get(r)?, src: Code::get(r)? },
             107 => Instr::Rare { op: Code::get(r)?, a: Code::get(r)?, b: Code::get(r)?, c: Code::get(r)?, class: Code::get(r)? },
+            108 => Instr::LoadConst { dst: Code::get(r)?, k: Code::get(r)? },
             _ => return Err(Bad),
         })
     }

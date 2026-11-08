@@ -256,7 +256,7 @@ impl Context<'_> {
         if !self.shutdown.is_empty() {
             self.run_shutdown(regs)?;
         }
-        let ncv = self.frames.last().map_or(0, |f| f.func.code.consts_at as usize);
+        let ncv = self.frames.last().map_or(0, |f| f.func.code.ncv as usize);
         self.end_destructors(regs, ncv)
     }
 

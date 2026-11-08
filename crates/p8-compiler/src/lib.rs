@@ -9,6 +9,7 @@
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
+mod consts;
 mod live;
 
 use p8_bytecode::{
@@ -112,10 +113,6 @@ struct FnBuilder<'a> {
     lines: Vec<u32>,
     consts: Vec<Frozen>,
     const_index: HashMap<ConstKey, usize>,
-    /// Which constants the code reads as values (one bit each, noted as
-    /// it is emitted); the others are only names (see `name_operand`).
-    value_bits: u64,
-    more_value_bits: Vec<u64>,
     cvs: IndexMap<Vec<u8>, usize>,
     temps: usize,
     /// Temporaries below this stay live across statements (a foreach's iterator).
@@ -174,7 +171,7 @@ struct FnBuilder<'a> {
 }
 
 /// A function's name tables, kept from one function to the next (see
-/// `ConstOrder::tables`): emptied, their room stays, so a function's
+/// `Scratch::tables`): emptied, their room stays, so a function's
 /// first constants, variables and call sites do not each grow a fresh
 /// table (one WordPress page compiled 8.9k functions, and their tables'
 /// regrowth was 15k rehashes of the constants alone).
@@ -205,7 +202,7 @@ struct Goto {
 }
 
 impl FnBuilder<'_> {
-    /// `tables`: a finished function's, emptied (`ConstOrder::tables`), or
+    /// `tables`: a finished function's, emptied (`Scratch::tables`), or
     /// new ones.
     fn new(name: Text, sym: Sym, tables: Tables) -> Self {
         FnBuilder {
@@ -219,8 +216,6 @@ impl FnBuilder<'_> {
             lines: Vec::with_capacity(32),
             consts: Vec::new(),
             const_index: tables.const_index,
-            value_bits: 0,
-            more_value_bits: Vec::new(),
             cvs: tables.cvs,
             temps: 0,
             floor: 0,
@@ -382,20 +377,12 @@ impl FnBuilder<'_> {
         r
     }
 
-    /// A constant the code reads as a value (copied into a call's
-    /// registers).
+    /// A constant the code names: as a value, or as the name of a
+    /// property, class constant or static property (`name_operand`). Read
+    /// in place when it runs (`p8_bytecode::const_index`): never a register.
     fn constant(&mut self, value: Frozen) -> Reg {
         let index = self.constant_slot(value);
-        self.mark_value(index);
         reg(CONST, index)
-    }
-
-    /// A constant only used as a name: the name operand of a property,
-    /// class constant or static property instruction (see
-    /// `name_operand`), or `global $x`'s. It is never copied into a
-    /// register, unless some code also asks for it as a value.
-    fn name_constant(&mut self, value: Frozen) -> Reg {
-        reg(CONST, self.constant_slot(value))
     }
 
     fn constant_slot(&mut self, value: Frozen) -> usize {
@@ -456,108 +443,36 @@ impl FnBuilder<'_> {
         i
     }
 
-    /// Constant `i` is read as a value somewhere (not only as a name).
-    fn mark_value(&mut self, i: usize) {
-        if i < 64 {
-            self.value_bits |= 1 << i;
-        } else {
-            let word = (i - 64) / 64;
-            if self.more_value_bits.len() <= word {
-                self.more_value_bits.resize(word + 1, 0);
-            }
-            self.more_value_bits[word] |= 1 << ((i - 64) % 64);
-        }
-    }
-
-    fn is_value(&self, i: usize) -> bool {
-        if i < 64 { self.value_bits >> i & 1 != 0 } else { self.more_value_bits.get((i - 64) / 64).is_some_and(|w| w >> ((i - 64) % 64) & 1 != 0) }
-    }
-
-    /// Debug builds: every constant operand an instruction reads as a value
-    /// (all but the name operand of an instruction that reads its name from
-    /// the constants) was asked for with `constant`, not `name_constant`.
-    #[cfg(debug_assertions)]
-    fn check_values(&self) {
-        for instr in &self.code {
-            let found: [std::cell::Cell<Reg>; 8] = Default::default();
-            let count = std::cell::Cell::new(0);
-            map_regs(&mut instr.clone(), |r| {
-                if r >> KIND_SHIFT == CONST && count.get() < found.len() {
-                    found[count.get()].set(r);
-                    count.set(count.get() + 1);
-                }
-                r
-            });
-            let mut name = name_operand(instr);
-            for cell in &found[..count.get()] {
-                let r = cell.get();
-                if name == Some(r) {
-                    name = None;
-                    continue;
-                }
-                let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
-                assert!(self.is_value(index), "constant {:?} is read as a value by {instr:?} but was made as a name", self.consts[index]);
-            }
-        }
-    }
-
-    /// Lay the frame out and renumber every register. `order` is scratch
-    /// space the compiler keeps for every function's constant order.
-    fn finish(mut self, file: Arc<str>, order: &mut ConstOrder, eval: bool) -> Function {
+    /// Lay the frame out and renumber every register: the variables, then
+    /// the temporaries. A constant becomes a constant operand
+    /// (`p8_bytecode::const_operand`), read in place where the instruction
+    /// can (`consts::place_consts`), else loaded into a scratch temporary
+    /// right before it. `scratch` is space the compiler keeps for every
+    /// function's passes.
+    fn finish(mut self, file: Arc<str>, scratch: &mut Scratch, eval: bool) -> Function {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
         let ncv = self.cvs.len();
-        let nconst = self.consts.len();
-        #[cfg(debug_assertions)]
-        self.check_values();
-        // The constants some code reads as a value come first: a call
-        // copies those into its registers. The others (property and class
-        // constant names, which their instructions read from the
-        // constants) come after, and are never copied. Most functions have
-        // none of the latter: nothing moves then.
-        let value_consts = (0..nconst).filter(|&i| self.is_value(i)).count();
-        let moved = value_consts < nconst;
-        if moved {
-            let (position, work) = (&mut order.position, &mut order.work);
-            position.clear();
-            let (mut next_value, mut next_name) = (0, value_consts as u32);
-            for i in 0..nconst {
-                let slot = if self.is_value(i) { &mut next_value } else { &mut next_name };
-                position.push(*slot);
-                *slot += 1;
-            }
-            // Move the constants to their places, in place (cycle by cycle).
-            work.clear();
-            work.extend_from_slice(position);
-            for i in 0..nconst {
-                while work[i] as usize != i {
-                    let j = work[i] as usize;
-                    self.consts.swap(i, j);
-                    work.swap(i, j);
-                }
-            }
-        }
-        let position = &order.position;
+        // The temporaries follow the variables, from register 1 at least: a
+        // call's frame starts at the caller's argument block (a temporary),
+        // and only the main frame may start at register 0 (`base == 0` is
+        // how the interpreter knows the main scope).
+        let tbase = ncv.max(1);
         let map = |r: Reg| -> Reg {
             // `$this` from the frame is no register.
             if r == p8_bytecode::THIS {
                 return r;
             }
             let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
-            (match r >> KIND_SHIFT {
-                CV => index,
-                CONST if moved => ncv + position[index] as usize,
-                CONST => ncv + index,
-                _ => ncv + nconst + index,
-            }) as Reg
+            match r >> KIND_SHIFT {
+                CV => index as Reg,
+                CONST => p8_bytecode::const_operand(index),
+                _ => (tbase + index) as Reg,
+            }
         };
         for instr in &mut self.code {
             map_regs(instr, map);
-            // `global $x` names its variable by constant index.
-            if moved && let Instr::BindGlobal { name, .. } = instr {
-                *name = position[*name as usize] as u16;
-            }
         }
         for h in &mut self.handlers {
             h.slot = map(h.slot);
@@ -573,16 +488,21 @@ impl FnBuilder<'_> {
                 *r = map(*r);
             }
         }
+        // The constants an instruction cannot read in place are loaded
+        // into scratch temporaries after the ordinary ones.
+        let loads = consts::place_consts(&mut self.code, &mut self.lines, &mut self.handlers, &mut self.silences, tbase + self.max_temps, &mut scratch.loads);
+        let ntemps = self.max_temps + loads;
         let frees_temps = live::free_temps(
             &mut self.code,
             &mut self.lines,
             &mut self.handlers,
             &mut self.silences,
-            (ncv + nconst, self.max_temps),
+            (tbase, ntemps),
             &self.classes,
             &self.arg_vars,
             &self.partials,
-            &mut order.live,
+            &self.consts,
+            &mut scratch.live,
         );
         fuse_steps(&mut self.code);
         let mut cv_names: Vec<(usize, Text)> =
@@ -591,7 +511,7 @@ impl FnBuilder<'_> {
         // The name tables go to the next function, emptied.
         let mut tables = Tables { const_index: self.const_index, cvs: self.cvs, site_index: self.site_index, class_index: self.class_index };
         tables.clear();
-        order.tables.push(tables);
+        scratch.tables.push(tables);
         let required = self.params.iter().rposition(|p| !p.has_default && !p.variadic).map_or(0, |i| i + 1);
         Function {
             name: self.name,
@@ -603,9 +523,8 @@ impl FnBuilder<'_> {
             code: self.code,
             lines: self.lines,
             consts: self.consts,
-            consts_at: ncv as Reg,
-            value_consts: value_consts as Reg,
-            nregs: (ncv + nconst + self.max_temps) as Reg,
+            ncv: ncv as Reg,
+            nregs: (tbase + ntemps) as Reg,
             frees_temps,
             cv_names: cv_names.into_iter().map(|(_, n)| n).collect(),
             required,
@@ -837,6 +756,27 @@ fn thread_returns(code: &mut [Instr]) {
     }
 }
 
+/// The value a typed function returns, checked against the declared type
+/// (VerifyReturn), and the register the return reads. A literal already of
+/// the type needs no check (PHP emits none: zend_emit_return_type_check
+/// skips a matching constant); one that may need converting is first
+/// moved into a temporary, which the check converts in place (a constant
+/// is read in place and cannot be written).
+fn verified_return(f: &mut FnBuilder, r: Reg) -> Reg {
+    if r >> KIND_SHIFT == CONST {
+        let index = (r & ((1 << KIND_SHIFT) - 1)) as usize;
+        if f.ret_type.as_ref().is_some_and(|t| t.quick(&f.consts[index].to_value())) {
+            return r;
+        }
+        let t = f.temp();
+        f.emit(Instr::Move { dst: t, src: r });
+        f.emit(Instr::rare(Rare::VerifyReturn, t, 0, 0, 0));
+        return t;
+    }
+    f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
+    r
+}
+
 /// `ns\\name` (just `name` in the global namespace).
 fn join(ns: &[u8], name: &[u8]) -> Vec<u8> {
     if ns.is_empty() { name.to_vec() } else { [ns, b"\\", name].concat() }
@@ -895,13 +835,11 @@ fn reenter_tries<'a>(f: &mut FnBuilder<'a>, left: Vec<TryCtx<'a>>) {
     }
 }
 
-/// Apply `f` to every register an instruction names.
-/// Where each constant of the function being finished goes (`position`),
-/// and room to move them there: kept by the compiler for every function.
+/// Scratch space the compiler keeps for every function's passes in `finish`.
 #[derive(Default)]
-struct ConstOrder {
-    position: Vec<u32>,
-    work: Vec<u32>,
+struct Scratch {
+    /// The constant-placement pass's (`consts::place_consts`).
+    loads: consts::Scratch,
     /// Finished functions' name tables, emptied, for the next functions
     /// (a stack: functions nest).
     tables: Vec<Tables>,
@@ -909,28 +847,8 @@ struct ConstOrder {
     live: live::Scratch,
 }
 
-/// The operand of `instr` that only names something (a property, a class
-/// constant, a static property): read from the function's constants when
-/// it is one, never as a register (see `Function::value_consts`).
-fn name_operand(instr: &Instr) -> Option<Reg> {
-    use Instr::*;
-    match *instr {
-        FetchProp { name, .. }
-        | AssignProp { name, .. }
-        | AssignPropOp { name, .. }
-        | PropIncDec { name, .. }
-        | IssetProp { name, .. }
-        | UnsetProp { name, .. }
-        | ClassConst { name, .. }
-        | FetchStaticProp { name, .. }
-        | AssignStaticProp { name, .. }
-        | AssignStaticPropOp { name, .. }
-        | AssignPropDim { name, .. } => Some(name),
-        _ => None,
-    }
-}
-
-fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
+/// Apply `f` to every register an instruction names.
+pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
     use Instr::*;
     match instr {
         DeclareClass { .. } | DeclareFunction { .. } => {}
@@ -1177,7 +1095,7 @@ fn map_regs(instr: &mut Instr, f: impl Fn(Reg) -> Reg) {
         Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } | Throw { src } | CatchIf { src, .. } => {
             *src = f(*src)
         }
-        FetchConst { dst, .. } => *dst = f(*dst),
+        FetchConst { dst, .. } | LoadConst { dst, .. } => *dst = f(*dst),
         ConcatN { dst, start, .. } => {
             *dst = f(*dst);
             *start = f(*start);
@@ -1265,7 +1183,7 @@ pub struct Compiler<'src> {
     /// (freed after the call).
     spread_refs: Vec<Reg>,
     /// Scratch for laying out each function's constants.
-    const_order: ConstOrder,
+    scratch: Scratch,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -1393,7 +1311,7 @@ impl<'src> Compiler<'src> {
             source,
             superglobals: None,
             spread_refs: Vec::new(),
-            const_order: ConstOrder::default(),
+            scratch: Scratch::default(),
             unused_result: false,
             registry,
             file: Arc::from(file),
@@ -1581,7 +1499,7 @@ impl<'src> Compiler<'src> {
                 other => scan(&mut self, &ns, other),
             }
         }
-        let mut f = FnBuilder::new(Text::from("{main}"), self.sym(b"{main}"), self.const_order.tables.pop().unwrap_or_default());
+        let mut f = FnBuilder::new(Text::from("{main}"), self.sym(b"{main}"), self.scratch.tables.pop().unwrap_or_default());
         f.strict = self.strict;
         // A file's code runs in the scope that includes it, a function's
         // too: its superglobals are bound like a function's.
@@ -1597,7 +1515,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        let mut main = f.finish(self.file.clone(), &mut self.const_order, self.eval);
+        let mut main = f.finish(self.file.clone(), &mut self.scratch, self.eval);
         main.compile_diags = std::mem::take(&mut self.diags);
         let main = Arc::new(main);
         Ok(Program { main, functions: self.functions, classes: self.classes })
@@ -1671,9 +1589,7 @@ impl<'src> Compiler<'src> {
                     if f.ret_type.as_ref().is_some_and(|t| t.is_void()) {
                         return Err(CompileError { message: "A void function must not return a value".into(), line: f.line });
                     }
-                    if f.ret_type.is_some() {
-                        f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
-                    }
+                    let r = if f.ret_type.is_some() { verified_return(f, r) } else { r };
                     f.free_loops(0, f.loops.len());
                     f.emit(Instr::Return { src: r });
                 }
@@ -2064,7 +1980,7 @@ impl<'src> Compiler<'src> {
                     };
                     let text = self.text(*name);
                     let var = f.cv(&text[1..]);
-                    let name_reg = f.name_constant(Frozen::Str(Text::from(&text[1..])));
+                    let name_reg = f.constant(Frozen::Str(Text::from(&text[1..])));
                     let name_index = name_reg & ((1 << KIND_SHIFT) - 1);
                     f.emit(Instr::BindGlobal { var, name: name_index });
                 }
@@ -2399,7 +2315,7 @@ impl<'src> Compiler<'src> {
         for (i, name) in SUPERGLOBALS.iter().enumerate() {
             if named & (1 << i) != 0 {
                 let var = f.cv(name.as_bytes());
-                let name_reg = f.name_constant(Frozen::Str(Text::from(*name)));
+                let name_reg = f.constant(Frozen::Str(Text::from(*name)));
                 f.emit(Instr::BindGlobal { var, name: name_reg & ((1 << KIND_SHIFT) - 1) });
             }
         }
@@ -2458,7 +2374,7 @@ impl<'src> Compiler<'src> {
         uses: &[p8_syntax::ast::ClosureUse],
     ) -> Result<(Function, Vec<Text>)> {
         let sym = self.sym_lower(name.as_bytes());
-        let mut f = FnBuilder::new(name, sym, self.const_order.tables.pop().unwrap_or_default());
+        let mut f = FnBuilder::new(name, sym, self.scratch.tables.pop().unwrap_or_default());
         f.meta = self.pending_meta.take().unwrap_or_default();
         f.returns_ref = by_ref;
         f.strict = self.strict;
@@ -2571,7 +2487,7 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::This { dst: obj });
                 obj
             };
-            let key = f.name_constant(Frozen::Str(name));
+            let key = f.constant(Frozen::Str(name));
             let dst = f.temp();
             f.emit(Instr::AssignProp { obj, name: key, val: reg(CV, i), dst, take: false });
             f.reset_temps(f.floor);
@@ -2619,7 +2535,7 @@ impl<'src> Compiler<'src> {
             Body::Set(name, e) => {
                 let obj = f.temp();
                 f.emit(Instr::This { dst: obj });
-                let key = f.name_constant(Frozen::Str(name));
+                let key = f.constant(Frozen::Str(name));
                 let val = self.expr(&mut f, e)?;
                 let dst = f.temp();
                 f.emit(Instr::AssignProp { obj, name: key, val, dst, take: false });
@@ -2627,9 +2543,7 @@ impl<'src> Compiler<'src> {
             }
             Body::Expr(e) => {
                 let r = self.expr(&mut f, e)?;
-                if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) {
-                    f.emit(Instr::rare(Rare::VerifyReturn, r, 0, 0, 0));
-                }
+                let r = if f.ret_type.as_ref().is_some_and(|t| !t.is_void()) { verified_return(&mut f, r) } else { r };
                 f.emit(Instr::Return { src: r });
                 // An arrow function takes every variable it uses (but its
                 // parameters) by value from where it is made.
@@ -2644,7 +2558,7 @@ impl<'src> Compiler<'src> {
         }
         f.resolve_gotos()?;
         f.check_size()?;
-        Ok((f.finish(self.file.clone(), &mut self.const_order, self.eval), captures))
+        Ok((f.finish(self.file.clone(), &mut self.scratch, self.eval), captures))
     }
 
     /// Take apart the array in `src` into the targets of `items` (keyed,
@@ -2780,7 +2694,7 @@ impl<'src> Compiler<'src> {
             }
             Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                 let class = self.class_ref(f, class)?;
-                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let dst = f.temp();
                 f.emit(Instr::AssignStaticProp { class, name, val, dst });
             }
@@ -3466,7 +3380,14 @@ impl<'src> Compiler<'src> {
         let name = match e {
             Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => name,
             _ => {
-                let r = self.expr(f, e)?;
+                let mut r = self.expr(f, e)?;
+                // A literal (`('A')::f()`): the class reference names a
+                // register, so the literal is loaded into one.
+                if r >> KIND_SHIFT == CONST {
+                    let t = f.temp();
+                    f.emit(Instr::Move { dst: t, src: r });
+                    r = t;
+                }
                 return Ok(f.class_ref(ClassRef::Dynamic(r)));
             }
         };
@@ -3547,7 +3468,7 @@ impl<'src> Compiler<'src> {
     fn prop_name_operand(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
         match e {
             Expr::Variable { name, .. } if !self.text(*name).starts_with(b"$") => {
-                Ok(f.name_constant(Frozen::Str(Text::from(self.text(*name)))))
+                Ok(f.constant(Frozen::Str(Text::from(self.text(*name)))))
             }
             other => self.expr(f, other),
         }
@@ -4681,7 +4602,7 @@ impl<'src> Compiler<'src> {
                 }
                 Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                     let class = self.class_ref(f, class)?;
-                    let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                    let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                     let val = self.expr(f, expr)?;
                     let dst = f.temp();
                     f.emit(Instr::AssignStaticProp { class, name, val, dst });
@@ -4834,7 +4755,7 @@ impl<'src> Compiler<'src> {
                     }
                     Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
                         let class = self.class_ref(f, class)?;
-                        let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                        let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                         let val = self.expr(f, expr)?;
                         let dst = f.temp();
                         f.emit(Instr::AssignStaticPropOp { op: bin, class, name, val, dst });
@@ -4866,7 +4787,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let op = if matches!(op, UnaryOp::PreInc) { BinOp::Add } else { BinOp::Sub };
@@ -4878,7 +4799,7 @@ impl<'src> Compiler<'src> {
                 if self.text(*name).starts_with(b"$") =>
             {
                 let class = self.class_ref(f, class)?;
-                let name = f.name_constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
+                let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                 let one = f.constant(Frozen::Int(1));
                 let dst = f.temp();
                 let scratch = f.temp();
@@ -5082,7 +5003,7 @@ impl<'src> Compiler<'src> {
                     // In a trait: the class using it, when the code runs.
                     MagicConstKind::Class if self.scope.as_ref().is_some_and(|s| s.in_trait) => {
                         let class = f.class_ref(ClassRef::Scope);
-                        let name = f.name_constant(Frozen::Str(Text::from("class")));
+                        let name = f.constant(Frozen::Str(Text::from("class")));
                         let dst = f.temp();
                         f.emit(Instr::ClassConst { dst, class, name });
                         return Ok(dst);
@@ -5309,7 +5230,7 @@ impl<'src> Compiler<'src> {
                         }
                         _ => {
                             let dst = f.temp();
-                            let class_const = f.name_constant(Frozen::Str(Text::from("class")));
+                            let class_const = f.constant(Frozen::Str(Text::from("class")));
                             f.emit(Instr::ClassConst { dst, class, name: class_const });
                             dst
                         }
@@ -5352,7 +5273,7 @@ impl<'src> Compiler<'src> {
                 let class_index = self.class_ref(f, class)?;
                 let dst = out(f, hint, mark);
                 if let Some(prop) = text.strip_prefix(b"$") {
-                    let name = f.name_constant(Frozen::Str(Text::from(prop)));
+                    let name = f.constant(Frozen::Str(Text::from(prop)));
                     f.emit(Instr::FetchStaticProp { dst, class: class_index, name });
                 } else if text.eq_ignore_ascii_case(b"class")
                     && let ClassRef::Named(ClassName { display, .. }) | ClassRef::Forward(ClassName { display, .. }) = &f.classes[class_index as usize]
@@ -5362,7 +5283,7 @@ impl<'src> Compiler<'src> {
                     let display = display.clone();
                     return Ok(f.constant(Frozen::Str(display)));
                 } else {
-                    let name = f.name_constant(Frozen::Str(Text::from(text)));
+                    let name = f.constant(Frozen::Str(Text::from(text)));
                     f.emit(Instr::ClassConst { dst, class: class_index, name });
                 }
                 dst

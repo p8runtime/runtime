@@ -337,10 +337,10 @@ fn disassemble(program: &p8_bytecode::Program) -> String {
     let mut out = String::new();
     for f in std::iter::once(&program.main).chain(&program.functions) {
         out.push_str(&format!(
-            "function {} (regs {}, consts at {}: {:?})\n",
+            "function {} (regs {}, {} variables, consts {:?})\n",
             String::from_utf8_lossy(f.name.as_bytes()),
             f.nregs,
-            f.consts_at,
+            f.ncv,
             f.consts
         ));
         for (pc, instr) in f.code.iter().enumerate() {

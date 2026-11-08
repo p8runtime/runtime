@@ -302,11 +302,9 @@ pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     {
         this.destructed.set(true);
     }
-    let consts = base + code.consts_at as usize..base + code.consts_at as usize + code.value_consts as usize;
-    for r in &mut regs[base..consts.start] {
-        clear(r);
-    }
-    for r in &mut regs[consts.end..base + code.nregs as usize] {
+    // The variables and the temporaries (an exception may leave anything
+    // in those).
+    for r in &mut regs[base..base + code.nregs as usize] {
         clear(r);
     }
     frame.this = None;
