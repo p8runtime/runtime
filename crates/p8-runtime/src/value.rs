@@ -116,6 +116,68 @@ impl Drop for Value {
     fn drop(&mut self) {}
 }
 
+/// The last handle of a string, array, reference or object goes: its free
+/// (and an object's destructor queued), out of line.
+#[cold]
+#[inline(never)]
+fn free_last(r: Repr) {
+    drop(r);
+}
+
+impl Value {
+    /// Let go of a value (PHP's `zval_ptr_dtor`): nothing for a plain one;
+    /// for one holding memory its count's decrement, inline, and the free
+    /// out of line only when this was the last handle (PHP's `GC_DELREF`,
+    /// then `rc_dtor_func` at zero). Returns whether a handle that may own
+    /// an object went (an array, a reference, an object): the free may
+    /// have left a destructor due. A decrement that frees nothing, or a
+    /// string's free, cannot have.
+    ///
+    /// The count is read first, so for a shared handle the `Rc` drop that
+    /// follows is known not to reach zero and is the decrement alone.
+    #[inline(always)]
+    pub fn release(mut self) -> bool {
+        match mem::replace(&mut self.0, Repr::Undef) {
+            Repr::Str(s) => {
+                if s.is_last() {
+                    free_last(Repr::Str(s));
+                } else {
+                    drop(s);
+                }
+                false
+            }
+            Repr::Array(a) => {
+                if Rc::strong_count(&a) == 1 {
+                    free_last(Repr::Array(a));
+                    true
+                } else {
+                    drop(a);
+                    false
+                }
+            }
+            Repr::Ref(r) => {
+                if Rc::strong_count(&r) == 1 {
+                    free_last(Repr::Ref(r));
+                    true
+                } else {
+                    drop(r);
+                    false
+                }
+            }
+            Repr::Object(o) => {
+                if Rc::strong_count(&o) == 1 {
+                    free_last(Repr::Object(o));
+                    true
+                } else {
+                    drop(o);
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
 impl Clone for Value {
     /// Inline: copying a value is on every register move.
     #[inline(always)]

@@ -1048,23 +1048,17 @@ pub(crate) fn is_plain(v: &Value) -> bool {
     v.is_plain()
 }
 
-/// Release what a value holds (a string, an array, a reference, an
-/// object): the one call an overwrite makes, and only for those.
-#[cold]
-#[inline(never)]
-pub(crate) fn release(v: Value) {
-    drop(v);
-}
-
 /// Write `v` over a register's value: the old value's tag is tested
-/// here, and only one holding memory is released, out of line (PHP's
-/// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then a call).
+/// here, and only one holding memory is released (PHP's
+/// zval_ptr_dtor_nogc: `Z_REFCOUNTED`, then `GC_DELREF`): its count's
+/// decrement inline, the free out of line for the last handle only
+/// (`Value::release`).
 ///
-/// Returns whether the old value held memory: the release may have freed
-/// the last holder of an object with a destructor, which the loop runs
-/// before the next instruction (`done!`), at this instruction's pc, as
-/// PHP runs it where the value went. A plain old value cannot have, so
-/// that test is on the release path only.
+/// Returns whether the release freed the last handle of something that
+/// may hold an object with a destructor, which the loop runs before the
+/// next instruction (`done!`), at this instruction's pc, as PHP runs it
+/// where the value went. A plain old value, or a decrement that freed
+/// nothing, cannot have, so that test is on the freeing path only.
 #[inline(always)]
 #[must_use = "a released value may leave a destructor due: test `ids.has_pending()`"]
 pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
@@ -1074,8 +1068,7 @@ pub(crate) fn put(slot: &mut Value, v: Value) -> bool {
         std::mem::forget(std::mem::replace(slot, v));
         false
     } else {
-        release(std::mem::replace(slot, v));
-        true
+        std::mem::replace(slot, v).release()
     }
 }
 
@@ -1091,10 +1084,7 @@ pub(crate) fn put_var(slot: &mut Value, v: Value) -> bool {
     }
     match slot.as_reference() {
         Some(cell) => write_ref(cell, v),
-        None => {
-            release(std::mem::replace(slot, v));
-            true
-        }
+        None => std::mem::replace(slot, v).release(),
     }
 }
 

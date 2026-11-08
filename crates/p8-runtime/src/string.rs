@@ -447,6 +447,12 @@ impl PhpStr {
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Rc::ptr_eq(&a.0, &b.0)
     }
+
+    /// Whether this is the string's only handle (dropping it frees it).
+    #[inline(always)]
+    pub fn is_last(&self) -> bool {
+        Rc::strong_count(&self.0) == 1
+    }
 }
 
 /// A handle reads as its head: `s.as_bytes()`, `s.len()`, `s.hash()`.
