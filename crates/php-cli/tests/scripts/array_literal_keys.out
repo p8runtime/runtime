@@ -1,0 +1,146 @@
+array(6) {
+  ["id"]=>
+  int(1)
+  ["name"]=>
+  string(1) "n"
+  [7]=>
+  string(5) "seven"
+  ["08"]=>
+  string(5) "eight"
+  ["-0"]=>
+  string(10) "minus zero"
+  ["Id"]=>
+  string(5) "cased"
+}
+array(6) {
+  [0]=>
+  string(2) "id"
+  [1]=>
+  string(4) "name"
+  [2]=>
+  int(7)
+  [3]=>
+  string(2) "08"
+  [4]=>
+  string(2) "-0"
+  [5]=>
+  string(2) "Id"
+}
+int(1)
+int(1)
+int(1)
+bool(true)
+bool(true)
+bool(true)
+string(5) "seven"
+string(5) "seven"
+bool(true)
+bool(true)
+bool(false)
+string(10) "minus zero"
+bool(true)
+bool(false)
+bool(false)
+array(3) {
+  ["id"]=>
+  string(24) "via computed and literal"
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  string(9) "defaulted"
+}
+array(3) {
+  ["second"]=>
+  int(2)
+  [0]=>
+  int(3)
+  ["first"]=>
+  string(8) "last now"
+}
+string(6) "string"
+string(6) "second"
+string(7) "integer"
+int(0)
+string(6) "string"
+string(5) "first"
+array(1) {
+  ["k"]=>
+  string(1) "v"
+}
+array(3) {
+  ["k"]=>
+  string(7) "changed"
+  ["n"]=>
+  int(1)
+  ["added"]=>
+  bool(true)
+}
+array(2) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  int(2)
+}
+string(1) "a"
+string(1) "b"
+string(3) "ten"
+bool(false)
+bool(true)
+bool(false)
+string(1) "a"
+string(7) "changed"
+int(0)
+int(1)
+array(1) {
+  ["x"]=>
+  int(3)
+}
+
+Deprecated: Implicit conversion from float 1.7 to int loses precision in %s on line 71
+array(5) {
+  [123]=>
+  string(3) "int"
+  ["0123"]=>
+  string(6) "string"
+  ["1e3"]=>
+  string(10) "string too"
+  [1]=>
+  string(9) "one again"
+  [""]=>
+  string(5) "empty"
+}
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+array(2) {
+  [1]=>
+  string(3) "one"
+  [2]=>
+  string(3) "two"
+}
+string(3) "two"
+string(3) "one"
+string(3) "two"
+string(3) "one"
+string(4) "set!"
+bool(true)
+array(6) {
+  [0]=>
+  string(2) "-0"
+  [1]=>
+  int(7)
+  [2]=>
+  string(2) "08"
+  [3]=>
+  string(2) "Id"
+  [4]=>
+  string(2) "id"
+  [5]=>
+  string(4) "name"
+}
+string(22) "{"id":1,"id2":2,"3":3}"
+string(4) "made"
+string(6) "inline"
+string(8) "computed"
+string(7) "missing"

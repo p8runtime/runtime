@@ -21,7 +21,7 @@ fn arr(pairs: &[(Key, Value)]) -> Value {
 fn values() -> Vec<Value> {
     let s = |x: &str| Value::str(PhpStr::from(x));
     let i = Key::Int;
-    let k = |x: &str| Key::Str(PhpStr::from(x));
+    let k = |x: &str| Key::str(PhpStr::from(x));
     vec![
         Value::NULL,
         Value::TRUE,

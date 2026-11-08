@@ -1679,7 +1679,7 @@ fn rpr_get_hooks(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resul
     let mut out = PhpArray::new();
     for (kind, method) in &h.hooks {
         let m = new_method(ctx, &h.class, method);
-        out.insert(Key::Str(PhpStr::from(*kind)), m);
+        out.insert(Key::str(PhpStr::from(*kind)), m);
     }
     Ok(Value::array(out))
 }

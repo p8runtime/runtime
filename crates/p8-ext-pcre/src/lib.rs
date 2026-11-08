@@ -559,7 +559,7 @@ fn subpat_array(c: &Compiled, subject: &PhpStr, m: &Captures, flags: i64) -> Php
         let _ = arr.push(v);
     }
     if let Some(mark) = &m.mark {
-        arr.insert(Key::Str(PhpStr::from("MARK")), Value::str(PhpStr::new(mark.clone())));
+        arr.insert(Key::str(PhpStr::from("MARK")), Value::str(PhpStr::new(mark.clone())));
     }
     arr
 }
@@ -709,7 +709,7 @@ fn match_impl(ctx: &mut dyn Ctx, args: &mut [Value], global: bool) -> Result<Val
                     let _ = out.push(v);
                 }
                 if let Some(marks) = marks {
-                    out.insert(Key::Str(PhpStr::from("MARK")), Value::array(marks));
+                    out.insert(Key::str(PhpStr::from("MARK")), Value::array(marks));
                 }
                 out
             } else {
@@ -1006,6 +1006,7 @@ fn preg_replace_callback_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<
             return Err(ctx.throw("TypeError", "preg_replace_callback_array(): Argument #1 ($pattern) must contain only string patterns as keys".into()));
         };
         let callback = callback.clone();
+        let p = p.to_php_str();
         subject = each_subject(ctx, &subject, |ctx, s| replace_with(ctx, &p, s, &Replacement::Callback(&callback, flags), limit, &mut count))?;
         if subject.is_null() {
             set_count(args, 3, count);

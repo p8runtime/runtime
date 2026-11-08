@@ -50,7 +50,7 @@ fn array_change_key_case(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, T
         let k = match k {
             Key::Str(s) => {
                 let b = s.as_bytes();
-                Key::Str(PhpStr::from(&*if upper { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }))
+                Key::str(PhpStr::from(&*if upper { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }))
             }
             k => k.clone(),
         };

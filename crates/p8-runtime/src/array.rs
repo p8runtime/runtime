@@ -4,11 +4,12 @@
 //! kept. Arrays are values: `Rc<PhpArray>` is shared until written
 //! (`Rc::make_mut`). Key rules follow zend_hash.c / zend_operators.c.
 
-use crate::string::{PhpStr, StrHead};
+use crate::string::{IStr, PhpStr, StrHead};
 use crate::value::{Kind, Value};
 use crate::number::dval_to_lval;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::ops::Deref;
 
 /// Freed array buffers of the two sizes most arrays have (8 and 16
 /// entries), kept for the next array on this thread (an isolate's): a new
@@ -99,7 +100,110 @@ impl Drop for Hashed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
     Int(i64),
-    Str(PhpStr),
+    Str(KeyStr),
+}
+
+/// A string key's string: an ordinary string (a counted handle), or a
+/// program-memory string (a compiled literal: `$a['id']`, `['id' => 1]`)
+/// kept as the pointer it is, as PHP keeps interned strings in keys. A
+/// literal probe and a stored literal key are then one head, found by
+/// pointer before any bytes; writing a literal key costs no twin and no
+/// count. Reads as its head (`as_bytes`, `len`, `hash`).
+#[derive(Clone)]
+pub enum KeyStr {
+    Owned(PhpStr),
+    Lit(&'static IStr),
+}
+
+impl Deref for KeyStr {
+    type Target = StrHead;
+
+    #[inline(always)]
+    fn deref(&self) -> &StrHead {
+        match self {
+            KeyStr::Owned(s) => s,
+            KeyStr::Lit(s) => s,
+        }
+    }
+}
+
+impl KeyStr {
+    /// The string as an owned handle (a literal's: the thread's twin).
+    pub fn to_php_str(&self) -> PhpStr {
+        match self {
+            KeyStr::Owned(s) => s.clone(),
+            KeyStr::Lit(s) => s.to_php_str(),
+        }
+    }
+
+    /// The string as a value: the literal itself (no count) when it is one.
+    pub fn to_value(&self) -> Value {
+        match self {
+            KeyStr::Owned(s) => Value::str(s.clone()),
+            KeyStr::Lit(s) => Value::istr(s),
+        }
+    }
+
+    /// `to_value` without a copy of an owned handle.
+    pub fn into_value(self) -> Value {
+        match self {
+            KeyStr::Owned(s) => Value::str(s),
+            KeyStr::Lit(s) => Value::istr(s),
+        }
+    }
+}
+
+/// Equal as strings: one head, or the same hash and bytes.
+impl PartialEq for KeyStr {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(&**self, &**other) || (self.hash() == other.hash() && self.as_bytes() == other.as_bytes())
+    }
+}
+
+impl Eq for KeyStr {}
+
+impl std::fmt::Debug for KeyStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl From<PhpStr> for KeyStr {
+    #[inline]
+    fn from(s: PhpStr) -> Self {
+        KeyStr::Owned(s)
+    }
+}
+
+impl From<&'static IStr> for KeyStr {
+    #[inline]
+    fn from(s: &'static IStr) -> Self {
+        KeyStr::Lit(s)
+    }
+}
+
+impl From<&str> for KeyStr {
+    fn from(s: &str) -> Self {
+        KeyStr::Owned(PhpStr::from(s))
+    }
+}
+
+impl From<&[u8]> for KeyStr {
+    fn from(s: &[u8]) -> Self {
+        KeyStr::Owned(PhpStr::from(s))
+    }
+}
+
+impl From<Vec<u8>> for KeyStr {
+    fn from(s: Vec<u8>) -> Self {
+        KeyStr::Owned(PhpStr::new(s))
+    }
+}
+
+impl From<String> for KeyStr {
+    fn from(s: String) -> Self {
+        KeyStr::Owned(PhpStr::from(s))
+    }
 }
 
 /// What normalizing a value into a key reported, for the engine to show.
@@ -118,21 +222,49 @@ pub enum KeyIssue {
 pub const NULL_OFFSET_DEPRECATION: &str = "Using null as an array offset is deprecated, use an empty string instead";
 
 impl Key {
+    /// A string key of `s` as it is (no integer normalization: for names
+    /// known not to be integers).
+    #[inline]
+    pub fn str(s: impl Into<KeyStr>) -> Key {
+        Key::Str(s.into())
+    }
+
     /// The key a string names: a canonical decimal integer is an int key
     /// (ZEND_HANDLE_NUMERIC_STR: no leading zeros, no "-0", fits in i64).
     pub fn from_string(s: PhpStr) -> Key {
         match canonical_int(s.as_bytes()) {
             Some(i) => Key::Int(i),
-            None => Key::Str(s),
+            None => Key::Str(KeyStr::Owned(s)),
         }
+    }
+
+    /// The key a program-memory string names: the string itself when it
+    /// is not a canonical integer (no twin, no count).
+    #[inline]
+    pub fn from_istr(s: &'static IStr) -> Key {
+        match canonical_int(s.as_bytes()) {
+            Some(i) => Key::Int(i),
+            None => Key::Str(KeyStr::Lit(s)),
+        }
+    }
+
+    /// The key a string value names, whatever handle holds the string
+    /// (a literal's kept as the literal); None when the value is not a
+    /// string.
+    #[inline]
+    pub fn from_str_value(value: &Value) -> Option<Key> {
+        if let Some(s) = value.as_istr() {
+            return Some(Key::from_istr(s));
+        }
+        value.cloned_str().map(Key::from_string)
     }
 
     /// The key a value names (null is "", bools and floats are ints).
     pub fn from_value(value: &Value) -> Result<(Key, Option<KeyIssue>), KeyIssue> {
         Ok(match value.kind() {
             Kind::Int => (Key::Int(value.as_int().expect("an int")), None),
-            Kind::Str => (Key::from_string(value.cloned_str().expect("a string")), None),
-            Kind::Null | Kind::Undef => (Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset)),
+            Kind::Str => (Key::from_str_value(value).expect("a string"), None),
+            Kind::Null | Kind::Undef => (Key::Str(KeyStr::Owned(PhpStr::empty())), Some(KeyIssue::NullOffset)),
             Kind::Bool => (Key::Int(i64::from(value.as_bool().expect("a bool"))), None),
             Kind::Float => {
                 let f = value.as_float().expect("a float");
@@ -152,7 +284,7 @@ impl Key {
     pub fn into_value(self) -> Value {
         match self {
             Key::Int(i) => Value::int(i),
-            Key::Str(s) => Value::str(s),
+            Key::Str(s) => s.into_value(),
         }
     }
 
@@ -160,7 +292,7 @@ impl Key {
     pub fn to_value(&self) -> Value {
         match self {
             Key::Int(i) => Value::int(*i),
-            Key::Str(s) => Value::str(s.clone()),
+            Key::Str(s) => s.to_value(),
         }
     }
 }
@@ -230,8 +362,10 @@ impl Packed {
 /// indices), the rest empty room. The index lives in the buckets too: each
 /// bucket's `head` is the chain head of hash slot `i` (one slot per
 /// bucket), its `next` the next entry of its own chain, as PHP keeps the
-/// hash slots in front of the buckets and `next` in the zval. 40 bytes a
-/// bucket either way (PHP: 32, and two u32 slots).
+/// hash slots in front of the buckets and `next` in the zval. 48 bytes a
+/// bucket (PHP: 32, and two u32 slots): the key is an owned or a
+/// program-memory string ([`KeyStr`], 16 bytes), which was measured (#363)
+/// against the 40-byte bucket of an owned-only key.
 ///
 /// A small table (up to SMALL buckets: most arrays, records of a few keys)
 /// has no chains: a lookup scans its buckets' hashes.
@@ -268,7 +402,7 @@ struct Bucket {
     /// (PHP's `h`).
     h: u64,
     /// A string key; None for an int key (which `h` is).
-    key: Option<PhpStr>,
+    key: Option<KeyStr>,
     value: Value,
     /// The next entry in this entry's chain (NONE: the last; UNSET: the
     /// entry is unset).
@@ -523,7 +657,7 @@ impl Hashed {
 
     /// A new entry, last in order (`key` not present).
     #[inline(always)]
-    fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
+    fn insert_new(&mut self, h: u64, key: Option<KeyStr>, value: Value) {
         if self.used == self.buckets.len() {
             self.grow();
         }
@@ -1004,12 +1138,12 @@ mod tests {
         assert_eq!(k("123"), Key::Int(123));
         assert_eq!(k("-5"), Key::Int(-5));
         assert_eq!(k("0"), Key::Int(0));
-        assert_eq!(k("012"), Key::Str(PhpStr::from("012")));
-        assert_eq!(k("-0"), Key::Str(PhpStr::from("-0")));
-        assert_eq!(k("9223372036854775808"), Key::Str(PhpStr::from("9223372036854775808")));
+        assert_eq!(k("012"), Key::Str(KeyStr::from("012")));
+        assert_eq!(k("-0"), Key::Str(KeyStr::from("-0")));
+        assert_eq!(k("9223372036854775808"), Key::Str(KeyStr::from("9223372036854775808")));
         assert_eq!(Key::from_value(&Value::float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
         assert_eq!(Key::from_value(&Value::TRUE), Ok((Key::Int(1), None)));
-        assert_eq!(Key::from_value(&Value::NULL), Ok((Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset))));
+        assert_eq!(Key::from_value(&Value::NULL), Ok((Key::Str(KeyStr::from("")), Some(KeyIssue::NullOffset))));
     }
 
     #[test]
@@ -1018,10 +1152,10 @@ mod tests {
         a.push(int(1)).unwrap();
         a.push(int(2)).unwrap();
         assert!(matches!(a.storage, Storage::Packed(_)));
-        a.insert(Key::Str(PhpStr::from("x")), int(3));
+        a.insert(Key::Str(KeyStr::from("x")), int(3));
         a.insert(Key::Int(0), int(9));
         let keys: Vec<Key> = a.iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, vec![Key::Int(0), Key::Int(1), Key::Str(PhpStr::from("x"))]);
+        assert_eq!(keys, vec![Key::Int(0), Key::Int(1), Key::Str(KeyStr::from("x"))]);
         assert_eq!(a.get(&Key::Int(0)).map(Value::to_int), Some(9));
     }
 
@@ -1034,25 +1168,69 @@ mod tests {
         for n in [4usize, 40] {
             let mut a = PhpArray::new();
             for i in 0..n {
-                a.insert(Key::Str(PhpStr::from(format!("key{i}"))), int(i as i64));
+                a.insert(Key::Str(KeyStr::from(format!("key{i}"))), int(i as i64));
             }
             for i in 0..n {
                 let other = PhpStr::from(format!("key{i}"));
-                assert_eq!(got(a.get(&Key::Str(other.clone()))), Some(i as i64), "get, {n} keys");
+                assert_eq!(got(a.get(&Key::Str(other.clone().into()))), Some(i as i64), "get, {n} keys");
                 assert_eq!(got(a.get_str(&other)), Some(i as i64), "get_str, {n} keys");
-                assert!(a.get_mut(&Key::Str(other.clone())).is_some(), "get_mut, {n} keys");
-                assert_eq!(got(a.get(&Key::Str(PhpStr::from(format!("key{i}x"))))), None, "a miss, {n} keys");
+                assert!(a.get_mut(&Key::Str(other.clone().into())).is_some(), "get_mut, {n} keys");
+                assert_eq!(got(a.get(&Key::Str(KeyStr::from(format!("key{i}x"))))), None, "a miss, {n} keys");
             }
             // set() finds the entry too: no second one is made.
-            a.insert(Key::Str(PhpStr::from("key1")), int(-1));
+            a.insert(Key::Str(KeyStr::from("key1")), int(-1));
             assert_eq!(a.len(), n);
             assert_eq!(got(a.get_str(&PhpStr::from("key1"))), Some(-1));
             // A program-memory key (one head): found by its head, and by its bytes.
             let i = IStr::intern(b"istr key").expect("room in the pool");
-            a.insert(Key::Str(i.to_php_str()), int(7));
+            a.insert(Key::Str(i.to_php_str().into()), int(7));
             assert_eq!(got(a.get_str(i)), Some(7));
             assert_eq!(got(a.get_str(&PhpStr::from("istr key"))), Some(7));
         }
+    }
+
+    /// A literal key is kept as the program-memory string: a literal
+    /// probe, an owned string of the bytes and a value made from the key
+    /// all name the same entry, whatever handle wrote it (#363).
+    #[test]
+    fn literal_keys_are_program_memory_strings() {
+        let got = |v: Option<&Value>| v.and_then(Value::as_int);
+        let lit = IStr::intern(b"literal key").expect("room in the pool");
+        let owned = PhpStr::from("literal key");
+        assert_eq!(std::mem::size_of::<Key>(), 16);
+        assert_eq!(std::mem::size_of::<Bucket>(), 48);
+        for n in [3usize, 30] {
+            // Written by the literal, found by the literal (one head), by
+            // an owned string, and by a key made from a string value.
+            let mut a = PhpArray::new();
+            for i in 0..n {
+                a.insert(Key::Str(KeyStr::from(format!("k{i}"))), int(i as i64));
+            }
+            a.insert(Key::from_istr(lit), int(1));
+            assert!(matches!(a.get(&Key::from_istr(lit)), Some(v) if v.as_int() == Some(1)));
+            assert_eq!(got(a.get_str(lit)), Some(1));
+            assert_eq!(got(a.get_str(&owned)), Some(1));
+            assert_eq!(got(a.get(&Key::from_str_value(&Value::str(owned.clone())).expect("a string"))), Some(1));
+            assert_eq!(got(a.get(&Key::from_str_value(&Value::istr(lit)).expect("a string"))), Some(1));
+            // The stored key is the literal: its value is the program-memory string.
+            let (key, _) = a.iter().last().expect("an entry");
+            assert_eq!(key, Key::Str(KeyStr::from(owned.clone())));
+            assert!(std::ptr::eq(key.to_value().as_istr().expect("a literal"), lit));
+            // Written by an owned string, found by the literal; the entry is one.
+            a.insert(Key::from_string(owned.clone()), int(2));
+            assert_eq!((a.len(), got(a.get_str(lit))), (n + 1, Some(2)));
+            // Unset by the literal; a copy made before keeps it.
+            let copy = a.clone();
+            assert!(a.remove(&Key::from_istr(lit)).is_some());
+            assert_eq!((a.len(), copy.len(), got(copy.get_str(lit))), (n, n + 1, Some(2)));
+        }
+        // A numeric literal is an int key, as a numeric string is.
+        let num = IStr::intern(b"42").expect("room in the pool");
+        assert_eq!(Key::from_istr(num), Key::Int(42));
+        let not_canonical = IStr::intern(b"042").expect("room in the pool");
+        assert_eq!(Key::from_istr(not_canonical), Key::Str(KeyStr::from("042")));
+        assert_eq!(Key::from_str_value(&Value::istr(num)), Some(Key::Int(42)));
+        assert_eq!(Key::from_str_value(&Value::int(1)), None);
     }
 
     #[test]
@@ -1075,10 +1253,10 @@ mod tests {
     fn unset_is_order_preserving_and_compacts() {
         let mut a = PhpArray::new();
         for i in 0..100 {
-            a.insert(Key::Str(PhpStr::from(format!("k{i}"))), int(i));
+            a.insert(Key::Str(KeyStr::from(format!("k{i}"))), int(i));
         }
         for i in 0..90 {
-            a.remove(&Key::Str(PhpStr::from(format!("k{i}"))));
+            a.remove(&Key::Str(KeyStr::from(format!("k{i}"))));
         }
         let values: Vec<i64> = a.values().map(Value::to_int).collect();
         assert_eq!(values, (90..100).collect::<Vec<_>>());
@@ -1119,30 +1297,30 @@ mod tests {
         let s = PhpStr::from("collides");
         let as_int = s.hash() as i64;
         let mut a = PhpArray::hashed(0);
-        a.insert(Key::Str(s.clone()), int(1));
+        a.insert(Key::Str(s.clone().into()), int(1));
         a.insert(Key::Int(as_int), int(2));
         assert_eq!(a.len(), 2);
-        assert_eq!(a.get(&Key::Str(s.clone())).map(Value::to_int), Some(1));
+        assert_eq!(a.get(&Key::Str(s.clone().into())).map(Value::to_int), Some(1));
         assert_eq!(a.get_int(as_int).map(Value::to_int), Some(2));
         a.remove(&Key::Int(as_int));
-        assert_eq!((a.len(), a.get(&Key::Str(s)).map(Value::to_int), a.get_int(as_int).is_none()), (1, Some(1), true));
+        assert_eq!((a.len(), a.get(&Key::Str(s.into())).map(Value::to_int), a.get_int(as_int).is_none()), (1, Some(1), true));
     }
 
     #[test]
     fn a_hash_grows_unsets_and_compacts_keeping_order_and_chains() {
         let mut a = PhpArray::new();
         for i in 0..1000 {
-            a.insert(Key::Str(PhpStr::from(format!("s{i}"))), int(i));
+            a.insert(Key::Str(KeyStr::from(format!("s{i}"))), int(i));
             a.insert(Key::Int(i * 7919), int(-i));
         }
         assert_eq!(a.len(), 2000);
         for i in (0..1000).step_by(3) {
-            assert_eq!(a.remove(&Key::Str(PhpStr::from(format!("s{i}")))).map(|v| v.to_int()), Some(i));
+            assert_eq!(a.remove(&Key::Str(KeyStr::from(format!("s{i}")))).map(|v| v.to_int()), Some(i));
             assert_eq!(a.remove(&Key::Int(i * 7919)).map(|v| v.to_int()), Some(-i));
         }
         for i in 0..1000 {
             let kept = i % 3 != 0;
-            assert_eq!(a.get(&Key::Str(PhpStr::from(format!("s{i}")))).is_some(), kept, "s{i}");
+            assert_eq!(a.get(&Key::Str(KeyStr::from(format!("s{i}")))).is_some(), kept, "s{i}");
             assert_eq!(a.get_int(i * 7919).is_some(), kept, "{i}");
         }
         let order: Vec<i64> = a.values().map(Value::to_int).collect();
@@ -1156,8 +1334,8 @@ mod tests {
         let end = a.end_pos();
         assert!(end <= 8, "{end} positions for 3 entries");
         assert_eq!(a.iter().map(|(k, _)| k).collect::<Vec<_>>(), keys[keys.len() - 3..]);
-        a.insert(Key::Str(PhpStr::from("s0")), int(0));
-        assert_eq!(a.entry_at(end).map(|(p, k, _)| (p, k)), Some((end, Key::Str(PhpStr::from("s0")))));
+        a.insert(Key::Str(KeyStr::from("s0")), int(0));
+        assert_eq!(a.entry_at(end).map(|(p, k, _)| (p, k)), Some((end, Key::Str(KeyStr::from("s0")))));
     }
 
     #[test]
@@ -1179,22 +1357,22 @@ mod tests {
             let mut a = PhpArray::new();
             for i in 0..n {
                 let v = if i % 3 == 0 { Value::UNDEF } else { int(i) };
-                a.insert(Key::Str(PhpStr::from(format!("p{i}"))), v);
+                a.insert(Key::Str(KeyStr::from(format!("p{i}"))), v);
             }
             let count = |a: &PhpArray| a.iter().count();
             assert_eq!((a.len(), count(&a)), (n as usize, n as usize), "{n}");
-            assert!(a.get(&Key::Str(PhpStr::from("p0"))).is_some_and(Value::is_undef), "{n}");
+            assert!(a.get(&Key::Str(KeyStr::from("p0"))).is_some_and(Value::is_undef), "{n}");
             let b = a.clone();
             assert_eq!(count(&b), n as usize);
             for i in (1..n).filter(|i| i % 3 != 0) {
-                a.remove(&Key::Str(PhpStr::from(format!("p{i}"))));
+                a.remove(&Key::Str(KeyStr::from(format!("p{i}"))));
             }
             let left: Vec<Key> = a.iter().map(|(k, _)| k).collect();
-            let undefs: Vec<Key> = (0..n).filter(|i| i % 3 == 0).map(|i| Key::Str(PhpStr::from(format!("p{i}")))).collect();
+            let undefs: Vec<Key> = (0..n).filter(|i| i % 3 == 0).map(|i| Key::Str(KeyStr::from(format!("p{i}")))).collect();
             assert_eq!(left, undefs, "{n}");
             assert_eq!(a.len(), undefs.len());
-            a.insert(Key::Str(PhpStr::from("after")), Value::UNDEF);
-            assert_eq!(a.iter().last().map(|(k, _)| k), Some(Key::Str(PhpStr::from("after"))));
+            a.insert(Key::Str(KeyStr::from("after")), Value::UNDEF);
+            assert_eq!(a.iter().last().map(|(k, _)| k), Some(Key::Str(KeyStr::from("after"))));
             assert_eq!(count(&b), n as usize, "the copy is untouched");
         }
     }
@@ -1216,22 +1394,22 @@ mod tests {
         };
         assert_eq!(table(&a), (8, 8, 0));
         for i in 0..9 {
-            a.insert(Key::Str(PhpStr::from(format!("k{i}"))), int(i));
+            a.insert(Key::Str(KeyStr::from(format!("k{i}"))), int(i));
             let (size, capacity, used) = table(&a);
             // The buckets are the whole table: its room is exactly its size.
             assert_eq!((size, capacity, used), (if i < 8 { 8 } else { 16 }, size, i as usize + 1));
         }
         // Chained now (past SMALL): every key found, an unset one not.
-        a.remove(&Key::Str(PhpStr::from("k3")));
+        a.remove(&Key::Str(KeyStr::from("k3")));
         for i in 0..9 {
-            assert_eq!(a.get(&Key::Str(PhpStr::from(format!("k{i}")))).is_some(), i != 3);
+            assert_eq!(a.get(&Key::Str(KeyStr::from(format!("k{i}")))).is_some(), i != 3);
         }
         let copy = a.clone();
         assert_eq!(table(&copy), table(&a));
         let keys: Vec<Key> = copy.iter().map(|(k, _)| k).collect();
         assert_eq!(keys.len(), 8);
-        assert_eq!(keys[2], Key::Str(PhpStr::from("k2")));
-        assert_eq!(keys[3], Key::Str(PhpStr::from("k4")));
+        assert_eq!(keys[2], Key::Str(KeyStr::from("k2")));
+        assert_eq!(keys[3], Key::Str(KeyStr::from("k4")));
     }
 
     #[test]
@@ -1260,19 +1438,19 @@ mod tests {
         assert!(c.iter().map(|(_, v)| v.to_int()).eq(0..9));
         // A table the same: the next table's, its old entries gone.
         let mut h = PhpArray::new();
-        h.insert(Key::Str(PhpStr::from("k")), int(1));
+        h.insert(Key::Str(KeyStr::from("k")), int(1));
         let (at, room) = buffer(&h);
         assert_eq!(room, 8);
         drop(h);
         let mut h2 = PhpArray::new();
-        h2.insert(Key::Str(PhpStr::from("other")), int(2));
+        h2.insert(Key::Str(KeyStr::from("other")), int(2));
         assert_eq!(buffer(&h2), (at, 8));
         assert_eq!(h2.len(), 1);
-        assert!(h2.get(&Key::Str(PhpStr::from("k"))).is_none());
+        assert!(h2.get(&Key::Str(KeyStr::from("k"))).is_none());
         // A table growing past eight keeps its eight for the next.
         let mut g = PhpArray::new();
         for i in 0..9 {
-            g.insert(Key::Str(PhpStr::from(format!("g{i}").as_str())), int(i));
+            g.insert(Key::Str(KeyStr::from(format!("g{i}").as_str())), int(i));
         }
         assert_eq!(buffer(&g).1, 16);
         assert!(g.iter().map(|(_, v)| v.to_int()).eq(0..9));

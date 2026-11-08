@@ -100,14 +100,14 @@ fn ini_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         let v = if details {
             let access = crate::defaults::INI_ACCESS.iter().find(|(n, _)| n == name).map_or(7, |(_, a)| i64::from(*a));
             let mut d = PhpArray::new();
-            d.insert(Key::Str(PhpStr::from("global_value")), default.map_or(Value::NULL, |b| Value::str(PhpStr::from(b))));
-            d.insert(Key::Str(PhpStr::from("local_value")), local);
-            d.insert(Key::Str(PhpStr::from("access")), Value::int(access));
+            d.insert(Key::str(PhpStr::from("global_value")), default.map_or(Value::NULL, |b| Value::str(PhpStr::from(b))));
+            d.insert(Key::str(PhpStr::from("local_value")), local);
+            d.insert(Key::str(PhpStr::from("access")), Value::int(access));
             Value::array(d)
         } else {
             local
         };
-        out.insert(Key::Str(PhpStr::from(*name)), v);
+        out.insert(Key::str(PhpStr::from(*name)), v);
     }
     Ok(Value::array(out))
 }
@@ -143,10 +143,10 @@ const E_USER_DEPRECATED: i64 = 16384;
 fn error_get_last(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let Some((level, message, file, line)) = ctx.last_error(false) else { return Ok(Value::NULL) };
     let mut a = PhpArray::new();
-    a.insert(Key::Str(PhpStr::from("type")), Value::int(level));
-    a.insert(Key::Str(PhpStr::from("message")), Value::str(PhpStr::from(message.as_str())));
-    a.insert(Key::Str(PhpStr::from("file")), Value::str(PhpStr::from(file.as_str())));
-    a.insert(Key::Str(PhpStr::from("line")), Value::int(line as i64));
+    a.insert(Key::str(PhpStr::from("type")), Value::int(level));
+    a.insert(Key::str(PhpStr::from("message")), Value::str(PhpStr::from(message.as_str())));
+    a.insert(Key::str(PhpStr::from("file")), Value::str(PhpStr::from(file.as_str())));
+    a.insert(Key::str(PhpStr::from("line")), Value::int(line as i64));
     Ok(Value::array(a))
 }
 
@@ -608,7 +608,7 @@ fn getopt(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let mut add = |name: &[u8], value: Value| {
         let key = match Key::from_value(&Value::str(PhpStr::from(name))) {
             Ok((k @ Key::Int(_), _)) if !(name.len() > 1 && name[0] == b'0') => k,
-            _ => Key::Str(PhpStr::from(name)),
+            _ => Key::str(PhpStr::from(name)),
         };
         match out.get(&key).cloned().map(Value::into_array) {
             Some(Ok(a)) => {

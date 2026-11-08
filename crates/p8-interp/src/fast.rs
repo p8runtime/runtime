@@ -302,8 +302,8 @@ impl Context<'_> {
                     let key = src(&w[..], key);
                     let k = if let Some(k) = key.as_int() {
                         Key::Int(k)
-                    } else if let Some(s) = key.cloned_str() {
-                        Key::from_string(s)
+                    } else if let Some(k) = Key::from_str_value(key) {
+                        k
                     } else {
                         slow!()
                     };

@@ -56,19 +56,35 @@ pub enum Frozen {
 
 impl Frozen {
     pub fn to_value(&self) -> Value {
+        self.value(false)
+    }
+
+    /// The value as a program's constant: its strings, an array's keys
+    /// and values included, are program-memory strings
+    /// ([`IStr::intern`](crate::string::IStr::intern); ordinary ones once
+    /// the pool is full), so a literal probe finds a constant array's key
+    /// by pointer.
+    pub fn to_program_value(&self) -> Value {
+        self.value(true)
+    }
+
+    fn value(&self, program: bool) -> Value {
         match self {
             Frozen::Null => Value::NULL,
             Frozen::Bool(b) => Value::bool(*b),
             Frozen::Int(i) => Value::int(*i),
             Frozen::Float(f) => Value::float(*f),
-            Frozen::Str(s) => Value::str(PhpStr::from(s.as_bytes())),
+            Frozen::Str(s) => match program.then(|| crate::string::IStr::intern(s.as_bytes())).flatten() {
+                Some(i) => Value::istr(i),
+                None => Value::str(PhpStr::from(s.as_bytes())),
+            },
             Frozen::Array(entries) => {
                 let mut array = PhpArray::new();
                 for (k, v) in entries.iter() {
-                    match k.as_ref().map(|k| Key::from_value(&k.to_value())) {
-                        Some(Ok((key, _))) => array.insert(key, v.to_value()),
+                    match k.as_ref().map(|k| Key::from_value(&k.value(program))) {
+                        Some(Ok((key, _))) => array.insert(key, v.value(program)),
                         _ => {
-                            let _ = array.push(v.to_value());
+                            let _ = array.push(v.value(program));
                         }
                     }
                 }

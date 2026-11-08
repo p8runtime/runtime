@@ -1884,7 +1884,7 @@ fn stream_get_meta_data(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
     });
     let mut out = PhpArray::new();
     for (k, v) in entries {
-        out.insert(Key::Str(PhpStr::from(k)), v);
+        out.insert(Key::str(PhpStr::from(k)), v);
     }
     Ok(Value::array(out))
 }

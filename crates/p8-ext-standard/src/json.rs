@@ -210,7 +210,7 @@ impl Encoder<'_> {
             if !list {
                 let key = match k {
                     Key::Int(n) => PhpStr::from(n.to_string()),
-                    Key::Str(s) => s.clone(),
+                    Key::Str(s) => s.to_php_str(),
                 };
                 self.string_key(key.as_bytes(), out);
                 out.push(b':');
@@ -401,7 +401,7 @@ impl<'a> Parser<'a> {
                     if k.as_bytes().first() == Some(&0) {
                         return Err(Fail::Code(9));
                     }
-                    o.dynamic.borrow_mut().insert(Key::Str(k), v);
+                    o.dynamic.borrow_mut().insert(Key::str(k), v);
                 }
                 Ok(Value::object(o))
             }

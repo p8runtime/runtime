@@ -1798,7 +1798,7 @@ fn mb_get_info(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     if t == "all" {
         let mut a = PhpArray::new();
         for (k, v) in entries {
-            a.insert(Key::Str(PhpStr::from(k)), v);
+            a.insert(Key::str(PhpStr::from(k)), v);
         }
         return Ok(Value::array(a));
     }

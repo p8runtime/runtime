@@ -1234,7 +1234,7 @@ fn named_marker(key: &Key) -> Key {
         Key::Int(i) => b.extend_from_slice(i.to_string().as_bytes()),
         Key::Str(s) => b.extend_from_slice(s.as_bytes()),
     }
-    Key::Str(PhpStr::new(b))
+    Key::str(PhpStr::new(b))
 }
 
 fn mark_named(array: &mut PhpArray, name: &PhpStr) {
