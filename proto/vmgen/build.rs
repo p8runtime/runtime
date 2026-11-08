@@ -1,0 +1,122 @@
+//! The handler generator: p8's `zend_vm_gen.php`.
+//!
+//! Each instruction is written once, in `src/ops.rs`, as a function whose
+//! operand kinds are `const` parameters (`ops::mv::<DST, SRC>`). This
+//! script enumerates every live combination of kinds and writes one
+//! named, non-generic handler per combination (`P8_MOVE_TMP_CONST`), plus
+//! the table the translator picks from by name. The specialisation itself
+//! is rustc's monomorphization: inside a handler every `if K == CONST` is
+//! a comparison of two constants, which the compiler folds, so the dead
+//! branches are gone from the generated code (checked in the disassembly,
+//! not assumed: see the PR). The choice over a text template (PHP's) or a
+//! proc-macro: the handler bodies stay ordinary Rust, type-checked once,
+//! and the generated file is small and readable.
+
+use std::env;
+use std::fs;
+use std::path::Path;
+
+/// One instruction: its name, the generic function in `ops`, and its kind
+/// parameters, each with the kinds it takes (names of `kinds::` consts).
+struct Def {
+    op: &'static str,
+    func: &'static str,
+    params: &'static [&'static [&'static str]],
+    /// Which combinations are live (the rest are never emitted by the
+    /// compiler: both operands literals, a `TAKE` of anything but a
+    /// temporary).
+    keep: fn(&[&str]) -> bool,
+}
+
+const SRC: &[&str] = &["CONST", "TMP", "CV"];
+const DST: &[&str] = &["TMP", "CV"];
+const REG: &[&str] = &["TMP", "CV"];
+const OBJ: &[&str] = &["TMP", "CV", "THIS"];
+const KEY: &[&str] = &["CINT", "CSTR", "TMP", "CV"];
+const RES: &[&str] = &["USED", "UNUSED"];
+const MODE: &[&str] = &["COPY", "TAKE"];
+const WHEN: &[&str] = &["T", "F"];
+const JCMP: &[&str] = &["LT", "LE", "EQ", "ID"];
+const CMP: &[&str] = &["LT", "LE", "GT", "GE", "EQ", "NE", "ID", "NI"];
+const ARITH: &[&str] = &["ADD", "SUB", "MUL"];
+const STEP: &[&str] = &["INC_LT", "INC_LE", "DEC_GT", "DEC_GE"];
+
+fn all(_: &[&str]) -> bool {
+    true
+}
+
+/// The last two kinds are the two operands: not both literals.
+fn not_both_const(k: &[&str]) -> bool {
+    !(k[k.len() - 2] == "CONST" && k[k.len() - 1] == "CONST")
+}
+
+/// `TAKE` (the operand moved out of its register) only of a temporary.
+fn take_of_tmp(k: &[&str]) -> bool {
+    let mode = k.iter().position(|&x| x == "COPY" || x == "TAKE").expect("a mode");
+    k[mode] == "COPY" || k[mode - 1] == "TMP"
+}
+
+const DEFS: &[Def] = &[
+    Def { op: "MOVE", func: "mv", params: &[DST, SRC], keep: all },
+    Def { op: "ASSIGN", func: "assign", params: &[SRC, MODE], keep: take_of_tmp },
+    Def { op: "FREE", func: "free", params: &[], keep: all },
+    Def { op: "JMP", func: "jmp", params: &[], keep: all },
+    Def { op: "JMP_COND", func: "jmp_cond", params: &[REG, WHEN], keep: all },
+    Def { op: "JCMP", func: "jcmp", params: &[JCMP, WHEN, SRC, SRC], keep: not_both_const },
+    Def { op: "STEP_JMP", func: "step_jmp", params: &[STEP, SRC], keep: all },
+    Def { op: "ARITH", func: "arith", params: &[ARITH, DST, SRC, SRC], keep: not_both_const },
+    Def { op: "CONCAT", func: "concat", params: &[DST, SRC, SRC], keep: not_both_const },
+    Def { op: "COMPARE", func: "compare", params: &[CMP, DST, SRC, SRC], keep: not_both_const },
+    Def { op: "FETCH_DIM", func: "fetch_dim", params: &[REG, KEY], keep: all },
+    Def { op: "ISSET_DIM", func: "isset_dim", params: &[REG, KEY], keep: all },
+    Def { op: "ASSIGN_DIM", func: "assign_dim", params: &[KEY, SRC, RES], keep: all },
+    Def { op: "FETCH_PROP", func: "fetch_prop", params: &[OBJ], keep: all },
+    Def { op: "ASSIGN_PROP", func: "assign_prop", params: &[OBJ, SRC, MODE, RES], keep: take_of_tmp },
+    Def { op: "CALL", func: "call", params: &[RES], keep: all },
+    Def { op: "RET", func: "ret", params: &[&["CONST", "TMP", "CV", "NONE"]], keep: all },
+    Def { op: "SEND_VAR_METHOD", func: "send_var_method", params: &[], keep: all },
+    Def { op: "METHOD_CALL", func: "method_call", params: &[OBJ, RES], keep: all },
+    Def { op: "ITER_INIT", func: "iter_init", params: &[REG], keep: all },
+    Def { op: "ITER_NEXT", func: "iter_next", params: &[&["NOKEY", "KEY"]], keep: all },
+    Def { op: "NEW", func: "new_obj", params: &[&["PLAIN", "CTOR"]], keep: all },
+    Def { op: "CONSTRUCT", func: "construct", params: &[], keep: all },
+    Def { op: "ECHO", func: "echo", params: &[SRC], keep: all },
+    Def { op: "REFUSED", func: "refused", params: &[], keep: all },
+];
+
+/// Every combination of one kind per parameter.
+fn combos(params: &[&'static [&'static str]]) -> Vec<Vec<&'static str>> {
+    let mut out: Vec<Vec<&'static str>> = vec![Vec::new()];
+    for p in params {
+        let p: &'static [&'static str] = p;
+        out = out.into_iter().flat_map(|c| p.iter().map(move |k| c.iter().copied().chain(std::iter::once(*k)).collect())).collect();
+    }
+    out
+}
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let mut src = String::new();
+    src.push_str("// Generated by build.rs: one handler per live combination of operand kinds.\n");
+    src.push_str("use crate::kinds::*;\nuse crate::ops;\nuse crate::vm::{Func, Handler, Insn, State, Window};\n\n");
+    let mut table = String::new();
+    let mut count = 0usize;
+    for def in DEFS {
+        for kinds in combos(def.params).into_iter().filter(|k| (def.keep)(k)) {
+            let name = std::iter::once(format!("P8_{}", def.op)).chain(kinds.iter().map(|k| k.to_string())).collect::<Vec<_>>().join("_");
+            let generics = if kinds.is_empty() { String::new() } else { format!("::<{}>", kinds.iter().map(|k| format!("{{{k}}}")).collect::<Vec<_>>().join(", ")) };
+            src.push_str(&format!(
+                "#[inline(never)]\n#[allow(non_snake_case)]\npub fn {name}<'p>(st: &mut State<'p>, w: &mut Window, f: &'p Func<'p>, i: &Insn<'p>, pc: u32) -> u32 {{\n    ops::{}{generics}(st, w, f, i, pc)\n}}\n",
+                def.func
+            ));
+            let kind_list = kinds.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(", ");
+            table.push_str(&format!("    (\"{}\", &[{kind_list}], \"{name}\", {name} as Handler),\n", def.op));
+            count += 1;
+        }
+    }
+    src.push_str("\n/// Every handler: (instruction, kinds, name, handler). The translator picks by instruction and kinds.\n");
+    src.push_str(&format!("pub static TABLE: [(&str, &[&str], &str, Handler); {count}] = [\n{table}];\n"));
+    let out = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("handlers.rs");
+    fs::write(&out, src).expect("write handlers.rs");
+    println!("cargo:warning=vmgen: {count} handlers generated");
+}
