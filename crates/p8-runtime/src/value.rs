@@ -136,8 +136,11 @@ impl Value {
     /// The count is read first, so for a shared handle the `Rc` drop that
     /// follows is known not to reach zero and is the decrement alone.
     #[inline(always)]
-    pub fn release(mut self) -> bool {
-        match mem::replace(&mut self.0, Repr::Undef) {
+    pub fn release(self) -> bool {
+        // (Not dropped after: its representation is moved out, and the
+        // drop of what is left would be an out-of-line call of its own.)
+        let mut this = mem::ManuallyDrop::new(self);
+        match mem::replace(&mut this.0, Repr::Undef) {
             Repr::Str(s) => {
                 if s.is_last() {
                     free_last(Repr::Str(s));
