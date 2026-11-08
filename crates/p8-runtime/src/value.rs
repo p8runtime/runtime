@@ -50,8 +50,8 @@ enum Repr {
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef(i64) = 4,
     /// A string in program memory (a compiled literal), by its id
-    /// ([`IStr::by_id`]): no count, nothing to release.
-    IStr(i64) = 5,
+    /// (#391 R1p: by pointer): no count, nothing to release.
+    IStr(&'static IStr) = 5,
     Str(Handle<PhpStr>) = 6,
     Array(Handle<Rc<PhpArray>>) = 7,
     /// A PHP reference: the shared cell `$a = &$b` makes.
@@ -220,7 +220,7 @@ impl Value {
             Repr::Int(w) => Some((Kind::Int, w)),
             Repr::Float(w) => Some((Kind::Float, w)),
             Repr::Undef(w) => Some((Kind::Undef, w)),
-            Repr::IStr(w) => Some((Kind::Str, w)),
+            Repr::IStr(s) => Some((Kind::Str, s.id() as i64)),
             _ => None,
         }
     }
@@ -233,7 +233,7 @@ impl Value {
             Repr::Int(w) => V::Int(*w),
             Repr::Float(w) => V::Float(f64::from_bits(*w as u64)),
             Repr::Undef(_) => V::Undef,
-            Repr::IStr(w) => V::IStr(IStr::by_id(*w as u32)),
+            Repr::IStr(s) => V::IStr(s),
             Repr::Str(s) => V::Str(s),
             Repr::Array(a) => V::Array(a),
             Repr::Ref(c) => V::Ref(c),
@@ -320,14 +320,14 @@ impl Value {
     /// count, nothing to release.
     #[inline(always)]
     pub fn istr(s: &'static IStr) -> Value {
-        Value(Repr::IStr(i64::from(s.id())))
+        Value(Repr::IStr(s))
     }
 
     /// The program-memory string this value holds, if it holds one.
     #[inline(always)]
     pub fn as_istr(&self) -> Option<&'static IStr> {
         match self.0 {
-            Repr::IStr(w) => Some(IStr::by_id(w as u32)),
+            Repr::IStr(s) => Some(s),
             _ => None,
         }
     }
@@ -468,7 +468,7 @@ impl Value {
     #[inline(always)]
     pub fn as_str(&self) -> Option<&StrHead> {
         match &self.0 {
-            Repr::IStr(w) => Some(IStr::by_id(*w as u32)),
+            Repr::IStr(s) => Some(s),
             Repr::Str(s) => Some(s),
             _ => None,
         }
@@ -544,7 +544,7 @@ impl Value {
     pub fn cloned_str(&self) -> Option<PhpStr> {
         match &self.0 {
             Repr::Str(s) => Some(PhpStr::clone(s)),
-            Repr::IStr(w) => Some(IStr::by_id(*w as u32).to_php_str()),
+            Repr::IStr(s) => Some(s.to_php_str()),
             _ => None,
         }
     }
@@ -580,7 +580,7 @@ impl Value {
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
         match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Str(s) => Ok(ManuallyDrop::into_inner(s)),
-            Repr::IStr(w) => Ok(IStr::by_id(w as u32).to_php_str()),
+            Repr::IStr(s) => Ok(s.to_php_str()),
             r => Err(Value(r)),
         }
     }
