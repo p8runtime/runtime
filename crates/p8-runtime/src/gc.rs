@@ -14,31 +14,33 @@
 
 use crate::array::PhpArray;
 use crate::object::{Ids, Object, Slot};
+use crate::heap::HRc;
 use crate::value::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::rc::Rc;
 
 enum Node {
-    Object(Rc<Object>),
-    Array(Rc<PhpArray>),
-    Cell(Rc<RefCell<Value>>),
+    Object(HRc<Object>),
+    Array(HRc<PhpArray>),
+    Cell(HRc<RefCell<Value>>),
 }
 
 impl Node {
     fn key(&self) -> usize {
         match self {
-            Node::Object(o) => Rc::as_ptr(o) as *const u8 as usize,
-            Node::Array(a) => Rc::as_ptr(a) as *const u8 as usize,
-            Node::Cell(c) => Rc::as_ptr(c) as *const u8 as usize,
+            Node::Object(o) => HRc::as_ptr(o) as *const u8 as usize,
+            Node::Array(a) => HRc::as_ptr(a) as *const u8 as usize,
+            Node::Cell(c) => HRc::as_ptr(c) as *const u8 as usize,
         }
     }
 
     fn strong(&self) -> usize {
         match self {
-            Node::Object(o) => Rc::strong_count(o),
-            Node::Array(a) => Rc::strong_count(a),
-            Node::Cell(c) => Rc::strong_count(c),
+            Node::Object(o) => HRc::strong_count(o),
+            Node::Array(a) => HRc::strong_count(a),
+            Node::Cell(c) => HRc::strong_count(c),
         }
     }
 
@@ -64,7 +66,7 @@ impl Node {
                 if let Some(l) = o.lazy_info.borrow().as_ref() {
                     add(&l.initializer);
                     if let Some(i) = &l.instance {
-                        add(&Value::object(Rc::clone(i)));
+                        add(&Value::object(HRc::clone(i)));
                     }
                 }
             }
@@ -81,7 +83,7 @@ impl Node {
 /// The objects in garbage cycles, oldest first, and how many values
 /// (objects and arrays) the cycles hold.
 pub struct Garbage {
-    pub objects: Vec<Rc<Object>>,
+    pub objects: Vec<HRc<Object>>,
     pub count: usize,
 }
 
@@ -175,8 +177,8 @@ mod tests {
         Rc::new(Class::stub("stdClass"))
     }
 
-    fn link(from: &Rc<Object>, to: &Rc<Object>, name: &str) {
-        from.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), Value::object(Rc::clone(to)));
+    fn link(from: &HRc<Object>, to: &HRc<Object>, name: &str) {
+        from.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), Value::object(HRc::clone(to)));
     }
 
     #[test]
@@ -191,7 +193,7 @@ mod tests {
         let g = find_cycles(&ids);
         assert!(g.objects.is_empty());
         // Only the cycle holds them.
-        let (wa, wb) = (Rc::downgrade(&a), Rc::downgrade(&b));
+        let (wa, wb) = (HRc::downgrade(&a), HRc::downgrade(&b));
         drop((a, b));
         let g = find_cycles(&ids);
         assert_eq!(g.objects.len(), 2);
@@ -215,10 +217,10 @@ mod tests {
         drop((a, b));
         assert!(find_cycles(&ids).objects.is_empty());
         // Through an array and a reference too.
-        let arr = Rc::new(crate::array::PhpArray::from_list(vec![Value::object(Rc::clone(&root))]));
-        let cell = Rc::new(RefCell::new(Value::array(Rc::clone(&arr))));
+        let arr = HRc::new(crate::array::PhpArray::from_list(vec![Value::object(HRc::clone(&root))]));
+        let cell = HRc::new(RefCell::new(Value::array(HRc::clone(&arr))));
         link(&root, &root, "self");
-        root.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("r")), Value::reference(Rc::clone(&cell)));
+        root.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("r")), Value::reference(HRc::clone(&cell)));
         drop((arr, cell));
         assert!(find_cycles(&ids).objects.is_empty());
         drop(root);

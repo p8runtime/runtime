@@ -11,7 +11,6 @@ use crate::string::PhpStr;
 use crate::value::{Kind, Value};
 use crate::numeric::{Number, increment_alphanumeric, leading_numeric, numeric_string, push_int};
 use crate::number::{Precision, dval_to_lval, float_to_string};
-use std::rc::Rc;
 
 /// A diagnostic an operator raised (shown with the current location).
 #[derive(Debug, Clone, PartialEq)]
@@ -328,14 +327,14 @@ fn int_pow(base: i64, exp: i64) -> Value {
 
 /// `$a + $b` on arrays: the left (its handle, shared until a key is
 /// added), plus the right's keys it lacks.
-fn array_union(a: Rc<PhpArray>, b: &PhpArray) -> Rc<PhpArray> {
+fn array_union(a: crate::value::ArrayRc, b: &PhpArray) -> crate::value::ArrayRc {
     if b.is_empty() {
         return a;
     }
     let mut out = a;
     for (key, value) in b.iter() {
         if !out.contains_key(&key) {
-            Rc::make_mut(&mut out).insert(key, value.clone());
+            crate::heap::HRc::make_mut(&mut out).insert(key, value.clone());
         }
     }
     out

@@ -21,6 +21,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt;
+use crate::heap::{HRc, Heap};
 use std::mem::{self, ManuallyDrop};
 use std::rc::Rc;
 
@@ -50,15 +51,20 @@ enum Repr {
     /// A variable never assigned (only in registers; reads warn and give null).
     Undef(i64) = 4,
     /// A string in program memory (a compiled literal), by its id
-    /// ([`IStr::by_id`]): no count, nothing to release.
-    IStr(i64) = 5,
-    Str(Handle<PhpStr>) = 6,
-    Array(Handle<Rc<PhpArray>>) = 7,
-    /// A PHP reference: the shared cell `$a = &$b` makes.
-    Ref(Handle<Rc<RefCell<Value>>>) = 8,
-    /// An object: a shared handle (copying the value copies the handle).
-    Object(Handle<Rc<Object>>) = 9,
+    /// as a plain pointer: no count, nothing to release. (By id through a
+    /// table, measured: +37 instructions per iteration on `identical`.
+    /// A pointer is one word too, and rustc's scalar pair unifies it
+    /// with the others' `i64`: the copy still folds.)
+    IStr(&'static IStr) = 5,
+    /// Every value holding memory (a string, an array, a reference, an
+    /// object): ONE pointer type, its kind a byte behind it ([`Heap`]).
+    Heap(Handle<Rc<Heap>>) = 6,
 }
+
+/// The typed handles the engine names.
+pub type ArrayRc = HRc<PhpArray>;
+pub type RefRc = HRc<RefCell<Value>>;
+pub type ObjectRc = HRc<Object>;
 
 // The layout the engine is tuned for: a zval's 16 bytes, and `Option<Value>`
 // no bigger (the tag's spare values are its `None`).
@@ -87,10 +93,10 @@ enum V<'a> {
     Float(f64),
     Undef,
     IStr(&'static IStr),
-    Str(&'a PhpStr),
-    Array(&'a Rc<PhpArray>),
-    Ref(&'a Rc<RefCell<Value>>),
-    Object(&'a Rc<Object>),
+    Str(&'a StrHead),
+    Array(&'a PhpArray),
+    Ref(&'a RefCell<Value>),
+    Object(&'a Object),
 }
 
 impl Default for Value {
@@ -125,14 +131,8 @@ const UNDEF_REPR: Repr = Repr::Undef(0);
 /// free when this was the last handle (PHP's `i_zval_ptr_dtor`).
 #[inline(never)]
 fn release_heap(r: &mut Repr) {
-    let count = match &*r {
-        Repr::Str(s) => s.count(),
-        Repr::Array(a) => Rc::strong_count(a),
-        Repr::Ref(c) => Rc::strong_count(c),
-        Repr::Object(o) => Rc::strong_count(o),
-        _ => return,
-    };
-    if count == 1 {
+    let Repr::Heap(h) = &*r else { return };
+    if Rc::strong_count(h) == 1 {
         free_last(mem::replace(r, UNDEF_REPR));
     } else {
         drop_shared(mem::replace(r, UNDEF_REPR));
@@ -140,19 +140,13 @@ fn release_heap(r: &mut Repr) {
 }
 
 /// Let go of a representation taken out of its value (see
-/// [`Value::release`]).
+/// [`Value::release`]): one count for every kind of heap value.
 #[inline(always)]
 fn release_repr(r: Repr) -> bool {
-    let count = match &r {
-        Repr::Str(s) => s.count(),
-        Repr::Array(a) => Rc::strong_count(a),
-        Repr::Ref(c) => Rc::strong_count(c),
-        Repr::Object(o) => Rc::strong_count(o),
-        _ => return false,
-    };
-    if count == 1 {
+    let Repr::Heap(h) = &r else { return false };
+    if Rc::strong_count(h) == 1 {
         // A string's free cannot run a destructor.
-        let owns = !matches!(r, Repr::Str(_));
+        let owns = !matches!(***h, Heap::Str(_));
         free_last(r);
         owns
     } else {
@@ -161,29 +155,21 @@ fn release_repr(r: Repr) -> bool {
     }
 }
 
-/// The last handle goes: its free, out of line, by its kind (PHP's
-/// `rc_dtor_func`).
+/// The last handle goes: its free, out of line (the `Heap`'s drop is the
+/// dispatch on its kind: PHP's `rc_dtor_func`).
 #[cold]
 #[inline(never)]
 fn free_last(r: Repr) {
-    match r {
-        Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
-        Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
-        Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
-        Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
-        _ => {}
+    if let Repr::Heap(h) = r {
+        drop(ManuallyDrop::into_inner(h));
     }
 }
 
 /// A shared handle's drop: the decrement alone.
 #[inline(always)]
 fn drop_shared(r: Repr) {
-    match r {
-        Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
-        Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
-        Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
-        Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
-        _ => {}
+    if let Repr::Heap(h) = r {
+        drop(ManuallyDrop::into_inner(h));
     }
 }
 
@@ -200,10 +186,7 @@ impl Value {
     #[inline(always)]
     pub fn same_handle(&self, other: &Value) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Str(a), Repr::Str(b)) => PhpStr::ptr_eq(a, b),
-            (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b),
-            (Repr::Ref(a), Repr::Ref(b)) => Rc::ptr_eq(a, b),
-            (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
+            (Repr::Heap(a), Repr::Heap(b)) => Rc::ptr_eq(a, b),
             _ => match (self.plain_word(), other.plain_word()) {
                 (Some(a), Some(b)) => a == b,
                 _ => false,
@@ -220,7 +203,7 @@ impl Value {
             Repr::Int(w) => Some((Kind::Int, w)),
             Repr::Float(w) => Some((Kind::Float, w)),
             Repr::Undef(w) => Some((Kind::Undef, w)),
-            Repr::IStr(w) => Some((Kind::Str, w)),
+            Repr::IStr(s) => Some((Kind::Str, s.id() as i64)),
             _ => None,
         }
     }
@@ -233,43 +216,51 @@ impl Value {
             Repr::Int(w) => V::Int(*w),
             Repr::Float(w) => V::Float(f64::from_bits(*w as u64)),
             Repr::Undef(_) => V::Undef,
-            Repr::IStr(w) => V::IStr(IStr::by_id(*w as u32)),
-            Repr::Str(s) => V::Str(s),
-            Repr::Array(a) => V::Array(a),
-            Repr::Ref(c) => V::Ref(c),
-            Repr::Object(o) => V::Object(o),
+            Repr::IStr(s) => V::IStr(s),
+            Repr::Heap(h) => match &***h {
+                Heap::Str(s) => V::Str(s),
+                Heap::Array(a) => V::Array(a),
+                Heap::Ref(c) => V::Ref(c),
+                Heap::Object(o) => V::Object(o),
+            },
+        }
+    }
+
+    /// How many values share this one's heap value (0 for a plain value).
+    #[inline(always)]
+    pub fn heap_count(&self) -> usize {
+        match &self.0 {
+            Repr::Heap(h) => Rc::strong_count(h),
+            _ => 0,
+        }
+    }
+
+    /// The heap value behind the pointer, if this holds one.
+    #[inline(always)]
+    fn heap(&self) -> Option<&Heap> {
+        match &self.0 {
+            Repr::Heap(h) => Some(h),
+            _ => None,
         }
     }
 }
 
 impl Clone for Value {
-    /// Inline: copying a value is on every register move. The plain test
-    /// first (one compare of the tag); the plain arms then fold into a
-    /// copy of both words (every payload is an `i64`), and the heap arms
-    /// into one increment (every handle's count is first in its
-    /// allocation). Written as one match, LLVM makes a ten-entry jump
-    /// table of it (#391's layout experiment).
+    /// Inline: copying a value is on every register move. One compare of
+    /// the tag; a plain value is then a copy of both words (the plain arms
+    /// fold: every payload is an `i64`), a heap value one increment (one
+    /// pointer type: no dispatch on its kind).
     #[inline(always)]
     fn clone(&self) -> Self {
-        if self.is_plain() {
-            Value(match self.0 {
-                Repr::Null(w) => Repr::Null(w),
-                Repr::Bool(w) => Repr::Bool(w),
-                Repr::Int(w) => Repr::Int(w),
-                Repr::Float(w) => Repr::Float(w),
-                Repr::Undef(w) => Repr::Undef(w),
-                Repr::IStr(w) => Repr::IStr(w),
-                _ => UNDEF_REPR,
-            })
-        } else {
-            Value(match &self.0 {
-                Repr::Str(s) => Repr::Str(s.clone()),
-                Repr::Array(a) => Repr::Array(a.clone()),
-                Repr::Ref(r) => Repr::Ref(r.clone()),
-                Repr::Object(o) => Repr::Object(o.clone()),
-                _ => UNDEF_REPR,
-            })
-        }
+        Value(match &self.0 {
+            Repr::Null(w) => Repr::Null(*w),
+            Repr::Bool(w) => Repr::Bool(*w),
+            Repr::Int(w) => Repr::Int(*w),
+            Repr::Float(w) => Repr::Float(*w),
+            Repr::Undef(w) => Repr::Undef(*w),
+            Repr::IStr(s) => Repr::IStr(s),
+            Repr::Heap(h) => Repr::Heap(h.clone()),
+        })
     }
 }
 
@@ -313,44 +304,49 @@ impl Value {
     }
 
     pub fn str(s: impl Into<PhpStr>) -> Value {
-        Value(Repr::Str(Handle::new(s.into())))
+        Value::of_heap(s.into().into_heap())
     }
 
-    /// A program-memory string's value (a compiled literal): its id, no
+    /// A program-memory string's value (a compiled literal): a pointer, no
     /// count, nothing to release.
     #[inline(always)]
     pub fn istr(s: &'static IStr) -> Value {
-        Value(Repr::IStr(i64::from(s.id())))
+        Value(Repr::IStr(s))
     }
 
     /// The program-memory string this value holds, if it holds one.
     #[inline(always)]
     pub fn as_istr(&self) -> Option<&'static IStr> {
         match self.0 {
-            Repr::IStr(w) => Some(IStr::by_id(w as u32)),
+            Repr::IStr(s) => Some(s),
             _ => None,
         }
     }
 
     #[inline(always)]
-    pub fn array(a: impl Into<Rc<PhpArray>>) -> Value {
-        Value(Repr::Array(Handle::new(a.into())))
+    fn of_heap(h: Rc<Heap>) -> Value {
+        Value(Repr::Heap(Handle::new(h)))
     }
 
     #[inline(always)]
-    pub fn object(o: impl Into<Rc<Object>>) -> Value {
-        Value(Repr::Object(Handle::new(o.into())))
+    pub fn array(a: impl Into<ArrayRc>) -> Value {
+        Value::of_heap(HRc::into_heap(a.into()))
+    }
+
+    #[inline(always)]
+    pub fn object(o: impl Into<ObjectRc>) -> Value {
+        Value::of_heap(HRc::into_heap(o.into()))
     }
 
     /// A PHP reference to the cell `$a = &$b` shares.
     #[inline(always)]
-    pub fn reference(cell: Rc<RefCell<Value>>) -> Value {
-        Value(Repr::Ref(Handle::new(cell)))
+    pub fn reference(cell: RefRc) -> Value {
+        Value::of_heap(HRc::into_heap(cell))
     }
 
     /// A PHP reference to a fresh cell holding `v`.
     pub fn new_reference(v: Value) -> Value {
-        Value(Repr::Ref(Handle::new(Rc::new(RefCell::new(v)))))
+        Value::reference(HRc::new(RefCell::new(v)))
     }
 
     #[inline(always)]
@@ -361,10 +357,14 @@ impl Value {
             Repr::Int(_) => Kind::Int,
             Repr::Float(_) => Kind::Float,
             Repr::Undef(_) => Kind::Undef,
-            Repr::IStr(_) | Repr::Str(_) => Kind::Str,
-            Repr::Array(_) => Kind::Array,
-            Repr::Ref(_) => Kind::Ref,
-            Repr::Object(_) => Kind::Object,
+            Repr::IStr(_) => Kind::Str,
+            // (The kind behind the pointer: a byte next to the count.)
+            Repr::Heap(ref h) => match ***h {
+                Heap::Str(_) => Kind::Str,
+                Heap::Array(_) => Kind::Array,
+                Heap::Ref(_) => Kind::Ref,
+                Heap::Object(_) => Kind::Object,
+            },
         }
     }
 
@@ -407,22 +407,22 @@ impl Value {
 
     #[inline(always)]
     pub fn is_str(&self) -> bool {
-        matches!(self.0, Repr::IStr(_) | Repr::Str(_))
+        matches!(self.0, Repr::IStr(_)) || matches!(self.heap(), Some(Heap::Str(_)))
     }
 
     #[inline(always)]
     pub fn is_array(&self) -> bool {
-        matches!(self.0, Repr::Array(_))
+        matches!(self.heap(), Some(Heap::Array(_)))
     }
 
     #[inline(always)]
     pub fn is_object(&self) -> bool {
-        matches!(self.0, Repr::Object(_))
+        matches!(self.heap(), Some(Heap::Object(_)))
     }
 
     #[inline(always)]
     pub fn is_reference(&self) -> bool {
-        matches!(self.0, Repr::Ref(_))
+        matches!(self.heap(), Some(Heap::Ref(_)))
     }
 
     /// Whether the value holds nothing to release: one compare of the tag.
@@ -468,8 +468,11 @@ impl Value {
     #[inline(always)]
     pub fn as_str(&self) -> Option<&StrHead> {
         match &self.0 {
-            Repr::IStr(w) => Some(IStr::by_id(*w as u32)),
-            Repr::Str(s) => Some(s),
+            Repr::IStr(s) => Some(s),
+            Repr::Heap(h) => match &***h {
+                Heap::Str(s) => Some(s),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -477,25 +480,36 @@ impl Value {
     /// The array, for reading. To write, `array_mut`.
     #[inline(always)]
     pub fn as_array(&self) -> Option<&PhpArray> {
-        match &self.0 {
-            Repr::Array(a) => Some(a),
+        match self.heap() {
+            Some(Heap::Array(a)) => Some(a),
             _ => None,
         }
     }
 
+    /// The object, for reading (#391: a borrow of the body; an owned
+    /// handle is `cloned_object`).
     #[inline(always)]
-    pub fn as_object(&self) -> Option<&Rc<Object>> {
-        match &self.0 {
-            Repr::Object(o) => Some(o),
+    pub fn as_object(&self) -> Option<&Object> {
+        match self.heap() {
+            Some(Heap::Object(o)) => Some(o),
             _ => None,
         }
     }
 
     /// The cell a PHP reference shares.
     #[inline(always)]
-    pub fn as_reference(&self) -> Option<&Rc<RefCell<Value>>> {
-        match &self.0 {
-            Repr::Ref(cell) => Some(cell),
+    pub fn as_reference(&self) -> Option<&RefCell<Value>> {
+        match self.heap() {
+            Some(Heap::Ref(c)) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// The heap handle, for writing in place, if it holds a `T`.
+    #[inline(always)]
+    fn heap_mut<T: crate::heap::HeapKind>(&mut self) -> Option<&mut Rc<Heap>> {
+        match &mut self.0 {
+            Repr::Heap(h) if T::get(h).is_some() => Some(h),
             _ => None,
         }
     }
@@ -504,8 +518,12 @@ impl Value {
     /// PHP's SEPARATE_ARRAY).
     #[inline(always)]
     pub fn array_mut(&mut self) -> Option<&mut PhpArray> {
-        match &mut self.0 {
-            Repr::Array(a) => Some(Rc::make_mut(a)),
+        let h = self.heap_mut::<PhpArray>()?;
+        if Rc::get_mut(h).is_none() {
+            separate_array(h);
+        }
+        match Rc::get_mut(h) {
+            Some(Heap::Array(a)) => Some(a),
             _ => None,
         }
     }
@@ -514,12 +532,9 @@ impl Value {
     /// A program-memory string is copied out first (it is never written).
     pub fn str_mut(&mut self) -> Option<&mut Vec<u8>> {
         if let Some(s) = self.as_istr() {
-            self.0 = Repr::Str(Handle::new(PhpStr::from(s.as_bytes())));
+            *self = Value::str(PhpStr::from(s.as_bytes()));
         }
-        match &mut self.0 {
-            Repr::Str(s) => Some(s.make_mut()),
-            _ => None,
-        }
+        self.heap_mut::<StrHead>().map(|h| crate::string::writable_heap(h, 0))
     }
 
     /// Append to the string, as `.=` does (in place when it is the only
@@ -527,15 +542,24 @@ impl Value {
     pub fn str_push(&mut self, bytes: &[u8]) -> bool {
         if let Some(s) = self.as_istr() {
             // (One new string of both, as a shared one's append.)
-            self.0 = Repr::Str(Handle::new(PhpStr::concat(s.as_bytes(), bytes)));
+            *self = Value::str(PhpStr::concat(s.as_bytes(), bytes));
             return true;
         }
-        match &mut self.0 {
-            Repr::Str(s) => {
-                s.push_bytes(bytes);
+        match self.heap_mut::<StrHead>() {
+            Some(h) => {
+                crate::string::writable_heap(h, bytes.len()).extend_from_slice(bytes);
                 true
             }
-            _ => false,
+            None => false,
+        }
+    }
+
+    /// The heap handle (shared), if it holds a `T`.
+    #[inline(always)]
+    fn cloned_heap<T: crate::heap::HeapKind>(&self) -> Option<HRc<T>> {
+        match &self.0 {
+            Repr::Heap(h) => HRc::from_heap(Rc::clone(h)).ok(),
+            _ => None,
         }
     }
 
@@ -543,34 +567,34 @@ impl Value {
     #[inline(always)]
     pub fn cloned_str(&self) -> Option<PhpStr> {
         match &self.0 {
-            Repr::Str(s) => Some(PhpStr::clone(s)),
-            Repr::IStr(w) => Some(IStr::by_id(*w as u32).to_php_str()),
+            Repr::IStr(s) => Some(s.to_php_str()),
+            Repr::Heap(h) if matches!(***h, Heap::Str(_)) => PhpStr::from_heap(Rc::clone(h)).ok(),
             _ => None,
         }
     }
 
     /// The array's handle (shared, not copied).
     #[inline(always)]
-    pub fn cloned_array(&self) -> Option<Rc<PhpArray>> {
-        match &self.0 {
-            Repr::Array(a) => Some(Rc::clone(a)),
-            _ => None,
-        }
+    pub fn cloned_array(&self) -> Option<ArrayRc> {
+        self.cloned_heap()
     }
 
     #[inline(always)]
-    pub fn cloned_object(&self) -> Option<Rc<Object>> {
-        match &self.0 {
-            Repr::Object(o) => Some(Rc::clone(o)),
-            _ => None,
-        }
+    pub fn cloned_object(&self) -> Option<ObjectRc> {
+        self.cloned_heap()
     }
 
     #[inline(always)]
-    pub fn cloned_reference(&self) -> Option<Rc<RefCell<Value>>> {
-        match &self.0 {
-            Repr::Ref(cell) => Some(Rc::clone(cell)),
-            _ => None,
+    pub fn cloned_reference(&self) -> Option<RefRc> {
+        self.cloned_heap()
+    }
+
+    /// The heap handle out of a value being consumed, if it holds a `T`.
+    #[inline]
+    fn into_heap<T: crate::heap::HeapKind>(mut self) -> Result<HRc<T>, Value> {
+        match mem::replace(&mut self.0, UNDEF_REPR) {
+            Repr::Heap(h) => HRc::from_heap(ManuallyDrop::into_inner(h)).map_err(Value::of_heap),
+            r => Err(Value(r)),
         }
     }
 
@@ -579,34 +603,25 @@ impl Value {
     #[inline]
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
         match mem::replace(&mut self.0, UNDEF_REPR) {
-            Repr::Str(s) => Ok(ManuallyDrop::into_inner(s)),
-            Repr::IStr(w) => Ok(IStr::by_id(w as u32).to_php_str()),
+            Repr::IStr(s) => Ok(s.to_php_str()),
+            Repr::Heap(h) => PhpStr::from_heap(ManuallyDrop::into_inner(h)).map_err(Value::of_heap),
             r => Err(Value(r)),
         }
     }
 
     #[inline]
-    pub fn into_array(mut self) -> Result<Rc<PhpArray>, Value> {
-        match mem::replace(&mut self.0, UNDEF_REPR) {
-            Repr::Array(a) => Ok(ManuallyDrop::into_inner(a)),
-            r => Err(Value(r)),
-        }
+    pub fn into_array(self) -> Result<ArrayRc, Value> {
+        self.into_heap()
     }
 
     #[inline]
-    pub fn into_object(mut self) -> Result<Rc<Object>, Value> {
-        match mem::replace(&mut self.0, UNDEF_REPR) {
-            Repr::Object(o) => Ok(ManuallyDrop::into_inner(o)),
-            r => Err(Value(r)),
-        }
+    pub fn into_object(self) -> Result<ObjectRc, Value> {
+        self.into_heap()
     }
 
     #[inline]
-    pub fn into_reference(mut self) -> Result<Rc<RefCell<Value>>, Value> {
-        match mem::replace(&mut self.0, UNDEF_REPR) {
-            Repr::Ref(cell) => Ok(ManuallyDrop::into_inner(cell)),
-            r => Err(Value(r)),
-        }
+    pub fn into_reference(self) -> Result<RefRc, Value> {
+        self.into_heap()
     }
 }
 
@@ -634,45 +649,53 @@ impl From<f64> for Value {
 impl From<PhpStr> for Value {
     #[inline(always)]
     fn from(s: PhpStr) -> Value {
-        Value(Repr::Str(Handle::new(s)))
+        Value::str(s)
     }
 }
 
-impl From<Rc<PhpArray>> for Value {
+impl From<ArrayRc> for Value {
     #[inline(always)]
-    fn from(a: Rc<PhpArray>) -> Value {
-        Value(Repr::Array(Handle::new(a)))
+    fn from(a: ArrayRc) -> Value {
+        Value::array(a)
     }
 }
 
 impl From<PhpArray> for Value {
     #[inline(always)]
     fn from(a: PhpArray) -> Value {
-        Value(Repr::Array(Handle::new(Rc::new(a))))
+        Value::array(HRc::new(a))
     }
 }
 
-impl From<Rc<Object>> for Value {
+impl From<ObjectRc> for Value {
     #[inline(always)]
-    fn from(o: Rc<Object>) -> Value {
-        Value(Repr::Object(Handle::new(o)))
+    fn from(o: ObjectRc) -> Value {
+        Value::object(o)
     }
 }
 
-impl From<Rc<RefCell<Value>>> for Value {
+impl From<RefRc> for Value {
     #[inline(always)]
-    fn from(cell: Rc<RefCell<Value>>) -> Value {
-        Value(Repr::Ref(Handle::new(cell)))
+    fn from(cell: RefRc) -> Value {
+        Value::reference(cell)
     }
+}
+
+/// A shared array's separation (PHP's SEPARATE_ARRAY): a copy of it, in a
+/// heap value of its own. Out of line: the write in place is the hot case.
+#[inline(never)]
+fn separate_array(h: &mut Rc<Heap>) {
+    let Heap::Array(a) = &**h else { return };
+    *h = Rc::new(Heap::Array(a.clone()));
 }
 
 impl Value {
     /// The value itself, looking through a reference.
     #[inline]
     pub fn deref(&self) -> Value {
-        match &self.0 {
-            Repr::Ref(cell) => cell.borrow().clone(),
-            _ => self.clone(),
+        match self.as_reference() {
+            Some(cell) => cell.borrow().clone(),
+            None => self.clone(),
         }
     }
 
@@ -769,7 +792,7 @@ impl Value {
             V::Bool(b) => if b { PhpStr::from("1") } else { PhpStr::empty() },
             V::Int(i) => PhpStr::from_int(i),
             V::Float(f) => PhpStr::from(float_to_string(f, Precision::ECHO, 'E')),
-            V::Str(s) => PhpStr::clone(s),
+            V::Str(_) => self.cloned_str().expect("a string"),
             V::IStr(s) => s.to_php_str(),
             V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
             V::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
@@ -804,8 +827,8 @@ impl Value {
             (V::Int(a), V::Int(b)) => a == b,
             (V::Float(a), V::Float(b)) => a == b,
             (V::IStr(_) | V::Str(_), V::IStr(_) | V::Str(_)) => self.as_str() == other.as_str(),
-            (V::Array(a), V::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
-            (V::Object(a), V::Object(b)) => Rc::ptr_eq(a, b),
+            (V::Array(a), V::Array(b)) => std::ptr::eq(a, b) || a.identical(b),
+            (V::Object(a), V::Object(b)) => std::ptr::eq(a, b),
             _ => false,
         }
     }
@@ -849,7 +872,7 @@ impl Value {
             // zend_std_compare_objects: the same object, or the same class
             // compared property by property; other classes can't be compared.
             (Object(a), Object(b)) => {
-                if Rc::ptr_eq(a, b) {
+                if std::ptr::eq(a, b) {
                     return Some(Ordering::Equal);
                 }
                 // Other classes, and enum cases, can't be compared.

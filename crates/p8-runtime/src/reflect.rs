@@ -15,7 +15,7 @@ pub enum Callee {
     /// A class's method, by name (any case).
     Method(Rc<Class>, PhpStr),
     /// A Closure object.
-    Closure(Rc<Object>),
+    Closure(crate::heap::HRc<Object>),
 }
 
 /// One parameter.
@@ -55,7 +55,7 @@ pub struct FnInfo {
     pub is_static: bool,
     pub is_closure: bool,
     pub is_generator: bool,
-    pub closure_this: Option<Rc<Object>>,
+    pub closure_this: Option<crate::heap::HRc<Object>>,
     pub closure_scope: Option<Rc<Class>>,
     /// A closure's called scope (`static`): getClosureCalledClass.
     pub closure_called: Option<Rc<Class>>,

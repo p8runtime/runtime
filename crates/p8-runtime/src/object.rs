@@ -6,7 +6,7 @@
 //! so a parent's code finds its properties at the same index in every
 //! subclass), its constants and its static properties.
 //!
-//! An object is a shared, mutable handle: `Rc<Object>`, its declared
+//! An object is a shared, mutable handle: `HRc<Object>`, its declared
 //! properties in slots, others in an ordered map. Object ids are reused
 //! after an object is freed, most recently freed first, as PHP's handles
 //! are.
@@ -16,6 +16,7 @@
 
 use crate::array::PhpArray;
 use crate::ext::{Ctx, Throw};
+use crate::heap::{HRc, HWeak};
 use crate::string::PhpStr;
 use crate::symbol::{Sym, SymbolCache};
 use crate::value::Value;
@@ -280,7 +281,7 @@ impl Property {
 }
 
 /// A method written in Rust (a builtin class's): `$this`, the arguments.
-pub type NativeMethod = fn(&mut dyn Ctx, &Rc<Object>, &mut [Value]) -> Result<Value, Throw>;
+pub type NativeMethod = fn(&mut dyn Ctx, &HRc<Object>, &mut [Value]) -> Result<Value, Throw>;
 /// A static method written in Rust: the arguments.
 pub type NativeStatic = fn(&mut dyn Ctx, &mut [Value]) -> Result<Value, Throw>;
 
@@ -546,15 +547,15 @@ pub struct Ids {
     monotonic: bool,
     /// Objects whose last reference went and whose destructor is due, in
     /// the order they went (each one revived to run it).
-    pending: RefCell<std::collections::VecDeque<Rc<Object>>>,
+    pending: RefCell<std::collections::VecDeque<HRc<Object>>>,
     /// How many are pending (read on hot paths: one load).
     due: Cell<u32>,
     /// Every object with a destructor, for the ones the script leaves
     /// alive (PHP destructs them at its end, oldest first).
-    live: RefCell<Vec<std::rc::Weak<Object>>>,
+    live: RefCell<Vec<HWeak<Object>>>,
     /// Every object, by id (an id is one live object's at a time):
     /// gc_collect_cycles walks them.
-    all: RefCell<Vec<std::rc::Weak<Object>>>,
+    all: RefCell<Vec<HWeak<Object>>>,
     /// Where these objects' destructors are queued, when not here (a
     /// resource's: with the objects', which the interpreter runs).
     queue: Option<Rc<Ids>>,
@@ -630,7 +631,7 @@ impl Ids {
     /// destructor to its end before the next: a destructor runs PHP code
     /// (a nested run that also runs what is due), and so sees only what it
     /// frees itself, which it destroys within, as PHP does.
-    pub fn take_pending(&self) -> std::collections::VecDeque<Rc<Object>> {
+    pub fn take_pending(&self) -> std::collections::VecDeque<HRc<Object>> {
         let batch = std::mem::take(&mut *self.pending.borrow_mut());
         self.due.set(self.due.get() - batch.len() as u32);
         batch
@@ -638,7 +639,7 @@ impl Ids {
 
     /// Objects a batch did not get to (a destructor threw): due again,
     /// ahead of any queued since.
-    pub fn requeue(&self, mut rest: std::collections::VecDeque<Rc<Object>>) {
+    pub fn requeue(&self, mut rest: std::collections::VecDeque<HRc<Object>>) {
         let mut pending = self.pending.borrow_mut();
         rest.append(&mut pending);
         *pending = rest;
@@ -647,27 +648,27 @@ impl Ids {
 
     /// The objects with a destructor still alive and not yet destructed,
     /// oldest (lowest id) first.
-    pub fn undestructed(&self) -> Vec<Rc<Object>> {
+    pub fn undestructed(&self) -> Vec<HRc<Object>> {
         let mut live = self.live.borrow_mut();
         live.retain(|w| w.strong_count() > 0);
-        let mut out: Vec<Rc<Object>> = live.iter().filter_map(std::rc::Weak::upgrade).filter(|o| !o.destructed.get()).collect();
+        let mut out: Vec<HRc<Object>> = live.iter().filter_map(HWeak::upgrade).filter(|o| !o.destructed.get()).collect();
         out.sort_by_key(|o| o.id);
         out
     }
 
     /// Every object still alive (for the cycle collector).
-    pub fn all_live(&self) -> Vec<Rc<Object>> {
-        self.all.borrow().iter().filter_map(std::rc::Weak::upgrade).collect()
+    pub fn all_live(&self) -> Vec<HRc<Object>> {
+        self.all.borrow().iter().filter_map(HWeak::upgrade).collect()
     }
 
-    fn track(&self, o: &Rc<Object>) {
+    fn track(&self, o: &HRc<Object>) {
         {
             let mut all = self.all.borrow_mut();
             let i = o.id as usize;
             if all.len() <= i {
-                all.resize(i + 1, std::rc::Weak::new());
+                all.resize(i + 1, HWeak::new());
             }
-            all[i] = Rc::downgrade(o);
+            all[i] = HRc::downgrade(o);
         }
         if o.class.flags & CLASS_DESTRUCTOR != 0 {
             let mut live = self.live.borrow_mut();
@@ -675,7 +676,7 @@ impl Ids {
             if live.len() >= 64 && live.len().is_power_of_two() {
                 live.retain(|w| w.strong_count() > 0);
             }
-            live.push(Rc::downgrade(o));
+            live.push(HRc::downgrade(o));
         }
     }
 }
@@ -702,7 +703,7 @@ pub struct Lazy {
     /// Which declared property slots are still lazy.
     pub lazy_slots: Vec<bool>,
     /// A proxy's real instance, once its factory ran.
-    pub instance: Option<Rc<Object>>,
+    pub instance: Option<HRc<Object>>,
 }
 
 impl Object {
@@ -717,7 +718,7 @@ impl Object {
     }
 
     /// An initialized proxy's real instance.
-    pub fn proxy_instance(&self) -> Option<Rc<Object>> {
+    pub fn proxy_instance(&self) -> Option<HRc<Object>> {
         if self.lazy.get() & (LAZY_PROXY | LAZY_UNINIT) != LAZY_PROXY {
             return None;
         }
@@ -726,7 +727,7 @@ impl Object {
 }
 
 /// The object a call to a missing method goes to (see [`Class::forward_calls`]).
-pub type ForwardCalls = fn(&Object) -> Option<Rc<Object>>;
+pub type ForwardCalls = fn(&Object) -> Option<HRc<Object>>;
 
 /// A native class's state for a clone (see [`Class::clone_data`]).
 pub type CloneData = fn(&Object) -> Rc<dyn std::any::Any>;
@@ -1017,14 +1018,14 @@ impl Object {
     }
 
     /// A new object of `class` with its properties' defaults.
-    pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> Rc<Object> {
+    pub fn new(class: Rc<Class>, ids: &Rc<Ids>) -> HRc<Object> {
         let data = class.make_data.map(|make| make());
         Object::with_data(class, ids, data)
     }
 
     /// A new object of `class` beside this one (same id space), holding
     /// `data`: for native code that has an object but no context.
-    pub fn sibling(&self, class: Rc<Class>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
+    pub fn sibling(&self, class: Rc<Class>, data: Option<Rc<dyn std::any::Any>>) -> HRc<Object> {
         Object::with_data(class, &self.ids, data)
     }
 
@@ -1034,16 +1035,16 @@ impl Object {
     }
 
     /// A new object holding `data` (see [`Data`]).
-    pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
+    pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> HRc<Object> {
         let slots = class.properties.iter().map(|p| p.default.clone()).collect();
         Object::with_slots(class, ids, data, slots)
     }
 
     /// A new object whose slots start as `slots` (one value per declared
     /// property: the class's defaults, prepared once by whoever makes many).
-    pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Props) -> Rc<Object> {
+    pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Props) -> HRc<Object> {
         debug_assert_eq!(slots.len(), class.properties.len());
-        let o = Rc::new(Object {
+        let o = HRc::new(Object {
             class,
             data: data.map(Data),
             slots: SlotCells::from(slots),
@@ -1059,8 +1060,8 @@ impl Object {
     }
 
     /// A shallow copy (clone): same class, the properties copied, a new id.
-    pub fn copy(&self) -> Rc<Object> {
-        let o = Rc::new(Object {
+    pub fn copy(&self) -> HRc<Object> {
+        let o = HRc::new(Object {
             class: Rc::clone(&self.class),
             data: match self.class.clone_data {
                 Some(clone) => Some(Data(clone(self))),
@@ -1088,7 +1089,7 @@ impl Drop for Object {
         if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() && self.lazy.get() == 0 {
             // Its destructor is due: the object lives on (same id, same
             // properties) until the interpreter has run it.
-            let revived = Rc::new(Object {
+            let revived = HRc::new(Object {
                 class: Rc::clone(&self.class),
                 data: self.data.take(),
                 slots: std::mem::take(&mut self.slots),
@@ -1175,8 +1176,8 @@ mod props_tests {
 
     #[test]
     fn assign_writes_through_a_reference_and_peek_puts_back() {
-        let r = Rc::new(RefCell::new(Value::int(1)));
-        let slot = Cell::new(Value::reference(Rc::clone(&r)));
+        let r = HRc::new(RefCell::new(Value::int(1)));
+        let slot = Cell::new(Value::reference(HRc::clone(&r)));
         slot.assign(Value::int(2));
         // The reference stays in the slot; its value changed.
         assert!(slot.peek(Value::is_reference));
