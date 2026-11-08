@@ -337,10 +337,10 @@ impl Dfa {
                 self.visited[n as usize] = self.stamp;
                 match self.nodes[n as usize] {
                     Node::Atom(atom, next) => {
-                        if let Some(c) = c {
-                            if atom_matches(p, atom, c) {
-                                self.next.push(next);
-                            }
+                        if let Some(c) = c
+                            && atom_matches(p, atom, c)
+                        {
+                            self.next.push(next);
                         }
                     }
                     Node::Split(a, b) => {
