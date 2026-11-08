@@ -365,9 +365,11 @@ impl Pass<'_> {
     }
 
     /// A store into a variable (`assign`): through the reference it holds.
+    /// (Not a temporary's: the compiler never makes one that holds a
+    /// reference the destination of a value, `reset_temps` frees them.)
     fn write(&self, s: &mut State, r: Reg, k: Kinds) {
         let old = s.get(r);
-        self.set(s, r, if old & REF != 0 { ANY } else { k });
+        self.set(s, r, if old & REF != 0 && !self.lay.is_temp(usize::from(r)) { ANY } else { k });
     }
 
     /// The registers of a block from `start` that are temporaries: ANY.
@@ -387,7 +389,10 @@ impl Pass<'_> {
 
     fn entry(&self) -> State {
         let f = self.func;
-        let mut k = vec![ANY; self.lay.n];
+        // Temporaries: what `leave` and `drop_frame` left (cleared) or
+        // a frame below did (values: a temporary that held a reference
+        // was freed, `reset_temps`).
+        let mut k = vec![VALUE | UNDEF; self.lay.n];
         for (r, slot) in k.iter_mut().enumerate().take(self.lay.consts_at) {
             // Not passed (or not a parameter): cleared by `enter`, or a
             // constant default.

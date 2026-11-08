@@ -142,6 +142,22 @@ impl Context<'_> {
                     done!(released);
                 }};
             }
+            // `arith!` whose destination the kinds prove holds nothing to
+            // release and is no reference: two ints stored over it as they are.
+            macro_rules! plain_arith {
+                ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
+                    if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), w[rx!($b)].as_int())
+                        && let Some(n) = $int(x, y)
+                    {
+                        std::mem::forget(std::mem::replace(&mut w[rx!($dst)], Value::int(n)));
+                        pc += 1;
+                    } else if arith(&mut w[..], $op, Reg::from($dst), Reg::from($a), Reg::from($b)) {
+                        done!(true);
+                    } else {
+                        slow!()
+                    }
+                }};
+            }
             // A fused step and test (`IncJumpLt` and co.) on ints (through a
             // reference too): step, then jump or go past the test. A non-int
             // bound leaves the test to the next instruction; a non-int
@@ -474,6 +490,25 @@ impl Context<'_> {
                     Op::Add => arith!(BinOp::Add, insn.a, insn.b, insn.c, i64::checked_add),
                     Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, insn.c, i64::checked_sub),
                     Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, insn.c, i64::checked_mul),
+                    // The kinds' forms (`insn::specialised`): what they prove
+                    // is not tested. Here: the result goes over a register
+                    // that holds nothing to release and no reference.
+                    Op::AddPlain => plain_arith!(BinOp::Add, insn.a, insn.b, insn.c, i64::checked_add),
+                    Op::SubPlain => plain_arith!(BinOp::Sub, insn.a, insn.b, insn.c, i64::checked_sub),
+                    // A copy of a defined value that is not a reference (into
+                    // a temporary, or a variable that is not a reference).
+                    Op::MoveVal | Op::AssignVal => {
+                        ops!(a, b, c, imm);
+                        let v = w[rx!(b)].clone();
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    Op::AssignTakeVal => {
+                        ops!(a, b, c, imm);
+                        let v = std::mem::replace(&mut w[rx!(b)], Value::UNDEF);
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // A return type check the kinds prove.
+                    Op::Nop => pc += 1,
                     Op::ConcatN => {
                         ops!(a, b, c, imm);
                         if !concat_n(&mut w[..], Reg::from(a), Reg::from(b), c) {
