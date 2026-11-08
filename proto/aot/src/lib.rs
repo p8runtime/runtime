@@ -124,7 +124,8 @@ pub fn main_with(flavour: Flavour) -> ExitCode {
             Flavour::A => a::methods(),
             Flavour::B => b::methods(),
         },
-        file: file.clone(),
+        // (Warnings name the script by its full path, as PHP's CLI does.)
+        file: std::fs::canonicalize(file).map_or_else(|_| file.clone(), |p| p.to_string_lossy().into_owned()),
         check,
     };
     let mut st = St { ids: Rc::new(Ids::default()), out: Vec::new(), depth: 0 };
