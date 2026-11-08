@@ -4,15 +4,20 @@
 //! Reference: $PHP_SRC_PATH/ext/standard/math.c
 
 use crate::arg;
-use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Fault, FastBuiltin, Throw};
+use p8_runtime::lent;
 use p8_runtime::object::CLASS_ENUM;
 use p8_runtime::ops::{self, BinOp};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::cmp::Ordering;
 
+/// The math functions on the borrowed ABI (frameless when plainly typed).
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "abs", run: abs },
+];
+
 pub static BUILTINS: &[Builtin] = &[
-    Builtin { name: "abs", run: abs, by_ref: &[] },
     Builtin { name: "ceil", run: ceil, by_ref: &[] },
     Builtin { name: "floor", run: floor, by_ref: &[] },
     Builtin { name: "round", run: round, by_ref: &[] },
@@ -52,11 +57,11 @@ fn float(args: &[Value], i: usize) -> f64 {
     arg(args, i).to_float()
 }
 
-fn abs(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn abs(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::at(args, 0);
     Ok(match v.as_int() {
         Some(i) => i.checked_abs().map_or(Value::float(-(i as f64)), Value::int),
-        None => Value::float(v.to_float().abs()),
+        None => Value::float(lent::float(args, 0).abs()),
     })
 }
 

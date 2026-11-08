@@ -32,7 +32,7 @@ use sites::*;
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, Rare};
 pub use include::{LoadError, Loader};
 use p8_runtime::array::{Key, KeyIssue, PhpArray};
-use p8_runtime::ext::{Ctx, Registry, const_key};
+use p8_runtime::ext::{Ctx, Imp, Registry, const_key};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{Class, HOOK_GET, HOOK_SET, Ids, Object, Slot};
@@ -1201,6 +1201,82 @@ impl Context<'_> {
             Ok(()) => pc + 1,
             Err(t) => self.unwind(regs, t, pc)?,
         };
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            return self.after_errors(regs, next, pc);
+        }
+        Ok(next)
+    }
+
+    /// A frameless call (PHP's ZEND_FRAMELESS_ICALL): builtin `i`, on the
+    /// borrowed ABI (`run`, from its registry entry), with the `argc`
+    /// arguments at `start` that the call site found plainly of their
+    /// declared types. No frame of either kind is pushed and no argument
+    /// is checked, moved or copied: the builtin reads the registers in
+    /// place, and they are cleared after (as a call consumes them). The
+    /// result goes to the register `dst`; the next pc comes back.
+    /// (A builtin of the moved ABI gets the registers mutably, as the
+    /// checked path's common case gives them; its error waits in `fault`
+    /// like a borrowed builtin's.)
+    #[inline(always)]
+    pub(crate) fn frameless_call(&mut self, regs: &mut Vec<Value>, pc: usize, i: usize, run: Imp, (start, argc, dst): (usize, usize, usize)) -> Result<usize, Throw> {
+        self.pc = pc + 1;
+        let outer = self.running_builtin.replace(i);
+        let r = match run {
+            Imp::Lent(run) => run(self, &regs[start..start + argc]).ok(),
+            Imp::Moved(run) => match run(self, &mut regs[start..start + argc]) {
+                Ok(v) => Some(v),
+                Err(t) => {
+                    self.fault = Some(t);
+                    None
+                }
+            },
+        };
+        self.running_builtin = outer;
+        let Some(v) = r else { return self.frameless_fault(regs, pc, i, start, argc) };
+        if !self.diags.is_empty() || !self.pending_errors.is_empty() {
+            self.frameless_diags(&regs[start..start + argc], i);
+        }
+        for r in &mut regs[start..start + argc] {
+            let _ = clear(r);
+        }
+        // (A tag test, not the out-of-line drop an assignment calls; the
+        // result register is a temporary, undefined until now.)
+        let _ = put(&mut regs[dst], v);
+        if !self.pending_errors.is_empty() || self.ids.has_pending() {
+            return self.after_errors(regs, pc + 1, pc);
+        }
+        Ok(pc + 1)
+    }
+
+    /// What a frameless call reported, as the checked path reports it: an
+    /// E_USER_ERROR waiting for the user handler (trigger_error()) starts
+    /// its trace with this call, and the warnings are shown.
+    #[cold]
+    #[inline(never)]
+    fn frameless_diags(&mut self, args: &[Value], i: usize) {
+        if self.pending_errors.iter().any(|e| e.0 == 256) {
+            self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, args);
+        }
+        self.report_diags();
+    }
+
+    /// A frameless call that raised: the builtin is the trace's first
+    /// frame (as the checked path makes it), then the exception unwinds
+    /// from the call.
+    #[cold]
+    #[inline(never)]
+    fn frameless_fault(&mut self, regs: &mut Vec<Value>, pc: usize, i: usize, start: usize, argc: usize) -> Result<usize, Throw> {
+        let mut t = self.take_fault();
+        match t {
+            Throw::Error { .. } | Throw::Fatal { .. } => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, &regs[start..start + argc]),
+            Throw::Autoload(n) => t = self.unlent_autoload(n),
+            _ => {}
+        }
+        self.report_diags();
+        for r in &mut regs[start..start + argc] {
+            clear(r);
+        }
+        let next = self.unwind(regs, t, pc)?;
         if !self.pending_errors.is_empty() || self.ids.has_pending() {
             return self.after_errors(regs, next, pc);
         }
@@ -3903,6 +3979,12 @@ impl Context<'_> {
         Ok(Ok(()))
     }
 
+    /// What the borrowed builtin that returned `Err(Fault)` raised.
+    #[cold]
+    pub(crate) fn take_fault(&mut self) -> Throw {
+        self.fault.take().expect("a Fault is made only by Ctx::fault, which keeps its Throw")
+    }
+
     fn run_builtin(&mut self, i: usize, args: &mut [Value]) -> Result<Value, Throw> {
         let call = *self.isolate.registry.call(i);
         if call.deprecated
@@ -3928,7 +4010,12 @@ impl Context<'_> {
             }
         }
         let outer = self.running_builtin.replace(i);
-        let mut r = (call.run)(self, args);
+        let mut r = match call.run {
+            Imp::Moved(run) => run(self, args),
+            // The adapter: a borrowed builtin, its arguments checked and
+            // converted in place above, lent as they are now.
+            Imp::Lent(run) => run(self, args).map_err(|_| self.take_fault()),
+        };
         self.running_builtin = outer;
         // (Checked before it is taken: taking moves the whole slot.)
         if self.header_throw.is_some()
@@ -4996,6 +5083,10 @@ impl Ctx for Context<'_> {
 
     fn throw(&self, class: &'static str, message: String) -> Throw {
         Context::throw(self, class, message)
+    }
+
+    fn set_fault(&mut self, t: Throw) {
+        self.fault = Some(t);
     }
 
     fn class(&mut self, name: &[u8]) -> Option<Rc<Class>> {

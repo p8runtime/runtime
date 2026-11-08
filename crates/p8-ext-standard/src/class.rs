@@ -7,15 +7,22 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, Ctx, Fault, FastBuiltin, Throw};
+use p8_runtime::lent;
 use p8_runtime::object::{CLASS_ENUM, CLASS_INTERFACE, CLASS_TRAIT, Class, visible};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
+/// The class functions on the borrowed ABI.
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "get_class", run: get_class },
+    FastBuiltin { name: "spl_object_id", run: spl_object_id },
+    FastBuiltin { name: "spl_object_hash", run: spl_object_hash },
+];
+
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "clone", run: clone, by_ref: &[] },
-    Builtin { name: "get_class", run: get_class, by_ref: &[] },
     Builtin { name: "get_parent_class", run: get_parent_class, by_ref: &[] },
     Builtin { name: "get_object_vars", run: get_object_vars, by_ref: &[] },
     Builtin { name: "get_mangled_object_vars", run: get_mangled_object_vars, by_ref: &[] },
@@ -31,8 +38,6 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "enum_exists", run: enum_exists, by_ref: &[] },
     Builtin { name: "is_a", run: is_a, by_ref: &[] },
     Builtin { name: "is_subclass_of", run: is_subclass_of, by_ref: &[] },
-    Builtin { name: "spl_object_id", run: spl_object_id, by_ref: &[] },
-    Builtin { name: "spl_object_hash", run: spl_object_hash, by_ref: &[] },
     Builtin { name: "get_called_class", run: get_called_class, by_ref: &[] },
     Builtin { name: "get_class_methods", run: get_class_methods, by_ref: &[] },
     Builtin { name: "class_alias", run: class_alias, by_ref: &[] },
@@ -326,12 +331,15 @@ fn name(class: &Class) -> Value {
 
 /// get_class($object = ?): the object's class, or with no argument the
 /// class the calling code is in.
-fn get_class(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    match args.first().map(Value::deref).and_then(|v| v.into_object().ok()) {
+fn get_class(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    if let Some(o) = lent::at(args, 0).as_object() {
+        return Ok(name(&o.class));
+    }
+    match lent::value(args, 0).as_object() {
         Some(o) => Ok(name(&o.class)),
         _ => match ctx.scope() {
             Some(c) => Ok(name(&c)),
-            None => Err(ctx.throw("Error", "get_class() without arguments must be called from within a class".into())),
+            None => Err(ctx.fault_with("Error", "get_class() without arguments must be called from within a class".into())),
         },
     }
 }
@@ -579,14 +587,16 @@ fn instance(ctx: &mut dyn Ctx, args: &[Value], allow_string: bool, strict: bool)
     Ok(class.is_a(&wanted))
 }
 
-fn spl_object_id(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
+fn spl_object_id(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
+    let Some(o) = v.as_object() else { return Ok(Value::NULL) };
     Ok(Value::int(i64::from(o.id)))
 }
 
 /// spl_object_hash: the id in 16 hex digits, then 16 zeros (PHP 8.1+).
-fn spl_object_hash(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::NULL) };
+fn spl_object_hash(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
+    let Some(o) = v.as_object() else { return Ok(Value::NULL) };
     Ok(Value::str(PhpStr::from(format!("{:016x}0000000000000000", o.id))))
 }
 

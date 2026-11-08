@@ -1,0 +1,86 @@
+int(5)
+string(5) "hello"
+string(5) "HELLO"
+string(5) "Hello"
+string(3) "ell"
+string(5) "Hello"
+bool(true)
+bool(true)
+int(2)
+int(3)
+string(1) "x"
+string(1) "x"
+string(1) "x"
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+int(3)
+int(4)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+int(2)
+array(2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+}
+int(5)
+float(2.5)
+float(9.223372036854776E+18)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+int(12)
+int(255)
+string(12) "00042|x|1.50"
+string(6) "ababab"
+string(3) "Abc"
+string(3) "aBC"
+int(65)
+string(1) "B"
+string(3) "xxx"
+int(5)
+int(7)
+string(4) "cdef"
+int(3)
+string(3) "str"
+string(3) "N\S"
+bool(true)
+counted
+int(7)
+int(3)
+string(3) "REF"
+ValueError: explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters explode@48
+ValueError: strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack) strpos@53
+strlen() expects exactly 1 argument, 0 given
+strlen(): Argument #1 ($string) must be of type string, array given
+
+Deprecated: ord(): Providing an empty string is deprecated in %s on line 71
+int(0)
+
+Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256 in %s on line 72
+string(1) ","
+handler: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead @79
+int(97)
+string(3) "N\D"
+bool(true)
+destructed
+after
+int(503497)

@@ -7,7 +7,8 @@
 
 use crate::arg;
 use p8_runtime::array::Key;
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, Ctx, Fault, FastBuiltin, Throw};
+use p8_runtime::lent;
 use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Object, Visibility};
 use p8_runtime::stream::resource;
@@ -16,38 +17,42 @@ use p8_runtime::numeric::numeric_string;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
 
+/// The type tests and conversions, on the borrowed ABI.
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "gettype", run: gettype },
+    FastBuiltin { name: "is_object", run: is_object },
+    FastBuiltin { name: "get_debug_type", run: get_debug_type },
+    FastBuiltin { name: "is_null", run: is_null },
+    FastBuiltin { name: "is_bool", run: is_bool },
+    FastBuiltin { name: "is_int", run: is_int },
+    FastBuiltin { name: "is_integer", run: is_int },
+    FastBuiltin { name: "is_long", run: is_int },
+    FastBuiltin { name: "is_float", run: is_float },
+    FastBuiltin { name: "is_double", run: is_float },
+    FastBuiltin { name: "is_string", run: is_string },
+    FastBuiltin { name: "is_array", run: is_array },
+    FastBuiltin { name: "is_scalar", run: is_scalar },
+    FastBuiltin { name: "is_numeric", run: is_numeric },
+    FastBuiltin { name: "is_iterable", run: is_iterable },
+    FastBuiltin { name: "is_countable", run: is_countable },
+    FastBuiltin { name: "intval", run: intval },
+    FastBuiltin { name: "floatval", run: floatval },
+    FastBuiltin { name: "doubleval", run: floatval },
+    FastBuiltin { name: "boolval", run: boolval },
+];
+
 pub static BUILTINS: &[Builtin] = &[
-    Builtin { name: "gettype", run: gettype, by_ref: &[] },
-    Builtin { name: "is_object", run: is_object, by_ref: &[] },
     Builtin { name: "is_resource", run: is_resource, by_ref: &[] },
     Builtin { name: "get_resource_type", run: get_resource_type, by_ref: &[] },
     Builtin { name: "get_resource_id", run: get_resource_id, by_ref: &[] },
-    Builtin { name: "get_debug_type", run: get_debug_type, by_ref: &[] },
-    Builtin { name: "is_null", run: is_null, by_ref: &[] },
-    Builtin { name: "is_bool", run: is_bool, by_ref: &[] },
-    Builtin { name: "is_int", run: is_int, by_ref: &[] },
-    Builtin { name: "is_integer", run: is_int, by_ref: &[] },
-    Builtin { name: "is_long", run: is_int, by_ref: &[] },
-    Builtin { name: "is_float", run: is_float, by_ref: &[] },
-    Builtin { name: "is_double", run: is_float, by_ref: &[] },
-    Builtin { name: "is_string", run: is_string, by_ref: &[] },
-    Builtin { name: "is_array", run: is_array, by_ref: &[] },
-    Builtin { name: "is_scalar", run: is_scalar, by_ref: &[] },
-    Builtin { name: "is_numeric", run: is_numeric, by_ref: &[] },
-    Builtin { name: "is_iterable", run: is_iterable, by_ref: &[] },
-    Builtin { name: "is_countable", run: is_countable, by_ref: &[] },
-    Builtin { name: "intval", run: intval, by_ref: &[] },
-    Builtin { name: "floatval", run: floatval, by_ref: &[] },
-    Builtin { name: "doubleval", run: floatval, by_ref: &[] },
     Builtin { name: "strval", run: strval, by_ref: &[] },
-    Builtin { name: "boolval", run: boolval, by_ref: &[] },
     Builtin { name: "var_dump", run: var_dump, by_ref: &[] },
     Builtin { name: "print_r", run: print_r, by_ref: &[] },
     Builtin { name: "var_export", run: var_export, by_ref: &[] },
 ];
 
-fn gettype(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn gettype(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     Ok(Value::str(match v.kind() {
         Kind::Null | Kind::Undef => "NULL",
         Kind::Bool => "boolean",
@@ -59,7 +64,7 @@ fn gettype(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             Some(o) => if closed(o) { "resource (closed)" } else { "resource" },
             None => "object",
         },
-        Kind::Ref => unreachable!("arg() looks through references"),
+        Kind::Ref => unreachable!("lent::value looks through references"),
     }))
 }
 
@@ -73,8 +78,8 @@ fn as_resource(v: &Value) -> Option<&Rc<Object>> {
     v.as_object().filter(|o| o.class.flags & CLASS_RESOURCE != 0)
 }
 
-fn is_object(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).as_object().is_some_and(|o| o.class.flags & CLASS_RESOURCE == 0)))
+fn is_object(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).as_object().is_some_and(|o| o.class.flags & CLASS_RESOURCE == 0)))
 }
 
 /// is_resource: an open resource.
@@ -104,8 +109,8 @@ fn get_resource_id(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     }
 }
 
-fn get_debug_type(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn get_debug_type(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     let name = match v.as_object() {
         Some(o) if o.class.flags & CLASS_RESOURCE != 0 => {
             if closed(o) { "resource (closed)".into() } else { format!("resource ({})", String::from_utf8_lossy(o.class.name.as_bytes())).into() }
@@ -118,59 +123,59 @@ fn get_debug_type(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(name.into_owned()))
 }
 
-fn is_null(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_null_or_undef()))
+fn is_null(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_null_or_undef()))
 }
 
-fn is_bool(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_bool()))
+fn is_bool(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_bool()))
 }
 
-fn is_int(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_int()))
+fn is_int(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_int()))
 }
 
-fn is_float(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_float()))
+fn is_float(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_float()))
 }
 
-fn is_string(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_str()))
+fn is_string(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_str()))
 }
 
-fn is_array(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).is_array()))
+fn is_array(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).is_array()))
 }
 
 /// is_iterable(): an array or a Traversable object.
-fn is_iterable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn is_iterable(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     Ok(Value::bool(v.is_array() || v.as_object().is_some_and(|o| o.class.is_a(b"traversable"))))
 }
 
 /// is_countable(): an array or a Countable object.
-fn is_countable(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn is_countable(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     Ok(Value::bool(v.is_array() || v.as_object().is_some_and(|o| o.class.is_a(b"countable"))))
 }
 
-fn is_scalar(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn is_scalar(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     Ok(Value::bool(v.is_bool() || v.is_number() || v.is_str()))
 }
 
 /// An int or float, or a string that is entirely a number (whitespace
 /// allowed around it, as of PHP 8).
-fn is_numeric(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
+fn is_numeric(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
     Ok(Value::bool(v.is_number() || v.as_str().is_some_and(|s| numeric_string(s.as_bytes()).is_some())))
 }
 
 /// intval($value, $base = 10): a string in another base is read as
 /// strtol does (prefixes 0x, 0o, 0b and a leading 0 for base 0 / 16 / 8 / 2).
-fn intval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let v = arg(args, 0);
-    let base = if args.len() > 1 { arg(args, 1).to_int() } else { 10 };
+fn intval(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let v = lent::value(args, 0);
+    let base = if args.len() > 1 { lent::int(args, 1) } else { 10 };
     let Some(s) = v.as_str() else { return Ok(Value::int(v.to_int())) };
     if base == 10 {
         return Ok(Value::int(v.to_int()));
@@ -232,8 +237,8 @@ fn strtol(s: &[u8], base: i64) -> i64 {
     n
 }
 
-fn floatval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::float(arg(args, 0).to_float()))
+fn floatval(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::float(lent::value(args, 0).to_float()))
 }
 
 /// strval(): a string as a string cast makes it (an object's __toString(),
@@ -242,8 +247,8 @@ fn strval(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(crate::printf::to_str(ctx, &arg(args, 0))?))
 }
 
-fn boolval(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arg(args, 0).to_bool()))
+fn boolval(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::value(args, 0).to_bool()))
 }
 
 /// print_r($value, $return = false)

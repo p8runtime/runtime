@@ -395,6 +395,7 @@ impl Isolate {
             reinit: Vec::new(),
             result_reg: 0,
             header_throw: None,
+            fault: None,
             deferred_write: None,
             fibers: Vec::new(),
             fiber_suspended: None,
@@ -583,6 +584,9 @@ pub struct Context<'i> {
     /// What header_register_callback's callback threw while a builtin's
     /// output sent the headers: the builtin's call ends with it.
     pub(crate) header_throw: Option<Throw>,
+    /// What a builtin on the borrowed ABI raised (`Ctx::fault`), until
+    /// its call takes it when the builtin returns `Err(Fault)`.
+    pub(crate) fault: Option<Throw>,
     /// A write held back until the error handler has run (`$undef op= v`).
     pub(crate) deferred_write: Option<(usize, Value)>,
     /// The fibers running, innermost last.

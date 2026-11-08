@@ -13,6 +13,7 @@ pub mod gc;
 pub mod glob;
 pub mod info;
 pub mod ini;
+pub mod lent;
 pub mod number;
 pub mod numeric;
 pub mod object;

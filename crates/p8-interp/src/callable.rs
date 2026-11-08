@@ -40,7 +40,7 @@ pub(crate) enum ClosureFunc {
     User(Rc<Closure>),
     /// A builtin function (its index, and the function: var_dump shows
     /// its name and parameters), from its name.
-    Builtin(usize, &'static p8_runtime::ext::Builtin),
+    Builtin(usize, p8_runtime::ext::Entry),
     /// A builtin class's method (`$doc->createElement(...)`), as its
     /// MethodFrame holds it.
     Method(Native, PhpStr),
@@ -60,7 +60,7 @@ impl Clone for ClosureFunc {
     fn clone(&self) -> ClosureFunc {
         match self {
             ClosureFunc::User(c) => ClosureFunc::User(Rc::clone(c)),
-            ClosureFunc::Builtin(i, b) => ClosureFunc::Builtin(*i, b),
+            ClosureFunc::Builtin(i, b) => ClosureFunc::Builtin(*i, *b),
             ClosureFunc::Method(n, name) => ClosureFunc::Method(*n, name.clone()),
         }
     }

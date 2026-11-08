@@ -4,7 +4,8 @@
 //! php-src directories).
 
 use p8_runtime::array::PhpArray;
-use p8_runtime::ext::{Ob, Builtin, Constant, Ctx, Extension, Registry, Throw};
+use p8_runtime::ext::{Ob, Builtin, Constant, Ctx, Extension, Fault, FastBuiltin, OrFault, Registry, Throw};
+use p8_runtime::lent;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
@@ -54,16 +55,22 @@ mod var;
 mod weak;
 mod zlib;
 
+/// Builtins on the borrowed ABI ([`p8_runtime::ext::Fast`]).
+static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "strlen", run: strlen },
+    FastBuiltin { name: "count", run: count },
+    FastBuiltin { name: "str_repeat", run: str_repeat },
+    FastBuiltin { name: "dechex", run: dechex },
+    FastBuiltin { name: "hrtime", run: hrtime },
+    FastBuiltin { name: "microtime", run: microtime },
+    FastBuiltin { name: "sprintf", run: sprintf },
+    FastBuiltin { name: "function_exists", run: function_exists },
+    FastBuiltin { name: "array_keys", run: array_keys },
+];
+
 static BUILTINS: &[Builtin] = &[
-    Builtin { name: "strlen", run: strlen, by_ref: &[] },
-    Builtin { name: "str_repeat", run: str_repeat, by_ref: &[] },
-    Builtin { name: "count", run: count, by_ref: &[] },
-    Builtin { name: "dechex", run: dechex, by_ref: &[] },
-    Builtin { name: "hrtime", run: hrtime, by_ref: &[] },
-    Builtin { name: "microtime", run: microtime, by_ref: &[] },
     Builtin { name: "number_format", run: number_format, by_ref: &[] },
     Builtin { name: "printf", run: printf, by_ref: &[] },
-    Builtin { name: "sprintf", run: sprintf, by_ref: &[] },
     Builtin { name: "ob_start", run: ob_start, by_ref: &[] },
     Builtin { name: "ob_end_clean", run: ob_end_clean, by_ref: &[] },
     Builtin { name: "ob_end_flush", run: ob_end_flush, by_ref: &[] },
@@ -78,13 +85,11 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "ob_get_status", run: ob_get_status, by_ref: &[] },
     Builtin { name: "ob_implicit_flush", run: ob_implicit_flush, by_ref: &[] },
     Builtin { name: "flush", run: flush, by_ref: &[] },
-    Builtin { name: "function_exists", run: function_exists, by_ref: &[] },
     Builtin { name: "extension_loaded", run: extension_loaded, by_ref: &[] },
     Builtin { name: "get_loaded_extensions", run: get_loaded_extensions, by_ref: &[] },
     Builtin { name: "define", run: define, by_ref: &[] },
     Builtin { name: "defined", run: defined, by_ref: &[] },
     Builtin { name: "func_get_args", run: func_get_args, by_ref: &[] },
-    Builtin { name: "array_keys", run: array_keys, by_ref: &[] },
     Builtin { name: "range", run: range::range, by_ref: &[] },
 ];
 
@@ -151,7 +156,9 @@ fn register(registry: &mut Registry) {
         registry.add_ini(name, *default);
     }
     registry.add_functions(BUILTINS);
+    registry.add_fast(FAST);
     registry.add_functions(array::BUILTINS);
+    registry.add_fast(array::FAST);
     registry.add_classes(array::CLASSES);
     registry.add_classes(math::CLASSES);
     // basic_functions.stub.php: `@prefer-ref $array`, `@prefer-ref $rest`.
@@ -184,6 +191,7 @@ fn register(registry: &mut Registry) {
     registry.add_classes(hash::CLASSES);
     registry.add_functions(info::BUILTINS);
     registry.add_functions(string2::BUILTINS);
+    registry.add_fast(string2::FAST);
     registry.add_functions(random::BUILTINS);
     registry.add_functions(scan::BUILTINS);
     registry.add_functions(dates::BUILTINS);
@@ -205,7 +213,9 @@ fn register(registry: &mut Registry) {
     registry.add_functions(serial::BUILTINS);
     registry.add_functions(array2::BUILTINS);
     registry.add_functions(class::BUILTINS);
+    registry.add_fast(class::FAST);
     registry.add_functions(math::BUILTINS);
+    registry.add_fast(math::FAST);
     registry.add_functions(head::BUILTINS);
     registry.add_functions(misc::BUILTINS);
     registry.add_functions(phpinfo::BUILTINS);
@@ -227,7 +237,9 @@ fn register(registry: &mut Registry) {
     let built = phpinfo::build_date().into_bytes();
     registry.add_constant(b"PHP_BUILD_DATE", Constant::Str(Box::leak(built.into_boxed_slice())));
     registry.add_functions(string::BUILTINS);
+    registry.add_fast(string::FAST);
     registry.add_functions(var::BUILTINS);
+    registry.add_fast(var::FAST);
     // These reach the caller's variables or run PHP code (__serialize,
     // jsonSerialize) though they take no callable.
     registry.mark_reenters(array2::REENTER);
@@ -240,7 +252,16 @@ fn register(registry: &mut Registry) {
     // (The printf family calls __toString on the values a v* array holds.)
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
-    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export", "count", "sizeof"]);
+    registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export"]);
+    // (count: a Countable's count() is PHP code; on an array it is not,
+    // so a call with no object argument may still be frameless.)
+    registry.mark_reenters_on_objects(&["count", "sizeof"]);
+    // Only an object's class, id or kind is looked at: frameless with one.
+    registry.objects_inert(&[
+        "get_class", "spl_object_id", "spl_object_hash", "is_object", "is_null", "is_bool", "is_int", "is_integer", "is_long", "is_float",
+        "is_double", "is_string", "is_array", "is_scalar", "is_numeric", "is_iterable", "is_countable", "is_resource", "gettype",
+        "get_debug_type",
+    ]);
     for (module, name, value, deprecation) in defaults::CONSTANTS {
         let value = match value {
             defaults::ConstValue::Int(i) => Constant::Int(*i),
@@ -264,25 +285,31 @@ fn str_arg(args: &[Value], i: usize) -> PhpStr {
     arg(args, i).to_php_string().unwrap_or_else(PhpStr::empty)
 }
 
-fn strlen(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::int(str_arg(args, 0).len() as i64))
+fn strlen(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::int(match lent::str(args, 0) {
+        Some(s) => s.len(),
+        None => lent::string(args, 0).len(),
+    } as i64))
 }
 
-fn str_repeat(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let s = str_arg(args, 0);
-    let n = arg(args, 1).to_int().max(0) as usize;
-    Ok(Value::str(PhpStr::new(s.as_bytes().repeat(n))))
+fn str_repeat(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let n = lent::int(args, 1).max(0) as usize;
+    Ok(Value::str(PhpStr::new(lent::bytes(args, 0).repeat(n))))
 }
 
-fn count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mode = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
-    let v = arg(args, 0);
+fn count(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let mode = lent::int(args, 1);
+    if let Some(a) = lent::array(args, 0) {
+        return Ok(Value::int(if mode == 1 { count_recursive(a) } else { a.len() as i64 }));
+    }
+    let v = lent::at(args, 0).deref();
     Ok(Value::int(if let Some(a) = v.as_array() {
         if mode == 1 { count_recursive(a) } else { a.len() as i64 }
     } else if let Some(o) = v.as_object().filter(|o| o.class.is_a(b"countable")) {
-        // A Countable: its count().
+        // A Countable: its count() (PHP code: count is marked as one
+        // that may run it, so it is never frameless on an object).
         let callable = Value::array(PhpArray::from_list(vec![Value::object(o.clone()), Value::str("count")]));
-        ctx.call(&callable, &mut [])?.to_int()
+        ctx.call(&callable, &mut []).or_fault(ctx)?.to_int()
     } else {
         1
     }))
@@ -296,16 +323,16 @@ fn count_recursive(a: &PhpArray) -> i64 {
     }).sum()
 }
 
-fn dechex(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn dechex(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     let mut digits = Vec::with_capacity(16);
-    p8_runtime::numeric::push_digits(&mut digits, arg(args, 0).to_int() as u64, 16, false);
+    p8_runtime::numeric::push_digits(&mut digits, lent::int(args, 0) as u64, 16, false);
     Ok(Value::str(PhpStr::new(digits)))
 }
 
-fn hrtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn hrtime(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     thread_local!(static START: std::time::Instant = std::time::Instant::now());
     let ns = START.with(|s| s.elapsed().as_nanos()) as i64;
-    if arg(args, 0).to_bool() {
+    if lent::bool(args, 0) {
         return Ok(Value::int(ns));
     }
     Ok(Value::array(Rc::new(PhpArray::from_list(vec![
@@ -314,9 +341,9 @@ fn hrtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     ]))))
 }
 
-fn microtime(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn microtime(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    if arg(args, 0).to_bool() {
+    if lent::bool(args, 0) {
         return Ok(Value::float(now.as_secs_f64()));
     }
     Ok(Value::str(format!("{:.8} {}", now.subsec_nanos() as f64 / 1e9, now.as_secs())))
@@ -359,8 +386,8 @@ fn printf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::int(out.len() as i64))
 }
 
-fn sprintf(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let out = printf::formatted(ctx, "sprintf", str_arg(args, 0).as_bytes(), &args[1..], printf::Missing::Count(1))?;
+fn sprintf(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let out = printf::formatted(ctx, "sprintf", lent::bytes(args, 0), args.get(1..).unwrap_or_default(), printf::Missing::Count(1)).or_fault(ctx)?;
     Ok(Value::str(PhpStr::new(out)))
 }
 
@@ -446,8 +473,8 @@ fn flush(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::NULL)
 }
 
-fn function_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(ctx.function_exists(str_arg(args, 0).as_bytes())))
+fn function_exists(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(ctx.function_exists(lent::bytes(args, 0))))
 }
 
 /// extension_loaded(string $extension): any case.
@@ -511,17 +538,76 @@ fn func_get_args(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// range() for int bounds and step (the float and character forms come with the port).
 /// array_keys($array, $filter_value, $strict = false): with a filter value
 /// (even null), only the keys whose values match it.
-fn array_keys(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let filter = (args.len() > 1).then(|| (arg(args, 1), args.len() > 2 && arg(args, 2).to_bool()));
-    let v = arg(args, 0);
-    Ok(match v.as_array() {
+fn array_keys(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let filter = (args.len() > 1).then(|| (lent::at(args, 1), lent::bool(args, 2)));
+    Ok(match lent::array(args, 0) {
         Some(a) => {
             // Sized once: every key when there is no filter.
             let mut keys = Vec::with_capacity(if filter.is_none() { a.len() } else { 0 });
-            keys.extend(a.iter().filter(|(_, v)| filter.as_ref().is_none_or(|(needle, strict)| array::matches(needle, &v.deref(), *strict))).map(|(k, _)| k.to_value()));
+            keys.extend(a.iter().filter(|(_, v)| filter.is_none_or(|(needle, strict)| array::matches(needle, v, strict))).map(|(k, _)| k.to_value()));
             Value::array(PhpArray::from_list(keys))
         }
         None => Value::NULL,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use p8_runtime::ext::{Imp, Registry};
+
+    fn registry() -> Registry {
+        Registry::new(&[super::EXTENSION])
+    }
+
+    /// Which call path each builtin may take: frameless only for one with
+    /// a signature that cannot run PHP code and is not deprecated; the
+    /// borrowed ABI for the migrated ones, the adapter keeping the rest.
+    #[test]
+    fn frameless_calls_are_the_plain_builtins() {
+        let r = registry();
+        let call = |name: &str| *r.call(r.lookup(name.as_bytes()).unwrap_or_else(|| panic!("{name} registered")));
+        for name in ["strlen", "abs", "in_array", "is_array", "str_contains", "substr", "explode", "sprintf", "count", "get_class"] {
+            let c = call(name);
+            assert!(matches!(c.frameless, Some(Imp::Lent(_))), "{name}: frameless on the borrowed ABI");
+        }
+        // Not migrated: frameless through the adapter, its moved ABI.
+        for name in ["array_merge", "str_pad", "number_format"] {
+            assert!(matches!(call(name).frameless, Some(Imp::Moved(_))), "{name}: frameless on the moved ABI");
+        }
+        // They call PHP code (a callback, a __toString on an element, an
+        // autoloader), or the checked path has a notice to give.
+        for name in ["array_map", "usort", "implode", "class_exists", "call_user_func", "is_callable", "array_multisort"] {
+            assert!(call(name).frameless.is_none(), "{name}: never frameless");
+        }
+        // count may run a Countable's count(): lent registers on the
+        // checked path, frameless (on no object) still.
+        assert!(call("count").reenters && call("count").frameless.is_some());
+        assert!(call("get_class").objects_ok && !call("strlen").objects_ok);
+    }
+
+    /// The call site's test: plainly typed arguments, the right count, no
+    /// reference, no undefined value, an object only where it is inert.
+    #[test]
+    fn plain_call_takes_only_arguments_needing_no_check() {
+        use p8_runtime::value::Value;
+        let r = registry();
+        let plain = |name: &str, args: &[Value]| r.call(r.lookup(name.as_bytes()).expect("registered")).plain(args);
+        assert!(plain("strlen", &[Value::str("abc")]));
+        assert!(!plain("strlen", &[Value::int(1)]), "an int to a string parameter is converted");
+        assert!(!plain("strlen", &[]), "too few");
+        assert!(!plain("strlen", &[Value::str("a"), Value::str("b")]), "too many");
+        assert!(!plain("strlen", &[Value::new_reference(Value::str("a"))]), "a reference");
+        assert!(!plain("strlen", &[Value::UNDEF]), "undefined");
+        assert!(plain("substr", &[Value::str("abc"), Value::int(1)]), "an optional parameter left out");
+        assert!(plain("substr", &[Value::str("abc"), Value::int(1), Value::NULL]), "?int takes null");
+        assert!(!plain("substr", &[Value::str("abc"), Value::float(1.0)]), "a float to an int parameter is converted");
+        assert!(plain("in_array", &[Value::int(1), Value::array(p8_runtime::array::PhpArray::new())]));
+        assert!(plain("sprintf", &[Value::str("%d %d"), Value::int(1), Value::int(2)]), "variadic");
+        let five = [Value::str("%d%d%d%d"), Value::int(1), Value::int(2), Value::int(3), Value::int(4)];
+        assert!(plain("sprintf", &five), "past the precomputed four: from the signature");
+        assert!(!plain("sprintf", &[Value::str("%s"), Value::int(1), Value::int(2), Value::int(3), Value::UNDEF]));
+        // (Objects: the recorded script builtin_frameless.php.)
+        assert!(plain("is_bool", &[Value::FALSE]) && plain("is_bool", &[Value::TRUE]));
+    }
 }
 

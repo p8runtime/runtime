@@ -7,7 +7,8 @@
 
 use crate::arg;
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
+use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Fault, FastBuiltin, Throw};
+use p8_runtime::lent;
 use p8_runtime::object::CLASS_ENUM;
 use p8_runtime::value::{Kind, Value};
 use std::cmp::Ordering;
@@ -27,15 +28,24 @@ pub const CLASSES: &[ClassSpec] = &[ClassSpec {
     debug_info: None,
 }];
 
+/// The array functions on the borrowed ABI.
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "sizeof", run: crate::count },
+    FastBuiltin { name: "array_key_exists", run: array_key_exists },
+    FastBuiltin { name: "key_exists", run: array_key_exists },
+    FastBuiltin { name: "in_array", run: in_array },
+    FastBuiltin { name: "array_search", run: array_search },
+    FastBuiltin { name: "array_key_first", run: array_key_first },
+    FastBuiltin { name: "array_key_last", run: array_key_last },
+    FastBuiltin { name: "array_first", run: array_first },
+    FastBuiltin { name: "array_last", run: array_last },
+    FastBuiltin { name: "array_is_list", run: array_is_list },
+];
+
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_multisort", run: array_multisort, by_ref: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
-    Builtin { name: "sizeof", run: crate::count, by_ref: &[] },
     Builtin { name: "array_values", run: array_values, by_ref: &[] },
     Builtin { name: "array_merge", run: array_merge, by_ref: &[] },
-    Builtin { name: "array_key_exists", run: array_key_exists, by_ref: &[] },
-    Builtin { name: "key_exists", run: array_key_exists, by_ref: &[] },
-    Builtin { name: "in_array", run: in_array, by_ref: &[] },
-    Builtin { name: "array_search", run: array_search, by_ref: &[] },
     Builtin { name: "array_slice", run: array_slice, by_ref: &[] },
     Builtin { name: "array_reverse", run: array_reverse, by_ref: &[] },
     Builtin { name: "array_flip", run: array_flip, by_ref: &[] },
@@ -46,10 +56,6 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_sum", run: array_sum, by_ref: &[] },
     Builtin { name: "array_product", run: array_product, by_ref: &[] },
     Builtin { name: "array_pad", run: array_pad, by_ref: &[] },
-    Builtin { name: "array_key_first", run: array_key_first, by_ref: &[] },
-    Builtin { name: "array_key_last", run: array_key_last, by_ref: &[] },
-    Builtin { name: "array_first", run: array_first, by_ref: &[] },
-    Builtin { name: "array_last", run: array_last, by_ref: &[] },
     Builtin { name: "array_count_values", run: array_count_values, by_ref: &[] },
     Builtin { name: "array_chunk", run: array_chunk, by_ref: &[] },
     Builtin { name: "array_diff", run: array_diff, by_ref: &[] },
@@ -57,7 +63,6 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "array_diff_key", run: array_diff_key, by_ref: &[] },
     Builtin { name: "array_intersect_key", run: array_intersect_key, by_ref: &[] },
     Builtin { name: "array_replace", run: array_replace, by_ref: &[] },
-    Builtin { name: "array_is_list", run: array_is_list, by_ref: &[] },
     Builtin { name: "array_push", run: array_push, by_ref: &[0] },
     Builtin { name: "array_pop", run: array_pop, by_ref: &[0] },
     Builtin { name: "array_shift", run: array_shift, by_ref: &[0] },
@@ -139,29 +144,38 @@ fn key_of(v: &Value) -> Option<Key> {
     }
 }
 
-fn array_key_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    if arg(args, 0).is_null() {
+fn array_key_exists(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let Some(a) = lent::array(args, 1) else { return Ok(Value::FALSE) };
+    let key = lent::at(args, 0);
+    // An int or a string key, looked up in place (no Key made).
+    if let Some(k) = key.as_int() {
+        return Ok(Value::bool(a.contains_key(&Key::Int(k))));
+    }
+    if let Some(s) = key.as_str() {
+        return Ok(Value::bool(a.get_str(s).is_some()));
+    }
+    if key.is_null() {
         ctx.deprecated("Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead");
     }
-    let found = key_of(&arg(args, 0)).is_some_and(|k| arr(args, 1).contains_key(&k));
-    Ok(Value::bool(found))
+    Ok(Value::bool(key_of(&key.deref()).is_some_and(|k| a.contains_key(&k))))
 }
 
 pub(crate) fn matches(needle: &Value, v: &Value, strict: bool) -> bool {
     if strict { needle.identical(v) } else { needle.loose_eq(v) }
 }
 
-fn in_array(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let (needle, strict) = (arg(args, 0), args.len() > 2 && arg(args, 2).to_bool());
-    Ok(Value::bool(arr(args, 1).values().any(|v| matches(&needle, &v.deref(), strict))))
+// (`identical` and `loose_eq` look through a reference themselves: the
+// needle and the elements are compared in place.)
+fn in_array(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let (needle, strict) = (lent::at(args, 0), lent::bool(args, 2));
+    let Some(a) = lent::array(args, 1) else { return Ok(Value::FALSE) };
+    Ok(Value::bool(a.values().any(|v| matches(needle, v, strict))))
 }
 
-fn array_search(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let (needle, strict) = (arg(args, 0), args.len() > 2 && arg(args, 2).to_bool());
-    Ok(arr(args, 1)
-        .iter()
-        .find(|(_, v)| matches(&needle, &v.deref(), strict))
-        .map_or(Value::FALSE, |(k, _)| k.to_value()))
+fn array_search(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let (needle, strict) = (lent::at(args, 0), lent::bool(args, 2));
+    let Some(a) = lent::array(args, 1) else { return Ok(Value::FALSE) };
+    Ok(a.iter().find(|(_, v)| matches(needle, v, strict)).map_or(Value::FALSE, |(k, _)| k.to_value()))
 }
 
 /// array_slice($array, $offset, $length = null, $preserve_keys = false):
@@ -373,24 +387,24 @@ fn array_pad(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     array(out)
 }
 
-fn array_key_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).iter().next().map_or(Value::NULL, |(k, _)| k.to_value()))
+fn array_key_first(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(lent::array(args, 0).and_then(|a| a.iter().next()).map_or(Value::NULL, |(k, _)| k.to_value()))
 }
 
-fn array_key_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).iter().last().map_or(Value::NULL, |(k, _)| k.to_value()))
+fn array_key_last(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(lent::array(args, 0).and_then(|a| a.iter().last()).map_or(Value::NULL, |(k, _)| k.to_value()))
 }
 
 /// array_first(array $array): mixed (PHP 8.5): the first value, dereferenced
 /// (RETURN_COPY_DEREF), or null for an empty array.
-fn array_first(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).values().next().map_or(Value::NULL, Value::deref))
+fn array_first(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(lent::array(args, 0).and_then(|a| a.values().next()).map_or(Value::NULL, Value::deref))
 }
 
 /// array_last(array $array): mixed (PHP 8.5): the last value, dereferenced,
 /// or null for an empty array.
-fn array_last(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(arr(args, 0).values().last().map_or(Value::NULL, Value::deref))
+fn array_last(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(lent::array(args, 0).and_then(|a| a.values().last()).map_or(Value::NULL, Value::deref))
 }
 
 fn array_count_values(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -491,8 +505,8 @@ fn array_replace(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     array(out)
 }
 
-fn array_is_list(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(arr(args, 0).is_list()))
+fn array_is_list(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::array(args, 0).is_none_or(PhpArray::is_list)))
 }
 
 fn array_push(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

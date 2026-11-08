@@ -43,6 +43,64 @@ pub fn counts(sig: &Sig) -> (usize, usize) {
     (required, if variadic { usize::MAX } else { params.len() })
 }
 
+/// Whether a frameless call can skip [`check_counted`]: as many arguments
+/// as `sig` takes, each plainly of its parameter's type (nothing to
+/// convert, warn about or refuse), none a reference or undefined, and
+/// none an object unless `objects` (the builtin is known to run no PHP
+/// code on one: an object may have a __toString() or __debugInfo(), or
+/// be a Countable, which the checked path runs with the builtin's frame
+/// pushed and the registers lent). (ZEND_FRAMELESS_ICALL's operands are
+/// type-tested the same way before the handler runs.)
+#[inline(always)]
+pub fn plain_call(sig: &Sig, (required, max): (usize, usize), objects: bool, args: &[Value]) -> bool {
+    if args.len() < required || args.len() > max {
+        return false;
+    }
+    let params = sig.params;
+    for (i, arg) in args.iter().enumerate() {
+        let param = match params.get(i) {
+            Some(p) => p,
+            None => match params.last() {
+                Some(p) if p.variadic => p,
+                _ => return false,
+            },
+        };
+        let shut = match arg.kind() {
+            Kind::Ref | Kind::Undef => true,
+            Kind::Object => !objects,
+            _ => false,
+        };
+        if shut || !plainly(param, arg) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The value kinds `param` takes as they are, as bits by [`Kind`] (what
+/// [`plain_call`] tests, worked out once per builtin): a bool only where
+/// both bools are taken, an object only where `objects` (and the type takes
+/// one), never a reference or undefined.
+pub fn kinds_taken(param: &Param, objects: bool) -> u16 {
+    let m = param.mask;
+    let any = m & T_MIXED != 0 || param.untyped();
+    let mut bits = 0;
+    for (kind, takes) in [
+        (Kind::Null, m & T_NULL != 0),
+        (Kind::Bool, m & T_BOOL != 0),
+        (Kind::Int, m & T_INT != 0),
+        (Kind::Float, m & T_FLOAT != 0),
+        (Kind::Str, m & (T_STRING | T_CALLABLE) != 0),
+        (Kind::Array, m & (T_ARRAY | T_CALLABLE) != 0),
+        (Kind::Object, objects && m & (T_OBJECT | T_CALLABLE) != 0),
+    ] {
+        if takes || (any && (kind != Kind::Object || objects)) {
+            bits |= 1 << kind as u16;
+        }
+    }
+    bits
+}
+
 /// [`check`], with `sig`'s [`counts`] already known.
 #[inline]
 pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Value], diags: &mut Diags) -> Result<(), Refused> {

@@ -6,40 +6,46 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, Ctx, Fault, FastBuiltin, OrFault, Throw};
+use p8_runtime::lent;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 
+/// The string functions on the borrowed ABI: their strings are read in
+/// place (no handle made, no program-memory literal copied).
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "chr", run: chr },
+    FastBuiltin { name: "ord", run: ord },
+    FastBuiltin { name: "strtolower", run: strtolower },
+    FastBuiltin { name: "strtoupper", run: strtoupper },
+    FastBuiltin { name: "ucfirst", run: ucfirst },
+    FastBuiltin { name: "lcfirst", run: lcfirst },
+    FastBuiltin { name: "trim", run: trim },
+    FastBuiltin { name: "ltrim", run: ltrim },
+    FastBuiltin { name: "rtrim", run: rtrim },
+    FastBuiltin { name: "chop", run: rtrim },
+    FastBuiltin { name: "str_contains", run: str_contains },
+    FastBuiltin { name: "str_starts_with", run: str_starts_with },
+    FastBuiltin { name: "str_ends_with", run: str_ends_with },
+    FastBuiltin { name: "strpos", run: strpos },
+    FastBuiltin { name: "stripos", run: stripos },
+    FastBuiltin { name: "strrpos", run: strrpos },
+    FastBuiltin { name: "strripos", run: strripos },
+    FastBuiltin { name: "substr", run: substr },
+    FastBuiltin { name: "explode", run: explode },
+    FastBuiltin { name: "strcmp", run: strcmp },
+    FastBuiltin { name: "strcasecmp", run: strcasecmp },
+    FastBuiltin { name: "strncmp", run: strncmp },
+];
+
 pub static BUILTINS: &[Builtin] = &[
-    Builtin { name: "chr", run: chr, by_ref: &[] },
-    Builtin { name: "ord", run: ord, by_ref: &[] },
-    Builtin { name: "strtolower", run: strtolower, by_ref: &[] },
-    Builtin { name: "strtoupper", run: strtoupper, by_ref: &[] },
-    Builtin { name: "ucfirst", run: ucfirst, by_ref: &[] },
-    Builtin { name: "lcfirst", run: lcfirst, by_ref: &[] },
     Builtin { name: "ucwords", run: ucwords, by_ref: &[] },
-    Builtin { name: "trim", run: trim, by_ref: &[] },
-    Builtin { name: "ltrim", run: ltrim, by_ref: &[] },
-    Builtin { name: "rtrim", run: rtrim, by_ref: &[] },
-    Builtin { name: "chop", run: rtrim, by_ref: &[] },
-    Builtin { name: "str_contains", run: str_contains, by_ref: &[] },
-    Builtin { name: "str_starts_with", run: str_starts_with, by_ref: &[] },
-    Builtin { name: "str_ends_with", run: str_ends_with, by_ref: &[] },
-    Builtin { name: "strpos", run: strpos, by_ref: &[] },
-    Builtin { name: "stripos", run: stripos, by_ref: &[] },
-    Builtin { name: "strrpos", run: strrpos, by_ref: &[] },
-    Builtin { name: "strripos", run: strripos, by_ref: &[] },
-    Builtin { name: "substr", run: substr, by_ref: &[] },
     Builtin { name: "substr_count", run: substr_count, by_ref: &[] },
     Builtin { name: "str_pad", run: str_pad, by_ref: &[] },
     Builtin { name: "str_split", run: str_split, by_ref: &[] },
     Builtin { name: "implode", run: implode, by_ref: &[] },
     Builtin { name: "join", run: implode, by_ref: &[] },
-    Builtin { name: "explode", run: explode, by_ref: &[] },
     Builtin { name: "strrev", run: strrev, by_ref: &[] },
-    Builtin { name: "strcmp", run: strcmp, by_ref: &[] },
-    Builtin { name: "strcasecmp", run: strcasecmp, by_ref: &[] },
-    Builtin { name: "strncmp", run: strncmp, by_ref: &[] },
     Builtin { name: "strncasecmp", run: strncasecmp, by_ref: &[] },
     Builtin { name: "str_replace", run: str_replace, by_ref: &[3] },
     Builtin { name: "str_ireplace", run: str_ireplace, by_ref: &[3] },
@@ -70,8 +76,17 @@ fn opt(args: &[Value], i: usize) -> Option<Value> {
     args.get(i).map(Value::deref).filter(|v| !v.is_null())
 }
 
-fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let c = arg(args, 0).to_int();
+/// Argument 0, a string, as it is (the caller's handle, shared): what a
+/// function that changes nothing returns (RETURN_STR_COPY).
+fn same(args: &[Value]) -> Value {
+    match lent::str(args, 0) {
+        Some(_) => lent::at(args, 0).clone(),
+        None => Value::str(PhpStr::empty()),
+    }
+}
+
+fn chr(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let c = lent::int(args, 0);
     if !(0..=255).contains(&c) {
         ctx.deprecated(
             "chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256",
@@ -80,50 +95,55 @@ fn chr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(PhpStr::byte(c.rem_euclid(256) as u8)))
 }
 
-fn ord(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let s = str_arg(args, 0);
+fn ord(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let s = lent::bytes(args, 0);
     // (8.5) a string that isn't exactly one byte
     match s.len() {
         1 => {}
         0 => ctx.deprecated("ord(): Providing an empty string is deprecated"),
         _ => ctx.deprecated("ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead"),
     }
-    Ok(Value::int(i64::from(s.as_bytes().first().copied().unwrap_or(0))))
+    Ok(Value::int(i64::from(s.first().copied().unwrap_or(0))))
 }
 
-/// `s` with each byte mapped by `f`: `s` itself when nothing changes (as
-/// zend_string_tolower hands back the same string), else built once.
-fn map_bytes(s: PhpStr, changes: impl Fn(&u8) -> bool, f: impl Fn(&u8) -> u8) -> Result<Value, Throw> {
-    let bytes = s.as_bytes();
-    let Some(first) = bytes.iter().position(changes) else { return Ok(Value::str(s)) };
+/// Argument 0 with each byte mapped by `f`: the argument itself when
+/// nothing changes (as zend_string_tolower hands back the same string),
+/// else built once.
+fn map_bytes(args: &[Value], changes: impl Fn(&u8) -> bool, f: impl Fn(&u8) -> u8) -> Result<Value, Fault> {
+    let bytes = lent::bytes(args, 0);
+    let Some(first) = bytes.iter().position(changes) else { return Ok(same(args)) };
     let mut out = PhpStr::scratch(bytes.len());
     out.extend_from_slice(&bytes[..first]);
     out.extend(bytes[first..].iter().map(f));
     Ok(Value::str(PhpStr::from_scratch(out)))
 }
 
-fn strtolower(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    map_bytes(str_arg(args, 0), u8::is_ascii_uppercase, u8::to_ascii_lowercase)
+fn strtolower(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    map_bytes(args, u8::is_ascii_uppercase, u8::to_ascii_lowercase)
 }
 
-fn strtoupper(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    map_bytes(str_arg(args, 0), u8::is_ascii_lowercase, u8::to_ascii_uppercase)
+fn strtoupper(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    map_bytes(args, u8::is_ascii_lowercase, u8::to_ascii_uppercase)
 }
 
-fn ucfirst(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut s = str_arg(args, 0).as_bytes().to_vec();
-    if let Some(c) = s.first_mut() {
-        c.make_ascii_uppercase();
+fn ucfirst(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    match lent::bytes(args, 0).first() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return Ok(same(args)),
     }
-    string(s)
+    let mut s = lent::bytes(args, 0).to_vec();
+    s[0].make_ascii_uppercase();
+    Ok(Value::str(PhpStr::new(s)))
 }
 
-fn lcfirst(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut s = str_arg(args, 0).as_bytes().to_vec();
-    if let Some(c) = s.first_mut() {
-        c.make_ascii_lowercase();
+fn lcfirst(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    match lent::bytes(args, 0).first() {
+        Some(c) if c.is_ascii_uppercase() => {}
+        _ => return Ok(same(args)),
     }
-    string(s)
+    let mut s = lent::bytes(args, 0).to_vec();
+    s[0].make_ascii_lowercase();
+    Ok(Value::str(PhpStr::new(s)))
 }
 
 /// ucwords($string, $separators = " \t\r\n\f\v")
@@ -159,10 +179,22 @@ fn char_mask(list: &[u8]) -> [bool; 256] {
     mask
 }
 
-fn trim_with(args: &[Value], left: bool, right: bool) -> Result<Value, Throw> {
-    let s = str_arg(args, 0);
-    let mask = if args.len() > 1 { char_mask(str_arg(args, 1).as_bytes()) } else { char_mask(b" \n\r\t\x0b\0") };
-    let mut bytes = s.as_bytes();
+/// The default mask, " \n\r\t\v\0", worked out at compile time.
+const WHITESPACE: [bool; 256] = {
+    let mut mask = [false; 256];
+    let list = b" \n\r\t\x0b\0";
+    let mut i = 0;
+    while i < list.len() {
+        mask[list[i] as usize] = true;
+        i += 1;
+    }
+    mask
+};
+
+fn trim_with(args: &[Value], left: bool, right: bool) -> Result<Value, Fault> {
+    let s = lent::bytes(args, 0);
+    let mask = if args.len() > 1 { char_mask(lent::bytes(args, 1)) } else { WHITESPACE };
+    let mut bytes = s;
     if left {
         while let Some((&c, rest)) = bytes.split_first() {
             if !mask[c as usize] {
@@ -180,20 +212,20 @@ fn trim_with(args: &[Value], left: bool, right: bool) -> Result<Value, Throw> {
         }
     }
     if bytes.len() == s.len() {
-        return Ok(Value::str(s));
+        return Ok(same(args));
     }
-    string(bytes.to_vec())
+    Ok(Value::str(PhpStr::from(bytes)))
 }
 
-fn trim(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn trim(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     trim_with(args, true, true)
 }
 
-fn ltrim(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn ltrim(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     trim_with(args, true, false)
 }
 
-fn rtrim(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn rtrim(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     trim_with(args, false, true)
 }
 
@@ -211,22 +243,22 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).rposition(|w| w == needle)
 }
 
-fn str_contains(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(find(str_arg(args, 0).as_bytes(), str_arg(args, 1).as_bytes()).is_some()))
+fn str_contains(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(find(lent::bytes(args, 0), lent::bytes(args, 1)).is_some()))
 }
 
-fn str_starts_with(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(str_arg(args, 0).as_bytes().starts_with(str_arg(args, 1).as_bytes())))
+fn str_starts_with(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::bytes(args, 0).starts_with(lent::bytes(args, 1))))
 }
 
-fn str_ends_with(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    Ok(Value::bool(str_arg(args, 0).as_bytes().ends_with(str_arg(args, 1).as_bytes())))
+fn str_ends_with(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::bool(lent::bytes(args, 0).ends_with(lent::bytes(args, 1))))
 }
 
 /// The haystack offset an `$offset` argument names, or the ValueError PHP
 /// raises when it is outside the haystack.
 fn offset(ctx: &dyn Ctx, func: &str, args: &[Value], len: usize) -> Result<usize, Throw> {
-    let off = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    let off = if args.len() > 2 { lent::int(args, 2) } else { 0 };
     let at = if off < 0 { len as i64 + off } else { off };
     if at < 0 || at > len as i64 {
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)")));
@@ -234,55 +266,55 @@ fn offset(ctx: &dyn Ctx, func: &str, args: &[Value], len: usize) -> Result<usize
     Ok(at as usize)
 }
 
+/// strpos / stripos: the haystack and needle read in place (folded
+/// copies only for stripos).
 fn position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Result<Value, Throw> {
-    let (h, n) = (str_arg(args, 0), str_arg(args, 1));
-    let (h, n) = if fold {
-        (h.as_bytes().to_ascii_lowercase(), n.as_bytes().to_ascii_lowercase())
-    } else {
-        (h.as_bytes().to_vec(), n.as_bytes().to_vec())
-    };
+    let (h, n) = (lent::bytes(args, 0), lent::bytes(args, 1));
     let at = offset(ctx, func, args, h.len())?;
-    Ok(find(&h[at..], &n).map_or(Value::FALSE, |i| Value::int((at + i) as i64)))
+    let found = if fold { find(&h[at..].to_ascii_lowercase(), &n.to_ascii_lowercase()) } else { find(&h[at..], n) };
+    Ok(found.map_or(Value::FALSE, |i| Value::int((at + i) as i64)))
 }
 
-fn strpos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    position(ctx, "strpos", args, false)
+fn strpos(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    position(ctx, "strpos", args, false).or_fault(ctx)
 }
 
-fn stripos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    position(ctx, "stripos", args, true)
+fn stripos(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    position(ctx, "stripos", args, true).or_fault(ctx)
 }
 
 /// strrpos: a negative offset ends the search that far from the end
 /// (the needle may start there); a positive one starts it.
 fn last_position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Result<Value, Throw> {
-    let (h, n) = (str_arg(args, 0), str_arg(args, 1));
-    let (h, n) = if fold {
-        (h.as_bytes().to_ascii_lowercase(), n.as_bytes().to_ascii_lowercase())
+    let (h, n) = (lent::bytes(args, 0), lent::bytes(args, 1));
+    let folded;
+    let (h, n): (&[u8], &[u8]) = if fold {
+        folded = (h.to_ascii_lowercase(), n.to_ascii_lowercase());
+        (&folded.0, &folded.1)
     } else {
-        (h.as_bytes().to_vec(), n.as_bytes().to_vec())
+        (h, n)
     };
-    let off = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    let off = if args.len() > 2 { lent::int(args, 2) } else { 0 };
     let len = h.len() as i64;
     if off > len || off < -len {
         return Err(ctx.throw("ValueError", format!("{func}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)")));
     }
     let found = if off >= 0 {
-        rfind(&h[off as usize..], &n).map(|i| i + off as usize)
+        rfind(&h[off as usize..], n).map(|i| i + off as usize)
     } else {
         // The needle may start at most at len + off.
         let end = ((len + off) as usize + n.len()).min(h.len());
-        rfind(&h[..end], &n)
+        rfind(&h[..end], n)
     };
     Ok(found.map_or(Value::FALSE, |i| Value::int(i as i64)))
 }
 
-fn strrpos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    last_position(ctx, "strrpos", args, false)
+fn strrpos(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    last_position(ctx, "strrpos", args, false).or_fault(ctx)
 }
 
-fn strripos(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    last_position(ctx, "strripos", args, true)
+fn strripos(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    last_position(ctx, "strripos", args, true).or_fault(ctx)
 }
 
 /// The byte range substr($string, $offset, $length) takes (PHP 8: an
@@ -298,14 +330,14 @@ fn sub_range(len: usize, offset: i64, length: Option<i64>) -> (usize, usize) {
     (start as usize, end.max(start) as usize)
 }
 
-fn substr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let s = str_arg(args, 0);
-    let (a, b) = sub_range(s.len(), arg(args, 1).to_int(), opt(args, 2).map(|v| v.to_int()));
+fn substr(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let s = lent::bytes(args, 0);
+    let (a, b) = sub_range(s.len(), lent::int(args, 1), lent::given(args, 2).map(|_| lent::int(args, 2)));
     // The whole string: itself (RETURN_STR_COPY); else one copy of the part.
     if a == 0 && b == s.len() {
-        return Ok(Value::str(s));
+        return Ok(same(args));
     }
-    Ok(Value::str(PhpStr::from(&s.as_bytes()[a..b])))
+    Ok(Value::str(PhpStr::from(&s[a..b])))
 }
 
 fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -428,15 +460,15 @@ fn implode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// explode($separator, $string, $limit = PHP_INT_MAX)
-fn explode(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let (sep, s) = (str_arg(args, 0), str_arg(args, 1));
+fn explode(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let (sep, s) = (lent::bytes(args, 0), lent::bytes(args, 1));
     // A limit of 0 means 1.
-    let limit = if args.len() > 2 { arg(args, 2).to_int().max(i64::MIN + 1) } else { i64::MAX };
+    let limit = if args.len() > 2 { lent::int(args, 2).max(i64::MIN + 1) } else { i64::MAX };
     let limit = if limit == 0 { 1 } else { limit };
     if sep.is_empty() {
-        return Err(ctx.throw("ValueError", "explode(): Argument #1 ($separator) cannot be empty".into()));
+        // (PHP 8.6's wording, string.c PHP_FUNCTION(explode).)
+        return Err(ctx.fault_with("ValueError", "explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters".into()));
     }
-    let (s, sep) = (s.as_bytes(), sep.as_bytes());
     let mut parts: Vec<&[u8]> = Vec::new();
     let mut rest = s;
     while let Some(at) = find(rest, sep) {
@@ -466,12 +498,14 @@ fn sign(o: std::cmp::Ordering) -> Result<Value, Throw> {
     Ok(Value::int(o as i64))
 }
 
-fn strcmp(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    sign(str_arg(args, 0).as_bytes().cmp(str_arg(args, 1).as_bytes()))
+fn strcmp(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    Ok(Value::int(lent::bytes(args, 0).cmp(lent::bytes(args, 1)) as i64))
 }
 
-fn strcasecmp(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    sign(str_arg(args, 0).as_bytes().to_ascii_lowercase().cmp(&str_arg(args, 1).as_bytes().to_ascii_lowercase()))
+fn strcasecmp(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let (a, b) = (lent::bytes(args, 0), lent::bytes(args, 1));
+    let o = a.iter().map(u8::to_ascii_lowercase).cmp(b.iter().map(u8::to_ascii_lowercase));
+    Ok(Value::int(o as i64))
 }
 
 fn prefix(ctx: &dyn Ctx, func: &str, args: &[Value]) -> Result<usize, Throw> {
@@ -482,10 +516,10 @@ fn prefix(ctx: &dyn Ctx, func: &str, args: &[Value]) -> Result<usize, Throw> {
     Ok(n as usize)
 }
 
-fn strncmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let n = prefix(ctx, "strncmp", args)?;
-    let (a, b) = (str_arg(args, 0), str_arg(args, 1));
-    sign(a.as_bytes()[..n.min(a.len())].cmp(&b.as_bytes()[..n.min(b.len())]))
+fn strncmp(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let n = prefix(ctx, "strncmp", args).or_fault(ctx)?;
+    let (a, b) = (lent::bytes(args, 0), lent::bytes(args, 1));
+    Ok(Value::int(a[..n.min(a.len())].cmp(&b[..n.min(b.len())]) as i64))
 }
 
 fn strncasecmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

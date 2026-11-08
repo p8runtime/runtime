@@ -7,10 +7,17 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
-use p8_runtime::ext::{Builtin, Ctx, Throw};
+use p8_runtime::ext::{Builtin, Ctx, Fault, FastBuiltin, Throw};
+use p8_runtime::lent;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
 use std::cmp::Ordering;
+
+/// On the borrowed ABI.
+pub static FAST: &[FastBuiltin] = &[
+    FastBuiltin { name: "strspn", run: strspn },
+    FastBuiltin { name: "strcspn", run: strcspn },
+];
 
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "strtok", run: strtok, by_ref: &[] },
@@ -29,8 +36,6 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "base64_decode", run: base64_decode, by_ref: &[] },
     Builtin { name: "chunk_split", run: chunk_split, by_ref: &[] },
     Builtin { name: "wordwrap", run: wordwrap, by_ref: &[] },
-    Builtin { name: "strspn", run: strspn, by_ref: &[] },
-    Builtin { name: "strcspn", run: strcspn, by_ref: &[] },
     Builtin { name: "strpbrk", run: strpbrk, by_ref: &[] },
     Builtin { name: "substr_compare", run: substr_compare, by_ref: &[] },
     Builtin { name: "similar_text", run: similar_text, by_ref: &[2] },
@@ -674,30 +679,30 @@ fn wordwrap(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 /// The part of the subject strspn and friends look at.
-fn span_subject(args: &[Value]) -> Vec<u8> {
-    let s = str_arg(args, 0);
-    let b = s.as_bytes();
+/// The part of argument 0 strspn/strcspn look at, read in place.
+fn span_subject(args: &[Value]) -> &[u8] {
+    let b = lent::bytes(args, 0);
     let n = b.len() as i64;
-    let offset = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
+    let offset = if args.len() > 2 { lent::int(args, 2) } else { 0 };
     let start = if offset < 0 { (n + offset).max(0) } else { offset.min(n) } as usize;
-    let end = match args.get(3).map(Value::deref) {
-        Some(l) if !l.is_null() => {
-            let l = l.to_int();
+    let end = match lent::given(args, 3) {
+        Some(_) => {
+            let l = lent::int(args, 3);
             if l < 0 { ((n + l).max(start as i64)) as usize } else { (start + l as usize).min(b.len()) }
         }
-        _ => b.len(),
+        None => b.len(),
     };
-    b[start..end.max(start)].to_vec()
+    &b[start..end.max(start)]
 }
 
-fn strspn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mask = str_arg(args, 1);
-    Ok(Value::int(span_subject(args).iter().take_while(|c| mask.as_bytes().contains(c)).count() as i64))
+fn strspn(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let mask = lent::bytes(args, 1);
+    Ok(Value::int(span_subject(args).iter().take_while(|c| mask.contains(c)).count() as i64))
 }
 
-fn strcspn(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mask = str_arg(args, 1);
-    Ok(Value::int(span_subject(args).iter().take_while(|c| !mask.as_bytes().contains(c)).count() as i64))
+fn strcspn(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
+    let mask = lent::bytes(args, 1);
+    Ok(Value::int(span_subject(args).iter().take_while(|c| !mask.contains(c)).count() as i64))
 }
 
 fn strpbrk(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
