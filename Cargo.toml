@@ -172,6 +172,14 @@ router = [
 lto = "fat"
 codegen-units = 1
 
+# Release with full debug info, for profilers (perf, callgrind, pprof): the
+# same optimized, fat-LTO code, with DWARF line and inline tables so code
+# inlined into the dispatch loop keeps its own function, file and line.
+# `cargo build --profile profiling -p php-cli` -> target/profiling/php2.
+[profile.profiling]
+inherits = "release"
+debug = true
+
 # php2 for wasm32-wasip1 (packages/vite-plugin-p8): release, optimized for
 # size and without its symbol names, so the module a host downloads and
 # compiles is smaller; the native release profile is left as it is.
