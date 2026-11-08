@@ -30,9 +30,10 @@ g = 2
 h = 10,20
 k = 1,2,3
 1 2
+5 9 9 9
 b = 2, d = 9
 
-Warning: Undefined variable $a in %s on line 138
+Warning: Undefined variable $a in %s on line 152
 NULL
 int(1)
 caught: changed
@@ -82,9 +83,10 @@ g = 2
 h = 10,20
 k = 1,2,3
 2 3
+5 9 9 9
 b = 2, d = 9
 
-Warning: Undefined variable $a in %s on line 138
+Warning: Undefined variable $a in %s on line 152
 NULL
 int(1)
 caught: changed

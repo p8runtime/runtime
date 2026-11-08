@@ -119,6 +119,20 @@ function globals() {
     return $copy;
 }
 
+// A function returning by reference: its value, and the reference
+// where the call asks for one.
+function &first(array &$arr) { return $arr[0]; }
+function ref_results() {
+    $data = [1, 2];
+    $y = first($data);
+    $y = 5;
+    $x = &first($data);
+    $x = 9;
+    $z = first($data);
+    $w = $z;
+    echo "$y {$data[0]} $z $w\n";
+}
+
 // Variables set by name.
 function by_name($vars, $name) {
     $a = 1;
@@ -198,6 +212,7 @@ for ($round = 0; $round < 2; $round++) {
     sum_over_object();
     refs();
     echo counter(), " ", globals(), "\n";
+    ref_results();
     by_name(["a" => 2], "c");
     undefined(false);
     undefined(true);

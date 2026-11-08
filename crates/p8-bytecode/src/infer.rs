@@ -145,6 +145,8 @@ struct Layout {
     temps: usize,
     /// Per CV (below `n`): never followed (always ANY).
     dirty: Vec<bool>,
+    /// A call in the code may leave a reference in its result (WantRef).
+    wants_refs: bool,
 }
 
 impl Layout {
@@ -245,6 +247,7 @@ fn layout(func: &Function) -> Layout {
     let ncv = func.cv_names.len();
     let consts_at = func.consts_at as usize;
     let temps = consts_at + func.consts.len();
+    let wants_refs = func.code.iter().any(|i| matches!(i, Instr::Rare { op: Rare::WantRef, .. }));
     let mut dirty = vec![false; ncv.min(n)];
     let mut mark = |r: Reg| {
         if let Some(d) = dirty.get_mut(usize::from(r)) {
@@ -253,7 +256,7 @@ fn layout(func: &Function) -> Layout {
     };
     if by_name(func) {
         dirty.iter_mut().for_each(|d| *d = true);
-        return Layout { n, consts_at, temps, dirty };
+        return Layout { n, consts_at, temps, dirty, wants_refs };
     }
     for (i, p) in func.params.iter().enumerate() {
         if p.by_ref || p.variadic {
@@ -285,7 +288,7 @@ fn layout(func: &Function) -> Layout {
             crate::regs::each_reg(instr, &mut mark);
         }
     }
-    Layout { n, consts_at, temps, dirty }
+    Layout { n, consts_at, temps, dirty, wants_refs }
 }
 
 /// The kinds of the followed registers at one point.
@@ -593,16 +596,14 @@ impl Pass<'_> {
                     self.write(s, key, VALUE);
                 }
             }
-            // A call's result is a value: `returned` reads a reference's,
-            // and an undefined one is `step`'s warning and null; a builtin
-            // returns a value.
-            Call { base, argc, dst, .. } => {
+            // A call's result is a value (`returned` reads a reference's,
+            // an undefined one is `step`'s warning and null, a builtin
+            // returns one, a function returning by reference returns its
+            // value), but in a reference context (`$x = &f()`, WantRef):
+            // the reference.
+            Call { base, argc, dst, .. } | MethodCall { dst, base, argc, .. } => {
                 self.spoil(s, base, usize::from(argc));
-                self.write(s, dst, VALUE);
-            }
-            MethodCall { dst, base, argc, .. } => {
-                self.spoil(s, base, usize::from(argc));
-                self.write(s, dst, VALUE);
+                self.write(s, dst, if self.lay.wants_refs { ANY } else { VALUE });
             }
             ConcatN { dst, start, n } => {
                 self.spoil(s, start, usize::from(n));
