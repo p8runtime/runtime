@@ -1237,9 +1237,11 @@ impl Context<'_> {
             self.frameless_diags(&regs[start..start + argc], i);
         }
         for r in &mut regs[start..start + argc] {
-            clear(r);
+            let _ = clear(r);
         }
-        regs[dst] = v;
+        // (A tag test, not the out-of-line drop an assignment calls; the
+        // result register is a temporary, undefined until now.)
+        let _ = put(&mut regs[dst], v);
         if !self.pending_errors.is_empty() || self.ids.has_pending() {
             return self.after_errors(regs, pc + 1, pc);
         }
