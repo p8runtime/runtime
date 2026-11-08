@@ -1,0 +1,40 @@
+-- 0
+a null
+destruct a0
+b int
+arr overwritten
+destruct in-array0
+copy unset
+20
+destruct ref0
+ref written
+destruct ret0
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}{"k":"v","0":1.5,"1":9223372036854775807}
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}
+-- 1
+a null
+destruct a1
+b int
+arr overwritten
+destruct in-array1
+copy unset
+22
+destruct ref1
+ref written
+destruct ret1
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}{"k":"v","0":1.5,"1":9223372036854775807}
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}
+-- 2
+a null
+destruct a2
+b int
+arr overwritten
+destruct in-array2
+copy unset
+24
+destruct ref2
+ref written
+destruct ret2
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}{"k":"v","0":1.5,"1":9223372036854775807}
+{"0":1,"1":2,"x":"long string literal that is not short","2":3}
+end

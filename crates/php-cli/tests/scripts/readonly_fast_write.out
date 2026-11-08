@@ -1,0 +1,54 @@
+-- run 0
+int(0)
+int(10)
+Error: Cannot modify readonly property P::$a
+float(3)
+Error: Cannot modify readonly property Q::$f
+int(11)
+string(3) "s11"
+Error: Cannot modify private(set) property Q::$n from global scope
+Error: Cannot modify protected(set) property Q::$s from global scope
+string(5) "child"
+Error: Cannot modify private(set) property Q::$n from scope R
+int(5)
+array(1) {
+  [0]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(6) "cloned"
+}
+int(12)
+Error: Cannot modify readonly property S::$v
+TypeError: Cannot assign string to property S::$v of type int
+Error: Cannot modify protected(set) readonly property S::$v from global scope
+-- run 1
+int(1)
+int(11)
+Error: Cannot modify readonly property P::$a
+float(3)
+Error: Cannot modify readonly property Q::$f
+int(11)
+string(3) "s11"
+Error: Cannot modify private(set) property Q::$n from global scope
+Error: Cannot modify protected(set) property Q::$s from global scope
+string(5) "child"
+Error: Cannot modify private(set) property Q::$n from scope R
+int(5)
+array(1) {
+  [0]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(6) "cloned"
+}
+int(12)
+Error: Cannot modify readonly property S::$v
+TypeError: Cannot assign string to property S::$v of type int
+Error: Cannot modify protected(set) readonly property S::$v from global scope

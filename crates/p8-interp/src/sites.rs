@@ -253,11 +253,16 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
 /// write is a plain store (`write_cached`'s test): `cached_slot`'s
 /// conditions but the slot's own state (the caller looks at the slot
 /// once, to write it), a defined value that is not a reference, and a
-/// property that is not readonly, has no set visibility, and is untyped
-/// or plainly of its type. Everything else is the full write's.
+/// property untyped or plainly of its type. A property with a set
+/// visibility only from code of its declaring class (`may_set`'s first
+/// test, which every set visibility passes); a readonly one the same, and
+/// only for its first write (`Plain::Unset`: the caller tests the slot is
+/// unset) outside any clone's re-initialization (`reinit` empty):
+/// `write_slot`'s rules where they pass with nothing to report. Everything
+/// else is the full write's.
 #[inline(always)]
-pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: usize, v: &Value) -> Option<usize> {
-    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: (usize, Option<&Class>), v: &Value, reinit: bool) -> Option<(usize, Plain)> {
+    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope.0) || o.lazy.get() != 0 {
         return None;
     }
     if v.is_undef() || v.is_reference() {
@@ -265,10 +270,37 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
     }
     let slot = site.slot as usize;
     let prop = o.class.properties.get(slot)?;
-    if prop.readonly || prop.set_visibility.is_some() || prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
+    let mut plain = Plain::Any;
+    if prop.readonly || prop.set_visibility.is_some() {
+        plain = guarded_write(prop, scope.1, reinit)?;
+    }
+    if prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
         return None;
     }
-    Some(slot)
+    Some((slot, plain))
+}
+
+/// What a plain write to a slot needs of the slot's state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Plain {
+    Any,
+    /// A readonly property's first write: the slot must be unset.
+    Unset,
+}
+
+/// `plain_slot`'s test of a readonly or set-visibility property: written
+/// from its declaring class (and a readonly one with no clone being
+/// re-initialized). Out of line: the common property has neither.
+#[inline(never)]
+fn guarded_write(prop: &p8_runtime::object::Property, scope: Option<&Class>, reinit: bool) -> Option<Plain> {
+    let scope = scope?;
+    if scope.lower != prop.declaring {
+        return None;
+    }
+    if prop.readonly {
+        return (!reinit).then_some(Plain::Unset);
+    }
+    Some(Plain::Any)
 }
 
 impl Context<'_> {

@@ -277,10 +277,16 @@ impl Context<'_> {
                             o
                         };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let Some(slot) = plain_slot(site.get(), o, scope, &w[rx!(val)]) else { slow!() };
+                        let Some((slot, plain)) = plain_slot(site.get(), o, (scope, top.scope.as_deref()), &w[rx!(val)], !self.reinit.is_empty()) else { slow!() };
                         let unused = matches!(code.get(pc + 1), Some(next) if next.op == Op::Free && next.a == dst);
                         let written = match o.slots().get(slot) {
-                            Some(s) if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 || !p8_runtime::object::Slot::peek(s, Value::is_undef) => {
+                            Some(s)
+                                if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
+                                    || {
+                                        let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
+                                        if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
+                                    } =>
+                            {
                                 // The slot's value out, written as a register
                                 // is, back in. (Pending is tested below,
                                 // whatever this released.)
