@@ -98,6 +98,9 @@ pub(crate) struct Dfa {
     starts: [u32; 8],
     resets: u32,
     disabled: bool,
+    /// Where the last unanchored search last had nothing alive: its match
+    /// starts there or later.
+    restart_at: usize,
     // Scratch for the closure.
     visited: Vec<u32>,
     stamp: u32,
@@ -252,6 +255,7 @@ impl Dfa {
             starts: [UNKNOWN; 8],
             resets: 0,
             disabled: false,
+            restart_at: 0,
             visited: vec![0; count],
             stamp: 0,
             stack: Vec::new(),
@@ -413,8 +417,12 @@ impl Dfa {
         let mut found = None;
         let mut pos = start;
         let len = s.len();
+        self.restart_at = start;
         while pos < len {
             let st = &self.states[sid as usize];
+            if st.kernel.is_empty() && st.flags & RESTART != 0 {
+                self.restart_at = pos;
+            }
             if st.kernel.is_empty() && st.flags & RESTART != 0 && !matches!(p.first, crate::compile::First::Any) {
                 // Nothing alive: skip to where a match can start.
                 match crate::exec::next_start(p, s, pos) {
@@ -490,8 +498,9 @@ impl Dfa {
         }
         let Some(end) = self.find_end(p, s, start, start, no_empty, false)? else { return Ok(None) };
         // The leftmost start that matches: the backtracker's. A start
-        // whose match ends at `end` is the one the unanchored search found.
-        let mut at = start;
+        // whose match ends at `end` is the one the unanchored search found;
+        // nothing was alive at `restart_at`, so it is there or later.
+        let mut at = self.restart_at;
         loop {
             if !matches!(p.first, crate::compile::First::Any) {
                 match crate::exec::next_start(p, s, at) {
