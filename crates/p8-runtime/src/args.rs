@@ -45,12 +45,14 @@ pub fn counts(sig: &Sig) -> (usize, usize) {
 
 /// Whether a frameless call can skip [`check_counted`]: as many arguments
 /// as `sig` takes, each plainly of its parameter's type (nothing to
-/// convert, warn about or refuse), and none an object (one may need its
-/// __toString(), or be a Countable: PHP code, which the checked path
-/// runs with the builtin's frame pushed). (ZEND_FRAMELESS_ICALL's
-/// operands are type-tested the same way before the handler runs.)
+/// convert, warn about or refuse), none a reference or undefined, and
+/// none an object unless `objects` (the builtin is known to run no PHP
+/// code on one: an object may have a __toString() or __debugInfo(), or
+/// be a Countable, which the checked path runs with the builtin's frame
+/// pushed and the registers lent). (ZEND_FRAMELESS_ICALL's operands are
+/// type-tested the same way before the handler runs.)
 #[inline(always)]
-pub fn plain_call(sig: &Sig, (required, max): (usize, usize), args: &[Value]) -> bool {
+pub fn plain_call(sig: &Sig, (required, max): (usize, usize), objects: bool, args: &[Value]) -> bool {
     if args.len() < required || args.len() > max {
         return false;
     }
@@ -63,7 +65,12 @@ pub fn plain_call(sig: &Sig, (required, max): (usize, usize), args: &[Value]) ->
                 _ => return false,
             },
         };
-        if arg.is_object() || !plainly(param, arg) {
+        let shut = match arg.kind() {
+            Kind::Ref | Kind::Undef => true,
+            Kind::Object => !objects,
+            _ => false,
+        };
+        if shut || !plainly(param, arg) {
             return false;
         }
     }

@@ -19,6 +19,17 @@ pub fn at(args: &[Value], i: usize) -> &Value {
     args.get(i).unwrap_or(NULL)
 }
 
+/// Argument `i` with a reference looked through (`mixed` parameters):
+/// borrowed, unless it is a reference, whose value is copied out.
+#[inline(always)]
+pub fn value(args: &[Value], i: usize) -> std::borrow::Cow<'_, Value> {
+    let v = at(args, i);
+    match v.as_reference() {
+        Some(cell) => std::borrow::Cow::Owned(cell.borrow().clone()),
+        None => std::borrow::Cow::Borrowed(v),
+    }
+}
+
 /// Argument `i` as an int (`int` parameters).
 #[inline(always)]
 pub fn int(args: &[Value], i: usize) -> i64 {

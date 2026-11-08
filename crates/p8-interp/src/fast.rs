@@ -762,7 +762,7 @@ impl Context<'_> {
                         let call = self.isolate.registry.call(i);
                         let start = base + args as usize;
                         if let (Some(run), Some(sig)) = (call.frameless, call.sig)
-                            && p8_runtime::args::plain_call(sig, call.counts, &regs[start..start + n as usize])
+                            && p8_runtime::args::plain_call(sig, call.counts, call.objects_ok, &regs[start..start + n as usize])
                             && !(self.header_callback_set && !self.out.started)
                         {
                             pc = self.frameless_call(regs, pc, i, run, (start, n as usize, base + dst as usize))?;

@@ -496,6 +496,9 @@ pub struct Call {
     /// The function, when a call may be frameless (see [`frameless`]);
     /// the call site still checks that the arguments need no conversion.
     pub frameless: Option<Imp>,
+    /// A frameless call may have object arguments: the builtin runs no PHP
+    /// code on them ([`Registry::objects_inert`]).
+    pub objects_ok: bool,
     pub sig: Option<&'static p8_stubs::Sig>,
     pub counts: (usize, usize),
     pub deprecated: bool,
@@ -511,13 +514,15 @@ pub struct Call {
 
 /// Whether a call of `call` may be frameless: the builtin has a signature
 /// (the call site checks the arguments against it), is not deprecated
-/// (the notice is the checked path's), takes nothing by reference and
-/// cannot run PHP code. Either ABI: a builtin of the moved one ([`Run`])
-/// gets the registers mutably, as the checked path's common case already
-/// gave them; one of the borrowed ABI ([`Fast`]) reads them in place and
-/// answers in two registers.
-fn frameless(call: &Call, by_ref: &[usize]) -> Option<Imp> {
-    (call.sig.is_some() && !call.deprecated && !call.reenters && by_ref.is_empty()).then_some(call.run)
+/// (the notice is the checked path's) and cannot run PHP code. Either
+/// ABI: a builtin of the moved one ([`Run`]) gets the registers mutably,
+/// as the checked path's common case already gave them; one of the
+/// borrowed ABI ([`Fast`]) reads them in place and answers in two
+/// registers. (A by-reference argument is a reference cell, which a
+/// frameless call never has: `str_replace`'s `$count` left out, the call
+/// may be frameless; passed, it is the checked path's.)
+fn frameless(call: &Call) -> Option<Imp> {
+    (call.sig.is_some() && !call.deprecated && !call.reenters).then_some(call.run)
 }
 
 /// A constant's value as an extension declares it.
@@ -716,6 +721,7 @@ impl Registry {
         let mut call = Call {
             run,
             frameless: None,
+            objects_ok: false,
             sig,
             counts: sig.map_or((0, 0), crate::args::counts),
             deprecated: deprecation.is_some(),
@@ -723,7 +729,7 @@ impl Registry {
             own_callbacks: false,
             prefer_ref: false,
         };
-        call.frameless = frameless(&call, entry.by_ref);
+        call.frameless = frameless(&call);
         self.calls.push(call);
         self.deprecations.push(deprecation);
         let sym = self.symbols.intern(entry.name.as_bytes());
@@ -889,6 +895,17 @@ impl Registry {
         }
     }
 
+    /// Builtins that only look at an object argument (its class, its id,
+    /// whether it is one): no __toString(), __debugInfo() or other PHP
+    /// code can run, so a frameless call may pass them objects.
+    pub fn objects_inert(&mut self, names: &[&str]) {
+        for n in names {
+            if let Some(i) = self.lookup(n.as_bytes()) {
+                self.calls[i].objects_ok = true;
+            }
+        }
+    }
+
     /// Builtins that check their callables themselves (PHP's parse their
     /// arguments by hand, after a deprecation or a choice of signature):
     /// the engine leaves their `callable` arguments to them.
@@ -906,6 +923,7 @@ impl Registry {
         for n in names {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].prefer_ref = true;
+                self.calls[i].frameless = None;
             }
         }
     }
