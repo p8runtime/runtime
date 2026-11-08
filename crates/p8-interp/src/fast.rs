@@ -757,6 +757,39 @@ impl Context<'_> {
                         let v = v.clone();
                         done!(put(&mut w[rx!(a)], v));
                     }
+                    // foreach over an array (a defined, non-reference
+                    // register): the iterator is the array and position 0;
+                    // an empty one jumps past the loop. (An object, a
+                    // reference, anything that warns: `step`.)
+                    Op::IterInit => {
+                        ops!(a, b, c, imm);
+                        let Some(arr) = w[rx!(a)].as_array() else { slow!() };
+                        if arr.is_empty() {
+                            pc = imm as usize;
+                        } else {
+                            let v = w[rx!(a)].clone();
+                            let released = put(&mut w[rx!(b)], v) | put(&mut w[rk!(rx!(b) + 1)], Value::int(0));
+                            done!(released);
+                        }
+                    }
+                    // An argument a user function or builtin the call site
+                    // resolved to takes by value: a copy (by reference, an
+                    // unresolved site, an undefined variable: `step`).
+                    Op::SendVar => {
+                        ops!(a, b, c, imm);
+                        let n = (imm >> 16) as usize;
+                        let by_value = match clo.sites[(imm & 0xffff) as usize].get() {
+                            Some(&Callee::User(f)) => !self.codes[f as usize].param_by_ref(n),
+                            Some(&Callee::Builtin(i)) => !self.isolate.registry.by_ref(i, n),
+                            Some(Callee::Constant(_)) => true,
+                            None => false,
+                        };
+                        if !by_value {
+                            slow!();
+                        }
+                        let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
                     // `C::NAME` the site's cache holds (filled by `step`).
                     Op::ClassConst => {
                         ops!(a, b, c, imm);

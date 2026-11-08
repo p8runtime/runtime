@@ -1,0 +1,43 @@
+-- 0
+0=1 1=2 2=3 4
+5 6 
+x=>1
+in a0
+destruct a0
+in b0
+destruct b0
+after
+
+Warning: foreach() argument must be of type array|object, null given in %s on line 28
+4 2
+["p","q","ref"]
+onetwo
+1,2,3 3 3
+1
+
+Warning: Undefined variable $undef in %s on line 40
+1
+ABCabcabc
+-- 1
+0=1 1=2 2=3 4
+5 6 
+x=>1
+in a1
+destruct a1
+in b1
+destruct b1
+after
+
+Warning: foreach() argument must be of type array|object, null given in %s on line 28
+4 2
+["p","q","ref"]
+onetwo
+1,2,3 3 3
+1
+
+Warning: Undefined variable $undef in %s on line 40
+1
+ABCabcabc
+
+Warning: foreach() argument must be of type array|object, int given in %s on line 44
+end
