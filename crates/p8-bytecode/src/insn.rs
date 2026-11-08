@@ -241,7 +241,13 @@ pub fn lower(func: &Function) -> Vec<Insn> {
     let consts = (func.consts_at as usize, func.consts.len());
     let ret = if func.is_generator { None } else { func.ret_type.as_ref() };
     let mut out = Vec::with_capacity(code.len());
-    infer::walk(func, |pc, kinds| out.push(lower_at(code, pc, consts, kinds, ret).unwrap_or(SLOW)));
+    // A file's main code runs once per include, and none of its variables
+    // are followed (`infer::by_name`): the pass would not pay for itself.
+    if func.name.as_bytes() == b"{main}" {
+        out.extend((0..code.len()).map(|pc| lower_at(code, pc, consts, &|_| infer::ANY, ret).unwrap_or(SLOW)));
+    } else {
+        infer::walk(func, |pc, kinds| out.push(lower_at(code, pc, consts, kinds, ret).unwrap_or(SLOW)));
+    }
     out
 }
 
