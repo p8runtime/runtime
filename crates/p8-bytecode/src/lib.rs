@@ -15,7 +15,9 @@ use p8_runtime::ops::BinOp;
 pub use p8_runtime::symbol::Sym;
 use std::sync::Arc;
 
+pub mod infer;
 pub mod insn;
+pub mod regs;
 pub mod serial;
 
 pub use insn::{Insn, Op};

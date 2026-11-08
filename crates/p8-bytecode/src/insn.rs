@@ -14,6 +14,7 @@
 //! which `step` runs. So the stream stays dense whatever the cold
 //! instructions need.
 
+use crate::infer::{self, ANY, Kinds};
 use crate::{Cmp, Function, Instr, Rare, Reg, THIS};
 use p8_runtime::ops::BinOp;
 
@@ -225,7 +226,9 @@ fn r(reg: Reg) -> Option<u8> {
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
     let consts = (func.consts_at as usize, func.consts.len());
-    (0..code.len()).map(|pc| lower_at(code, pc, consts).unwrap_or(SLOW)).collect()
+    let mut out = Vec::with_capacity(code.len());
+    infer::walk(func, |pc, kinds| out.push(lower_at(code, pc, consts, kinds).unwrap_or(SLOW)));
+    out
 }
 
 /// The property cache entry of a name register: its constant's index.
@@ -234,7 +237,7 @@ fn prop_site(name: Reg, (consts_at, nconsts): (usize, usize)) -> Option<u32> {
     (i < nconsts).then_some(i as u32)
 }
 
-fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize)) -> Option<Insn> {
+fn lower_at(code: &[Instr], pc: usize, consts: (usize, usize), kinds: &dyn Fn(Reg) -> Kinds) -> Option<Insn> {
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     // A block of registers (arguments, a concatenation's parts) is in the
     // window whole: the loop indexes it from its first.
@@ -369,7 +372,7 @@ mod tests {
             Instr::Move { dst: 11, src: 5 },
             Instr::Call { site: 6, base: 10, argc: 2, dst: 12 },
         ];
-        let at = |pc| lower_at(&code, pc, (0, 0)).unwrap();
+        let at = |pc| lower_at(&code, pc, (0, 0), &|_| ANY).unwrap();
         assert_eq!(at(0), Insn { op: Op::CallRegs, a: 2, b: 2, c: 12, imm: 4 | 10 << 16 });
         assert_eq!(at(1).op, Op::Move);
         assert_eq!(at(3), Insn { op: Op::CallRegs, a: 7, b: 1, c: 7, imm: 5 | 10 << 16 });
@@ -381,7 +384,7 @@ mod tests {
     #[test]
     fn wide_registers_are_slow() {
         let code = [Instr::Add { dst: 300, a: 1, b: 2 }, Instr::Add { dst: 3, a: 1, b: 2 }];
-        assert!(lower_at(&code, 0, (0, 0)).is_none());
-        assert_eq!(lower_at(&code, 1, (0, 0)).unwrap().op, Op::Add);
+        assert!(lower_at(&code, 0, (0, 0), &|_| ANY).is_none());
+        assert_eq!(lower_at(&code, 1, (0, 0), &|_| ANY).unwrap().op, Op::Add);
     }
 }
