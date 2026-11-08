@@ -81,6 +81,19 @@ pub(crate) struct ClassSet {
 impl ClassSet {
     fn new(set: Set, ucp_case: bool) -> ClassSet {
         let mut low = [0u64; 4];
+        if !set.nocase && set.items.iter().all(|i| matches!(i, Item::Range(..))) {
+            // Plain ranges: filled directly, not tested character by character.
+            for item in &set.items {
+                let Item::Range(lo, hi) = *item else { unreachable!() };
+                for c in lo..=hi.min(255) {
+                    low[c as usize / 64] |= 1 << (c % 64);
+                }
+            }
+            if set.negated {
+                low.iter_mut().for_each(|w| *w = !*w);
+            }
+            return ClassSet { set, low };
+        }
         let mut cs = ClassSet { set, low };
         for c in 0..256u32 {
             if cs.test_items(c, ucp_case) != cs.set.negated {
