@@ -68,15 +68,14 @@ impl Context<'_> {
             out.insert(Key::from_string(name(u32::from(*r))), v);
         }
         let statics = self.statics.get(&(Arc::as_ptr(code) as usize)).map(|s| &s.cells);
-        let consts = code.consts_at as usize..code.consts_at as usize + code.consts.len();
         for (at, ins) in code.code.iter().enumerate() {
             if let p8_bytecode::Instr::StaticVar { var, index, .. } = ins {
                 let v = match statics.and_then(|s| s.get(index)) {
                     Some(cell) => cell.borrow().deref(),
                     // Not run yet: a constant initializer's value, as PHP shows it.
                     None => match (code.code.get(at + 1), code.code.get(at + 2)) {
-                        (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && consts.contains(&(*src as usize)) => {
-                            code.consts[*src as usize - consts.start].to_value()
+                        (Some(p8_bytecode::Instr::Assign { var: v, src }), _) if v == var && let Some(k) = p8_bytecode::const_index(*src) => {
+                            code.consts[k].to_value()
                         }
                         // (Assigned from its temporary: taken.)
                         (Some(p8_bytecode::Instr::NewArray { dst, .. }), Some(p8_bytecode::Instr::Assign { var: v, src } | p8_bytecode::Instr::AssignTake { var: v, src }))

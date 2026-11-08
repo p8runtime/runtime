@@ -93,9 +93,6 @@ impl Context<'_> {
                 window[i] = v;
             }
         }
-        for (i, c) in func.consts[..code.value_consts as usize].iter().enumerate() {
-            window[code.consts_at as usize + i] = c.clone();
-        }
         if argc < nparams && !func.defaults.is_empty() {
             crate::fast::fill_defaults(&func.defaults, &mut window[..nparams], argc);
         }
