@@ -350,7 +350,7 @@ impl Context<'_> {
     /// private or protected property's cache entry is valid for.
     #[inline]
     pub(crate) fn scope_addr(&self) -> usize {
-        self.frames.last().and_then(|f| f.scope.as_ref()).map_or(0, |c| Rc::as_ptr(c) as usize)
+        self.frames.last().and_then(|f| f.scope()).map_or(0, |c| Rc::as_ptr(c) as usize)
     }
 
     /// The frame a cached method call makes: the same class from the same
@@ -430,7 +430,7 @@ impl Context<'_> {
         let frame = self.frames.last();
         if s.is_static {
             let forward = matches!(func.classes[class as usize], p8_bytecode::ClassRef::Forward(..) | p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope);
-            let called = match frame.and_then(|f| f.called.as_ref()) {
+            let called = match frame.and_then(|f| f.called()) {
                 Some(c) if forward && (extends(c, target) || c.is_a(&target.lower)) => Rc::clone(c),
                 _ => Rc::clone(target),
             };

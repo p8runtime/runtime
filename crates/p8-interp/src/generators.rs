@@ -9,7 +9,7 @@
 //! ZEND_FE_RESET_R / ZEND_FE_FETCH_R on objects)
 
 use crate::classes::{Code, MethodFrame};
-use crate::{Closure, Context, NO_RET, Next};
+use crate::{Closure, Context, NO_RET, Next, flag};
 use p8_bytecode::Reg;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
@@ -172,10 +172,8 @@ impl Context<'_> {
         {
             let frame = self.frames.last_mut().expect("the generator's frame");
             frame.pc = pc;
-            frame.this = this;
-            frame.scope = scope;
-            frame.called = called;
-            frame.owner = Some(Rc::clone(object));
+            frame.set_classes(this, scope, called);
+            frame.set_owner(Some(Rc::clone(object)));
         }
         self.frames.floor = index;
         let mut r = Ok(());
@@ -195,6 +193,7 @@ impl Context<'_> {
         if let (Some(caller), Some(pc)) = (self.frames.last_mut(), caller_pc) {
             caller.pc = pc;
         }
+        self.frames.slots[index].flags &= !flag::OWNER;
         self.frames.slots[index].owner = None;
         let mut s = state.0.borrow_mut();
         s.running = false;
@@ -212,12 +211,13 @@ impl Context<'_> {
     /// registers; it gives `value` (under `key`, or the next int key).
     pub(crate) fn suspend(&mut self, regs: &mut [Value], value: Value, key: Option<Value>, resume_pc: usize, dst: Option<Reg>) -> Next {
         let frame = self.frames.pop();
+        frame.flags &= !flag::OWNER;
         let generator = frame.owner.take().expect("a generator's frame");
         let base = frame.base as usize;
         let nregs = frame.func.code.nregs as usize;
+        // (The scope and called class stay in the slot, kept: `Frame::scope`.)
+        frame.flags &= !(flag::THIS | flag::SCOPE);
         frame.this = None;
-        frame.scope = None;
-        frame.called = None;
         let state = gen_of(&generator).expect("a Generator");
         let mut s = state.0.borrow_mut();
         s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)).collect();

@@ -192,7 +192,7 @@ impl Context<'_> {
         let is_static_callee = data.func.user().is_some() && is_closure && data.is_static;
         let object = if is_static_callee { None } else { this.clone() };
         let called = called.or_else(|| object.as_ref().map(|o| Rc::clone(&o.class)));
-        let scope = if applied.trampoline { self.frames.last().and_then(|f| f.scope.clone()) } else { scope };
+        let scope = if applied.trampoline { self.frames.last().and_then(|f| f.scope().cloned()) } else { scope };
         let scope = match scope {
             None if object.is_some() => Some(Rc::clone(&self.classes[&self.isolate.known.closure])),
             s => s,

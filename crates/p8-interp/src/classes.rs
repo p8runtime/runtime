@@ -130,7 +130,7 @@ impl Context<'_> {
     /// self), and the called class (for static::).
     pub(crate) fn scope(&self) -> (Option<Rc<Class>>, Option<Rc<Class>>) {
         match self.frames.last() {
-            Some(f) => (f.scope.clone(), f.called.clone()),
+            Some(f) => f.classes(),
             None => (None, None),
         }
     }
@@ -726,7 +726,7 @@ impl Context<'_> {
         if ctor.visibility == Visibility::Public && !frame {
             return Ok((object, None));
         }
-        if !visible(ctor.visibility, &ctor.declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
+        if !visible(ctor.visibility, &ctor.declaring, self.frames.last().and_then(|f| f.scope()).map(Rc::as_ref)) {
             let t = self.throw("Error", format!("Call to {} {}::__construct() from {}", ctor.visibility.word(), text(&class.name), self.scope_name()));
             // Made while the object still is (PHP numbers the Error after it).
             let e = self.exception(regs, t);
@@ -915,7 +915,7 @@ impl Context<'_> {
         };
         let declaring = self.declaring(&target, &method.declaring);
         let access = self.access_class(&declaring, method, key);
-        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
+        let scope = self.frames.last().and_then(|f| f.scope()).map(Rc::as_ref);
         if !visible(method.visibility, &access, scope) {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(m);
@@ -934,7 +934,7 @@ impl Context<'_> {
         self.method_deprecated(method);
         let fframe = self.code_of(method);
         if method.is_static {
-            let called = match self.frames.last().and_then(|f| f.called.as_ref()) {
+            let called = match self.frames.last().and_then(|f| f.called()) {
                 Some(c) if forward && c.is_a(&target.lower) => Rc::clone(c),
                 _ => Rc::clone(&target),
             };
@@ -1422,7 +1422,7 @@ impl Context<'_> {
                     } else {
                         self.class_named(c.declaring_name.as_bytes()).cloned().unwrap_or_else(|| Rc::clone(&class))
                     };
-                    if !visible(c.visibility, &declaring, self.frames.last().and_then(|f| f.scope.as_deref())) {
+                    if !visible(c.visibility, &declaring, self.frames.last().and_then(|f| f.scope()).map(Rc::as_ref)) {
                         return Err(self.throw(
                             "Error",
                             format!("Cannot access {} constant {}::{}", c.visibility.word(), text(&class.name), text(&name)),
@@ -1681,7 +1681,7 @@ impl Context<'_> {
         let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
             && matches!(v.deref().kind(), Kind::Str | Kind::Array | Kind::Object)
             && self.why_not_callable(v, true)?.is_none();
-        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called.as_deref()));
+        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope().map(Rc::as_ref), f.called().map(Rc::as_ref)));
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
             b"parent" => scope.and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
@@ -1704,7 +1704,7 @@ impl Context<'_> {
     pub(crate) fn function_display(&self) -> String {
         let Some(frame) = self.frames.last() else { return String::new() };
         let code = &frame.func.code;
-        match (&code.class, &frame.scope) {
+        match (&code.class, frame.scope()) {
             (Some(_), Some(scope)) if !code.name.as_bytes().starts_with(b"{closure") => format!("{}::{}", text(&scope.name), text_of(&code.name)),
             _ => text_of(&code.name),
         }
@@ -1800,9 +1800,9 @@ impl Context<'_> {
     /// classes, `static` as the called class.
     pub(crate) fn type_shown(&self, ty: &p8_runtime::types::TypeDecl) -> String {
         let frame = self.frames.last();
-        let scope = frame.and_then(|f| f.scope.as_ref());
+        let scope = frame.and_then(|f| f.scope());
         let relative = ty.classes.iter().any(|c| c.as_bytes().eq_ignore_ascii_case(b"self") || c.as_bytes().eq_ignore_ascii_case(b"parent"));
-        let called = frame.and_then(|f| f.called.as_ref().or(f.this.as_ref().map(|t| &t.class))).or(scope);
+        let called = frame.and_then(|f| f.called().or(f.this.as_ref().map(|t| &t.class))).or(scope);
         let is_static = ty.mask & p8_runtime::types::T_STATIC != 0 && called.is_some();
         if scope.is_none() || !(relative || is_static) {
             return ty.shown_resolved();

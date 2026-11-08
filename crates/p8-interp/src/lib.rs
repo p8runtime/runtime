@@ -687,7 +687,7 @@ impl Context<'_> {
         let here = 0u8;
         self.stack_base = std::ptr::addr_of!(here) as usize;
         self.frames.push(&Closure::new(Arc::clone(&main), self.isolate), 0, 0, NO_RET);
-        self.frames.last_mut().expect("the main frame").global = true;
+        self.frames.last_mut().expect("the main frame").flags |= flag::GLOBAL;
         enter(&mut self.frames, &mut regs);
         for (name, value) in self.request_globals() {
             match main.cv_names.iter().position(|n| n.as_bytes() == name.as_bytes()) {
@@ -890,7 +890,7 @@ impl Context<'_> {
             // A constant expression's code: where it was needed; a class's
             // (its constants, defaults, attributes), where it is written
             // (zend_ast_evaluate_ex's filename and lineno override).
-            Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() && !(f.func.code.own_location && f.scope.is_some()) => {
+            Some(f) if f.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() && !(f.func.code.own_location && f.scope().is_some()) => {
                 let n = self.frames.len();
                 match self.frames.slots[..n].iter().rev().find(|f| f.func.code.name.as_bytes() != p8_bytecode::CONST_EXPR.as_bytes()) {
                     Some(f) => (Rc::from(&*f.func.code.file), f.func.code.lines.get((f.pc as usize).saturating_sub(1)).copied().unwrap_or(0)),
@@ -1934,7 +1934,7 @@ impl Context<'_> {
                     // In a file included at global scope the variable is the
                     // global itself: unset removes it there too.
                     if !in_main
-                        && self.frames.last().is_some_and(|f| f.global)
+                        && self.frames.last().is_some_and(|f| f.is_global())
                         && let Some(name) = func.cv_names.get(var as usize)
                     {
                         let name = name.as_bytes().to_vec();
@@ -2341,14 +2341,14 @@ impl Context<'_> {
                     }
                     Rare::VarRef => {
                         let name = self.var_name(w, clo, b);
-                        let global = c == 1 || self.frames.last().is_some_and(|f| f.global);
+                        let global = c == 1 || self.frames.last().is_some_and(|f| f.is_global());
                         let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::reference(cell);
                     }
                     Rare::VarGet => {
                         let name = self.var_name(w, clo, b);
                         let global = c & 2 != 0;
-                        let scope = global || self.frames.last().is_some_and(|f| f.global);
+                        let scope = global || self.frames.last().is_some_and(|f| f.is_global());
                         let v = if scope && !in_main { self.with_main(below, |cx, main| cx.global_value(main, &name)) } else { self.var_value(w, in_main, &name) };
                         match v {
                             Some(v) => reg!(a) = v,
@@ -2363,7 +2363,7 @@ impl Context<'_> {
                     }
                     Rare::VarUnset => {
                         let name = self.var_name(w, clo, a);
-                        let at_global = self.frames.last().is_some_and(|f| f.global);
+                        let at_global = self.frames.last().is_some_and(|f| f.is_global());
                         if at_global && !in_main {
                             // A file included at global scope: the global is
                             // emptied, and this file's binding to it goes.
@@ -2444,7 +2444,7 @@ impl Context<'_> {
                     }
                     Rare::VarBind => {
                         let name = self.var_name(w, clo, a);
-                        let at_global = in_main || self.frames.last().is_some_and(|f| f.global);
+                        let at_global = in_main || self.frames.last().is_some_and(|f| f.is_global());
                         if c == 1 {
                             // `global $$name` at global scope changes nothing.
                             if !at_global {
@@ -2948,9 +2948,7 @@ impl Context<'_> {
                             }
                             self.frames.push(f, base + args as usize, argc as usize, NO_RET);
                             let frame = self.frames.last_mut().expect("the frame just pushed");
-                            frame.this = Some(object);
-                            frame.scope = Some(Rc::clone(declaring));
-                            frame.called = Some(Rc::clone(&info.class));
+                            frame.set_classes(Some(object), Some(Rc::clone(declaring)), Some(Rc::clone(&info.class)));
                             enter(&mut self.frames, regs);
                             return Ok(Next::Switch);
                         }
@@ -3640,10 +3638,8 @@ impl Context<'_> {
         }
         self.frames.push(&func, args, argc as usize, ret);
         let frame = self.frames.last_mut().expect("the frame just pushed");
-        frame.this = m.this;
-        frame.scope = m.scope;
-        frame.called = m.called;
-        frame.owner = m.closure;
+        frame.set_classes(m.this, m.scope, m.called);
+        frame.set_owner(m.closure);
         enter(&mut self.frames, regs);
         // A closure's `use` values go into their variables, from the
         // Closure called (only a closure's code has `bound` registers).
@@ -3680,7 +3676,7 @@ impl Context<'_> {
                 let base = frame.base as usize;
                 return make_ref(&mut regs[base..], r as Reg);
             }
-            if frame.global {
+            if frame.is_global() {
                 return self.global_cell(regs, name);
             }
             let shared = frame.extra.as_ref().is_some_and(|e| e.shared.is_some());
@@ -3695,7 +3691,7 @@ impl Context<'_> {
     fn run_in_scope(&mut self, regs: &mut Vec<Value>, base: usize, func: &Function, main: &Arc<Function>, dst: Reg, pc: usize) -> Next {
         // The file runs in the including code's scope: the globals when
         // that is global scope (however deep in includes), else its locals.
-        let global = self.frames.last().is_some_and(|f| f.global);
+        let global = self.frames.last().is_some_and(|f| f.is_global());
         let mut cells: Vec<Rc<RefCell<Value>>> = Vec::with_capacity(main.cv_names.len());
         let mut origins: Vec<Origin> = Vec::new();
         for name in &main.cv_names {
@@ -3714,9 +3710,9 @@ impl Context<'_> {
                 }
             });
         }
-        let (this, scope, called) = match self.frames.last() {
-            Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
-            None => (None, None, None),
+        let (this, (scope, called)) = match self.frames.last() {
+            Some(f) => (f.this.clone(), f.classes()),
+            None => (None, (None, None)),
         };
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = pc as u32;
@@ -3731,9 +3727,11 @@ impl Context<'_> {
             regs[at + i] = Value::reference(cell);
         }
         let frame = self.frames.last_mut().expect("the file's frame");
-        (frame.this, frame.scope, frame.called, frame.global) = (this, scope, called, global);
-        if !global {
-            frame.extra.get_or_insert_with(Default::default).shared = Some(origins.into_boxed_slice());
+        frame.set_classes(this, scope, called);
+        if global {
+            frame.flags |= flag::GLOBAL;
+        } else {
+            frame.extra_mut().shared = Some(origins.into_boxed_slice());
         }
         Next::Switch
     }
@@ -4220,6 +4218,8 @@ impl Context<'_> {
                 if let Some(e) = &mut frame.extra {
                     e.vars.remove(name);
                 }
+                // (A frame whose variables were all removed keeps its
+                // Extra and its flag: the box is recycled when it ends.)
             }
         }
     }
@@ -5349,7 +5349,7 @@ impl Ctx for Context<'_> {
         let regs = &self.isolate.regs;
         match frame.func.code.cv_names.iter().position(|n| n.as_bytes() == name) {
             Some(r) => Some(regs.get(frame.base as usize + r)?.deref()).filter(|v| !v.is_undef()),
-            None if frame.global => self.global_value(regs, name),
+            None if frame.is_global() => self.global_value(regs, name),
             None => frame.vars()?.get(name).map(|c| c.borrow().clone()),
         }
     }
@@ -5364,7 +5364,7 @@ impl Ctx for Context<'_> {
                 }
                 true
             }
-            None if frame.global => {
+            None if frame.is_global() => {
                 // (The main frame's window starts at register 0.)
                 let mut regs = std::mem::take(&mut self.isolate.regs);
                 self.global_cell(&mut regs, name).replace(value);
@@ -5383,7 +5383,7 @@ impl Ctx for Context<'_> {
         let Some(frame) = self.frames.last() else { return Vec::new() };
         // At global scope (a file included there too): the main frame's
         // variables and the other globals.
-        let frame = if frame.global { self.frames.first().expect("the main frame") } else { frame };
+        let frame = if frame.is_global() { self.frames.first().expect("the main frame") } else { frame };
         let regs = &self.isolate.regs;
         let base = frame.base as usize;
         let mut out: Vec<(PhpStr, Value)> = frame
@@ -5797,7 +5797,7 @@ fn make_ref(w: &mut [Value], r: Reg) -> Rc<RefCell<Value>> {
 /// variadic parameter's `CollectVariadic`).
 #[cold]
 #[allow(clippy::vec_box)] // see `Frames::spare`
-fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, nparams: usize, argc: usize) -> Option<Box<Extra>> {
+fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, nparams: usize, argc: usize) -> Box<Extra> {
     // A spare one (emptied) if there is one: no allocation.
     let mut extra = spare.pop().unwrap_or_default();
     // A new one's list from the kept buffers.
@@ -5805,7 +5805,7 @@ fn take_extra(spare: &mut Vec<Box<Extra>>, regs: &mut [Value], base: usize, npar
         extra.args = p8_runtime::array::values_buffer(argc - nparams);
     }
     extra.args.extend(regs[base + nparams..base + argc].iter_mut().map(std::mem::take));
-    Some(extra)
+    extra
 }
 
 /// `$a[k] op= v` for an int or string `k`, `$a` an array holding a number
