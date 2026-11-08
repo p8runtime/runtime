@@ -60,14 +60,6 @@ pub(crate) mod flag {
 
 pub(crate) const NO_RET: u32 = u32::MAX;
 
-/// A handle a call's frame needs: the one its slot kept from the last
-/// call at this depth (the same function, the same class: no reference
-/// count touched), or a new one.
-pub(crate) enum Keep<T> {
-    Slot,
-    New(T),
-}
-
 /// A frame's arguments past its parameters and its run-time variables.
 #[derive(Default)]
 pub(crate) struct Extra {
@@ -202,6 +194,7 @@ impl Frame {
 
     /// The frame as a method's (or a class-bound closure's): its `$this`,
     /// its scope and its called class; None for each a function has not.
+    #[inline(always)]
     pub(crate) fn set_classes(&mut self, this: Option<Rc<Object>>, scope: Option<Rc<Class>>, called: Option<Rc<Class>>) {
         if scope.is_some() || called.is_some() {
             self.flags |= flag::SCOPE;
@@ -219,6 +212,7 @@ impl Frame {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn set_owner(&mut self, owner: Option<Rc<Object>>) {
         if owner.is_some() {
             self.flags |= flag::OWNER;
@@ -235,13 +229,13 @@ impl Frame {
     }
 
     /// The frame (just pushed) as an instance method's: `$this`, the
-    /// declaring class as its scope (the slot's own when `keeps_scope`
+    /// declaring class as its scope (None: the slot's own, `keeps_scope`
     /// said so), `$this`'s class as the called class (the slot's own
     /// when it is the same, the usual case: the same call from the same
     /// depth touches no class reference count).
     #[inline(always)]
-    pub(crate) fn adopt(&mut self, this: Rc<Object>, declaring: Keep<Rc<Class>>) {
-        if let Keep::New(d) = declaring {
+    pub(crate) fn adopt(&mut self, this: Rc<Object>, declaring: Option<Rc<Class>>) {
+        if let Some(d) = declaring {
             self.scope = Some(d);
         }
         if self.called.as_ref().is_none_or(|c| !Rc::ptr_eq(c, &this.class)) {

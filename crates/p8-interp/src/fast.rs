@@ -1088,16 +1088,17 @@ impl Context<'_> {
                             match site.as_ref() {
                                 Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
                                     MethodCode::User(code) => {
-                                        let slot = self.frames.next_slot();
-                                        let func = match slot.filter(|f| Rc::as_ptr(&f.func) == code.as_ptr()) {
-                                            Some(_) => Some(Keep::Slot),
-                                            None => code.upgrade().map(Keep::New),
+                                        let (func_kept, scope_kept) = match self.frames.next_slot() {
+                                            Some(f) => (Rc::as_ptr(&f.func) == code.as_ptr(), f.keeps_scope(&s.declaring)),
+                                            None => (false, false),
                                         };
-                                        let declaring = match slot.filter(|f| f.keeps_scope(&s.declaring)) {
-                                            Some(_) => Some(Keep::Slot),
-                                            None => s.declaring.upgrade().map(Keep::New),
-                                        };
-                                        func.zip(declaring)
+                                        // (None in the inner Option: the slot's own.)
+                                        let func = if func_kept { Some(None) } else { code.upgrade().map(Some) };
+                                        let declaring = if scope_kept { Some(None) } else { s.declaring.upgrade().map(Some) };
+                                        match (func, declaring) {
+                                            (Some(f), Some(d)) => Some((f, d)),
+                                            _ => None,
+                                        }
                                     }
                                     MethodCode::Native(..) => None,
                                 },
@@ -1106,8 +1107,8 @@ impl Context<'_> {
                         };
                         let Some((func, declaring)) = found else { slow!() };
                         let target = match &func {
-                            Keep::Slot => &self.frames.next_slot().expect("the kept slot").func.code,
-                            Keep::New(f) => &f.code,
+                            None => &self.frames.next_slot().expect("the kept slot").func.code,
+                            Some(f) => &f.code,
                         };
                         if n < target.required || target.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
@@ -1123,8 +1124,8 @@ impl Context<'_> {
                         }
                         let (at, ret) = (base + args as usize, (base + dst as usize) as u32);
                         let frame = match func {
-                            Keep::Slot => self.frames.push_kept(at, n, ret),
-                            Keep::New(f) => {
+                            None => self.frames.push_kept(at, n, ret),
+                            Some(f) => {
                                 self.frames.push(&f, at, n, ret);
                                 self.frames.last_mut().expect("the frame just pushed")
                             }
