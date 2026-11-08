@@ -72,6 +72,58 @@ thread_local! {
     static SLOTS: Cell<Vec<Option<usize>>> = const { Cell::new(Vec::new()) };
 }
 
+/// Whether `c` is a word character (`\w`, `\b`); None is the subject's edge.
+pub(crate) fn is_word(p: &Prog, c: Option<u32>) -> bool {
+    match c {
+        None => false,
+        Some(c) if p.ucp => unicode::has_property(c, unicode::PT_WORD, 0),
+        Some(c) => c < 128 && ((c as u8).is_ascii_alphanumeric() || c == b'_' as u32),
+    }
+}
+
+pub(crate) fn caseless_eq(p: &Prog, a: u32, b: u32) -> bool {
+    if p.utf || p.ucp {
+        unicode::caseless_eq(a, b)
+    } else {
+        a == b || (a < 128 && b < 128 && (a as u8).eq_ignore_ascii_case(&(b as u8)))
+    }
+}
+
+/// Whether the character `c` is a newline under the program's convention,
+/// seen on its own (CRLF, where that takes two characters, is excluded).
+pub(crate) fn newline_char(p: &Prog, c: u32) -> bool {
+    match p.newline {
+        Newline::Lf => c == b'\n' as u32,
+        Newline::Cr => c == b'\r' as u32,
+        Newline::Nul => c == 0,
+        Newline::CrLf => false,
+        Newline::AnyCrLf => c == b'\r' as u32 || c == b'\n' as u32,
+        Newline::Any => matches!(c, 0x0a..=0x0d | 0x85 | 0x2028 | 0x2029),
+    }
+}
+
+/// Whether the character `c` matches a one-character atom (`Byte` matches
+/// any character; `AnyNoNl` judges a newline by `c` alone, see
+/// [`newline_char`]).
+pub(crate) fn atom_matches(p: &Prog, atom: Atom, c: u32) -> bool {
+    match atom {
+        Atom::Char(x) => c == x,
+        Atom::CharNc(x) => caseless_eq(p, c, x),
+        Atom::CharNcR(x) => (c < 128) == (x < 128) && caseless_eq(p, c, x),
+        Atom::Any | Atom::Byte => true,
+        Atom::AnyNoNl => !newline_char(p, c),
+        Atom::Set(i) => p.sets[i as usize].matches(c, p.utf),
+    }
+}
+
+/// Whether the DFA may run this search: it has no backtracking limits, so
+/// a search with lowered limits (whose errors are part of the result) and
+/// NOTEMPTY stay on the machine. PHP's JIT path gives the machine the JIT
+/// stack's depth.
+fn dfa_allowed(opts: &MatchOptions) -> bool {
+    opts.match_limit >= 1_000_000 && opts.depth_limit >= 16_384 && !opts.not_empty
+}
+
 pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Result<Option<Captures>, MatchError> {
     let mut caps = Captures { slots: SLOTS.take(), mark: None };
     let found = exec_into(p, s, start, opts, &mut caps);
@@ -82,9 +134,48 @@ pub(crate) fn exec(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions) -> Res
 
 /// [`exec`] into `caps` (its room reused): whether there is a match.
 pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures) -> Result<bool, MatchError> {
+    // With captures to recover the DFA path is three passes (forward, at
+    // the candidate starts, then the machine at the start found), which a
+    // short subject does not repay.
+    let worth = p.slots == 2 || s.len() - start >= 32;
+    exec_into_dfa(p, s, start, opts, caps, worth && dfa_allowed(opts))
+}
+
+/// [`exec_into`], with the DFA used (when the program has one) or not.
+pub(crate) fn exec_into_dfa(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures, use_dfa: bool) -> Result<bool, MatchError> {
     let mut slots = std::mem::take(&mut caps.slots);
     slots.clear();
     slots.resize(p.slots, None);
+    caps.mark = None;
+    if let Some(required) = &p.required
+        && required.find(&s[start..]).is_none()
+    {
+        caps.slots = slots;
+        return Ok(false);
+    }
+    let mut anchored = p.anchored || opts.anchored;
+    let mut from = start;
+    // The DFA (dfa.rs) finds the match's bounds in one pass; the machine
+    // then runs once, at that start, only for the captures.
+    if let Some(dfa) = p.dfa.as_ref().filter(|_| use_dfa) {
+        match dfa.borrow_mut().find(p, s, start, opts.not_empty_atstart || p.not_empty_atstart, anchored) {
+            Ok(None) => {
+                caps.slots = slots;
+                return Ok(false);
+            }
+            Ok(Some((ms, me))) if p.slots == 2 => {
+                slots[0] = Some(ms);
+                slots[1] = Some(me);
+                caps.slots = slots;
+                return Ok(true);
+            }
+            Ok(Some((ms, _))) => {
+                from = ms;
+                anchored = true;
+            }
+            Err(crate::dfa::Overflow) => {}
+        }
+    }
     let mut vm = Vm {
         p,
         s,
@@ -105,10 +196,9 @@ pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, c
         targets: Vec::new(),
         nest: 0,
     };
-    let found = search(&mut vm, start, opts);
+    let found = search(&mut vm, from, anchored);
     let Vm { slots, mut stack, mark, .. } = vm;
     caps.slots = slots;
-    caps.mark = None;
     stack.clear();
     // (Not a big one: a cached pattern would hold it for the request.)
     if stack.capacity() <= 1024 {
@@ -125,7 +215,7 @@ pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, c
 /// Where a match can start at or after `at`: the next byte a match can
 /// start with (memchr for one to three of them), or `at` when any can.
 #[inline]
-fn next_start(p: &Prog, s: &[u8], at: usize) -> Option<usize> {
+pub(crate) fn next_start(p: &Prog, s: &[u8], at: usize) -> Option<usize> {
     let rest = &s[at..];
     let n = match &p.first {
         First::Any => return Some(at),
@@ -138,12 +228,11 @@ fn next_start(p: &Prog, s: &[u8], at: usize) -> Option<usize> {
     n.map(|n| at + n)
 }
 
-/// Tries each start from `start`: the match's end (its captures in the
-/// machine's slots).
-fn search(vm: &mut Vm, start: usize, opts: &MatchOptions) -> Result<Option<usize>, MatchError> {
+/// Tries each start from `start` (only `start` when `anchored`): the
+/// match's end (its captures in the machine's slots).
+fn search(vm: &mut Vm, start: usize, anchored: bool) -> Result<Option<usize>, MatchError> {
     let p = vm.p;
     let s = vm.s;
-    let anchored = p.anchored || opts.anchored;
     let mut at = start;
     while at <= s.len() {
         if !matches!(p.first, First::Any) {
@@ -286,19 +375,11 @@ impl Vm<'_> {
     }
 
     fn is_word(&self, c: Option<u32>) -> bool {
-        match c {
-            None => false,
-            Some(c) if self.p.ucp => unicode::has_property(c, unicode::PT_WORD, 0),
-            Some(c) => c < 128 && ((c as u8).is_ascii_alphanumeric() || c == b'_' as u32),
-        }
+        is_word(self.p, c)
     }
 
     fn caseless_eq(&self, a: u32, b: u32) -> bool {
-        if self.p.utf || self.p.ucp {
-            unicode::caseless_eq(a, b)
-        } else {
-            a == b || (a < 128 && b < 128 && (a as u8).eq_ignore_ascii_case(&(b as u8)))
-        }
+        caseless_eq(self.p, a, b)
     }
 
     /// One item at `at`: the position after it.
@@ -315,15 +396,7 @@ impl Vm<'_> {
             }
             _ => {
                 let (c, n) = self.char_at(at)?;
-                let ok = match atom {
-                    Atom::Char(x) => c == x,
-                    Atom::CharNc(x) => self.caseless_eq(c, x),
-                    Atom::CharNcR(x) => (c < 128) == (x < 128) && self.caseless_eq(c, x),
-                    Atom::Any => true,
-                    Atom::Set(i) => self.p.sets[i as usize].matches(c, self.p.utf),
-                    _ => unreachable!(),
-                };
-                ok.then_some(at + n)
+                atom_matches(self.p, atom, c).then_some(at + n)
             }
         }
     }
