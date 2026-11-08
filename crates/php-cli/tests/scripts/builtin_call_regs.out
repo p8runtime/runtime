@@ -1,0 +1,136 @@
+15
+array(3) {
+  [0]=>
+  int(4)
+  [1]=>
+  string(11) "hello world"
+  [2]=>
+  string(1) "o"
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  string(3) "abc"
+  [2]=>
+  string(1) "z"
+}
+HELLO/Hello
+mixed
+array(2) {
+  [0]=>
+  string(3) "REF"
+  [1]=>
+  string(7) "changed"
+}
+0|integer
+
+Warning: Undefined variable $missing in %s on line 47
+int(0)
+123455integer
+array(4) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+  }
+  [3]=>
+  array(2) {
+    ["x"]=>
+    int(1)
+    ["y"]=>
+    int(2)
+  }
+}
+uu
+YESNO
+ValueError: str_split(): Argument #2 ($length) must be greater than 0 at line 77
+#0 %s(77): str_split('x', 0)
+#1 %s(121): repeat('x', 0)
+#2 %s(135): run()
+#3 {main}
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+still here: D
+D gone
+bool(true)
+70
+again
+15
+array(3) {
+  [0]=>
+  int(4)
+  [1]=>
+  string(11) "hello world"
+  [2]=>
+  string(1) "o"
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  string(3) "abc"
+  [2]=>
+  string(1) "z"
+}
+HELLO/Hello
+mixed
+array(2) {
+  [0]=>
+  string(3) "REF"
+  [1]=>
+  string(7) "changed"
+}
+0|integer
+
+Warning: Undefined variable $missing in %s on line 47
+int(0)
+123455integer
+array(4) {
+  [0]=>
+  int(2)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+  }
+  [3]=>
+  array(2) {
+    ["x"]=>
+    int(1)
+    ["y"]=>
+    int(2)
+  }
+}
+uu
+YESNO
+ValueError: str_split(): Argument #2 ($length) must be greater than 0 at line 77
+#0 %s(77): str_split('x', 0)
+#1 %s(121): repeat('x', 0)
+#2 %s(137): run()
+#3 {main}
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+still here: D
+D gone
+bool(true)
+70
+done

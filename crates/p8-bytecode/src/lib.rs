@@ -15,7 +15,10 @@ use p8_runtime::ops::BinOp;
 pub use p8_runtime::symbol::Sym;
 use std::sync::Arc;
 
+pub mod insn;
 pub mod serial;
+
+pub use insn::{Insn, Op};
 
 /// A register index within the current frame.
 pub type Reg = u16;
@@ -815,6 +818,9 @@ pub struct Function {
     pub params: Vec<Param>,
     pub returns_ref: bool,
     pub code: Vec<Instr>,
+    /// What the interpreter's loop runs: `code` as 8-byte instructions,
+    /// one per pc (`insn::lower`, made with the function: `lowered`).
+    pub insns: Vec<Insn>,
     /// Source line of each instruction.
     pub lines: Vec<u32>,
     pub consts: Vec<Frozen>,
@@ -913,6 +919,12 @@ pub struct Handler {
 }
 
 impl Function {
+    /// The function with its executed form made from its code (`insns`).
+    pub fn lowered(mut self) -> Function {
+        self.insns = insn::lower(&self);
+        self
+    }
+
     /// Whether parameter `n` is passed by reference (variadic: the last one's mode).
     pub fn param_by_ref(&self, n: usize) -> bool {
         match self.params.get(n) {
@@ -932,7 +944,9 @@ mod tests {
 
     #[test]
     fn instructions_stay_small() {
-        // Dispatch reads one instruction per step; keep them compact.
+        // The loop reads the 8-byte form (also a const assert in insn.rs);
+        // the compiler's form is the side table `step` reads.
+        assert_eq!(std::mem::size_of::<super::Insn>(), 8);
         assert!(std::mem::size_of::<super::Instr>() <= 12, "{}", std::mem::size_of::<super::Instr>());
     }
 }

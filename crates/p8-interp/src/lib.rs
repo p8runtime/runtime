@@ -1207,23 +1207,22 @@ impl Context<'_> {
         Ok(next)
     }
 
-    /// A frameless call (PHP's ZEND_FRAMELESS_ICALL): builtin `i`, on the
-    /// borrowed ABI (`run`, from its registry entry), with the `argc`
-    /// arguments at `start` that the call site found plainly of their
-    /// declared types. No frame of either kind is pushed and no argument
-    /// is checked, moved or copied: the builtin reads the registers in
-    /// place, and they are cleared after (as a call consumes them). The
-    /// result goes to the register `dst`; the next pc comes back.
-    /// (A builtin of the moved ABI gets the registers mutably, as the
-    /// checked path's common case gives them; its error waits in `fault`
-    /// like a borrowed builtin's.)
+    /// A frameless call (PHP's ZEND_FRAMELESS_ICALL): builtin `i`, by
+    /// `run` (from its registry entry), with arguments `args` that the
+    /// call site found plainly of their declared types. No frame of either
+    /// kind is pushed and no argument is checked, moved or copied: the
+    /// builtin reads the registers in place. The result, or None when it
+    /// raised (the Throw waits in `fault`). The loop does the rest in
+    /// line (`execute`'s `frameless!`), or `frameless_tail` when there is
+    /// more to do. (A builtin of the moved ABI gets the registers mutably,
+    /// as the checked path's common case gives them; its error waits in
+    /// `fault` like a borrowed builtin's.)
     #[inline(always)]
-    pub(crate) fn frameless_call(&mut self, regs: &mut Vec<Value>, pc: usize, i: usize, run: Imp, (start, argc, dst): (usize, usize, usize)) -> Result<usize, Throw> {
-        self.pc = pc + 1;
+    pub(crate) fn frameless_run(&mut self, i: usize, run: Imp, args: &mut [Value]) -> Option<Value> {
         let outer = self.running_builtin.replace(i);
         let r = match run {
-            Imp::Lent(run) => run(self, &regs[start..start + argc]).ok(),
-            Imp::Moved(run) => match run(self, &mut regs[start..start + argc]) {
+            Imp::Lent(run) => run(self, args).ok(),
+            Imp::Moved(run) => match run(self, args) {
                 Ok(v) => Some(v),
                 Err(t) => {
                     self.fault = Some(t);
@@ -1232,20 +1231,31 @@ impl Context<'_> {
             },
         };
         self.running_builtin = outer;
-        let Some(v) = r else { return self.frameless_fault(regs, pc, i, start, argc) };
+        r
+    }
+
+    /// The rest of the frameless call at `at` that raised (`r` None) or
+    /// left diagnostics: the arguments `argc` at `start` (absolute) are
+    /// cleared when they are the call's own (`temps`), the result goes to
+    /// `dst`, and what was raised is handled as the checked path would.
+    /// Returns the pc to go on at.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn frameless_tail(&mut self, regs: &mut Vec<Value>, at: usize, i: usize, r: Option<Value>, (start, argc, dst, temps): (usize, usize, usize, bool)) -> Result<usize, Throw> {
+        let Some(v) = r else { return self.frameless_fault(regs, at, i, (start, argc, temps)) };
         if !self.diags.is_empty() || !self.pending_errors.is_empty() {
             self.frameless_diags(&regs[start..start + argc], i);
         }
-        for r in &mut regs[start..start + argc] {
-            let _ = clear(r);
+        if temps {
+            for r in &mut regs[start..start + argc] {
+                let _ = clear(r);
+            }
         }
-        // (A tag test, not the out-of-line drop an assignment calls; the
-        // result register is a temporary, undefined until now.)
         let _ = put(&mut regs[dst], v);
         if !self.pending_errors.is_empty() || self.ids.has_pending() {
-            return self.after_errors(regs, pc + 1, pc);
+            return self.after_errors(regs, at + 1, at);
         }
-        Ok(pc + 1)
+        Ok(at + 1)
     }
 
     /// What a frameless call reported, as the checked path reports it: an
@@ -1265,7 +1275,7 @@ impl Context<'_> {
     /// from the call.
     #[cold]
     #[inline(never)]
-    fn frameless_fault(&mut self, regs: &mut Vec<Value>, pc: usize, i: usize, start: usize, argc: usize) -> Result<usize, Throw> {
+    fn frameless_fault(&mut self, regs: &mut Vec<Value>, pc: usize, i: usize, (start, argc, temps): (usize, usize, bool)) -> Result<usize, Throw> {
         let mut t = self.take_fault();
         match t {
             Throw::Error { .. } | Throw::Fatal { .. } => self.failed_call(self.isolate.registry.function(i).name.as_bytes(), None, &regs[start..start + argc]),
@@ -1273,8 +1283,10 @@ impl Context<'_> {
             _ => {}
         }
         self.report_diags();
-        for r in &mut regs[start..start + argc] {
-            clear(r);
+        if temps {
+            for r in &mut regs[start..start + argc] {
+                clear(r);
+            }
         }
         let next = self.unwind(regs, t, pc)?;
         if !self.pending_errors.is_empty() || self.ids.has_pending() {

@@ -557,7 +557,9 @@ impl FnBuilder<'_> {
             arg_vars: self.arg_vars,
             partials: self.partials,
             compile_diags: Vec::new(),
+            insns: Vec::new(),
         }
+        .lowered()
     }
 }
 
