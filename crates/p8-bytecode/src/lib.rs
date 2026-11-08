@@ -821,8 +821,10 @@ pub struct Function {
     pub returns_ref: bool,
     pub code: Vec<Instr>,
     /// What the interpreter's loop runs: `code` as 8-byte instructions,
-    /// one per pc (`insn::lower`, made with the function: `lowered`).
-    pub insns: Vec<Insn>,
+    /// one per pc (`insn::lower`, with the kinds `infer` proves), made
+    /// when the function first runs (`insns()`): most of an application's
+    /// functions never run in a request, and the inference is not free.
+    pub insns: std::sync::OnceLock<Vec<Insn>>,
     /// Source line of each instruction.
     pub lines: Vec<u32>,
     pub consts: Vec<Frozen>,
@@ -921,10 +923,10 @@ pub struct Handler {
 }
 
 impl Function {
-    /// The function with its executed form made from its code (`insns`).
-    pub fn lowered(mut self) -> Function {
-        self.insns = insn::lower(&self);
-        self
+    /// The executed form of the code (`insns`), made on the first call.
+    #[inline]
+    pub fn insns(&self) -> &[Insn] {
+        self.insns.get_or_init(|| insn::lower(self))
     }
 
     /// Whether parameter `n` is passed by reference (variadic: the last one's mode).

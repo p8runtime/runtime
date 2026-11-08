@@ -344,7 +344,7 @@ fn disassemble(program: &p8_bytecode::Program) -> String {
             f.consts
         ));
         // Each instruction with the opcode the loop runs for it.
-        for (pc, (instr, insn)) in f.code.iter().zip(&f.insns).enumerate() {
+        for (pc, (instr, insn)) in f.code.iter().zip(f.insns()).enumerate() {
             out.push_str(&format!("  {pc:4} L{:<4} {:<14} {instr:?}\n", f.lines[pc], format!("{:?}", insn.op)));
         }
     }

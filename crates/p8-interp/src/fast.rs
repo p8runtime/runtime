@@ -34,7 +34,7 @@ impl Context<'_> {
             let mut top = self.frames.last().expect("a frame");
             let mut clo = &*top.func;
             let base = top.base as usize;
-            let mut code = &clo.code.insns[..];
+            let mut code = clo.code.insns();
             // A loop's backward branch is where an interrupt is noticed:
             // `step` then raises it.
             macro_rules! back {
@@ -226,7 +226,7 @@ impl Context<'_> {
                             }
                             top = self.frames.last().expect("a frame");
                             clo = &*top.func;
-                            code = &clo.code.insns[..];
+                            code = clo.code.insns();
                         }
                         r => {
                             pc = self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps))?;

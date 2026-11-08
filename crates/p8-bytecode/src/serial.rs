@@ -508,11 +508,11 @@ macro_rules! record {
     };
 }
 record!(Program { main, functions, classes });
-// `insns` is the code's executed form, made again from `code`.
+// `insns` is the code's executed form, made again from `code` (when it first runs).
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, consts_at, value_consts, nregs, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
-} made insns by Function::lowered);
+} made insns by std::convert::identity);
 record!(CompileDiag { level, message, line });
 record!(PartialSite { args, variadic, name, line });
 record!(PartialArg { name, placeholder });
