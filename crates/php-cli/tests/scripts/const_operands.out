@@ -1,0 +1,102 @@
+3: acfhknor truefalsefalsefalse-11
+10: cdghijlmoqr falsefalsetruetrue00
+10.0: cdghijnoqr falsefalsetruefalse00
+'10': cdghijnoqr falsefalsetruefalse00
+11: bdegknoq falsetruefalsefalse1-1
+NULL: acfhknpr truefalsefalsefalse-11
+'abc': bdegknoq falsetruefalsefalse1-1
+true: cdghijnoqr falsefalsetruefalse00
+6 6 4 -4 10 10 2.5 0.4 2 2 25 32 '5z' 'a5' 5 1 10
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 37
+3.5 3.5 1.5 -1.5 5.0 5.0 1.25 0.8 2 1 6.25 5.656854249492381 '2.5z' 'a2.5' 3 0 4
+4 4 2 -2 6 6 1.5 0.6666666666666666 0 1 9 8 '3z' 'a3' 3 1 6
+TypeError: Unsupported operand types: string + int
+pq12.51 90.75
+
+Deprecated: Implicit conversion from float 3.7 to int loses precision in %s on line 47
+array(9) {
+  ["k"]=>
+  string(3) "one"
+  [2]=>
+  string(3) "two"
+  ["n"]=>
+  NULL
+  [3]=>
+  string(1) "f"
+  [1]=>
+  string(1) "b"
+  ["d"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(1) "x"
+  }
+  ["z"]=>
+  bool(true)
+  [5]=>
+  string(4) "five"
+  [6]=>
+  string(6) "pushed"
+}
+one two 1 falsetruefalsetruetrue
+default one
+|
+ho truefalse
+Jello
+0123454321012332101.52.5
+string(3) "lit"
+int(7)
+float(1)
+NULL
+bool(true)
+string(3) "2.5"
+int(1)
+int(42)
+string(5) "arrow"
+r10(): Return value must be of type int, string returned
+LIT cba truetrue 5 3 2 4
+chr(): Argument #1 ($codepoint) must be of type int, array given
+3 abab 3
+array(2) {
+  ["dyn"]=>
+  int(1)
+  ["strdyn"]=>
+  int(3)
+}
+bool(true)
+bool(true)
+lit-2 propccstatic cc static
+three
+indirect
+interp one and pq12.51
+onetwo
+yes
+nullish falsy 12 1
+evaluated1 ev
+tu1!
+dflt 7 11 x 7 12 y 1 13
+object(V)#1 (4) {
+  ["i"]=>
+  int(5)
+  ["s"]=>
+  string(3) "str"
+  ["arr"]=>
+  array(2) {
+    ["a"]=>
+    string(1) "b"
+    ["c"]=>
+    string(1) "d"
+  }
+  ["f"]=>
+  float(2.5)
+}

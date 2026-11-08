@@ -76,7 +76,6 @@ $r9 = fn() => 'arrow';
 var_dump(r1(), r2(), r3(), r4(), r5(), r6(), r7(), $r8(), $r9());
 function r10(): int { return "x"; }
 try { r10(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-declare(strict_types=0);
 
 // A one-literal builtin call, and a literal the builtin converts or refuses.
 echo strtoupper('lit'), ' ', strrev('abc'), ' ', var_export(function_exists('cmp'), true), var_export(defined('PHP_VERSION'), true), ' ', ucfirst(5), ' ', abs(-3), ' ', count([1, 2]), ' ', strlen('four'), "\n";
