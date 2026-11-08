@@ -314,7 +314,7 @@ impl Context<'_> {
                     // its declared type (`verify_args` would accept each as it
                     // is); a conversion, a class check or a variadic: `step`.
                     Op::VerifyArgs => {
-                        if !args_plain(&clo.code.params, &w[..], top.argc as usize) {
+                        if !args_plain(clo, &w[..], top.argc as usize) {
                             slow!();
                         }
                         pc += 1;
@@ -322,7 +322,7 @@ impl Context<'_> {
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     Op::VerifyReturn => match &clo.code.ret_type {
-                        Some(ty) if clo.code.is_generator || !ty.quick(&w[rx!(insn.a)]) => slow!(),
+                        Some(ty) if clo.code.is_generator || !ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)]) => slow!(),
                         _ => pc += 1,
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
@@ -904,15 +904,16 @@ pub(crate) enum Flow {
 }
 
 /// Whether the first `argc` registers of `w` are each plainly of their
-/// parameter's declared type (`TypeDecl::quick`), so `verify_args` has
-/// nothing to check or convert. A typed variadic is left to it.
+/// parameter's declared type (`TypeDecl::quick`, an object's class test
+/// through the closure's memo), so `verify_args` has nothing to check or
+/// convert. A typed variadic is left to it.
 #[inline]
-pub(crate) fn args_plain(params: &[p8_bytecode::Param], w: &[Value], argc: usize) -> bool {
-    params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
+pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
+    clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
         Some(_) if p.variadic => false,
         Some(_) if i >= argc || v.is_undef() => true,
-        Some(ty) => ty.quick(v),
+        Some(ty) => ClassMemo::quick(clo.type_memo.get(i), ty, v),
     })
 }
 

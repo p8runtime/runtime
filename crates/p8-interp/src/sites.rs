@@ -30,6 +30,43 @@ pub struct Closure {
     /// as the frame is entered (`fill_defaults`), as PHP's RECV_INIT does
     /// for a constant default. The compiler leaves no code for a literal.
     pub(crate) defaults: Box<[Option<Value>]>,
+    /// The class each declared type last accepted an object of (`quick`'s
+    /// class test, an `instanceof` walk by name, made once per class):
+    /// one per parameter, then the return type's; empty when no type
+    /// names a class.
+    pub(crate) type_memo: Box<[ClassMemo]>,
+}
+
+/// A class a declared type accepted (`Closure::type_memo`): its address,
+/// compared; and a weak handle, which keeps the address from being reused
+/// by another class while the memo holds it.
+#[derive(Default)]
+pub(crate) struct ClassMemo {
+    addr: Cell<usize>,
+    keep: Cell<std::rc::Weak<Class>>,
+}
+
+impl ClassMemo {
+    /// `ty.quick(v)`, an object's class test answered by the memo when it
+    /// is the class accepted last (an object's verdict depends on its
+    /// class alone).
+    #[inline(always)]
+    pub(crate) fn quick(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+        match (v.as_object(), memo) {
+            (Some(o), Some(m)) => m.addr.get() == Rc::as_ptr(&o.class) as usize || m.learn(ty, o),
+            _ => ty.quick(v),
+        }
+    }
+
+    #[inline(never)]
+    fn learn(&self, ty: &p8_runtime::types::TypeDecl, o: &Rc<Object>) -> bool {
+        if !ty.quick_object(o) {
+            return false;
+        }
+        self.addr.set(Rc::as_ptr(&o.class) as usize);
+        self.keep.set(Rc::downgrade(&o.class));
+        true
+    }
 }
 
 impl Closure {
@@ -64,7 +101,13 @@ impl Closure {
         } else {
             Box::default()
         };
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults })
+        let names_class = |t: &Option<p8_runtime::types::TypeDecl>| t.as_ref().is_some_and(|t| !t.lower.is_empty());
+        let type_memo = if code.params.iter().any(|p| names_class(&p.ty)) || names_class(&code.ret_type) {
+            (0..=code.params.len()).map(|_| ClassMemo::default()).collect()
+        } else {
+            Box::default()
+        };
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo })
     }
 
     /// The stand-in for a declared function or method whose closure has not
