@@ -25,6 +25,14 @@ int(12)
 Error: Cannot modify readonly property S::$v
 TypeError: Cannot assign string to property S::$v of type int
 Error: Cannot modify protected(set) readonly property S::$v from global scope
+n=5
+Error: Cannot modify private(set) property Q::$n from global scope
+Error: Cannot modify private(set) property Q::$n from scope R
+n=5
+v=7
+Error: Cannot modify protected(set) readonly property S::$v from global scope
+v=7
+Error: Cannot modify protected(set) readonly property S::$v from scope P
 -- run 1
 int(1)
 int(11)
@@ -52,3 +60,11 @@ int(12)
 Error: Cannot modify readonly property S::$v
 TypeError: Cannot assign string to property S::$v of type int
 Error: Cannot modify protected(set) readonly property S::$v from global scope
+n=5
+Error: Cannot modify private(set) property Q::$n from global scope
+Error: Cannot modify private(set) property Q::$n from scope R
+n=5
+v=7
+Error: Cannot modify protected(set) readonly property S::$v from global scope
+v=7
+Error: Cannot modify protected(set) readonly property S::$v from scope P

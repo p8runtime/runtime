@@ -56,4 +56,18 @@ for ($i = 0; $i < 2; $i++) {
     $s2 = new S();
     try { $s2->set("x"); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
     try { $s2->v = 1; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    // One site, run from different scopes (the same code bound to each):
+    // the cache may answer only where the declaring class writes.
+    $setN = function ($o, $v) { $o->n = $v; };
+    $initV = function ($o, $v) { $o->v = $v; };
+    foreach ([Q::class, null, R::class, Q::class] as $scope) {
+        $f = Closure::bind($setN, null, $scope);
+        $q2 = new Q(1);
+        try { $f($q2, 5); echo "n=", $q2->n, "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+    foreach ([S::class, null, S::class, P::class] as $scope) {
+        $f = Closure::bind($initV, null, $scope);
+        $s3 = new S();
+        try { $f($s3, 7); echo "v=", $s3->v, "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
 }
