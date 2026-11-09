@@ -47,12 +47,47 @@ impl StrHead {
 
     /// The string's hash, computed on first use and kept. Nothing PHP
     /// code sees depends on it (arrays keep insertion order).
+    ///
+    /// Inline it is the load and a test (ZSTR_H); computing it is out of
+    /// line, so a lookup by a string whose hash is known (a literal, a key
+    /// read before) carries no hashing code.
     #[inline]
     pub fn hash(&self) -> u64 {
         let cached = self.hash.load(Ordering::Relaxed);
         if cached != 0 {
             return cached;
         }
+        self.compute_hash()
+    }
+
+    /// The first byte, 0 for the empty string (as PHP's NUL-terminated
+    /// `*ZSTR_VAL`): what the numeric-key test looks at first. A short
+    /// string's buffer is zero past its length, so this is one load.
+    #[inline(always)]
+    pub fn first_byte(&self) -> u8 {
+        match &self.bytes {
+            Bytes::Inline { buf, .. } => buf[0],
+            Bytes::Heap(v) => v.first().copied().unwrap_or(0),
+        }
+    }
+
+    /// Whether two heads hold the same bytes, decided inline when both
+    /// are short: a short string's buffer is zero past its length and
+    /// never written once made (a write moves it to the heap), so equal
+    /// bytes are an equal length and an equal buffer, compared as words
+    /// with no call. None when either is on the heap (compare the slices).
+    #[inline(always)]
+    pub fn short_eq(&self, other: &StrHead) -> Option<bool> {
+        match (&self.bytes, &other.bytes) {
+            (Bytes::Inline { len: a, buf: x }, Bytes::Inline { len: b, buf: y }) => Some(a == b && x == y),
+            _ => None,
+        }
+    }
+
+    /// `hash` the first time (zend_string_hash_func).
+    #[cold]
+    #[inline(never)]
+    fn compute_hash(&self) -> u64 {
         let h = hash_bytes(self.as_bytes()).max(1);
         self.hash.store(h, Ordering::Relaxed);
         h
@@ -589,6 +624,24 @@ mod tests {
         let long = PhpStr::concat(&[b'x'; 20], &[b'y'; 20]);
         assert_eq!(long.as_bytes(), [[b'x'; 20], [b'y'; 20]].concat());
         assert!(matches!(PhpStr::concat(&[b'x'; 11], &[b'y'; 11]).0.bytes, Bytes::Inline { .. }));
+    }
+
+    /// `short_eq` decides two short strings by their buffers (zero past the
+    /// length, whatever built them) and leaves a heap one to the slices;
+    /// `first_byte` is 0 for the empty string.
+    #[test]
+    fn short_strings_compare_by_their_buffers() {
+        let built = PhpStr::concat(b"ab", b"c");
+        let int = PhpStr::from_int(-12);
+        assert_eq!(PhpStr::from("abc").short_eq(&built), Some(true));
+        assert_eq!(PhpStr::from("-12").short_eq(&int), Some(true));
+        assert_eq!(PhpStr::from("abd").short_eq(&built), Some(false));
+        assert_eq!(PhpStr::from("ab").short_eq(&built), Some(false));
+        assert_eq!(PhpStr::from("ab\0").short_eq(&PhpStr::from("ab")), Some(false));
+        let i = IStr::intern(b"abc").expect("room in the pool");
+        assert_eq!(i.short_eq(&built), Some(true));
+        assert_eq!(PhpStr::new(b"abc".to_vec()).short_eq(&built), None);
+        assert_eq!((PhpStr::empty().first_byte(), PhpStr::new(Vec::new()).first_byte(), PhpStr::new(b"-1".to_vec()).first_byte()), (0, 0, b'-'));
     }
 
     #[test]

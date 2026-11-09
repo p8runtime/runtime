@@ -1,0 +1,194 @@
+-- runtime keys, 0 padding entries
+'0': 'v0' isset=true exists=true
+'1': 'v1' isset=true exists=true
+'-1': 'v-1' isset=true exists=true
+'08': 'v08' isset=true exists=true
+'-0': 'v-0' isset=true exists=true
+'00': 'v00' isset=true exists=true
+'0x1': 'v0x1' isset=true exists=true
+'1e3': 'v1e3' isset=true exists=true
+' 1': 'v 1' isset=true exists=true
+'1 ': 'v1 ' isset=true exists=true
+'+1': 'v+1' isset=true exists=true
+'-': 'v-' isset=true exists=true
+'': 'v' isset=true exists=true
+'9223372036854775807': 'v9223372036854775807' isset=true exists=true
+'9223372036854775808': 'v9223372036854775808' isset=true exists=true
+'-9223372036854775808': 'v-9223372036854775808' isset=true exists=true
+'-9223372036854775809': 'v-9223372036854775809' isset=true exists=true
+'18446744073709551616': 'v18446744073709551616' isset=true exists=true
+'12345678901234567890': 'v12345678901234567890' isset=true exists=true
+'1.5': 'v1.5' isset=true exists=true
+'a1': 'va1' isset=true exists=true
+'1a': 'v1a' isset=true exists=true
+'-01': 'v-01' isset=true exists=true
+'--1': 'v--1' isset=true exists=true
+'0.0': 'v0.0' isset=true exists=true
+integer 0
+integer 1
+integer -1
+string '08'
+string '-0'
+string '00'
+string '0x1'
+string '1e3'
+string ' 1'
+string '1 '
+string '+1'
+string '-'
+string ''
+integer 9223372036854775807
+string '9223372036854775808'
+integer -9223372036854775807-1
+string '-9223372036854775809'
+string '18446744073709551616'
+string '12345678901234567890'
+string '1.5'
+string 'a1'
+string '1a'
+string '-01'
+string '--1'
+string '0.0'
+bool(true)
+bool(true)
+string(2) "v0"
+bool(false)
+string(20) "v9223372036854775807"
+string(21) "v-9223372036854775808"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+22
+-- runtime keys, 12 padding entries
+'0': 'v0' isset=true exists=true
+'1': 'v1' isset=true exists=true
+'-1': 'v-1' isset=true exists=true
+'08': 'v08' isset=true exists=true
+'-0': 'v-0' isset=true exists=true
+'00': 'v00' isset=true exists=true
+'0x1': 'v0x1' isset=true exists=true
+'1e3': 'v1e3' isset=true exists=true
+' 1': 'v 1' isset=true exists=true
+'1 ': 'v1 ' isset=true exists=true
+'+1': 'v+1' isset=true exists=true
+'-': 'v-' isset=true exists=true
+'': 'v' isset=true exists=true
+'9223372036854775807': 'v9223372036854775807' isset=true exists=true
+'9223372036854775808': 'v9223372036854775808' isset=true exists=true
+'-9223372036854775808': 'v-9223372036854775808' isset=true exists=true
+'-9223372036854775809': 'v-9223372036854775809' isset=true exists=true
+'18446744073709551616': 'v18446744073709551616' isset=true exists=true
+'12345678901234567890': 'v12345678901234567890' isset=true exists=true
+'1.5': 'v1.5' isset=true exists=true
+'a1': 'va1' isset=true exists=true
+'1a': 'v1a' isset=true exists=true
+'-01': 'v-01' isset=true exists=true
+'--1': 'v--1' isset=true exists=true
+'0.0': 'v0.0' isset=true exists=true
+integer 0
+integer 1
+integer -1
+string '08'
+string '-0'
+string '00'
+string '0x1'
+string '1e3'
+string ' 1'
+string '1 '
+string '+1'
+string '-'
+string ''
+integer 9223372036854775807
+string '9223372036854775808'
+integer -9223372036854775807-1
+string '-9223372036854775809'
+string '18446744073709551616'
+string '12345678901234567890'
+string '1.5'
+string 'a1'
+string '1a'
+string '-01'
+string '--1'
+string '0.0'
+bool(true)
+bool(true)
+string(2) "v0"
+bool(false)
+string(20) "v9223372036854775807"
+string(21) "v-9223372036854775808"
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+34
+-- literal keys
+5 => 'five'
+'05' => 'oh-five'
+-5 => 'minus'
+'-0' => 'minus zero'
+'x' => 'ex'
+string(4) "five"
+string(4) "five"
+string(7) "oh-five"
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+string(5) "again"
+string(2) "ex"
+bool(false)
+bool(false)
+array(9) {
+  [0]=>
+  int(5)
+  [1]=>
+  string(2) "05"
+  [2]=>
+  int(-5)
+  [3]=>
+  string(2) "-0"
+  [4]=>
+  string(1) "x"
+  [5]=>
+  int(7)
+  [6]=>
+  string(2) "07"
+  [7]=>
+  int(9223372036854775807)
+  [8]=>
+  string(19) "9223372036854775808"
+}
+bool(false)
+int(8)
+-- order
+10 => 'A'
+'b' => 'B'
+20 => 'c'
+30 => 'd'
+'030' => 'e'
+-- copy on write
+'k' => 1
+'l' => 2
+'k' => 10
+'l' => 2
+'m' => 3
+'k' => 1
+'l' => 2
+1 => 'one'
+3 0 1
+3 1 1
+3 2 1
+-- references
+int(5)
+int(5)
+int(6)
+int(7)
+int(7)
+-- large
+int(200)
+int(0)
+int(198)
+int(-99)
+string(4) "key0"
+int(99)

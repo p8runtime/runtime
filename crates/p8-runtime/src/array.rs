@@ -120,8 +120,13 @@ pub const NULL_OFFSET_DEPRECATION: &str = "Using null as an array offset is depr
 impl Key {
     /// The key a string names: a canonical decimal integer is an int key
     /// (ZEND_HANDLE_NUMERIC_STR: no leading zeros, no "-0", fits in i64).
+    ///
+    /// Out of line: the interpreter's fast loop builds keys from strings
+    /// (array literals), and the test inlined there costs the loop's other
+    /// paths registers.
+    #[inline(never)]
     pub fn from_string(s: PhpStr) -> Key {
-        match canonical_int(s.as_bytes()) {
+        match canonical_int(&s) {
             Some(i) => Key::Int(i),
             None => Key::Str(s),
         }
@@ -166,15 +171,48 @@ impl Key {
 }
 
 /// A canonical decimal integer: "0", "-12", not "012", "-0", "+1", " 1".
-fn canonical_int(b: &[u8]) -> Option<i64> {
-    let digits = b.strip_prefix(b"-").unwrap_or(b);
-    if digits.is_empty() || digits.len() > 20 || !digits.iter().all(u8::is_ascii_digit) {
+///
+/// ZEND_HANDLE_NUMERIC_STR: the first byte is tested inline, and only a
+/// key starting with a digit, or with '-' and a digit, goes on to
+/// [`canonical_int_rest`]. Most string keys start with a letter or '_'
+/// (above '9'), so a lookup by one costs two compares here.
+#[inline(always)]
+fn canonical_int(s: &StrHead) -> Option<i64> {
+    let c = s.first_byte();
+    if c > b'9' || (c < b'0' && c != b'-') {
         return None;
     }
-    if digits[0] == b'0' && (digits.len() > 1 || b.len() > 1) {
-        return None;
+    canonical_int_rest(s.as_bytes())
+}
+
+/// `canonical_int` past its first byte (a digit or '-'): as
+/// _zend_handle_numeric_str_ex, digit by digit, no leading zero, no "-0",
+/// and in the i64 range.
+#[inline(never)]
+fn canonical_int_rest(b: &[u8]) -> Option<i64> {
+    let neg = b[0] == b'-';
+    let digits = &b[usize::from(neg)..];
+    // (MAX_LENGTH_OF_LONG - 1: 19 digits; i64::MIN has 19 as well.)
+    match digits {
+        [] => return None,
+        [b'0', ..] if b.len() > 1 => return None,
+        _ if digits.len() > 19 => return None,
+        _ => {}
     }
-    std::str::from_utf8(b).ok()?.parse().ok()
+    let mut n: u64 = 0;
+    for &d in digits {
+        if !d.is_ascii_digit() {
+            return None;
+        }
+        // (19 digits fit in a u64: no overflow here.)
+        n = n * 10 + u64::from(d - b'0');
+    }
+    if neg {
+        // Down to i64::MIN, whose magnitude is i64::MAX + 1.
+        (n <= i64::MAX as u64 + 1).then(|| (n as i64).wrapping_neg())
+    } else {
+        i64::try_from(n).ok()
+    }
 }
 
 /// `$a[] = v` when the next key would overflow: "Cannot add element to the
@@ -313,6 +351,23 @@ enum Probe<'a> {
     Str(&'a StrHead),
 }
 
+/// Whether a probe `s` is the stored key `k`, their hashes equal, decided
+/// with no call where it can be: the same head (zend_hash_find_bucket's
+/// `p->key == key`), or two short strings compared as words. None when
+/// the bytes must be compared as slices (a heap string on either side).
+///
+/// A literal is rarely the same head as the key it finds: an array built
+/// from literals holds the thread's handle of each (its twin), not the
+/// program-memory head the lookup has, so the short compare is the
+/// common case for literal keys, not a fallback.
+#[inline(always)]
+fn same_key(s: &StrHead, k: &StrHead) -> Option<bool> {
+    if std::ptr::eq(s, k) {
+        return Some(true);
+    }
+    s.short_eq(k)
+}
+
 impl Key {
     #[inline(always)]
     fn probe(&self) -> Probe<'_> {
@@ -388,14 +443,13 @@ impl Hashed {
     /// fast loop inlines array reads, and only their packed part belongs
     /// there.
     ///
-    /// A leaf: it compares hashes, and a string key by its head's address
-    /// (a program-memory string is one head wherever it is written). The
-    /// first entry whose hash matches and whose head does not is handed to
-    /// [`Hashed::find_bytes`], which compares bytes from there on. Most
-    /// lookups never get there (one in five on WordPress), and a function
-    /// that calls `bcmp` itself has to save and restore every register the
-    /// loop uses around it, in every call: that was a third of this
-    /// function's cost.
+    /// A leaf: it compares hashes, and a string key by [`same_key`] (its
+    /// head's address, or a short string's words). The first entry whose
+    /// hash matches and which is a heap string is handed to
+    /// [`Hashed::find_bytes`], which compares bytes from there on. A
+    /// function that calls `bcmp` itself has to save and restore every
+    /// register the loop uses around it, in every call: that was a third
+    /// of this function's cost.
     #[inline(never)]
     fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         if self.small() {
@@ -407,12 +461,11 @@ impl Hashed {
             if b.h == h {
                 match (key, &b.key) {
                     (Probe::Int, None) => return Some(i as usize),
-                    (Probe::Str(s), Some(k)) => {
-                        if std::ptr::eq(s, &**k) {
-                            return Some(i as usize);
-                        }
-                        return self.find_bytes(h, s, i);
-                    }
+                    (Probe::Str(s), Some(k)) => match same_key(s, k) {
+                        Some(true) => return Some(i as usize),
+                        Some(false) => {}
+                        None => return self.find_bytes(h, s, i),
+                    },
                     _ => {}
                 }
             }
@@ -475,7 +528,7 @@ impl Hashed {
     ///
     /// A leaf, as `find` is: the byte compare of a string key is out of
     /// line (`scan_bytes`), reached from the first entry whose hash
-    /// matches and whose head is another.
+    /// matches and which [`same_key`] cannot decide (a heap string).
     #[inline(always)]
     fn scan(&self, h: u64, key: Probe<'_>) -> Option<usize> {
         let taken = &self.buckets[..self.used];
@@ -483,10 +536,11 @@ impl Hashed {
             Probe::Str(s) => {
                 for (i, b) in taken.iter().enumerate() {
                     if b.h == h && let Some(k) = &b.key {
-                        if std::ptr::eq(s, &**k) {
-                            return Some(i);
+                        match same_key(s, k) {
+                            Some(true) => return Some(i),
+                            Some(false) => {}
+                            None => return self.scan_bytes(h, s, i),
                         }
-                        return self.scan_bytes(h, s, i);
                     }
                 }
                 None
@@ -709,6 +763,11 @@ impl PhpArray {
         }
     }
 
+    /// Out of line, as before the numeric-key test became small: inlined,
+    /// LLVM put it into the interpreter's fast loop at five sites, and the
+    /// loop's other paths paid for the registers (+9 instructions an
+    /// iteration on `$a[2]`).
+    #[inline(never)]
     pub fn get(&self, key: &Key) -> Option<&Value> {
         match &self.storage {
             Storage::Packed(p) => match key {
@@ -724,12 +783,39 @@ impl PhpArray {
     /// or any borrowed string uses.
     #[inline]
     pub fn get_str(&self, s: &StrHead) -> Option<&Value> {
-        if let Some(i) = canonical_int(s.as_bytes()) {
+        if let Some(i) = canonical_int(s) {
             return self.get_int(i);
         }
         match &self.storage {
             Storage::Packed(_) => None,
             Storage::Hashed(h) => h.find(s.hash(), Probe::Str(s)).and_then(|i| h.get(i)),
+        }
+    }
+
+    /// `get_mut` of the key a string names, with no handle to it made
+    /// (see [`get_str`](Self::get_str)).
+    #[inline]
+    pub fn get_str_mut(&mut self, s: &StrHead) -> Option<&mut Value> {
+        if let Some(i) = canonical_int(s) {
+            return self.get_int_mut(i);
+        }
+        match &mut self.storage {
+            Storage::Packed(_) => None,
+            Storage::Hashed(h) => {
+                let i = h.find(s.hash(), Probe::Str(s))?;
+                Some(&mut h.buckets[i].value)
+            }
+        }
+    }
+
+    /// `insert` of a string key just looked up and not found (a write's
+    /// miss, after [`get_str_mut`](Self::get_str_mut)): appended with no
+    /// second lookup, as zend_hash_add_new.
+    pub fn insert_absent(&mut self, key: Key, value: Value) {
+        debug_assert!(!self.contains_key(&key), "insert_absent of a present key");
+        match (&mut self.storage, key) {
+            (Storage::Hashed(h), Key::Str(s)) => h.insert_new(s.hash(), Some(s), value),
+            (_, key) => self.insert(key, value),
         }
     }
 
@@ -1007,6 +1093,14 @@ mod tests {
         assert_eq!(k("012"), Key::Str(PhpStr::from("012")));
         assert_eq!(k("-0"), Key::Str(PhpStr::from("-0")));
         assert_eq!(k("9223372036854775808"), Key::Str(PhpStr::from("9223372036854775808")));
+        assert_eq!(k("9223372036854775807"), Key::Int(i64::MAX));
+        assert_eq!(k("-9223372036854775808"), Key::Int(i64::MIN));
+        for s in ["", "-", "-01", "00", "08", "+1", " 1", "1 ", "1a", "a1", "--1", "1.0", "0x1", "\0", "-9223372036854775809", "18446744073709551616", "12345678901234567890"] {
+            assert_eq!(k(s), Key::Str(PhpStr::from(s)), "{s:?}");
+        }
+        // A key on the heap (not a short string) the same.
+        assert_eq!(Key::from_string(PhpStr::new(b"42".to_vec())), Key::Int(42));
+        assert_eq!(Key::from_string(PhpStr::new(b"042".to_vec())), Key::Str(PhpStr::from("042")));
         assert_eq!(Key::from_value(&Value::float(1.5)), Ok((Key::Int(1), Some(KeyIssue::LosesPrecision(1.5)))));
         assert_eq!(Key::from_value(&Value::TRUE), Ok((Key::Int(1), None)));
         assert_eq!(Key::from_value(&Value::NULL), Ok((Key::Str(PhpStr::empty()), Some(KeyIssue::NullOffset))));
@@ -1043,6 +1137,16 @@ mod tests {
                 assert!(a.get_mut(&Key::Str(other.clone())).is_some(), "get_mut, {n} keys");
                 assert_eq!(got(a.get(&Key::Str(PhpStr::from(format!("key{i}x"))))), None, "a miss, {n} keys");
             }
+            // A heap handle of a short key's bytes (compared as slices),
+            // and a short probe of a key stored on the heap.
+            let heap = |s: &str| PhpStr::new(s.as_bytes().to_vec());
+            for i in 0..n {
+                assert_eq!(got(a.get_str(&heap(&format!("key{i}")))), Some(i as i64), "heap probe, {n} keys");
+            }
+            a.insert(Key::Str(heap("on the heap")), int(-2));
+            assert_eq!(got(a.get_str(&PhpStr::from("on the heap"))), Some(-2));
+            assert_eq!(got(a.get_str(&PhpStr::from("on the hea"))), None);
+            a.remove(&Key::Str(PhpStr::from("on the heap")));
             // set() finds the entry too: no second one is made.
             a.insert(Key::Str(PhpStr::from("key1")), int(-1));
             assert_eq!(a.len(), n);
