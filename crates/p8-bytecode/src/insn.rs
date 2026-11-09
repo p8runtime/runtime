@@ -319,7 +319,12 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
         Instr::Free { reg } => enc::free([o(reg)?]),
         Instr::JumpIf { cond, target } => enc::jump_cond([Opnd::Flag(kinds::T), o(cond)?, Opnd::Imm(target)]),
         Instr::JumpIfNot { cond, target } => enc::jump_cond([Opnd::Flag(kinds::F), o(cond)?, Opnd::Imm(target)]),
-        Instr::FetchDim { dst, arr, key, .. } => enc::fetch_dim([o(dst)?, o(arr)?, o(key)?]),
+        // (empty()'s last dimension is a read here: its misses are cold.)
+        Instr::FetchDim { dst, arr, key, quiet, empty } => {
+            let mode = Opnd::Flag(if quiet && !empty { kinds::IS } else { kinds::R });
+            enc::fetch_dim([mode, o(dst)?, o(arr)?, o(key)?])
+        }
+        Instr::AssignDim { var, n: 0, append: true, val, dst, .. } => enc::append_dim([o(var)?, o(val)?, res(code, pc, dst), o(dst)?]),
         Instr::IssetDim { dst, var, keys, n: 1 } => enc::isset_dim([o(dst)?, o(var)?, o(keys)?]),
         Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => enc::assign_dim([o(var)?, o(keys)?, o(val)?, res(code, pc, dst), o(dst)?]),
 
@@ -559,12 +564,18 @@ mod tests {
             Instr::Free { reg: 6 },
             // A literal key and a literal value: none.
             Instr::AssignDim { var: 1, keys: c(7), n: 1, append: false, val: c(3), dst: 6 },
+            // `$a['k'] ?? ..` and `$a[] = $v;`.
+            Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: true, empty: false },
+            Instr::AssignDim { var: 1, keys: 0, n: 0, append: true, val: 3, dst: 6 },
+            Instr::Free { reg: 6 },
         ];
         let consts = consts();
         let at = |pc| lower_at(&code, pc, &consts, 2);
-        assert_eq!(at(0).unwrap(), Insn { op: Op::P8_FETCH_DIM_KSTR, a: 5, b: 1, c: 0, imm: 7 });
-        assert_eq!(at(1).unwrap().op, Op::P8_FETCH_DIM_KINT);
-        assert_eq!(at(2).unwrap(), Insn { op: Op::P8_FETCH_DIM_REG, a: 5, b: 1, c: 2, imm: 0 });
+        assert_eq!(at(0).unwrap(), Insn { op: Op::P8_FETCH_DIM_R_KSTR, a: 5, b: 1, c: 0, imm: 7 });
+        assert_eq!(at(1).unwrap().op, Op::P8_FETCH_DIM_R_KINT);
+        assert_eq!(at(2).unwrap(), Insn { op: Op::P8_FETCH_DIM_R_REG, a: 5, b: 1, c: 2, imm: 0 });
+        assert_eq!(at(11).unwrap().op, Op::P8_FETCH_DIM_IS_KSTR);
+        assert_eq!(at(12).unwrap(), Insn { op: Op::P8_APPEND_DIM_REG_UNUSED, a: 1, b: 3, c: 6, imm: 0 });
         assert!(at(3).is_none());
         assert_eq!(at(4).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_THIS_K_COPY_UNUSED, a: 6, b: 0, c: 0, imm: 5 | 4 << 16 });
         assert_eq!(at(6).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_REG_REG_TAKE_USED, a: 1, b: 3, c: 6, imm: 4 });

@@ -21,6 +21,11 @@ mod refs;
 mod throw;
 mod fast;
 mod vmops;
+
+/// How one instruction is run out of the loop (`step`, `cold_run`): on the
+/// context `C`, its registers, the frame's closure, base, argument count
+/// and the instruction's pc.
+type Run<C> = fn(&mut C, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>;
 mod frames;
 mod isolate;
 mod sites;
@@ -1334,14 +1339,14 @@ impl Context<'_> {
     /// interrupt due (a backward jump's) is raised first.
     #[cold]
     #[inline(never)]
-    fn cold(&mut self, regs: &mut Vec<Value>, pc: usize, run: fn(&mut Self, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>) -> Result<Flow, Throw> {
+    fn cold(&mut self, regs: &mut Vec<Value>, pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
         self.detour(regs, pc, run)
     }
 
     /// Run the instruction at `pc` by `run` out of the loop, and what it
     /// raised (`slow`'s doc).
     #[inline(always)]
-    fn detour(&mut self, regs: &mut Vec<Value>, mut pc: usize, run: fn(&mut Self, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>) -> Result<Flow, Throw> {
+    fn detour(&mut self, regs: &mut Vec<Value>, mut pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
         let frame = self.frames.last().expect("a frame");
         let func = Rc::clone(&frame.func);
         let (base, argc) = (frame.base as usize, frame.argc as usize);

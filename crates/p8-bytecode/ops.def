@@ -37,14 +37,17 @@ op JUMP_COND jump_cond cold=cold_run when=T|F cond=REG target=IMM
 op JUMP_CMP jump_cmp cold=cold_run cmp=LT|LE|GT|GE|EQ|ID when=T|F a=REG b=REG|K target=IMM
 drop cmp=GT b=REG
 drop cmp=GE b=REG
-/// `dst = arr[key]` (`FetchDim`).
-op FETCH_DIM fetch_dim cold=cold_run dst=REG arr=REG key=REG|KINT|KSTR
+/// `dst = arr[key]` (`FetchDim`): a read (R: a missing key warns), or a
+/// quiet one (IS: `??`, a missing key is null).
+op FETCH_DIM fetch_dim cold=cold_run mode=R|IS dst=REG arr=REG key=REG|KINT|KSTR
 /// `dst = isset(var[key])`, one dimension (`IssetDim`).
 op ISSET_DIM isset_dim cold=cold_run dst=REG var=REG key=REG|KINT|KSTR
 /// `var[key] = val`, one dimension (`AssignDim`); `dst` = the value when USED.
 op ASSIGN_DIM assign_dim cold=cold_run var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
 drop key=KINT val=K
 drop key=KSTR val=K
+/// `var[] = val` (`AssignDim` appending); `dst` = the value when USED.
+op APPEND_DIM append_dim cold=cold_run var=REG val=REG|K res=USED|UNUSED dst=REG
 /// `dst = obj->(property site)`, `obj` a register or `$this` (`FetchProp`).
 op FETCH_PROP fetch_prop cold=cold_run dst=REG obj=REG|THIS site=IMM16
 /// `obj->(property site) = val` (`AssignProp`); `dst` = the value when USED.

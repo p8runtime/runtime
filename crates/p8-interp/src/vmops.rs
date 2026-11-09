@@ -181,10 +181,11 @@ pub(crate) fn jump_cmp<const CMP: u8, const WHEN: u8, const B: u8>(hx: Hx, a: u3
 
 /// `$a[k]` on an array holding a plain value at that key: an int key, a
 /// string literal (looked up by its hash, in place), a string in a
-/// register; an array through a reference by `elem`. Anything else (a
-/// missing key's warning, an object, a string's offset) is cold.
+/// register; an array through a reference by `elem`. IS (`??`): a missing
+/// key of an array is null. Anything else (a missing key's warning, an
+/// object, a string's offset) is cold.
 #[inline(always)]
-pub(crate) fn fetch_dim<const KEY: u8>(hx: Hx, dst: u32, arr: u32, key: u32) -> Ctl {
+pub(crate) fn fetch_dim<const MODE: u8, const KEY: u8>(hx: Hx, dst: u32, arr: u32, key: u32) -> Ctl {
     let kv = hx.v::<KEY>(key);
     let v = if let Some(a) = hx.w[r(arr)].as_array() {
         let e = if KEY == KSTR {
@@ -203,6 +204,7 @@ pub(crate) fn fetch_dim<const KEY: u8>(hx: Hx, dst: u32, arr: u32, key: u32) -> 
         };
         match e {
             Some(v) if !v.is_reference() => v.clone(),
+            None if MODE == IS => Value::NULL,
             _ => return Ctl::Cold,
         }
     } else {
@@ -289,7 +291,39 @@ pub(crate) fn assign_dim<const KEY: u8, const VAL: u8, const RES: u8>(hx: Hx, va
             let _ = put(&mut hx.w[r(dst)], v);
             Ctl::Next(true)
         }
-        None => Ctl::Skip(true),
+        None => {
+            // (What the skipped Free does: a stale value there goes now.)
+            let _ = clear(&mut hx.w[r(dst)]);
+            Ctl::Skip(true)
+        }
+    }
+}
+
+/// `$a[] = v`, `$a` an array (separated if shared): appended at its next
+/// key; an occupied next key (the error), anything but an array, an
+/// undefined value is cold.
+#[inline(always)]
+pub(crate) fn append_dim<const VAL: u8, const RES: u8>(hx: Hx, var: u32, val: u32, dst: u32) -> Ctl {
+    let v = if is_k(VAL) {
+        hx.v::<VAL>(val).clone()
+    } else {
+        match copied(&hx.w[r(val)]) {
+            Some(v) => v,
+            None => return Ctl::Cold,
+        }
+    };
+    let Some(a) = hx.w[r(var)].array_mut() else { return Ctl::Cold };
+    if a.next_key().is_none() {
+        return Ctl::Cold;
+    }
+    if RES == USED {
+        let _ = a.push(v.clone());
+        let _ = put(&mut hx.w[r(dst)], v);
+        Ctl::Next(true)
+    } else {
+        let _ = a.push(v);
+        // (What the skipped Free does: a stale value there goes now.)
+        Ctl::Skip(clear(&mut hx.w[r(dst)]))
     }
 }
 
@@ -351,6 +385,8 @@ pub(crate) fn assign_prop<const OBJ: u8, const VAL: u8, const MODE: u8, const RE
         let _ = put(&mut hx.w[r(dst)], v);
         Ctl::Next(true)
     } else {
+        // (What the skipped Free does: a stale value there goes now.)
+        let _ = clear(&mut hx.w[r(dst)]);
         Ctl::Skip(true)
     };
     if MODE == TAKE {
