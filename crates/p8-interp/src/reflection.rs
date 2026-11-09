@@ -387,7 +387,7 @@ class_method!(rc_has_property, |ctx, class, this, args| {
     }
     // A dynamic property of the object it reflects (ReflectionObject).
     Ok(Value::bool(match get(this, "\0object").as_object() {
-        Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+        Some(o) => o.dynamic().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
         None => false,
     }))
 });
@@ -395,7 +395,7 @@ class_method!(rc_get_property, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
     if !class.slots.contains_key(name.as_bytes()) && !class.statics.contains_key(name.as_bytes()) {
         let dynamic = match get(this, "\0object").as_object() {
-            Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+            Some(o) => o.dynamic().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
             None => false,
         };
         if !dynamic {
@@ -1311,7 +1311,7 @@ fn rpr_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     let class = class_arg(ctx, &target)?;
     let name = text(&arg(args, 1));
     let dynamic = match target.as_object() {
-        Some(o) => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+        Some(o) => o.dynamic().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
         None => false,
     };
     if class.slot(name.as_bytes(), None).is_none() && !class.statics.contains_key(name.as_bytes()) && !dynamic {
@@ -1355,7 +1355,7 @@ fn rpr_get_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
                 Ok(v)
             }
         }
-        None => Ok(o.dynamic.borrow().get(&Key::from_string(PhpStr::from(name.as_str()))).map_or(Value::NULL, Value::deref)),
+        None => Ok(o.dynamic().get(&Key::from_string(PhpStr::from(name.as_str()))).map_or(Value::NULL, Value::deref)),
     }
 }
 
@@ -1377,7 +1377,7 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
         Some(i) => o.slots()[i].assign(v),
         None => {
-            o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name.as_str())), v);
+            o.dynamic_mut().insert(Key::from_string(PhpStr::from(name.as_str())), v);
         }
     }
     Ok(Value::NULL)
@@ -1496,7 +1496,7 @@ fn rc_get_lazy_initializer(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Val
     if !o.is_uninit_lazy() {
         return Ok(Value::NULL);
     }
-    Ok(o.lazy_info.borrow().as_ref().map_or(Value::NULL, |l| l.initializer.clone()))
+    Ok(o.lazy_info().as_ref().map_or(Value::NULL, |l| l.initializer.clone()))
 }
 
 /// The object a ReflectionProperty lazy method works on (through
@@ -1560,7 +1560,7 @@ fn rpr_is_initialized(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     let Ok(o) = arg(args, 0).into_object() else { return Ok(Value::FALSE) };
     Ok(Value::bool(match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
         Some(i) => !o.slots()[i].peek(Value::is_undef),
-        None => o.dynamic.borrow().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
+        None => o.dynamic().contains_key(&Key::from_string(PhpStr::from(name.as_str()))),
     }))
 }
 

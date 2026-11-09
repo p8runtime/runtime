@@ -225,7 +225,7 @@ fn next(sql: &[u8], i: usize, scanner: Scanner) -> (Tok, usize) {
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
+    memchr::memmem::find(hay, needle)
 }
 
 /// Phase 1 of `pdo_parse_params()`: look for the placeholders.

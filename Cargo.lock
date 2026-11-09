@@ -3967,6 +3967,7 @@ name = "p8-ext-mbstring"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "memchr",
  "p8-pcre",
  "p8-runtime",
  "p8-stubs",
@@ -4029,6 +4030,7 @@ dependencies = [
 name = "p8-ext-pdo"
 version = "0.1.0"
 dependencies = [
+ "memchr",
  "p8-runtime",
 ]
 
@@ -4087,12 +4089,14 @@ dependencies = [
  "crc32fast",
  "dns-lookup",
  "flate2",
+ "foldhash",
  "getrandom 0.2.16",
  "gost94",
  "libc",
  "md-5 0.10.6",
  "md2",
  "md4",
+ "memchr",
  "nix 0.30.1",
  "p8-runtime",
  "ripemd",

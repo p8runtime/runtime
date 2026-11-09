@@ -577,7 +577,7 @@ fn get_charset(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value], _: &str) -
         ("state", Value::int(1)),
         ("comment", Value::str(cs.comment)),
     ] {
-        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(k)), v);
+        o.dynamic_mut().insert(Key::from_string(PhpStr::from(k)), v);
     }
     Ok(Value::object(o))
 }
@@ -878,7 +878,7 @@ fn fetch_object(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
         match class.slot(&name, Some(&class.lower)) {
             Some(i) => object.slots()[i].set(value),
             None => {
-                object.dynamic.borrow_mut().insert(Key::from_string(PhpStr::new(name)), value);
+                object.dynamic_mut().insert(Key::from_string(PhpStr::new(name)), value);
             }
         }
     }
@@ -916,7 +916,7 @@ fn field_object(ctx: &mut dyn Ctx, r: &ResultData, i: usize) -> Value {
         ("type", Value::int(c.kind as i64)),
         ("decimals", Value::int(c.decimals as i64)),
     ];
-    let mut dynamic = o.dynamic.borrow_mut();
+    let mut dynamic = o.dynamic_mut();
     for (name, value) in fields {
         dynamic.insert(Key::from_string(PhpStr::from(name)), value);
     }

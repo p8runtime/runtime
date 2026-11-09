@@ -7,6 +7,8 @@ description = "p8's mbstring extension: multibyte strings over UTF-8, the Unicod
 
 [dependencies]
 encoding_rs = "0.8"
+# Substring search (SIMD, safe API; the version p8-syntax uses)
+memchr = "2.7"
 p8-pcre = { path = "../p8-pcre" }
 p8-runtime = { path = "../p8-runtime" }
 p8-stubs = { path = "../p8-stubs" }

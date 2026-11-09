@@ -292,7 +292,7 @@ impl Encoder<'_> {
                 entries.push((Key::from_string(p.name.clone()), v));
             }
         }
-        for (k, v) in o.dynamic.borrow().iter() {
+        for (k, v) in o.dynamic().iter() {
             entries.push((k, v.clone()));
         }
         self.seen.push(ptr);
@@ -401,7 +401,7 @@ impl<'a> Parser<'a> {
                     if k.as_bytes().first() == Some(&0) {
                         return Err(Fail::Code(9));
                     }
-                    o.dynamic.borrow_mut().insert(Key::Str(k), v);
+                    o.dynamic_mut().insert(Key::Str(k), v);
                 }
                 Ok(Value::object(o))
             }

@@ -393,10 +393,10 @@ fn instance(ctx: &mut dyn Ctx, w: &Wrapper, context: Value) -> Result<Option<Rc<
         Some(i) => o.slots()[i].set(context),
         None => {
             let key = Key::Str(PhpStr::from("context"));
-            if !o.dynamic.borrow().contains_key(&key) && o.class.flags & CLASS_ALLOW_DYNAMIC == 0 && o.class.lower != b"stdclass" {
+            if !o.dynamic().contains_key(&key) && o.class.flags & CLASS_ALLOW_DYNAMIC == 0 && o.class.lower != b"stdclass" {
                 ctx.deprecated(&format!("Creation of dynamic property {}::$context is deprecated", class_name(&o)));
             }
-            o.dynamic.borrow_mut().insert(key, context);
+            o.dynamic_mut().insert(key, context);
         }
     }
     if o.class.method(b"__construct").is_some() {
