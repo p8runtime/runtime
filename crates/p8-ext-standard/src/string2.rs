@@ -82,7 +82,7 @@ fn strip_tags(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         // A comment, or a tag up to its (unquoted) '>'.
         if b[i..].starts_with(b"<!--") {
-            i = match b[i + 4..].windows(3).position(|w| w == b"-->") {
+            i = match memchr::memmem::find(&b[i + 4..], b"-->") {
                 Some(p) => i + 4 + p + 3,
                 None => b.len(),
             };
