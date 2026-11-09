@@ -112,3 +112,7 @@ show('sep at ends', explode('|', '|a|'));
 show('no sep', explode('|', 'abc', -1));
 show('empty subject', explode(',', ''));
 show('empty subject neg', explode(',', '', -1));
+
+echo "-- strtr on an empty string\n";
+show('empty key', strtr('', ['' => 'x']));
+show('empty key, array value', strtr('', ['' => 'x', 'a' => [1]]));

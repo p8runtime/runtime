@@ -740,6 +740,11 @@ fn push_text(ctx: &mut dyn Ctx, out: &mut Vec<u8>, v: &Value) {
 /// key longer than the string skipped, and a replacement converted to a
 /// string each time it is used (PHP converts per match too).
 fn strtr_pairs(ctx: &mut dyn Ctx, s: PhpStr, pairs: &PhpArray) -> Value {
+    // PHP_FUNCTION(strtr)'s shortcut: "" is returned before any key is
+    // looked at (no warning for an empty key) or any replacement converted.
+    if s.is_empty() {
+        return Value::str(s);
+    }
     let key_text = |k: Key| match k {
         Key::Int(i) => PhpStr::from(i.to_string().as_str()),
         Key::Str(k) => k,

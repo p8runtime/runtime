@@ -170,3 +170,6 @@ empty subject: array(1) {
 }
 empty subject neg: array(0) {
 }
+-- strtr on an empty string
+empty key: string(0) ""
+empty key, array value: string(0) ""
