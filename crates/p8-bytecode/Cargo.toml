@@ -7,3 +7,6 @@ description = "p8's register bytecode: instructions, functions, call sites"
 
 [dependencies]
 p8-runtime = { path = "../p8-runtime" }
+
+[build-dependencies]
+p8-vmgen = { path = "../p8-vmgen" }

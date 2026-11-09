@@ -1,0 +1,8 @@
+[package]
+name = "p8-vmgen"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's handler generator: reads the instruction definitions (ops.def) and writes the opcodes, the encoders lowering picks a handler with, and the interpreter's dispatch arms"
+
+[dependencies]

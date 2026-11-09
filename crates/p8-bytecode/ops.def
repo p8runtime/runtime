@@ -1,0 +1,164 @@
+# p8's instruction definitions: the opcodes of the executed form (`Insn`).
+#
+# Read by p8-vmgen (crates/p8-vmgen/src/lib.rs, which documents the
+# format) from p8-bytecode's build.rs, which writes the `Op` enum, the kind
+# constants and the encoders lowering picks a handler with, and from
+# p8-interp's build.rs, which writes the loop's dispatch arms. Each `op`
+# is written once, its handler in crates/p8-interp/src/vmops.rs with its
+# operand kinds as `const` parameters; every live combination of kinds is
+# one opcode, `P8_<OP>_<KINDS>`, with the tests of the kinds folded away.
+# A `hand` opcode's arm is written by hand in crates/p8-interp/src/fast.rs.
+#
+# Operands are listed in the order lowering passes them and the handler
+# takes them. Registers: TMP, CV, REG (either). Literals of the closure's
+# constants: K (any), KINT, KSTR. IMM / IMM16: raw immediates. THIS: the
+# frame's `$this`. Anything else is a flag: USED/UNUSED (the result is
+# read / freed by the next instruction, which is then skipped), COPY/TAKE
+# (the value operand is copied / moved out of its temporary), T/F (branch
+# when the condition holds / does not), LT.. (the comparison).
+
+# ---- generated --------------------------------------------------------
+
+/// `a = b` (`Move`), `a = K` (`LoadConst`): a copy into a temporary.
+op MOVE mov cold=cold_run dst=REG src=REG|K
+/// `$var = b`, `$var = K` (`Assign`, `AssignC`): through a reference the variable holds.
+op ASSIGN assign cold=cold_run var=REG src=REG|K
+/// `$var = tmp`, the temporary read for the last time (`AssignTake`): moved, not copied.
+op ASSIGN_TAKE assign_take cold=cold_run var=REG src=REG
+/// Release a temporary (`Free`).
+op FREE free cold=cold_run reg=REG
+/// `a = $this` (`This`).
+op THIS this cold=cold_run dst=REG
+/// Jump to `target` when `cond` is true (T, `JumpIf`) / false (F, `JumpIfNot`).
+op JUMP_COND jump_cond cold=cold_run when=T|F cond=REG target=IMM
+/// Compare `a` with `b` (a register, or a literal on the right), jump to
+/// `target` when the test is T / F (`JumpLt` .. `JumpNotIdentical`).
+/// GT and GE are a literal on the left (`K < a` is `a > K`).
+op JUMP_CMP jump_cmp cold=cold_run cmp=LT|LE|GT|GE|EQ|ID when=T|F a=REG b=REG|K target=IMM
+drop cmp=GT b=REG
+drop cmp=GE b=REG
+/// `dst = arr[key]` (`FetchDim`).
+op FETCH_DIM fetch_dim cold=cold_run dst=REG arr=REG key=REG|KINT|KSTR
+/// `dst = isset(var[key])`, one dimension (`IssetDim`).
+op ISSET_DIM isset_dim cold=cold_run dst=REG var=REG key=REG|KINT|KSTR
+/// `var[key] = val`, one dimension (`AssignDim`); `dst` = the value when USED.
+op ASSIGN_DIM assign_dim cold=cold_run var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
+drop key=KINT val=K
+drop key=KSTR val=K
+/// `dst = obj->(property site)`, `obj` a register or `$this` (`FetchProp`).
+op FETCH_PROP fetch_prop cold=cold_run dst=REG obj=REG|THIS site=IMM16
+/// `obj->(property site) = val` (`AssignProp`); `dst` = the value when USED.
+op ASSIGN_PROP assign_prop cold=cold_run obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
+drop val=K mode=TAKE
+
+# ---- written by hand ---------------------------------------------------
+
+/// Not run by the loop: `step` runs the `Instr` at this pc.
+hand Slow
+hand VerifyArgs
+/// a: the value returned
+hand VerifyReturn
+/// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
+hand Intrinsic
+/// pass b's variable c as argument imm >> 16 of method site imm & 0xffff on the object in a
+hand SendVarMethod
+/// pc = imm
+hand Jump
+/// a = b (cmp imm, `cmp`) c
+hand Compare
+hand IncVar
+hand DecVar
+/// step a, test against b, jump to imm
+hand IncJumpLt
+hand IncJumpLe
+hand DecJumpGt
+hand DecJumpGe
+/// a = b (op imm, `binop`) c
+hand Binary
+hand Add
+hand Sub
+hand Mul
+/// a = the c registers from b concatenated
+hand ConcatN
+/// a[b] (op imm >> 8) = c; imm & 0xff = the result register
+hand AssignDimOp
+/// next of iterator a: value to b (and key to c for IterNextKey), or jump to imm
+hand IterNext
+hand IterNextKey
+/// a (op imm) = b
+hand AssignOp
+/// a's step (imm: INC, POST) into b
+hand IncDec
+hand LoadNull
+/// a = !b
+hand Not
+hand ToBool
+/// a = isset(b)
+hand IssetVar
+/// a ?? : b = a and jump to imm when set
+hand JumpIfSet
+/// a = [] with room for imm
+hand NewArray
+/// a[] = b (imm: TAKE)
+hand ArrayPush
+/// a[b] = c (imm: TAKE)
+hand ArraySet
+/// a = constant of site imm
+hand FetchConst
+/// a = class constant: class reference imm >> 16, the name the
+/// constant imm & 0xffff (its cache entry, as a property name's)
+hand ClassConst
+/// foreach over a: the array (b, b + 1 = it and its position 0), or to
+/// imm when it is empty
+hand IterInit
+/// argument n (imm >> 16) of call site imm & 0xffff: a = b, when the
+/// function takes it by value
+hand SendVar
+/// call site imm with the b arguments at a, result to c
+hand Call
+/// `f(x0, .., xn-1)`, x the b registers from a (one for any register,
+/// several when they are consecutive), whose `Instr`s are the b `Move`s
+/// into the call's argument registers (from imm >> 16) and the `Call`
+/// (site imm & 0xffff, result to c) that follow: a frameless builtin
+/// call reads its arguments where they are, and pc goes past the call.
+/// Anything else runs the first Move (and the code after it) as it is.
+hand CallRegs
+/// a = b->(method site imm & 0xffff) with the imm >> 16 arguments at c
+hand MethodCall
+/// a = a new object of class reference imm (its constructor not run)
+hand New
+/// the constructor of the object in a, with the c arguments at b
+hand Construct
+/// a = class reference imm >> 16's method (site imm & 0xffff) with
+/// the c arguments at b; sends no variables itself (`vars` is NO_VARS)
+hand StaticCall
+/// return a
+hand Return
+hand ReturnNull
+
+# The constant forms: the same operations with one operand a literal,
+# read in place from the closure's constants (`Function::consts`), as
+# PHP's handlers read a CONST operand. `K` below is that constant.
+/// return K (imm)
+hand ReturnC
+/// a = b (cmp imm & 15, `cmp`) K (imm >> 8)
+hand CompareC
+/// a = b op K (imm)
+hand AddC
+hand SubC
+hand MulC
+/// a = b (op imm & 15, `binop`) K (imm >> 8), or K op b with CONST_LEFT
+hand BinaryC
+/// a (op imm & 15) = K (imm >> 8)
+hand AssignOpC
+/// step a, test against K (`wide`), jump to imm
+hand IncJumpLtC
+hand IncJumpLeC
+hand DecJumpGtC
+hand DecJumpGeC
+/// a[] = K (imm)
+hand ArrayPushC
+/// a[key] = val with the key, the value or both constants (KEY_CONST,
+/// VAL_CONST; the constants in imm bits 0..14 and 14..28; TAKE as
+/// ArraySet's)
+hand ArraySetC

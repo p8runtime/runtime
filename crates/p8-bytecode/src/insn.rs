@@ -13,9 +13,18 @@
 //! `Op::Slow`: its operands are the `Instr` at the same pc, the side table,
 //! which `step` runs. So the stream stays dense whatever the cold
 //! instructions need.
+//!
+//! The opcodes are generated (`ops.def`, p8-vmgen): the hand-written ones,
+//! then one per specialisation of each generated instruction,
+//! `P8_<OP>_<KINDS>`. Lowering classifies each operand (`Opnd`: a
+//! temporary, a variable, a literal of a type, a flag it knows) and the
+//! instruction's encoder (`enc`) picks the exact opcode and packs it.
 
 use crate::{Cmp, Function, Instr, Rare, Reg, THIS, const_index};
+use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
+
+include!(concat!(env!("OUT_DIR"), "/ops.rs"));
 
 /// One executed instruction: 8 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +40,45 @@ const _: () = assert!(std::mem::size_of::<Insn>() == 8);
 const _: () = assert!(std::mem::align_of::<Insn>() == 4);
 const _: () = assert!(std::mem::size_of::<Op>() == 1);
 
-/// The flag in `imm` of AssignProp, ArrayPush and ArraySet: the value
-/// operand is a temporary read for the last time (moved, not copied).
+/// An operand as lowering classifies it, for an encoder (`enc`): the
+/// value is the register, the constant's index or the immediate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opnd {
+    /// A temporary (a register at or past `ncv`).
+    Tmp(u32),
+    /// A compiled variable (below `ncv`).
+    Cv(u32),
+    /// A literal: of any other type, an int, a string.
+    K(u32),
+    KInt(u32),
+    KStr(u32),
+    Imm(u32),
+    /// The frame's `$this`.
+    This,
+    /// A flag (`kinds::USED`, ..).
+    Flag(u8),
+}
+
+fn val(o: Opnd) -> u32 {
+    match o {
+        Opnd::Tmp(v) | Opnd::Cv(v) | Opnd::K(v) | Opnd::KInt(v) | Opnd::KStr(v) | Opnd::Imm(v) => v,
+        Opnd::This | Opnd::Flag(_) => 0,
+    }
+}
+
+/// An operand's value in a byte field.
+fn byte(o: Opnd) -> Option<u8> {
+    u8::try_from(val(o)).ok()
+}
+
+/// An operand's value in an `n`-bit field.
+fn bits(o: Opnd, n: u32) -> Option<u32> {
+    let v = val(o);
+    (n >= 32 || v < 1 << n).then_some(v)
+}
+
+/// The flag in `imm` of ArrayPush and ArraySet: the value operand is a
+/// temporary read for the last time (moved, not copied).
 pub const TAKE: u32 = 1 << 31;
 
 /// IncDec's `imm`: increment (else decrement), and post (the old value).
@@ -52,205 +98,10 @@ pub const VAL_CONST: u32 = 1 << 29;
 /// 256), not the register.
 pub const ARG_CONST: u32 = 1 << 30;
 
-/// The constant operand of a compare-and-branch or a fused step (the
-/// `b` and `c` bytes).
+/// The constant operand of a fused step (the `b` and `c` bytes).
 #[inline(always)]
 pub fn wide(insn: &Insn) -> usize {
     usize::from(insn.b) | usize::from(insn.c) << 8
-}
-
-/// An opcode. Operands are listed as `a`, `b`, `c` (registers) and `imm`.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Op {
-    /// Not run by the loop: `step` runs the `Instr` at this pc.
-    Slow,
-    /// a = `$this`
-    This,
-    /// a = b->(property site imm)
-    FetchProp,
-    /// a = `$this`->(property site imm)
-    FetchPropThis,
-    /// a->(site imm & !TAKE) = b; c = the value
-    AssignProp,
-    /// `$this`->(site) = b; c = the value
-    AssignPropThis,
-    VerifyArgs,
-    /// a: the value returned
-    VerifyReturn,
-    /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
-    Intrinsic,
-    /// pass b's variable c as argument imm >> 16 of method site imm & 0xffff on the object in a
-    SendVarMethod,
-    /// pc = imm
-    Jump,
-    /// compare a and b, jump to imm
-    JumpLt,
-    JumpNotLt,
-    JumpLe,
-    JumpNotLe,
-    JumpEq,
-    JumpNotEq,
-    JumpIdentical,
-    JumpNotIdentical,
-    /// a = b (cmp imm, `cmp`) c
-    Compare,
-    IncVar,
-    DecVar,
-    /// step a, test against b, jump to imm
-    IncJumpLt,
-    IncJumpLe,
-    DecJumpGt,
-    DecJumpGe,
-    /// a = b (op imm, `binop`) c
-    Binary,
-    Add,
-    Sub,
-    Mul,
-    /// a = the c registers from b concatenated
-    ConcatN,
-    /// a = b
-    Move,
-    Assign,
-    AssignTake,
-    Free,
-    /// test a, jump to imm
-    JumpIf,
-    JumpIfNot,
-    /// a = b[c]
-    FetchDim,
-    /// a = isset(b[c])
-    IssetDim,
-    /// a[b] = c; imm = the result register
-    AssignDim,
-    /// a[b] (op imm >> 8) = c; imm & 0xff = the result register
-    AssignDimOp,
-    /// next of iterator a: value to b (and key to c for IterNextKey), or jump to imm
-    IterNext,
-    IterNextKey,
-    /// a (op imm) = b
-    AssignOp,
-    /// a's step (imm: INC, POST) into b
-    IncDec,
-    LoadNull,
-    /// a = !b
-    Not,
-    ToBool,
-    /// a = isset(b)
-    IssetVar,
-    /// a ?? : b = a and jump to imm when set
-    JumpIfSet,
-    /// a = [] with room for imm
-    NewArray,
-    /// a[] = b (imm: TAKE)
-    ArrayPush,
-    /// a[b] = c (imm: TAKE)
-    ArraySet,
-    /// a = constant of site imm
-    FetchConst,
-    /// a = class constant: class reference imm >> 16, the name the
-    /// constant imm & 0xffff (its cache entry, as a property name's)
-    ClassConst,
-    /// foreach over a: the array (b, b + 1 = it and its position 0), or to
-    /// imm when it is empty
-    IterInit,
-    /// argument n (imm >> 16) of call site imm & 0xffff: a = b, when the
-    /// function takes it by value
-    SendVar,
-    /// call site imm with the b arguments at a, result to c
-    Call,
-    /// `f(x0, .., xn-1)`, x the b registers from a (one for any register,
-    /// several when they are consecutive), whose `Instr`s are the b `Move`s
-    /// into the call's argument registers (from imm >> 16) and the `Call`
-    /// (site imm & 0xffff, result to c) that follow: a frameless builtin
-    /// call reads its arguments where they are, and pc goes past the call.
-    /// Anything else runs the first Move (and the code after it) as it is.
-    CallRegs,
-    /// a = b->(method site imm & 0xffff) with the imm >> 16 arguments at c
-    MethodCall,
-    /// a = a new object of class reference imm (its constructor not run)
-    New,
-    /// the constructor of the object in a, with the c arguments at b
-    Construct,
-    /// a = class reference imm >> 16's method (site imm & 0xffff) with
-    /// the c arguments at b; sends no variables itself (`vars` is NO_VARS)
-    StaticCall,
-    /// return a
-    Return,
-    ReturnNull,
-
-    // The constant forms: the same operations with one operand a literal,
-    // read in place from the closure's constants (`Function::consts`), as
-    // PHP's handlers read a CONST operand. `K` below is that constant.
-    /// a = K (imm)
-    LoadConst,
-    /// variable a = K (imm)
-    AssignC,
-    /// return K (imm)
-    ReturnC,
-    /// compare a with K (`wide`: b | c << 8), jump to imm; K is the right
-    /// operand (`a < K`), so `Gt`/`Ge` cover a literal on the left
-    JumpLtC,
-    JumpNotLtC,
-    JumpLeC,
-    JumpNotLeC,
-    JumpGtC,
-    JumpNotGtC,
-    JumpGeC,
-    JumpNotGeC,
-    JumpEqC,
-    JumpNotEqC,
-    JumpIdenticalC,
-    JumpNotIdenticalC,
-    /// a = b (cmp imm & 15, `cmp`) K (imm >> 8)
-    CompareC,
-    /// a = b op K (imm)
-    AddC,
-    SubC,
-    MulC,
-    /// a = b (op imm & 15, `binop`) K (imm >> 8), or K op b with CONST_LEFT
-    BinaryC,
-    /// a (op imm & 15) = K (imm >> 8)
-    AssignOpC,
-    /// step a, test against K (`wide`), jump to imm
-    IncJumpLtC,
-    IncJumpLeC,
-    DecJumpGtC,
-    DecJumpGeC,
-    /// a = b[K] (imm)
-    FetchDimC,
-    /// a = isset(b[K]) (imm)
-    IssetDimC,
-    /// a[K (imm >> 8)] = c; imm & 0xff = the result register
-    AssignDimCK,
-    /// a[b] = K (imm >> 8); imm & 0xff = the result register
-    AssignDimCV,
-    /// a[] = K (imm)
-    ArrayPushC,
-    /// a[key] = val with the key, the value or both constants (KEY_CONST,
-    /// VAL_CONST; the constants in imm bits 0..14 and 14..28; TAKE as
-    /// ArraySet's)
-    ArraySetC,
-}
-
-/// The constant-form opcode of a compare-and-branch: jump when `a cmp K`
-/// is `when`, for the conditions a branch tests.
-fn jump_c(cmp: Cmp, when: bool) -> Option<Op> {
-    Some(match (cmp, when) {
-        (Cmp::Lt, true) => Op::JumpLtC,
-        (Cmp::Lt, false) => Op::JumpNotLtC,
-        (Cmp::Le, true) => Op::JumpLeC,
-        (Cmp::Le, false) => Op::JumpNotLeC,
-        (Cmp::Gt, true) => Op::JumpGtC,
-        (Cmp::Gt, false) => Op::JumpNotGtC,
-        (Cmp::Ge, true) => Op::JumpGeC,
-        (Cmp::Ge, false) => Op::JumpNotGeC,
-        (Cmp::Eq, true) => Op::JumpEqC,
-        (Cmp::Eq, false) => Op::JumpNotEqC,
-        (Cmp::Identical, true) => Op::JumpIdenticalC,
-        (Cmp::Identical, false) => Op::JumpNotIdenticalC,
-        _ => return None,
-    })
 }
 
 /// `a cmp b` as `b cmp' a`.
@@ -334,6 +185,19 @@ fn cmp_imm(c: Cmp) -> u32 {
     }
 }
 
+/// A compare-and-branch's comparison as JUMP_CMP's flag.
+fn cmp_flag(c: Cmp) -> Option<u8> {
+    Some(match c {
+        Cmp::Lt => kinds::LT,
+        Cmp::Le => kinds::LE,
+        Cmp::Gt => kinds::GT,
+        Cmp::Ge => kinds::GE,
+        Cmp::Eq => kinds::EQ,
+        Cmp::Identical => kinds::ID,
+        _ => return None,
+    })
+}
+
 const SLOW: Insn = Insn { op: Op::Slow, a: 0, b: 0, c: 0, imm: 0 };
 
 /// A register operand as a byte, if it is in the window.
@@ -344,7 +208,7 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_at(code, pc, func.consts.len()).unwrap_or(SLOW)).collect()
+    (0..code.len()).map(|pc| lower_at(code, pc, &func.consts, func.ncv).unwrap_or(SLOW)).collect()
 }
 
 /// The property cache entry of a name operand: its constant's index.
@@ -359,15 +223,42 @@ fn k(reg: Reg, nconsts: usize) -> Option<u32> {
     (i < nconsts).then_some(i as u32)
 }
 
-fn lower_at(code: &[Instr], pc: usize, nconsts: usize) -> Option<Insn> {
+/// Constant `i` as an operand: of its type.
+fn konst(consts: &[Frozen], i: usize) -> Option<Opnd> {
+    Some(match consts.get(i)? {
+        Frozen::Int(_) => Opnd::KInt(i as u32),
+        Frozen::Str(_) => Opnd::KStr(i as u32),
+        _ => Opnd::K(i as u32),
+    })
+}
+
+/// A register or constant operand, classified: a temporary or a variable
+/// (by `ncv`), a literal by its type. None for a constant past the table.
+fn opnd(reg: Reg, consts: &[Frozen], ncv: Reg) -> Option<Opnd> {
+    match const_index(reg) {
+        Some(i) => konst(consts, i),
+        None if reg < ncv => Some(Opnd::Cv(u32::from(reg))),
+        None => Some(Opnd::Tmp(u32::from(reg))),
+    }
+}
+
+/// UNUSED when the instruction after `pc` frees `dst` (the handler then
+/// writes no result and goes past that Free), else USED.
+fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
+    Opnd::Flag(if matches!(code.get(pc + 1), Some(&Instr::Free { reg }) if reg == dst) { kinds::UNUSED } else { kinds::USED })
+}
+
+fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<Insn> {
+    let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
+    let o = |reg: Reg| opnd(reg, consts, ncv);
     // A constant operand: its index, when the instruction has one there.
     let k = |reg: Reg| k(reg, nconsts);
     // The constant forms: `a` a register and K in the b and c bytes (a
-    // branch or a fused step, whose imm is the target), or K in imm.
+    // fused step, whose imm is the target).
     let wide = |op: Op, a: Reg, kk: u32, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: kk as u8, c: (kk >> 8) as u8, imm }) };
-    // A comparison, one side a register and the other K: the opcode
-    // (and the test as `reg cmp K`).
+    // A comparison, one side a register and the other K: the test as
+    // `reg cmp K`.
     let cmp_c = |cmp: Cmp, a: Reg, b: Reg| -> Option<(Cmp, Reg, u32)> {
         match (k(a), k(b)) {
             (None, Some(kb)) => Some((cmp, a, kb)),
@@ -396,23 +287,18 @@ fn lower_at(code: &[Instr], pc: usize, nconsts: usize) -> Option<Insn> {
     }
     let take = |t: bool| if t { TAKE } else { 0 };
     match code[pc] {
-        Instr::This { dst } => i(Op::This, dst, 0, 0, 0),
+        // The generated instructions (`ops.def`): the encoder picks the
+        // specialisation of the operands' kinds.
+        Instr::This { dst } => enc::this([o(dst)?]),
         Instr::FetchProp { dst, obj, name, .. } => {
-            let site = prop_site(name, nconsts)?;
-            if obj == THIS { i(Op::FetchPropThis, dst, 0, 0, site) } else { i(Op::FetchProp, dst, obj, 0, site) }
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::fetch_prop([o(dst)?, if obj == THIS { Opnd::This } else { o(obj)? }, site])
         }
         Instr::AssignProp { obj, name, val, dst, take: t } => {
-            let site = prop_site(name, nconsts)?;
-            if obj == THIS { i(Op::AssignPropThis, 0, val, dst, site | take(t)) } else { i(Op::AssignProp, obj, val, dst, site | take(t)) }
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            let obj = if obj == THIS { Opnd::This } else { o(obj)? };
+            enc::assign_prop([obj, o(val)?, Opnd::Flag(if t { kinds::TAKE } else { kinds::COPY }), res(code, pc, dst), o(dst)?, site])
         }
-        Instr::Rare { op: Rare::VerifyArgs, .. } => i(Op::VerifyArgs, 0, 0, 0, 0),
-        Instr::Rare { op: Rare::VerifyReturn, a, .. } => i(Op::VerifyReturn, a, 0, 0, 0),
-        Instr::Rare { op, a, b, c, class } if op.is_intrinsic() => {
-            let kind = INTRINSICS.iter().position(|&k| k == op)? as u32;
-            i(Op::Intrinsic, a, b, c, u32::from(class) | kind << 16)
-        }
-        Instr::SendVarMethod { obj, method, n, arg, var } => i(Op::SendVarMethod, obj, arg, var, u32::from(method) | u32::from(n) << 16),
-        Instr::Jump { target } => i(Op::Jump, 0, 0, 0, target),
         Instr::JumpLt { .. }
         | Instr::JumpNotLt { .. }
         | Instr::JumpLe { .. }
@@ -422,24 +308,30 @@ fn lower_at(code: &[Instr], pc: usize, nconsts: usize) -> Option<Insn> {
         | Instr::JumpIdentical { .. }
         | Instr::JumpNotIdentical { .. } => {
             let (cmp, a, b, when, target) = code[pc].as_jump_cmp()?;
-            match cmp_c(cmp, a, b) {
-                Some((cmp, a, kk)) => wide(jump_c(cmp, when)?, a, kk, target),
-                None => {
-                    let op = match (cmp, when) {
-                        (Cmp::Lt, true) => Op::JumpLt,
-                        (Cmp::Lt, false) => Op::JumpNotLt,
-                        (Cmp::Le, true) => Op::JumpLe,
-                        (Cmp::Le, false) => Op::JumpNotLe,
-                        (Cmp::Eq, true) => Op::JumpEq,
-                        (Cmp::Eq, false) => Op::JumpNotEq,
-                        (Cmp::Identical, true) => Op::JumpIdentical,
-                        (Cmp::Identical, false) => Op::JumpNotIdentical,
-                        _ => return None,
-                    };
-                    i(op, a, b, 0, target)
-                }
-            }
+            // A literal on the left goes to the right.
+            let (cmp, a, b) = if const_index(a).is_some() && const_index(b).is_none() { (swapped(cmp), b, a) } else { (cmp, a, b) };
+            enc::jump_cmp([Opnd::Flag(cmp_flag(cmp)?), Opnd::Flag(if when { kinds::T } else { kinds::F }), o(a)?, o(b)?, Opnd::Imm(target)])
         }
+        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| enc::mov([o(dst)?, o(src)?])),
+        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| enc::mov([o(dst)?, konst(consts, usize::from(kk))?])),
+        Instr::Assign { var, src } => enc::assign([o(var)?, o(src)?]),
+        Instr::AssignTake { var, src } => enc::assign_take([o(var)?, o(src)?]),
+        Instr::Free { reg } => enc::free([o(reg)?]),
+        Instr::JumpIf { cond, target } => enc::jump_cond([Opnd::Flag(kinds::T), o(cond)?, Opnd::Imm(target)]),
+        Instr::JumpIfNot { cond, target } => enc::jump_cond([Opnd::Flag(kinds::F), o(cond)?, Opnd::Imm(target)]),
+        Instr::FetchDim { dst, arr, key, .. } => enc::fetch_dim([o(dst)?, o(arr)?, o(key)?]),
+        Instr::IssetDim { dst, var, keys, n: 1 } => enc::isset_dim([o(dst)?, o(var)?, o(keys)?]),
+        Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => enc::assign_dim([o(var)?, o(keys)?, o(val)?, res(code, pc, dst), o(dst)?]),
+
+        // The hand-written ones.
+        Instr::Rare { op: Rare::VerifyArgs, .. } => i(Op::VerifyArgs, 0, 0, 0, 0),
+        Instr::Rare { op: Rare::VerifyReturn, a, .. } => i(Op::VerifyReturn, a, 0, 0, 0),
+        Instr::Rare { op, a, b, c, class } if op.is_intrinsic() => {
+            let kind = INTRINSICS.iter().position(|&k| k == op)? as u32;
+            i(Op::Intrinsic, a, b, c, u32::from(class) | kind << 16)
+        }
+        Instr::SendVarMethod { obj, method, n, arg, var } => i(Op::SendVarMethod, obj, arg, var, u32::from(method) | u32::from(n) << 16),
+        Instr::Jump { target } => i(Op::Jump, 0, 0, 0, target),
         Instr::Compare { cmp, dst, a, b } => match cmp_c(cmp, a, b) {
             Some((cmp, a, kk)) => i(Op::CompareC, dst, a, 0, cmp_imm(cmp) | kk << 8),
             None => i(Op::Compare, dst, a, b, cmp_imm(cmp)),
@@ -479,29 +371,6 @@ fn lower_at(code: &[Instr], pc: usize, nconsts: usize) -> Option<Insn> {
             _ => i(Op::Mul, dst, a, b, 0),
         },
         Instr::ConcatN { dst, start, n } => i(Op::ConcatN, dst, start, Reg::from(n), 0),
-        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| i(Op::Move, dst, src, 0, 0)),
-        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| i(Op::LoadConst, dst, 0, 0, u32::from(kk))),
-        Instr::Assign { var, src } => match k(src) {
-            Some(kk) => i(Op::AssignC, var, 0, 0, kk),
-            None => i(Op::Assign, var, src, 0, 0),
-        },
-        Instr::AssignTake { var, src } => i(Op::AssignTake, var, src, 0, 0),
-        Instr::Free { reg } => i(Op::Free, reg, 0, 0, 0),
-        Instr::JumpIf { cond, target } => i(Op::JumpIf, cond, 0, 0, target),
-        Instr::JumpIfNot { cond, target } => i(Op::JumpIfNot, cond, 0, 0, target),
-        Instr::FetchDim { dst, arr, key, .. } => match k(key) {
-            Some(kk) => i(Op::FetchDimC, dst, arr, 0, kk),
-            None => i(Op::FetchDim, dst, arr, key, 0),
-        },
-        Instr::IssetDim { dst, var, keys, n: 1 } => match k(keys) {
-            Some(kk) => i(Op::IssetDimC, dst, var, 0, kk),
-            None => i(Op::IssetDim, dst, var, keys, 0),
-        },
-        Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => match (k(keys), k(val)) {
-            (Some(kk), None) => i(Op::AssignDimCK, var, 0, val, u32::from(r(dst)?) | kk << 8),
-            (None, Some(kk)) => i(Op::AssignDimCV, var, keys, 0, u32::from(r(dst)?) | kk << 8),
-            _ => i(Op::AssignDim, var, keys, val, u32::from(r(dst)?)),
-        },
         Instr::AssignDimOp { op, var, keys, n: 1, val, dst } => i(Op::AssignDimOp, var, keys, val, u32::from(r(dst)?) | binop_imm(op) << 8),
         Instr::IterNext { iter, val, key, has_key, end } => i(if has_key { Op::IterNextKey } else { Op::IterNext }, iter, val, if has_key { key } else { 0 }, end),
         Instr::AssignOp { op, var, src } => match k(src) {
@@ -598,6 +467,11 @@ mod tests {
         }
     }
 
+    /// 512 constants: ints, but 7 is a string and 9 a float.
+    fn consts() -> Vec<Frozen> {
+        (0..512).map(|i| if i == 7 { Frozen::Str("k".into()) } else if i == 9 { Frozen::Float(0.5) } else { Frozen::Int(i) }).collect()
+    }
+
     #[test]
     fn moves_into_a_call_become_one_call() {
         let code = [
@@ -610,20 +484,22 @@ mod tests {
             Instr::Move { dst: 11, src: 5 },
             Instr::Call { site: 6, base: 10, argc: 2, dst: 12 },
         ];
-        let at = |pc| lower_at(&code, pc, 0).unwrap();
+        let at = |pc| lower_at(&code, pc, &[], 0).unwrap();
         assert_eq!(at(0), Insn { op: Op::CallRegs, a: 2, b: 2, c: 12, imm: 4 | 10 << 16 });
-        assert_eq!(at(1).op, Op::Move);
+        assert_eq!(at(1).op, Op::P8_MOVE_REG);
         assert_eq!(at(3), Insn { op: Op::CallRegs, a: 7, b: 1, c: 7, imm: 5 | 10 << 16 });
         // Not consecutive: the Moves stay.
-        assert_eq!(at(5).op, Op::Move);
-        assert_eq!(at(6).op, Op::Move);
+        assert_eq!(at(5).op, Op::P8_MOVE_REG);
+        assert_eq!(at(6).op, Op::P8_MOVE_REG);
     }
 
     #[test]
     fn wide_registers_are_slow() {
-        let code = [Instr::Add { dst: 300, a: 1, b: 2 }, Instr::Add { dst: 3, a: 1, b: 2 }];
-        assert!(lower_at(&code, 0, 0).is_none());
-        assert_eq!(lower_at(&code, 1, 0).unwrap().op, Op::Add);
+        let code = [Instr::Add { dst: 300, a: 1, b: 2 }, Instr::Add { dst: 3, a: 1, b: 2 }, Instr::Move { dst: 300, src: 1 }, Instr::Free { reg: 256 }];
+        assert!(lower_at(&code, 0, &[], 0).is_none());
+        assert_eq!(lower_at(&code, 1, &[], 0).unwrap().op, Op::Add);
+        assert!(lower_at(&code, 2, &[], 0).is_none());
+        assert!(lower_at(&code, 3, &[], 0).is_none());
     }
 
     #[test]
@@ -646,21 +522,64 @@ mod tests {
             // Both operands constants: no form (the compiler loads one).
             Instr::JumpEq { a: c(1), b: c(2), target: 9 },
         ];
-        let at = |pc| lower_at(&code, pc, 512).unwrap();
-        assert_eq!(at(0), Insn { op: Op::JumpLtC, a: 2, b: 3, c: 0, imm: 9 });
-        assert_eq!(at(1), Insn { op: Op::JumpGtC, a: 2, b: 44, c: 1, imm: 9 });
-        assert_eq!(at(2), Insn { op: Op::JumpNotIdenticalC, a: 4, b: 1, c: 0, imm: 9 });
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 0).unwrap();
+        assert_eq!(at(0), Insn { op: Op::P8_JUMP_CMP_LT_T_K, a: 2, b: 3, c: 0, imm: 9 });
+        assert_eq!(at(1), Insn { op: Op::P8_JUMP_CMP_GT_T_K, a: 2, b: 44, c: 1, imm: 9 });
+        assert_eq!(at(2), Insn { op: Op::P8_JUMP_CMP_ID_F_K, a: 4, b: 1, c: 0, imm: 9 });
         assert_eq!(at(3), Insn { op: Op::CompareC, a: 5, b: 4, c: 0, imm: cmp_imm(Cmp::Ge) | 1 << 8 });
         assert_eq!(at(4), Insn { op: Op::AddC, a: 5, b: 4, c: 0, imm: 7 });
         assert_eq!(at(5), Insn { op: Op::SubC, a: 5, b: 4, c: 0, imm: 7 });
         assert_eq!(at(6), Insn { op: Op::BinaryC, a: 5, b: 4, c: 0, imm: binop_imm(BinOp::Concat) | CONST_LEFT | 7 << 8 });
         assert_eq!(at(7), Insn { op: Op::ArraySetC, a: 5, b: 0, c: 0, imm: KEY_CONST | VAL_CONST | 1 | 2 << 14 });
         assert_eq!(at(8), Insn { op: Op::CallRegs, a: 7, b: 1, c: 12, imm: 4 | 10 << 16 | ARG_CONST });
-        assert_eq!(at(10), Insn { op: Op::AssignC, a: 1, b: 0, c: 0, imm: 2 });
+        assert_eq!(at(10), Insn { op: Op::P8_ASSIGN_K, a: 1, b: 0, c: 0, imm: 2 });
         assert_eq!(at(11), Insn { op: Op::IncJumpLtC, a: 1, b: 2, c: 1, imm: 0 });
         assert_eq!(at(12), Insn { op: Op::ReturnC, a: 0, b: 0, c: 0, imm: 2 });
-        assert!(lower_at(&code, 13, 512).is_none());
+        assert!(lower_at(&code, 13, &consts, 0).is_none());
         // A constant past the table is no form either.
-        assert!(lower_at(&code, 0, 3).is_none());
+        assert!(lower_at(&code, 0, &consts[..3], 0).is_none());
+    }
+
+    #[test]
+    fn the_kinds_pick_the_handler() {
+        use crate::const_operand as c;
+        let code = [
+            Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: false, empty: false },
+            Instr::FetchDim { dst: 5, arr: 1, key: c(3), quiet: false, empty: false },
+            Instr::FetchDim { dst: 5, arr: 1, key: 2, quiet: false, empty: false },
+            // A float key: no specialisation (`step`'s).
+            Instr::FetchDim { dst: 5, arr: 1, key: c(9), quiet: false, empty: false },
+            // The result freed next: UNUSED, and the site and the value in imm.
+            Instr::AssignProp { obj: THIS, name: c(4), val: c(5), dst: 6, take: false },
+            Instr::Free { reg: 6 },
+            Instr::AssignProp { obj: 1, name: c(4), val: 3, dst: 6, take: true },
+            Instr::JumpIfNot { cond: 1, target: 77 },
+            Instr::AssignDim { var: 1, keys: c(7), n: 1, append: false, val: 3, dst: 6 },
+            Instr::Free { reg: 6 },
+            // A literal key and a literal value: none.
+            Instr::AssignDim { var: 1, keys: c(7), n: 1, append: false, val: c(3), dst: 6 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 2);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::P8_FETCH_DIM_KSTR, a: 5, b: 1, c: 0, imm: 7 });
+        assert_eq!(at(1).unwrap().op, Op::P8_FETCH_DIM_KINT);
+        assert_eq!(at(2).unwrap(), Insn { op: Op::P8_FETCH_DIM_REG, a: 5, b: 1, c: 2, imm: 0 });
+        assert!(at(3).is_none());
+        assert_eq!(at(4).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_THIS_K_COPY_UNUSED, a: 6, b: 0, c: 0, imm: 5 | 4 << 16 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_REG_REG_TAKE_USED, a: 1, b: 3, c: 6, imm: 4 });
+        assert_eq!(at(7).unwrap(), Insn { op: Op::P8_JUMP_COND_F, a: 1, b: 0, c: 0, imm: 77 });
+        assert_eq!(at(8).unwrap(), Insn { op: Op::P8_ASSIGN_DIM_KSTR_REG_UNUSED, a: 1, b: 3, c: 6, imm: 7 });
+        assert!(at(10).is_none());
+    }
+
+    #[test]
+    fn every_generated_opcode_is_listed() {
+        // SPECS and the enum agree, in order, after the hand opcodes.
+        let first = SPECS[0].0 as usize;
+        for (n, (op, _, _)) in SPECS.iter().enumerate() {
+            assert_eq!(*op as usize, first + n);
+        }
+        assert!(SPECS.len() > 40);
     }
 }
