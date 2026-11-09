@@ -1,0 +1,172 @@
+-- empty needle
+strpos: int(0)
+strpos off: int(2)
+stripos: int(3)
+strrpos: int(3)
+strrpos neg: int(2)
+strripos: int(3)
+strstr: string(3) "abc"
+stristr before: string(0) ""
+str_contains: bool(true)
+str_contains empty: bool(true)
+str_replace: string(3) "abc"
+str_ireplace: string(3) "abc"
+substr_count: ValueError: substr_count(): Argument #2 ($needle) must not be empty
+explode: ValueError: explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters
+-- needle longer than haystack
+strpos: bool(false)
+stripos: bool(false)
+strrpos: bool(false)
+strripos: bool(false)
+strstr: bool(false)
+str_contains: bool(false)
+substr_count: int(0)
+str_replace: string(2) "ab"
+explode: array(1) {
+  [0]=>
+  string(2) "ab"
+}
+needle at end: int(2)
+needle at end i: int(2)
+rneedle at start: int(0)
+rneedle at start i: int(0)
+-- overlapping matches
+str_replace aaa: string(3) "bba"
+str_replace aba: string(3) "XbX"
+str_ireplace aba: string(3) "XbX"
+substr_count aa: int(2)
+substr_count aba: int(2)
+substr_count off: int(2)
+substr_count len: int(1)
+substr_count neg: int(1)
+str_replace count: string(3) "bba"
+count: int(2)
+str_replace array: string(2) "cc"
+strrpos overlap: int(2)
+strrpos off: int(3)
+strrpos neg off: int(0)
+strrpos neg off2: int(3)
+strripos neg off: int(0)
+stripos off: int(3)
+-- strtr pairs
+overlap keys: string(2) "YY"
+prefix chain: string(2) "31"
+no rescan: string(9) "hello All"
+swap: string(2) "ba"
+
+Warning: strtr(): Ignoring replacement of empty string in %s on line 66
+empty key: string(3) "aBc"
+
+Warning: strtr(): Ignoring replacement of empty string in %s on line 67
+only empty key: string(3) "abc"
+empty subject: string(0) ""
+empty array: string(3) "abc"
+longer than subject: string(2) "aB"
+int keys: string(12) "aonebtwotwoc"
+mixed keys: string(14) "ten oh-one one"
+single pair: string(2) "ba"
+single byte pair: string(6) "bonono"
+no match: string(3) "xyz"
+values: string(8) "1 2.5 1 "
+
+Warning: Array to string conversion in %s on line 77
+
+Warning: Array to string conversion in %s on line 77
+array value: string(13) "Array-Array-B"
+array value unused: string(3) "xyz"
+
+Warning: Array to string conversion in %s on line 79
+single array value: string(3) "xyz"
+binary: string(3) "a0B"
+ties by length: string(2) "3d"
+three-arg: string(3) "xyc"
+-- case-insensitive, non-ASCII
+stripos ascii: int(6)
+stripos e-acute: int(9)
+stripos latin1: int(2)
+stripos latin1 upper: int(2)
+strripos utf8: int(0)
+stristr utf8: string(7) "STRASSE"
+stristr sharp s: string(3) "ße"
+str_ireplace utf8: string(9) "Éte eTÉ"
+str_ireplace mixed: string(7) "_ _ aÉ"
+str_ireplace digits: string(5) "0_34_"
+stripos high byte first: int(1)
+stripos at: int(3)
+stripos bad off: ValueError: stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+strripos bad off: ValueError: strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+-- explode limits
+plain: array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+}
+limit 2: array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(3) "b,c"
+}
+limit 1: array(1) {
+  [0]=>
+  string(5) "a,b,c"
+}
+limit 0: array(1) {
+  [0]=>
+  string(5) "a,b,c"
+}
+limit -1: array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+limit -3: array(0) {
+}
+limit -5: array(0) {
+}
+limit big: array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+multi-byte sep: array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(4) ":c::"
+}
+overlap sep: array(3) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "a"
+}
+sep at ends: array(3) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(0) ""
+}
+no sep: array(0) {
+}
+empty subject: array(1) {
+  [0]=>
+  string(0) ""
+}
+empty subject neg: array(0) {
+}

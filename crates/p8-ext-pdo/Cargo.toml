@@ -7,3 +7,5 @@ description = "p8's pdo extension: the driver-agnostic PDO core (PDO, PDOStateme
 
 [dependencies]
 p8-runtime = { path = "../p8-runtime" }
+# Substring search (SIMD, safe API; the version p8-syntax uses)
+memchr = "2.7"

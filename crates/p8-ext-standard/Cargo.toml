@@ -7,6 +7,10 @@ description = "p8's standard extension: PHP 8.4's constants and core builtin fun
 
 [dependencies]
 p8-runtime = { path = "../p8-runtime" }
+# Substring search (SIMD, safe API; the version p8-syntax uses) and strtr's
+# key table hasher (the one p8-runtime uses)
+memchr = "2.7"
+foldhash = "0.1"
 # Hashes (RustCrypto, pure Rust; the versions the workspace already uses)
 md-5 = "0.10"
 sha1 = "0.10"

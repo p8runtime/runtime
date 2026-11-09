@@ -894,17 +894,14 @@ fn find_first(h: &[u8], n: &[u8]) -> Option<usize> {
     if n.is_empty() {
         return Some(0);
     }
-    h.windows(n.len()).position(|w| w == n)
+    memchr::memmem::find(h, n)
 }
 
 fn find_last(h: &[u8], n: &[u8]) -> Option<usize> {
     if n.is_empty() {
         return Some(h.len());
     }
-    if h.len() < n.len() {
-        return None;
-    }
-    (0..=h.len() - n.len()).rev().find(|&i| &h[i..i + n.len()] == n)
+    memchr::memmem::rfind(h, n)
 }
 
 fn find(h: &[u8], n: &[u8], offset: i64, reverse: bool) -> Found {

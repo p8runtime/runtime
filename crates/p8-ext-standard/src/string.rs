@@ -11,6 +11,8 @@ use p8_runtime::lent;
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 
+use memchr::memmem;
+
 /// The string functions on the borrowed ABI: their strings are read in
 /// place (no handle made, no program-memory literal copied).
 pub static FAST: &[FastBuiltin] = &[
@@ -229,18 +231,102 @@ fn rtrim(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
     trim_with(args, false, true)
 }
 
+/// The first `needle` in `haystack` (zend_memnstr): memchr's SIMD
+/// substring search, not a compare at every position. "" is found at 0.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
+    match needle {
+        [] => Some(0),
+        [b] => memchr::memchr(*b, haystack),
+        _ => memmem::find(haystack, needle),
     }
-    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// The last `needle` in `haystack` (zend_memnrstr); "" is found at the end.
 fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(haystack.len());
+    match needle {
+        [] => Some(haystack.len()),
+        [b] => memchr::memrchr(*b, haystack),
+        _ => memmem::rfind(haystack, needle),
     }
-    haystack.windows(needle.len()).rposition(|w| w == needle)
+}
+
+/// Whether case folding can change `needle` (it has an ASCII letter);
+/// if not, a folded search is an exact one.
+fn foldable(needle: &[u8]) -> bool {
+    needle.iter().any(u8::is_ascii_alphabetic)
+}
+
+/// The first `needle` in `haystack`, ASCII letters matching either case
+/// (PHP 8.2+'s locale-independent folding; other bytes match exactly).
+/// No folded copy is made: memchr finds the first byte in either case,
+/// the rest is compared folded in place.
+fn find_fold(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if !foldable(needle) {
+        return find(haystack, needle);
+    }
+    let last = haystack.len().checked_sub(needle.len())?;
+    let (first, rest) = (needle[0], &needle[1..]);
+    let mut from = 0;
+    while let Some(i) = memchr::memchr2(first.to_ascii_lowercase(), first.to_ascii_uppercase(), &haystack[from..=last]) {
+        let at = from + i;
+        if haystack[at + 1..at + needle.len()].eq_ignore_ascii_case(rest) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// The last `needle` in `haystack`, folded as `find_fold` folds.
+fn rfind_fold(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if !foldable(needle) {
+        return rfind(haystack, needle);
+    }
+    let mut end = haystack.len().checked_sub(needle.len())? + 1;
+    let (first, rest) = (needle[0], &needle[1..]);
+    while let Some(at) = memchr::memrchr2(first.to_ascii_lowercase(), first.to_ascii_uppercase(), &haystack[..end]) {
+        if haystack[at + 1..at + needle.len()].eq_ignore_ascii_case(rest) {
+            return Some(at);
+        }
+        end = at;
+    }
+    None
+}
+
+/// The starts of the non-overlapping `needle`s in `haystack`, left to
+/// right (php_str_to_str_ex, substr_count, explode): one searcher built
+/// for the needle and reused across the haystack. `needle` is not empty.
+fn find_all<'a>(haystack: &'a [u8], needle: &'a [u8], fold: bool) -> Hits<'a> {
+    debug_assert!(!needle.is_empty());
+    match needle {
+        _ if fold && foldable(needle) => Hits::Folded { haystack, needle, from: 0 },
+        [b] => Hits::Byte(memchr::memchr_iter(*b, haystack)),
+        _ => Hits::Bytes(memmem::find_iter(haystack, needle)),
+    }
+}
+
+/// `find_all`'s iterator.
+#[allow(clippy::large_enum_variant)] // one per search, on the stack: boxing the searcher would allocate per call
+enum Hits<'a> {
+    Byte(memchr::Memchr<'a>),
+    Bytes(memmem::FindIter<'a, 'a>),
+    Folded { haystack: &'a [u8], needle: &'a [u8], from: usize },
+}
+
+impl Iterator for Hits<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Hits::Byte(it) => it.next(),
+            Hits::Bytes(it) => it.next(),
+            Hits::Folded { haystack, needle, from } => {
+                let at = *from + find_fold(&haystack[*from..], needle)?;
+                *from = at + needle.len();
+                Some(at)
+            }
+        }
+    }
 }
 
 fn str_contains(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
@@ -266,12 +352,12 @@ fn offset(ctx: &dyn Ctx, func: &str, args: &[Value], len: usize) -> Result<usize
     Ok(at as usize)
 }
 
-/// strpos / stripos: the haystack and needle read in place (folded
-/// copies only for stripos).
+/// strpos / stripos: the haystack and needle read in place, folded in
+/// place for stripos.
 fn position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Result<Value, Throw> {
     let (h, n) = (lent::bytes(args, 0), lent::bytes(args, 1));
     let at = offset(ctx, func, args, h.len())?;
-    let found = if fold { find(&h[at..].to_ascii_lowercase(), &n.to_ascii_lowercase()) } else { find(&h[at..], n) };
+    let found = if fold { find_fold(&h[at..], n) } else { find(&h[at..], n) };
     Ok(found.map_or(Value::FALSE, |i| Value::int((at + i) as i64)))
 }
 
@@ -287,13 +373,7 @@ fn stripos(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
 /// (the needle may start there); a positive one starts it.
 fn last_position(ctx: &dyn Ctx, func: &str, args: &[Value], fold: bool) -> Result<Value, Throw> {
     let (h, n) = (lent::bytes(args, 0), lent::bytes(args, 1));
-    let folded;
-    let (h, n): (&[u8], &[u8]) = if fold {
-        folded = (h.to_ascii_lowercase(), n.to_ascii_lowercase());
-        (&folded.0, &folded.1)
-    } else {
-        (h, n)
-    };
+    let rfind = if fold { rfind_fold } else { rfind };
     let off = if args.len() > 2 { lent::int(args, 2) } else { 0 };
     let len = h.len() as i64;
     if off > len || off < -len {
@@ -343,7 +423,7 @@ fn substr(_: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
 fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (h, n) = (str_arg(args, 0), str_arg(args, 1));
     if n.is_empty() {
-        return Err(ctx.throw("ValueError", "substr_count(): Argument #2 ($needle) cannot be empty".into()));
+        return Err(ctx.throw("ValueError", "substr_count(): Argument #2 ($needle) must not be empty".into()));
     }
     let len = h.len() as i64;
     let off = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
@@ -361,13 +441,8 @@ fn substr_count(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             end
         }
     };
-    let (hay, needle) = (&h.as_bytes()[start as usize..end as usize], n.as_bytes());
-    let (mut count, mut i) = (0, 0);
-    while let Some(at) = find(&hay[i..], needle) {
-        count += 1;
-        i += at + needle.len();
-    }
-    Ok(Value::int(count))
+    let hay = &h.as_bytes()[start as usize..end as usize];
+    Ok(Value::int(find_all(hay, n.as_bytes(), false).count() as i64))
 }
 
 /// str_pad($string, $length, $pad_string = " ", $pad_type = STR_PAD_RIGHT)
@@ -470,15 +545,15 @@ fn explode(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Value, Fault> {
         return Err(ctx.fault_with("ValueError", "explode(): Argument #1 ($separator) must not be empty, use str_split() to split a string into characters".into()));
     }
     let mut parts: Vec<&[u8]> = Vec::new();
-    let mut rest = s;
-    while let Some(at) = find(rest, sep) {
+    let mut from = 0;
+    for at in find_all(s, sep, false) {
         if limit > 0 && parts.len() as i64 == limit - 1 {
             break;
         }
-        parts.push(&rest[..at]);
-        rest = &rest[at + sep.len()..];
+        parts.push(&s[from..at]);
+        from = at + sep.len();
     }
-    parts.push(rest);
+    parts.push(&s[from..]);
     if limit < 0 {
         let keep = parts.len() as i64 + limit;
         parts.truncate(keep.max(0) as usize);
@@ -535,23 +610,15 @@ fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count:
     if search.is_empty() {
         return None;
     }
-    let lowered;
-    let (hay, needle): (&[u8], std::borrow::Cow<[u8]>) = if fold {
-        lowered = subject.to_ascii_lowercase();
-        (&lowered, std::borrow::Cow::Owned(search.to_ascii_lowercase()))
-    } else {
-        (subject, std::borrow::Cow::Borrowed(search))
-    };
-    let first = find(hay, &needle)?;
+    let mut hits = find_all(subject, search, fold);
+    let first = hits.next()?;
     let mut out = PhpStr::scratch(subject.len());
     let mut i = 0;
-    let mut at = Some(first);
-    while let Some(found) = at {
-        out.extend_from_slice(&subject[i..i + found]);
+    for found in std::iter::once(first).chain(hits) {
+        out.extend_from_slice(&subject[i..found]);
         out.extend_from_slice(replace);
-        i += found + needle.len();
+        i = found + search.len();
         *count += 1;
-        at = find(&hay[i..], &needle);
     }
     out.extend_from_slice(&subject[i..]);
     Some(out)
@@ -631,12 +698,7 @@ fn replace(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, T
         None => replace_in(&subject, &search, &with, fold, &mut count, &mut diags),
     };
     // One report per conversion, in order, as zval_get_string makes them.
-    for d in diags {
-        match d {
-            p8_runtime::ops::Diag::Warning(m) => ctx.warn(&m),
-            p8_runtime::ops::Diag::Deprecated(m) => ctx.deprecated(&m),
-        }
-    }
+    report(ctx, diags);
     if let Some(cell) = args.get(3).and_then(Value::as_reference) {
         *cell.borrow_mut() = Value::int(count);
     }
@@ -651,6 +713,108 @@ fn str_ireplace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     replace(ctx, args, true)
 }
 
+/// Each conversion's warnings and deprecations, in order, as
+/// zval_get_string makes them.
+fn report(ctx: &mut dyn Ctx, diags: Vec<p8_runtime::ops::Diag>) {
+    for d in diags {
+        match d {
+            p8_runtime::ops::Diag::Warning(m) => ctx.warn(&m),
+            p8_runtime::ops::Diag::Deprecated(m) => ctx.deprecated(&m),
+        }
+    }
+}
+
+/// `v` as a string appended to `out`, reporting what converting it says.
+fn push_text(ctx: &mut dyn Ctx, out: &mut Vec<u8>, v: &Value) {
+    let mut diags = Vec::new();
+    p8_runtime::ops::push_string(out, v, &mut diags);
+    report(ctx, diags);
+}
+
+/// strtr($string, $pairs): php_strtr_array. One pair is a plain
+/// left-to-right replace. More: at each position the longest key that
+/// matches there wins (keys are distinct, so there is never a tie), the
+/// candidates found by hash among the key lengths between the shortest
+/// and the longest, and only where some key's first byte is; replaced
+/// text is never rescanned. An empty key is warned about and ignored, a
+/// key longer than the string skipped, and a replacement converted to a
+/// string each time it is used (PHP converts per match too).
+fn strtr_pairs(ctx: &mut dyn Ctx, s: PhpStr, pairs: &PhpArray) -> Value {
+    let key_text = |k: Key| match k {
+        Key::Int(i) => PhpStr::from(i.to_string().as_str()),
+        Key::Str(k) => k,
+    };
+    if pairs.len() == 1 {
+        let Some((k, v)) = pairs.iter().next() else { return Value::str(s) };
+        let key = key_text(k);
+        let mut with = Vec::new();
+        push_text(ctx, &mut with, v);
+        if key.is_empty() {
+            ctx.warn("strtr(): Ignoring replacement of empty string");
+            return Value::str(s);
+        }
+        let mut count = 0;
+        return match replace_one(s.as_bytes(), key.as_bytes(), &with, false, &mut count) {
+            Some(out) => Value::str(PhpStr::from_scratch(out)),
+            None => Value::str(s),
+        };
+    }
+    let out = {
+        let bytes = s.as_bytes();
+        let mut keys: Vec<(PhpStr, &Value)> = Vec::with_capacity(pairs.len());
+        for (k, v) in pairs.iter() {
+            let key = key_text(k);
+            if key.is_empty() {
+                ctx.warn("strtr(): Ignoring replacement of empty string");
+            } else if key.len() <= bytes.len() {
+                keys.push((key, v));
+            }
+        }
+        let (Some(min), Some(max)) = (keys.iter().map(|(k, _)| k.len()).min(), keys.iter().map(|(k, _)| k.len()).max()) else {
+            return Value::str(s);
+        };
+        // Which lengths and first bytes some key has, and the keys by text
+        // (the first of equal texts kept, as zend_hash_add keeps it).
+        let (mut lens, mut firsts) = (vec![false; max + 1], [false; 256]);
+        let mut by_text: std::collections::HashMap<&[u8], &Value, foldhash::fast::FixedState> =
+            std::collections::HashMap::with_capacity_and_hasher(keys.len(), foldhash::fast::FixedState::default());
+        for (k, v) in &keys {
+            lens[k.len()] = true;
+            firsts[k.as_bytes()[0] as usize] = true;
+            by_text.entry(k.as_bytes()).or_insert(*v);
+        }
+        let mut out: Option<Vec<u8>> = None;
+        let (mut pos, mut copied) = (0, 0);
+        'scan: while pos + min <= bytes.len() {
+            if firsts[bytes[pos] as usize] {
+                let mut len = max.min(bytes.len() - pos);
+                while len >= min {
+                    if lens[len]
+                        && let Some(&with) = by_text.get(&bytes[pos..pos + len])
+                    {
+                        let o = out.get_or_insert_with(|| PhpStr::scratch(bytes.len()));
+                        o.extend_from_slice(&bytes[copied..pos]);
+                        push_text(ctx, o, with);
+                        pos += len;
+                        copied = pos;
+                        continue 'scan;
+                    }
+                    len -= 1;
+                }
+            }
+            pos += 1;
+        }
+        out.map(|mut o| {
+            o.extend_from_slice(&bytes[copied..]);
+            o
+        })
+    };
+    match out {
+        Some(o) => Value::str(PhpStr::from_scratch(o)),
+        None => Value::str(s),
+    }
+}
+
 /// strtr($string, $from, $to) maps bytes; strtr($string, $pairs) replaces
 /// substrings, longest match first, never rescanning replaced text.
 fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -659,39 +823,7 @@ fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         let Ok(pairs) = arg(args, 1).into_array() else {
             return Err(ctx.throw("TypeError", format!("strtr(): Argument #2 ($from) must be of type array, {} given", arg(args, 1).type_name())));
         };
-        let mut map: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-        let mut diags = Vec::new();
-        for (k, v) in pairs.iter() {
-            let key = match k {
-                Key::Int(i) => i.to_string().into_bytes(),
-                Key::Str(s) => s.as_bytes().to_vec(),
-            };
-            if key.is_empty() {
-                continue;
-            }
-            let mut with = Vec::new();
-            p8_runtime::ops::push_string(&mut with, v, &mut diags);
-            map.push((key, with));
-        }
-        if !diags.is_empty() {
-            ctx.warn("Array to string conversion");
-        }
-        map.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let bytes = s.as_bytes();
-        let mut out = PhpStr::scratch(bytes.len());
-        let mut i = 0;
-        'scan: while i < bytes.len() {
-            for (from, to) in &map {
-                if bytes[i..].starts_with(from) {
-                    out.extend_from_slice(to);
-                    i += from.len();
-                    continue 'scan;
-                }
-            }
-            out.push(bytes[i]);
-            i += 1;
-        }
-        return Ok(Value::str(PhpStr::from_scratch(out)));
+        return Ok(strtr_pairs(ctx, s, &pairs));
     }
     if args.len() < 3 {
         return Err(ctx.throw("ArgumentCountError", "strtr() expects exactly 3 arguments, 2 given".into()));
@@ -708,11 +840,7 @@ fn strtr(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn strstr_with(args: &[Value], fold: bool) -> Result<Value, Throw> {
     let (h, n) = (str_arg(args, 0), str_arg(args, 1));
     let before = args.len() > 2 && arg(args, 2).to_bool();
-    let found = if fold {
-        find(&h.as_bytes().to_ascii_lowercase(), &n.as_bytes().to_ascii_lowercase())
-    } else {
-        find(h.as_bytes(), n.as_bytes())
-    };
+    let found = if fold { find_fold(h.as_bytes(), n.as_bytes()) } else { find(h.as_bytes(), n.as_bytes()) };
     match found {
         Some(at) if before => string(h.as_bytes()[..at].to_vec()),
         Some(at) => string(h.as_bytes()[at..].to_vec()),
@@ -734,7 +862,7 @@ fn strrchr(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (h, n) = (str_arg(args, 0), str_arg(args, 1));
     let before = args.len() > 2 && arg(args, 2).to_bool();
     let c = n.as_bytes().first().copied().unwrap_or(0);
-    match h.as_bytes().iter().rposition(|&b| b == c) {
+    match memchr::memrchr(c, h.as_bytes()) {
         Some(at) if before => string(h.as_bytes()[..at].to_vec()),
         Some(at) => string(h.as_bytes()[at..].to_vec()),
         None => Ok(Value::FALSE),
