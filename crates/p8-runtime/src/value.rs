@@ -911,21 +911,22 @@ impl Value {
 
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
-        match (self.view(), other.view()) {
+        // (On the representation, not the view: a hot operator, and the
+        // view's pair match measured +33 instructions per `===`.)
+        match (&self.0, &other.0) {
             // One program-memory string per bytes: the same bytes are
             // the same pointer.
-            (V::IStr(a), V::IStr(b)) => std::ptr::eq(a, b),
-            (V::Str(a), V::Str(b)) => a == b,
-            (V::Ref(a), _) => a.borrow().identical(other),
-            (_, V::Ref(b)) => self.identical(&b.borrow()),
-            (V::Null | V::Undef, V::Null | V::Undef) => true,
-            (V::Bool(a), V::Bool(b)) => a == b,
-            (V::Int(a), V::Int(b)) => a == b,
+            (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
+            (Repr::Str(a), Repr::Str(b)) => a == b,
+            (Repr::Ref(a), _) => a.borrow().identical(other),
+            (_, Repr::Ref(b)) => self.identical(&b.borrow()),
+            (Repr::Null(_) | Repr::Undef(_), Repr::Null(_) | Repr::Undef(_)) => true,
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => a == b,
             // (As floats, not bits: NAN is not itself, 0.0 is -0.0.)
-            (V::Float(a), V::Float(b)) => a == b,
-            (V::IStr(_) | V::Str(_), V::IStr(_) | V::Str(_)) => self.as_str() == other.as_str(),
-            (V::Array(a), V::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
-            (V::Object(a), V::Object(b)) => Rc::ptr_eq(a, b),
+            (Repr::Float(a), Repr::Float(b)) => f64::from_bits(*a as u64) == f64::from_bits(*b as u64),
+            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str() == other.as_str(),
+            (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
+            (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
