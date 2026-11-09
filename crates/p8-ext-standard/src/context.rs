@@ -35,11 +35,11 @@ fn key(k: &[u8]) -> Key {
 }
 
 fn options(o: &Object) -> PhpArray {
-    o.dynamic.borrow().get(&key(OPTIONS)).and_then(Value::as_array).cloned().unwrap_or_default()
+    o.dynamic().get(&key(OPTIONS)).and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 fn store(o: &Object, options: PhpArray) {
-    o.dynamic.borrow_mut().insert(key(OPTIONS), Value::array(options));
+    o.dynamic_mut().insert(key(OPTIONS), Value::array(options));
 }
 
 /// `wrapper => [option => value]` merged into the context's options.
@@ -72,7 +72,7 @@ fn context_arg(ctx: &mut dyn Ctx, args: &[Value], n: usize, function: &str, stre
 
 fn set_params_on(ctx: &mut dyn Ctx, o: &Object, params: &PhpArray) -> Result<(), Throw> {
     if let Some(n) = params.get(&key(b"notification")) {
-        o.dynamic.borrow_mut().insert(key(NOTIFICATION), n.deref());
+        o.dynamic_mut().insert(key(NOTIFICATION), n.deref());
     }
     if let Some(opts) = params.get(&key(b"options")).map(Value::deref).and_then(|v| v.into_array().ok()) {
         merge(ctx, o, &opts)?;
@@ -138,7 +138,7 @@ fn set_options(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 fn get_params(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let o = context_arg(ctx, args, 0, "stream_context_get_params", true)?;
     let mut out = PhpArray::new();
-    if let Some(n) = o.dynamic.borrow().get(&key(NOTIFICATION)) {
+    if let Some(n) = o.dynamic().get(&key(NOTIFICATION)) {
         out.insert(key(b"notification"), n.clone());
     }
     out.insert(key(b"options"), Value::array(options(&o)));

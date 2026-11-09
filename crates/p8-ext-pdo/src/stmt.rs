@@ -944,11 +944,11 @@ fn set_prop(ctx: &mut dyn Ctx, obj: &Rc<Object>, class: &Rc<Class>, name: &[u8],
             obj.slots()[i].set(value)
         }
         None => {
-            let exists = obj.dynamic.borrow().contains_key(&str_key(name));
+            let exists = obj.dynamic().contains_key(&str_key(name));
             if !exists && class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 && class.lower != b"stdclass" {
                 ctx.deprecated(&format!("Creation of dynamic property {}::${} is deprecated", String::from_utf8_lossy(class.shown()), String::from_utf8_lossy(name)));
             }
-            obj.dynamic.borrow_mut().insert(str_key(name), value);
+            obj.dynamic_mut().insert(str_key(name), value);
         }
     }
     Ok(())
@@ -1253,7 +1253,7 @@ fn lazy_row(ctx: &mut dyn Ctx, this: &Rc<Object>) -> R {
             column_value(ctx, d.as_ref().expect("state"), i, None)
         };
         if n.as_bytes() != b"queryString" {
-            o.dynamic.borrow_mut().insert(column_key(n), v);
+            o.dynamic_mut().insert(column_key(n), v);
         }
     }
     Ok(Value::object(o))
@@ -1838,7 +1838,7 @@ pub fn it_rewind(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> R {
 // ---- PDORow (PDO::FETCH_LAZY) as an array ----
 
 pub fn row_offset_get(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    let d = this.dynamic.borrow();
+    let d = this.dynamic();
     let k = arg(args, 0);
     Ok(match k.as_int() {
         Some(i) => d.values().nth(i.max(0) as usize).map_or(Value::NULL, Value::deref),
@@ -1847,7 +1847,7 @@ pub fn row_offset_get(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
 }
 
 pub fn row_offset_exists(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
-    let d = this.dynamic.borrow();
+    let d = this.dynamic();
     let k = arg(args, 0);
     Ok(Value::bool(match k.as_int() {
         Some(i) => i >= 0 && (i as usize) < d.len(),

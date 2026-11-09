@@ -313,7 +313,7 @@ fn properties(o: &Object) -> PhpArray {
         };
         a.insert(Key::from_string(PhpStr::new(name)), v.clone());
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         a.insert(k, v.clone());
     }
     a

@@ -94,7 +94,7 @@ impl Writer<'_> {
     fn object(&mut self, o: &Rc<Object>) -> Result<(), Throw> {
         // A lazy object is initialized first (unless it asked not to be).
         let lazy;
-        let o = if o.lazy.get() != 0 && o.lazy_info.borrow().as_ref().is_none_or(|l| l.options & 8 == 0 || !o.is_uninit_lazy()) {
+        let o = if o.lazy.get() != 0 && o.lazy_info().as_ref().is_none_or(|l| l.options & 8 == 0 || !o.is_uninit_lazy()) {
             lazy = self.ctx.lazy_initialize(o)?;
             &lazy
         } else {
@@ -165,7 +165,7 @@ impl Writer<'_> {
             all.push((mangled, v.clone()));
         }
         drop(slots);
-        for (k, v) in o.dynamic.borrow().iter() {
+        for (k, v) in o.dynamic().iter() {
             let k = match k {
                 Key::Int(i) => i.to_string().into_bytes(),
                 Key::Str(s) => s.as_bytes().to_vec(),
@@ -467,7 +467,7 @@ impl<'a> Reader<'a> {
                     None => {
                         let c = ctx.class(b"__PHP_Incomplete_Class").ok_or(Bad::At(start))?;
                         let o = ctx.new_object(&c);
-                        o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::str(PhpStr::from(name)));
+                        o.dynamic_mut().insert(Key::from_string(PhpStr::from("__PHP_Incomplete_Class_Name")), Value::str(PhpStr::from(name)));
                         (o, true)
                     }
                 };
@@ -578,7 +578,7 @@ fn set_property(o: &Object, key: Key, v: Value) {
     match slot {
         Some(i) => o.slots()[i].set(v),
         None => {
-            o.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), v);
+            o.dynamic_mut().insert(Key::from_string(PhpStr::from(name)), v);
         }
     }
 }

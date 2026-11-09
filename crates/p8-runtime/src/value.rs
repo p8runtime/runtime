@@ -985,7 +985,7 @@ impl Value {
                         o => return Some(o),
                     }
                 }
-                return a.dynamic.borrow().compare(&b.dynamic.borrow());
+                return a.dynamic().compare(&b.dynamic());
             }
             (Null, Null) => Ordering::Equal,
             (Null, Bool(b)) => false.cmp(&b),

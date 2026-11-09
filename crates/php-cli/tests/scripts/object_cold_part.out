@@ -1,0 +1,100 @@
+bool(false)
+bool(false)
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+a b 
+{"a":1,"b":[2]} O:5:"Plain":2:{s:1:"a";i:1;s:1:"b";a:1:{i:0;i:2;}}
+bool(true)
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+bool(false)
+bool(true)
+array(3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+  ["y"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+bool(false)
+array(4) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+  ["y"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["z"]=>
+  string(1) "z"
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+destruct {"a":1,"extra":"kept"}
+destruct {"a":1}
+bool(true)
+bool(true)
+init
+bool(false)
+int(10)
+string(1) "d"
+factory
+int(20)
+bool(false)
+bool(true)
+reinit
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+end

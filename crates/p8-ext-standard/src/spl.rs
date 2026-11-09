@@ -101,7 +101,7 @@ fn elements(o: &Object) -> PhpArray {
             out.insert(Key::from_string(p.name.clone()), v.deref());
         }
     }
-    for (k, v) in inner.dynamic.borrow().iter() {
+    for (k, v) in inner.dynamic().iter() {
         out.insert(k, v.deref());
     }
     out
@@ -124,7 +124,7 @@ fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
                     None => dynamic.insert(k, v.clone()),
                 }
             }
-            *inner.dynamic.borrow_mut() = dynamic;
+            *inner.dynamic_mut() = dynamic;
             r
         }
         Err(other) => {
@@ -263,7 +263,7 @@ fn members(o: &Object) -> PhpArray {
         };
         out.insert(Key::from_string(PhpStr::new(key)), v.clone());
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k.clone(), v.clone());
     }
     out
@@ -316,10 +316,10 @@ fn ao_unserialize(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
             this.class.write(this, name, this.class.name.as_bytes(), v.clone());
         } else {
             let k = Key::from_string(PhpStr::from(name));
-            if !this.dynamic.borrow().contains_key(&k) {
+            if !this.dynamic().contains_key(&k) {
                 ctx.deprecated(&format!("Creation of dynamic property {}::${} is deprecated", String::from_utf8_lossy(this.class.name.as_bytes()), String::from_utf8_lossy(name)));
             }
-            this.dynamic.borrow_mut().insert(k, v.clone());
+            this.dynamic_mut().insert(k, v.clone());
         }
     }
     Ok(Value::NULL)
@@ -930,7 +930,7 @@ fn spl_members(o: &Object, own: &[u8]) -> PhpArray {
         out.insert(Key::from_string(PhpStr::new(key)), slots[i].deref());
     }
     drop(slots);
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.deref());
     }
     out
@@ -952,11 +952,11 @@ fn spl_restore_members(ctx: &mut dyn Ctx, o: &Object, own: &[u8], members: &PhpA
         match o.class.properties.iter().position(|p| p.name.as_bytes() == name.as_slice() && p.declaring.as_slice() != own) {
             Some(i) => o.slots()[i].set(v.deref()),
             None => {
-                if o.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 && !o.dynamic.borrow().contains_key(&k) {
+                if o.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 && !o.dynamic().contains_key(&k) {
                     let class = String::from_utf8_lossy(o.class.name.as_bytes()).into_owned();
                     ctx.deprecated(&format!("Creation of dynamic property {class}::${} is deprecated", String::from_utf8_lossy(&name)));
                 }
-                o.dynamic.borrow_mut().insert(k, v.deref());
+                o.dynamic_mut().insert(k, v.deref());
             }
         }
     }

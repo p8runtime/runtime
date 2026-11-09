@@ -580,7 +580,7 @@ impl Context<'_> {
                 let cell = o.slots()[i].modify(crate::refs::make_ref);
                 return Some((p, key, cell));
             }
-            if let Some(slot) = o.dynamic.borrow_mut().get_mut(&key) {
+            if let Some(slot) = o.dynamic_mut().get_mut(&key) {
                 let cell = crate::refs::make_ref(slot);
                 return Some((p, key, cell));
             }
@@ -609,7 +609,7 @@ impl Context<'_> {
                 out.insert(Key::from_string(p.name.clone()), slots[i].deref());
             }
         }
-        for (k, v) in o.dynamic.borrow().iter() {
+        for (k, v) in o.dynamic().iter() {
             out.insert(k, v.deref());
         }
         out

@@ -549,12 +549,17 @@ pub struct Ids {
     pending: RefCell<std::collections::VecDeque<Rc<Object>>>,
     /// How many are pending (read on hot paths: one load).
     due: Cell<u32>,
-    /// Every object with a destructor, for the ones the script leaves
-    /// alive (PHP destructs them at its end, oldest first).
-    live: RefCell<Vec<std::rc::Weak<Object>>>,
-    /// Every object, by id (an id is one live object's at a time):
-    /// gc_collect_cycles walks them.
+    /// Every object, by id (an id is one live object's at a time), as
+    /// zend_objects_store's table: gc_collect_cycles walks them, and the
+    /// ones with a destructor the script leaves alive are destructed at
+    /// its end from here, oldest (lowest id) first. An object empties its
+    /// entry as it goes, so its memory is freed then (a weak reference
+    /// left behind would keep the block until the id was taken again,
+    /// after the next object's allocation: never the block just freed).
     all: RefCell<Vec<std::rc::Weak<Object>>>,
+    /// What an object without a [`Cold`] part reads as its own: nothing
+    /// (never borrowed mutably: writes make the object's own).
+    empty: Cold,
     /// Where these objects' destructors are queued, when not here (a
     /// resource's: with the objects', which the interpreter runs).
     queue: Option<Rc<Ids>>,
@@ -648,11 +653,12 @@ impl Ids {
     /// The objects with a destructor still alive and not yet destructed,
     /// oldest (lowest id) first.
     pub fn undestructed(&self) -> Vec<Rc<Object>> {
-        let mut live = self.live.borrow_mut();
-        live.retain(|w| w.strong_count() > 0);
-        let mut out: Vec<Rc<Object>> = live.iter().filter_map(std::rc::Weak::upgrade).filter(|o| !o.destructed.get()).collect();
-        out.sort_by_key(|o| o.id);
-        out
+        // (By id: the table's order.)
+        self.all
+            .borrow()
+            .iter()
+            .filter_map(|w| w.upgrade().filter(|o| o.class.flags & CLASS_DESTRUCTOR != 0 && !o.destructed.get()))
+            .collect()
     }
 
     /// Every object still alive (for the cycle collector).
@@ -660,24 +666,39 @@ impl Ids {
         self.all.borrow().iter().filter_map(std::rc::Weak::upgrade).collect()
     }
 
+    #[inline]
     fn track(&self, o: &Rc<Object>) {
-        {
-            let mut all = self.all.borrow_mut();
-            let i = o.id as usize;
-            if all.len() <= i {
-                all.resize(i + 1, std::rc::Weak::new());
-            }
-            all[i] = Rc::downgrade(o);
+        let mut all = self.all.borrow_mut();
+        let i = o.id as usize;
+        if all.len() <= i {
+            all.resize(i + 1, std::rc::Weak::new());
         }
-        if o.class.flags & CLASS_DESTRUCTOR != 0 {
-            let mut live = self.live.borrow_mut();
-            // Drop the dead now and then, so the list stays the size of the living.
-            if live.len() >= 64 && live.len().is_power_of_two() {
-                live.retain(|w| w.strong_count() > 0);
-            }
-            live.push(Rc::downgrade(o));
+        // (What it replaces is empty: the object that had the id emptied it.)
+        all[i] = Rc::downgrade(o);
+    }
+
+    /// Object `id` went: its entry empties, so its memory goes with it.
+    #[inline]
+    fn untrack(&self, id: u32) {
+        // (Not while the table is being read: the block then waits for the
+        // id to be taken again, as it did before.)
+        if let Ok(mut all) = self.all.try_borrow_mut()
+            && let Some(w) = all.get_mut(id as usize)
+        {
+            *w = std::rc::Weak::new();
         }
     }
+}
+
+/// What few objects have, kept out of the object itself so the hot part
+/// (class, native state, declared properties, id) is small: properties
+/// added at run time, and a lazy object's state. Made by the first write.
+#[derive(Debug, Default)]
+pub struct Cold {
+    /// Properties added at run time (`$o->new = 1`), in order.
+    dynamic: RefCell<PhpArray>,
+    /// A lazy object's initializer and state (see [`Lazy`]).
+    lazy_info: RefCell<Option<Box<Lazy>>>,
 }
 
 /// What an object of a builtin class holds beyond its properties (a
@@ -713,7 +734,7 @@ impl Object {
 
     /// Slot `i` is lazy (not yet initialized, initialization pending).
     pub fn lazy_slot(&self, i: usize) -> bool {
-        self.lazy.get() != 0 && self.lazy_info.borrow().as_ref().is_some_and(|l| l.lazy_slots.get(i).copied().unwrap_or(false))
+        self.lazy.get() != 0 && self.lazy_info().as_ref().is_some_and(|l| l.lazy_slots.get(i).copied().unwrap_or(false))
     }
 
     /// An initialized proxy's real instance.
@@ -721,7 +742,54 @@ impl Object {
         if self.lazy.get() & (LAZY_PROXY | LAZY_UNINIT) != LAZY_PROXY {
             return None;
         }
-        self.lazy_info.borrow().as_ref().and_then(|l| l.instance.clone())
+        self.lazy_info().as_ref().and_then(|l| l.instance.clone())
+    }
+
+    /// The cold part, if it has one; else the empty one its id space
+    /// keeps (read only).
+    #[inline(always)]
+    fn cold(&self) -> &Cold {
+        self.cold.get().map_or(&self.ids.empty, |c| c)
+    }
+
+    /// The cold part, made if it has none (a write).
+    #[inline]
+    fn cold_mut(&self) -> &Cold {
+        self.cold.get_or_init(Box::default)
+    }
+
+    /// Properties added at run time (`$o->new = 1`), in order.
+    #[inline]
+    pub fn dynamic(&self) -> std::cell::Ref<'_, PhpArray> {
+        self.cold().dynamic.borrow()
+    }
+
+    /// Properties added at run time, to change.
+    #[inline]
+    pub fn dynamic_mut(&self) -> std::cell::RefMut<'_, PhpArray> {
+        self.cold_mut().dynamic.borrow_mut()
+    }
+
+    /// The properties added at run time, taken (none left).
+    pub fn take_dynamic(&self) -> PhpArray {
+        self.cold.get().map(|c| std::mem::take(&mut *c.dynamic.borrow_mut())).unwrap_or_default()
+    }
+
+    /// A lazy object's initializer and state (see [`Lazy`]).
+    #[inline]
+    pub fn lazy_info(&self) -> std::cell::Ref<'_, Option<Box<Lazy>>> {
+        self.cold().lazy_info.borrow()
+    }
+
+    /// A lazy object's state, to change.
+    #[inline]
+    pub fn lazy_info_mut(&self) -> std::cell::RefMut<'_, Option<Box<Lazy>>> {
+        self.cold_mut().lazy_info.borrow_mut()
+    }
+
+    /// A lazy object's state, taken (none left).
+    pub fn take_lazy_info(&self) -> Option<Box<Lazy>> {
+        self.cold.get().and_then(|c| c.lazy_info.borrow_mut().take())
     }
 }
 
@@ -953,6 +1021,20 @@ impl From<Props> for SlotCells {
 }
 
 impl SlotCells {
+    /// Copies of `values`, made in place: one copy per slot, as
+    /// object_properties_init's of the default properties table (no
+    /// [`Props`] in between to move).
+    #[inline]
+    fn copied(values: &[Value]) -> SlotCells {
+        if values.len() > INLINE_PROPS {
+            let mut heap = crate::array::values_buffer(values.len());
+            heap.extend_from_slice(values);
+            return SlotCells::Heap(heap.into_iter().map(Cell::new).collect());
+        }
+        let cells = std::array::from_fn(|i| Cell::new(values.get(i).cloned().unwrap_or(Value::UNDEF)));
+        SlotCells::Inline { len: values.len() as u8, cells }
+    }
+
     #[inline(always)]
     fn cells(&self) -> &[Cell<Value>] {
         match self {
@@ -983,17 +1065,20 @@ pub struct Object {
     pub data: Option<Data>,
     /// Declared properties by slot; Undef where unset or uninitialized.
     slots: SlotCells,
-    /// Properties added at run time (`$o->new = 1`), in order.
-    pub dynamic: RefCell<PhpArray>,
-    pub id: u32,
     ids: Rc<Ids>,
+    /// Dynamic properties and lazy state, for the few objects that have
+    /// them (see [`Cold`]; [`Object::dynamic`], [`Object::lazy_info`]).
+    cold: std::cell::OnceCell<Box<Cold>>,
+    pub id: u32,
     /// Its destructor ran, or must not (its constructor threw).
     pub destructed: Cell<bool>,
     /// LAZY_UNINIT / LAZY_PROXY (PHP 8.4 lazy objects): 0 for a plain object.
     pub lazy: Cell<u8>,
-    /// A lazy object's initializer and state (see [`Lazy`]).
-    pub lazy_info: RefCell<Option<Box<Lazy>>>,
 }
+
+// The hot part (#396): 200 bytes before the cold part moved out.
+#[cfg(target_pointer_width = "64")]
+const _: () =assert!(std::mem::size_of::<Object>() == 120);
 
 impl Object {
     /// The declared property slots, one per declared property in slot
@@ -1035,24 +1120,37 @@ impl Object {
 
     /// A new object holding `data` (see [`Data`]).
     pub fn with_data(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>) -> Rc<Object> {
-        let slots = class.properties.iter().map(|p| p.default.clone()).collect();
+        let slots: Props = class.properties.iter().map(|p| p.default.clone()).collect();
         Object::with_slots(class, ids, data, slots)
     }
 
     /// A new object whose slots start as `slots` (one value per declared
-    /// property: the class's defaults, prepared once by whoever makes many).
+    /// property).
     pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Props) -> Rc<Object> {
         debug_assert_eq!(slots.len(), class.properties.len());
+        Object::made(class, ids, data, SlotCells::from(slots))
+    }
+
+    /// A new object whose slots start as copies of `defaults` (one value
+    /// per declared property: the class's defaults, prepared once by
+    /// whoever makes many), copied straight into it.
+    #[inline]
+    pub fn with_defaults(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, defaults: &[Value]) -> Rc<Object> {
+        debug_assert_eq!(defaults.len(), class.properties.len());
+        Object::made(class, ids, data, SlotCells::copied(defaults))
+    }
+
+    #[inline(always)]
+    fn made(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: SlotCells) -> Rc<Object> {
         let o = Rc::new(Object {
             class,
             data: data.map(Data),
-            slots: SlotCells::from(slots),
-            dynamic: RefCell::new(PhpArray::new()),
-            id: ids.take(),
+            slots,
             ids: Rc::clone(ids),
+            cold: std::cell::OnceCell::new(),
+            id: ids.take(),
             destructed: Cell::new(false),
             lazy: Cell::new(0),
-            lazy_info: RefCell::new(None),
         });
         ids.track(&o);
         o
@@ -1069,12 +1167,16 @@ impl Object {
             // A property once passed by reference (ksort($this->a)) is a
             // plain value again in the clone, not shared with it.
             slots: SlotCells::from(self.slots().iter().map(|c| c.peek(crate::array::dup)).collect::<Props>()),
-            dynamic: RefCell::new(self.dynamic.borrow().clone()),
-            id: self.ids.take(),
             ids: Rc::clone(&self.ids),
+            cold: match self.cold.get() {
+                Some(c) if !c.dynamic.borrow().is_empty() => {
+                    std::cell::OnceCell::from(Box::new(Cold { dynamic: RefCell::new(c.dynamic.borrow().clone()), lazy_info: RefCell::new(None) }))
+                }
+                _ => std::cell::OnceCell::new(),
+            },
+            id: self.ids.take(),
             destructed: Cell::new(false),
             lazy: Cell::new(0),
-            lazy_info: RefCell::new(None),
         });
         self.ids.track(&o);
         o
@@ -1083,26 +1185,32 @@ impl Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
+        // (Its entry in the table emptied: no weak reference left to keep
+        // this memory once it has gone.)
+        self.ids.untrack(self.id);
         // A lazy object's destructor never runs (an initialized proxy's real
         // instance has its own), as zend_objects_destroy_object skips them.
         if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() && self.lazy.get() == 0 {
             // Its destructor is due: the object lives on (same id, same
-            // properties) until the interpreter has run it.
+            // properties, its own cold part, minus any lazy state) until
+            // the interpreter has run it.
+            let cold = std::mem::take(&mut self.cold);
+            let lazy = cold.get().and_then(|c| c.lazy_info.borrow_mut().take());
             let revived = Rc::new(Object {
                 class: Rc::clone(&self.class),
                 data: self.data.take(),
                 slots: std::mem::take(&mut self.slots),
-                dynamic: RefCell::new(std::mem::take(self.dynamic.get_mut())),
-                id: self.id,
                 ids: Rc::clone(&self.ids),
+                cold,
+                id: self.id,
                 destructed: Cell::new(true),
                 lazy: Cell::new(0),
-                lazy_info: RefCell::new(None),
             });
             let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
             queue.pending.borrow_mut().push_back(revived);
             queue.due.set(queue.due.get() + 1);
             queue.queued.set(queue.queued.get() + 1);
+            drop(lazy);
             return;
         }
         if self.ids.monotonic {
@@ -1114,13 +1222,19 @@ impl Drop for Object {
         // (A buffer of their own kept for the next object or array.) The
         // dynamic ones first, then the declared, as zend_object_std_dtor
         // destroys `properties` before walking `properties_table`.
-        let dynamic = self.dynamic.get_mut();
-        if !dynamic.is_empty() {
-            drop(std::mem::take(dynamic));
-        }
+        let cold = self.cold.get_mut().map(|c| &mut **c);
+        let lazy = if let Some(Cold { dynamic, lazy_info }) = cold {
+            let dynamic = dynamic.get_mut();
+            if !dynamic.is_empty() {
+                drop(std::mem::take(dynamic));
+            }
+            lazy_info.get_mut().take()
+        } else {
+            None
+        };
         self.slots.release();
-        if self.data.is_some() || self.lazy_info.get_mut().is_some() {
-            drop((self.data.take(), self.lazy_info.get_mut().take()));
+        if self.data.is_some() || lazy.is_some() {
+            drop((self.data.take(), lazy));
         }
         // A destructor not yet run (one these properties queued, or one
         // queued before) would in PHP have run, and freed its object's

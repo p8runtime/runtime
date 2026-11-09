@@ -58,10 +58,10 @@ impl Node {
                 for c in o.slots() {
                     c.peek(&mut add);
                 }
-                for v in o.dynamic.borrow().values() {
+                for v in o.dynamic().values() {
                     add(v);
                 }
-                if let Some(l) = o.lazy_info.borrow().as_ref() {
+                if let Some(l) = o.lazy_info().as_ref() {
                     add(&l.initializer);
                     if let Some(i) = &l.instance {
                         add(&Value::object(Rc::clone(i)));
@@ -159,8 +159,8 @@ pub fn find_cycles(ids: &Ids) -> Garbage {
 pub fn clear(o: &Object) {
     // (The slots stay, Undef: their number is the class's.)
     let slots: Vec<Value> = o.slots().iter().map(|c| c.replace(Value::UNDEF)).collect();
-    let dynamic = std::mem::take(&mut *o.dynamic.borrow_mut());
-    let lazy = o.lazy_info.borrow_mut().take();
+    let dynamic = o.take_dynamic();
+    let lazy = o.take_lazy_info();
     drop((slots, dynamic, lazy));
 }
 
@@ -176,7 +176,7 @@ mod tests {
     }
 
     fn link(from: &Rc<Object>, to: &Rc<Object>, name: &str) {
-        from.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from(name)), Value::object(Rc::clone(to)));
+        from.dynamic_mut().insert(Key::from_string(PhpStr::from(name)), Value::object(Rc::clone(to)));
     }
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
         let arr = Rc::new(crate::array::PhpArray::from_list(vec![Value::object(Rc::clone(&root))]));
         let cell = Rc::new(RefCell::new(Value::array(Rc::clone(&arr))));
         link(&root, &root, "self");
-        root.dynamic.borrow_mut().insert(Key::from_string(PhpStr::from("r")), Value::reference(Rc::clone(&cell)));
+        root.dynamic_mut().insert(Key::from_string(PhpStr::from("r")), Value::reference(Rc::clone(&cell)));
         drop((arr, cell));
         assert!(find_cycles(&ids).objects.is_empty());
         drop(root);

@@ -28,7 +28,7 @@ impl Context<'_> {
         let scope = self.scope().0;
         match o.class.slot(name, scope.as_ref().map(|s| s.lower.as_slice())) {
             Some(i) => o.lazy_slot(i),
-            None => !o.dynamic.borrow().contains_key(&Key::from_string(p8_runtime::string::PhpStr::new(name.to_vec()))),
+            None => !o.dynamic().contains_key(&Key::from_string(p8_runtime::string::PhpStr::new(name.to_vec()))),
         }
     }
 
@@ -96,9 +96,9 @@ impl Context<'_> {
                 if o.lazy.get() == LAZY_PROXY {
                     // An initialized proxy becomes lazy again.
                     o.lazy.set(0);
-                    *o.lazy_info.borrow_mut() = None;
+                    *o.lazy_info_mut() = None;
                 } else {
-                    if o.lazy_info.borrow().is_some() {
+                    if o.lazy_info().is_some() {
                         return Err(self.throw("Error", "Can not reset an object while it is being initialized"));
                     }
                     if options & SKIP_DESTRUCTOR == 0 && !o.destructed.get() && o.class.method(b"__destruct").is_some() {
@@ -111,7 +111,7 @@ impl Context<'_> {
                     }
                     o.destructed.set(false);
                 }
-                *o.dynamic.borrow_mut() = PhpArray::new();
+                *o.dynamic_mut() = PhpArray::new();
                 o
             }
         };
@@ -138,7 +138,7 @@ impl Context<'_> {
         if count == 0 {
             return Ok(o);
         }
-        *o.lazy_info.borrow_mut() = Some(Box::new(Lazy { initializer, options, lazy_slots, instance: None }));
+        *o.lazy_info_mut() = Some(Box::new(Lazy { initializer, options, lazy_slots, instance: None }));
         o.lazy.set(LAZY_UNINIT | if proxy { LAZY_PROXY } else { 0 });
         Ok(o)
     }
@@ -152,7 +152,7 @@ impl Context<'_> {
     /// defaults, without the initializer.
     pub(crate) fn lazy_mark_initialized(&mut self, o: &Rc<Object>) -> Result<(), Throw> {
         let defaults = self.slot_defaults(&o.class)?;
-        let lazy = o.lazy_info.borrow_mut().take();
+        let lazy = o.lazy_info_mut().take();
         if let Some(l) = lazy {
             let slots = o.slots();
             for (i, is_lazy) in l.lazy_slots.iter().enumerate() {
@@ -169,7 +169,7 @@ impl Context<'_> {
     /// object is no longer lazy once no slot is.
     pub(crate) fn lazy_slot_done(&mut self, o: &Rc<Object>, i: usize) {
         let empty = {
-            let mut info = o.lazy_info.borrow_mut();
+            let mut info = o.lazy_info_mut();
             let Some(l) = info.as_mut() else { return };
             if let Some(s) = l.lazy_slots.get_mut(i) {
                 *s = false;
@@ -177,7 +177,7 @@ impl Context<'_> {
             !l.lazy_slots.iter().any(|&s| s)
         };
         if empty && o.is_uninit_lazy() {
-            *o.lazy_info.borrow_mut() = None;
+            *o.lazy_info_mut() = None;
             o.lazy.set(0);
         }
     }
@@ -191,7 +191,7 @@ impl Context<'_> {
         if !o.is_uninit_lazy() {
             return Ok(Rc::clone(o));
         }
-        let initializer = o.lazy_info.borrow().as_ref().map(|l| l.initializer.clone()).unwrap_or(Value::NULL);
+        let initializer = o.lazy_info().as_ref().map(|l| l.initializer.clone()).unwrap_or(Value::NULL);
         if o.lazy.get() & LAZY_PROXY != 0 {
             return self.lazy_init_proxy(regs, o, initializer);
         }
@@ -200,10 +200,10 @@ impl Context<'_> {
         let flags = o.lazy.get();
         o.lazy.set(0);
         let snapshot = o.slot_values();
-        let dyn_snapshot = o.dynamic.borrow().clone();
+        let dyn_snapshot = o.dynamic().clone();
         let defaults = self.slot_defaults(&o.class)?;
         {
-            let info = o.lazy_info.borrow();
+            let info = o.lazy_info();
             let lazy_slots = info.as_ref().map(|l| l.lazy_slots.clone()).unwrap_or_default();
             let slots = o.slots();
             for (i, is_lazy) in lazy_slots.iter().enumerate() {
@@ -215,7 +215,7 @@ impl Context<'_> {
         let r = self.call_with_regs(regs, &initializer, &mut [Value::object(Rc::clone(o))]);
         let revert = |o: &Rc<Object>| {
             o.set_slot_values(&snapshot);
-            *o.dynamic.borrow_mut() = dyn_snapshot.clone();
+            *o.dynamic_mut() = dyn_snapshot.clone();
             o.lazy.set(flags);
         };
         match r {
@@ -228,7 +228,7 @@ impl Context<'_> {
                 Err(self.throw("TypeError", "Lazy object initializer must return NULL or no value"))
             }
             Ok(_) => {
-                *o.lazy_info.borrow_mut() = None;
+                *o.lazy_info_mut() = None;
                 Ok(Rc::clone(o))
             }
         }
@@ -281,7 +281,7 @@ impl Context<'_> {
             return Err(self.throw("Error", "Lazy proxy factory must return a non-lazy object"));
         }
         // The proxy's own properties are gone: every access goes to the instance.
-        *o.dynamic.borrow_mut() = PhpArray::new();
+        *o.dynamic_mut() = PhpArray::new();
         let n = o.class.properties.len();
         {
             let slots = o.slots();
@@ -291,7 +291,7 @@ impl Context<'_> {
                 }
             }
         }
-        if let Some(l) = o.lazy_info.borrow_mut().as_mut() {
+        if let Some(l) = o.lazy_info_mut().as_mut() {
             l.instance = Some(Rc::clone(&inst));
             l.initializer = Value::NULL;
             l.lazy_slots = vec![true; n];
