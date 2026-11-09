@@ -1,0 +1,38 @@
+[package]
+name = "clif"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Prototype #397, MEASUREMENT ONLY: V4b's kind-aware code for add/call/prop_read emitted by Cranelift into an object file, linked into a harness"
+publish = false
+
+# A root of its own (the engine's workspace excludes it too). Never merged,
+# never a dependency of anything.
+[workspace]
+
+# The code generator: safe Rust (`forbid(unsafe_code)`). Writes the object
+# file the harness links (scripts/build.sh runs it between the builds).
+[[bin]]
+name = "clif-gen"
+path = "src/gen.rs"
+
+# The harness: links the generated object (build.rs) and calls it. The only
+# `unsafe` of this prototype is its `ffi` module, the C-ABI boundary.
+[[bin]]
+name = "clif"
+path = "src/main.rs"
+
+[dependencies]
+aot = { path = "../aot" }
+p8-runtime = { path = "../../crates/p8-runtime" }
+cranelift-codegen = "=0.135.8"
+cranelift-frontend = "=0.135.8"
+cranelift-module = "=0.135.8"
+cranelift-object = "=0.135.8"
+
+# The same profile as V4 (and the engine's release profile), with line
+# tables for callgrind and perf.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = true
