@@ -49,15 +49,33 @@ type Handle<T> = ManuallyDrop<T>;
 /// a copy of one is two moves. With a byte tag the seven bytes after it
 /// are padding the compiler copies field by field (four more loads and
 /// stores, through the stack, on every register copy).
-#[derive(Debug)]
+///
+/// # Invariant: one word in every variant (#391, #394)
+///
+/// Every variant holds exactly one 8-byte scalar at offset 8: the plain
+/// ones an `i64` (an int, a float's bits by `to_bits`, a bool as 0 or 1,
+/// a zero word for null and undefined), the program-memory string a
+/// pointer, the heap ones an `Rc`'s pointer. rustc's ABI then treats the
+/// value as a scalar pair: passed and returned in two registers, copied
+/// as two moves. One variant with no payload, a narrower one (`f64` is a
+/// float register class, `bool` a byte) or two fields, and the whole enum
+/// becomes an aggregate, returned through a stack slot and reloaded as
+/// 16 bytes after two 8-byte stores: a store-forwarding stall on every
+/// copy (`assign` 34 cycles per iteration, against 19 with this layout,
+/// #391). `tests::value_is_a_scalar_pair` guards it.
 #[repr(u64)]
 enum Repr {
-    Null = 0,
-    Bool(B) = 1,
+    /// The word is 0 (only read through the tag).
+    Null(i64) = 0,
+    /// 0 or 1.
+    Bool(i64) = 1,
     Int(i64) = 2,
-    Float(f64) = 3,
-    /// A variable never assigned (only in registers; reads warn and give null).
-    Undef = 4,
+    /// The float's bits (`f64::to_bits`): an `f64` payload would be of
+    /// another register class, and break the scalar pair.
+    Float(i64) = 3,
+    /// A variable never assigned (only in registers; reads warn and give
+    /// null). The word is 0.
+    Undef(i64) = 4,
     /// A string in program memory (a compiled literal): a plain pointer,
     /// no count to keep, nothing to release (PHP's interned strings,
     /// which `Z_REFCOUNTED` is false for).
@@ -70,30 +88,26 @@ enum Repr {
     Object(Handle<Rc<Object>>) = 9,
 }
 
-/// A bool's payload, at the payload's offset (8) as every other variant's
-/// is: a copy of any value is then its tag and one word. (A plain `bool`
-/// sits at offset 1, and copying a value had to move bytes 1..8 too, one
-/// by one through the stack: most of what a register copy cost.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(align(8))]
-struct B(bool);
+/// What a value let go of is left as: plain, so its `Drop` does nothing.
+const UNDEF_REPR: Repr = Repr::Undef(0);
 
-impl B {
-    const FALSE: B = B(false);
-    const TRUE: B = B(true);
-
-    #[inline(always)]
-    const fn new(b: bool) -> B {
-        B(b)
-    }
-
-    #[inline(always)]
-    const fn get(self) -> bool {
-        self.0
-    }
+/// A value seen as its kind and payload, for the code that dispatches on
+/// both (conversions, comparisons): the float and the bool decoded from
+/// their words once, here, so the representation stays private to the
+/// few functions that copy, release and build.
+#[derive(Debug)]
+enum V<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Undef,
+    IStr(&'static IStr),
+    Str(&'a PhpStr),
+    Array(&'a Rc<PhpArray>),
+    Ref(&'a Rc<RefCell<Value>>),
+    Object(&'a Rc<Object>),
 }
-
-const _: () = assert!(mem::size_of::<B>() == 8);
 
 /// The first tag holding memory: tags below it are plain.
 const FIRST_HEAP_TAG: u8 = 6;
@@ -133,8 +147,9 @@ impl Default for Value {
 }
 
 impl fmt::Debug for Value {
+    /// Through [`V`]: a float as itself, not as its bits.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        self.view().fmt(f)
     }
 }
 
@@ -183,9 +198,9 @@ fn release_heap(r: &mut Repr) {
         _ => return,
     };
     if count == 1 {
-        free_last(mem::replace(r, Repr::Undef));
+        free_last(mem::replace(r, UNDEF_REPR));
     } else {
-        drop_shared(mem::replace(r, Repr::Undef));
+        drop_shared(mem::replace(r, UNDEF_REPR));
     }
 }
 
@@ -262,7 +277,7 @@ impl Value {
     pub fn release(mut self) -> bool {
         // (What is left is plain: the drop of `self` that follows tests
         // its tag and does nothing.)
-        release_repr(mem::replace(&mut self.0, Repr::Undef))
+        release_repr(mem::replace(&mut self.0, UNDEF_REPR))
     }
 
     /// Whether `self` is `other` itself: the same scalar (a float by its
@@ -272,10 +287,9 @@ impl Value {
     #[inline(always)]
     pub fn same_handle(&self, other: &Value) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Null, Repr::Null) | (Repr::Undef, Repr::Undef) => true,
-            (Repr::Bool(a), Repr::Bool(b)) => a == b,
-            (Repr::Int(a), Repr::Int(b)) => a == b,
-            (Repr::Float(a), Repr::Float(b)) => a.to_bits() == b.to_bits(),
+            (Repr::Null(_), Repr::Null(_)) | (Repr::Undef(_), Repr::Undef(_)) => true,
+            // (A float by its bits: the word is them.)
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) | (Repr::Float(a), Repr::Float(b)) => a == b,
             (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
             (Repr::Str(a), Repr::Str(b)) => PhpStr::ptr_eq(a, b),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b),
@@ -284,34 +298,55 @@ impl Value {
             _ => false,
         }
     }
+
+    /// The value as its kind and decoded payload (see [`V`]).
+    #[inline(always)]
+    fn view(&self) -> V<'_> {
+        match &self.0 {
+            Repr::Null(_) => V::Null,
+            Repr::Bool(w) => V::Bool(*w != 0),
+            Repr::Int(w) => V::Int(*w),
+            Repr::Float(w) => V::Float(f64::from_bits(*w as u64)),
+            Repr::Undef(_) => V::Undef,
+            Repr::IStr(s) => V::IStr(s),
+            Repr::Str(s) => V::Str(s),
+            Repr::Array(a) => V::Array(a),
+            Repr::Ref(c) => V::Ref(c),
+            Repr::Object(o) => V::Object(o),
+        }
+    }
 }
 
 impl Clone for Value {
     /// Inline: copying a value is on every register move.
     ///
-    /// A jump table on the tag (#353's finding), still: the plain arms
-    /// cannot fold into one copy while their payloads are of different
-    /// types to the compiler (an int, a float, a bool, a pointer), as it
-    /// keeps each arm's store and tag constant apart (measured in #361's
-    /// PR: a tag test before the table, and a word of payload on every
-    /// plain variant, folded nothing and cost WordPress +1.2%
-    /// instructions). A copy with no dispatch needs every plain payload
-    /// to be one word of the same type: the program-memory string by
-    /// index rather than by reference, the float by its bits. Separate work.
+    /// The plain test first (one compare of the tag, as `Drop`'s): the
+    /// plain arms then fold into a copy of both words, as every plain
+    /// payload is one word (an `i64` or a pointer, which LLVM unifies),
+    /// and the heap arms into the count's increment. Written as one match
+    /// over all ten, LLVM keeps a ten-entry jump table of it (#353's
+    /// finding; #391's layout experiment).
     #[inline(always)]
     fn clone(&self) -> Self {
-        Value(match &self.0 {
-            Repr::Null => Repr::Null,
-            Repr::Bool(b) => Repr::Bool(*b),
-            Repr::Int(i) => Repr::Int(*i),
-            Repr::Float(f) => Repr::Float(*f),
-            Repr::IStr(s) => Repr::IStr(s),
-            Repr::Str(s) => Repr::Str(s.clone()),
-            Repr::Array(a) => Repr::Array(a.clone()),
-            Repr::Ref(r) => Repr::Ref(r.clone()),
-            Repr::Object(o) => Repr::Object(o.clone()),
-            Repr::Undef => Repr::Undef,
-        })
+        if self.is_plain() {
+            Value(match self.0 {
+                Repr::Null(w) => Repr::Null(w),
+                Repr::Bool(w) => Repr::Bool(w),
+                Repr::Int(w) => Repr::Int(w),
+                Repr::Float(w) => Repr::Float(w),
+                Repr::Undef(w) => Repr::Undef(w),
+                Repr::IStr(s) => Repr::IStr(s),
+                _ => UNDEF_REPR,
+            })
+        } else {
+            Value(match &self.0 {
+                Repr::Str(s) => Repr::Str(s.clone()),
+                Repr::Array(a) => Repr::Array(a.clone()),
+                Repr::Ref(r) => Repr::Ref(r.clone()),
+                Repr::Object(o) => Repr::Object(o.clone()),
+                _ => UNDEF_REPR,
+            })
+        }
     }
 }
 
@@ -348,14 +383,14 @@ pub enum Kind {
 /// - `into_*`: the handle out of a value being consumed (`mem::replace`
 ///   of the representation, which leaves Undef for `Drop`).
 impl Value {
-    pub const NULL: Value = Value(Repr::Null);
-    pub const UNDEF: Value = Value(Repr::Undef);
-    pub const TRUE: Value = Value(Repr::Bool(B::TRUE));
-    pub const FALSE: Value = Value(Repr::Bool(B::FALSE));
+    pub const NULL: Value = Value(Repr::Null(0));
+    pub const UNDEF: Value = Value(UNDEF_REPR);
+    pub const TRUE: Value = Value(Repr::Bool(1));
+    pub const FALSE: Value = Value(Repr::Bool(0));
 
     #[inline(always)]
     pub const fn bool(b: bool) -> Value {
-        Value(Repr::Bool(B::new(b)))
+        Value(Repr::Bool(b as i64))
     }
 
     #[inline(always)]
@@ -365,7 +400,7 @@ impl Value {
 
     #[inline(always)]
     pub const fn float(f: f64) -> Value {
-        Value(Repr::Float(f))
+        Value(Repr::Float(f.to_bits() as i64))
     }
 
     pub fn str(s: impl Into<PhpStr>) -> Value {
@@ -414,11 +449,11 @@ impl Value {
     #[inline(always)]
     pub fn kind(&self) -> Kind {
         match self.0 {
-            Repr::Null => Kind::Null,
+            Repr::Null(_) => Kind::Null,
             Repr::Bool(_) => Kind::Bool,
             Repr::Int(_) => Kind::Int,
             Repr::Float(_) => Kind::Float,
-            Repr::Undef => Kind::Undef,
+            Repr::Undef(_) => Kind::Undef,
             Repr::IStr(_) | Repr::Str(_) => Kind::Str,
             Repr::Array(_) => Kind::Array,
             Repr::Ref(_) => Kind::Ref,
@@ -428,19 +463,19 @@ impl Value {
 
     #[inline(always)]
     pub fn is_null(&self) -> bool {
-        matches!(self.0, Repr::Null)
+        matches!(self.0, Repr::Null(_))
     }
 
     #[inline(always)]
     pub fn is_undef(&self) -> bool {
-        matches!(self.0, Repr::Undef)
+        matches!(self.0, Repr::Undef(_))
     }
 
     /// Null or undefined: what reads as null (isset is false, the type
     /// name is "null").
     #[inline(always)]
     pub fn is_null_or_undef(&self) -> bool {
-        matches!(self.0, Repr::Null | Repr::Undef)
+        matches!(self.0, Repr::Null(_) | Repr::Undef(_))
     }
 
     #[inline(always)]
@@ -493,15 +528,15 @@ impl Value {
         self.tag() < FIRST_HEAP_TAG
     }
 
-    /// The representation's tag (its `repr(u8)` discriminant).
+    /// The representation's tag (its `repr(u64)` discriminant).
     #[inline(always)]
     fn tag(&self) -> u8 {
         match self.0 {
-            Repr::Null => 0,
+            Repr::Null(_) => 0,
             Repr::Bool(_) => 1,
             Repr::Int(_) => 2,
             Repr::Float(_) => 3,
-            Repr::Undef => 4,
+            Repr::Undef(_) => 4,
             Repr::IStr(_) => 5,
             Repr::Str(_) => 6,
             Repr::Array(_) => 7,
@@ -513,7 +548,7 @@ impl Value {
     #[inline(always)]
     pub fn as_bool(&self) -> Option<bool> {
         match self.0 {
-            Repr::Bool(b) => Some(b.get()),
+            Repr::Bool(w) => Some(w != 0),
             _ => None,
         }
     }
@@ -529,7 +564,7 @@ impl Value {
     #[inline(always)]
     pub fn as_float(&self) -> Option<f64> {
         match self.0 {
-            Repr::Float(f) => Some(f),
+            Repr::Float(w) => Some(f64::from_bits(w as u64)),
             _ => None,
         }
     }
@@ -539,15 +574,6 @@ impl Value {
     pub fn as_int_mut(&mut self) -> Option<&mut i64> {
         match &mut self.0 {
             Repr::Int(i) => Some(i),
-            _ => None,
-        }
-    }
-
-    /// The float, for writing in place.
-    #[inline(always)]
-    pub fn as_float_mut(&mut self) -> Option<&mut f64> {
-        match &mut self.0 {
-            Repr::Float(f) => Some(f),
             _ => None,
         }
     }
@@ -670,7 +696,7 @@ impl Value {
     /// is not one.
     #[inline]
     pub fn into_str(mut self) -> Result<PhpStr, Value> {
-        match mem::replace(&mut self.0, Repr::Undef) {
+        match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Str(s) => Ok(ManuallyDrop::into_inner(s)),
             Repr::IStr(s) => Ok(s.to_php_str()),
             r => Err(Value(r)),
@@ -679,7 +705,7 @@ impl Value {
 
     #[inline]
     pub fn into_array(mut self) -> Result<Rc<PhpArray>, Value> {
-        match mem::replace(&mut self.0, Repr::Undef) {
+        match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Array(a) => Ok(ManuallyDrop::into_inner(a)),
             r => Err(Value(r)),
         }
@@ -687,7 +713,7 @@ impl Value {
 
     #[inline]
     pub fn into_object(mut self) -> Result<Rc<Object>, Value> {
-        match mem::replace(&mut self.0, Repr::Undef) {
+        match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Object(o) => Ok(ManuallyDrop::into_inner(o)),
             r => Err(Value(r)),
         }
@@ -695,7 +721,7 @@ impl Value {
 
     #[inline]
     pub fn into_reference(mut self) -> Result<Rc<RefCell<Value>>, Value> {
-        match mem::replace(&mut self.0, Repr::Undef) {
+        match mem::replace(&mut self.0, UNDEF_REPR) {
             Repr::Ref(cell) => Ok(ManuallyDrop::into_inner(cell)),
             r => Err(Value(r)),
         }
@@ -705,21 +731,21 @@ impl Value {
 impl From<bool> for Value {
     #[inline(always)]
     fn from(b: bool) -> Value {
-        Value(Repr::Bool(B::new(b)))
+        Value::bool(b)
     }
 }
 
 impl From<i64> for Value {
     #[inline(always)]
     fn from(i: i64) -> Value {
-        Value(Repr::Int(i))
+        Value::int(i)
     }
 }
 
 impl From<f64> for Value {
     #[inline(always)]
     fn from(f: f64) -> Value {
-        Value(Repr::Float(f))
+        Value::float(f)
     }
 }
 
@@ -771,31 +797,31 @@ impl Value {
     /// The type name PHP uses in messages (zend_zval_type_name): an
     /// object's is its class name.
     pub fn type_name(&self) -> Cow<'static, str> {
-        Cow::Borrowed(match &self.0 {
-            Repr::Null | Repr::Undef => "null",
-            Repr::Bool(_) => "bool",
-            Repr::Int(_) => "int",
-            Repr::Float(_) => "float",
-            Repr::IStr(_) | Repr::Str(_) => "string",
-            Repr::Array(_) => "array",
-            Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => "resource",
-            Repr::Object(o) => return Cow::Owned(String::from_utf8_lossy(o.class.name.as_bytes()).into_owned()),
-            Repr::Ref(cell) => return cell.borrow().type_name(),
+        Cow::Borrowed(match self.view() {
+            V::Null | V::Undef => "null",
+            V::Bool(_) => "bool",
+            V::Int(_) => "int",
+            V::Float(_) => "float",
+            V::IStr(_) | V::Str(_) => "string",
+            V::Array(_) => "array",
+            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => "resource",
+            V::Object(o) => return Cow::Owned(String::from_utf8_lossy(o.class.name.as_bytes()).into_owned()),
+            V::Ref(cell) => return cell.borrow().type_name(),
         })
     }
 
     /// zend_is_true
     pub fn to_bool(&self) -> bool {
-        match &self.0 {
-            Repr::Null | Repr::Undef => false,
-            Repr::Bool(b) => b.get(),
-            Repr::Int(i) => *i != 0,
-            Repr::Float(f) => *f != 0.0,
-            Repr::IStr(s) => !(s.is_empty() || s.as_bytes() == b"0"),
-            Repr::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
-            Repr::Array(a) => !a.is_empty(),
-            Repr::Object(o) => o.class.cast_bool.is_none_or(|cast| cast(o)),
-            Repr::Ref(cell) => cell.borrow().to_bool(),
+        match self.view() {
+            V::Null | V::Undef => false,
+            V::Bool(b) => b,
+            V::Int(i) => i != 0,
+            V::Float(f) => f != 0.0,
+            V::IStr(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+            V::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+            V::Array(a) => !a.is_empty(),
+            V::Object(o) => o.class.cast_bool.is_none_or(|cast| cast(o)),
+            V::Ref(cell) => cell.borrow().to_bool(),
         }
     }
 
@@ -803,9 +829,9 @@ impl Value {
     /// warns about when it is coerced to bool, string, array or object.
     #[inline]
     pub fn is_nan(&self) -> bool {
-        match &self.0 {
-            Repr::Float(f) => f.is_nan(),
-            Repr::Ref(cell) => cell.borrow().is_nan(),
+        match self.view() {
+            V::Float(f) => f.is_nan(),
+            V::Ref(cell) => cell.borrow().is_nan(),
             _ => false,
         }
     }
@@ -813,63 +839,63 @@ impl Value {
     /// zval_get_long: floats wrap as zend_dval_to_lval does; numeric
     /// strings read their numeric prefix, saturating when out of range.
     pub fn to_int(&self) -> i64 {
-        match &self.0 {
-            Repr::Null | Repr::Undef => 0,
-            Repr::Bool(b) => i64::from(b.get()),
-            Repr::Int(i) => *i,
-            Repr::Float(f) => dval_to_lval(*f),
-            Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
+        match self.view() {
+            V::Null | V::Undef => 0,
+            V::Bool(b) => i64::from(b),
+            V::Int(i) => i,
+            V::Float(f) => dval_to_lval(f),
+            V::IStr(_) | V::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
                 Some((Number::Int(i), _)) => i,
                 Some((Number::Float(f), _)) => dval_to_lval_cap(f),
                 None => 0,
             },
-            Repr::Array(a) => i64::from(!a.is_empty()),
+            V::Array(a) => i64::from(!a.is_empty()),
             // A resource is its number.
-            Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
-            Repr::Object(o) if o.class.cast_int.is_some() => o.class.cast_int.expect("checked")(o),
-            Repr::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_int(),
+            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
+            V::Object(o) if o.class.cast_int.is_some() => o.class.cast_int.expect("checked")(o),
+            V::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_int(),
             // PHP warns "could not be converted to int" (the engine reports it).
-            Repr::Object(_) => 1,
-            Repr::Ref(cell) => cell.borrow().to_int(),
+            V::Object(_) => 1,
+            V::Ref(cell) => cell.borrow().to_int(),
         }
     }
 
     /// zval_get_double
     pub fn to_float(&self) -> f64 {
-        match &self.0 {
-            Repr::Null | Repr::Undef => 0.0,
-            Repr::Bool(b) => f64::from(u8::from(b.get())),
-            Repr::Int(i) => *i as f64,
-            Repr::Float(f) => *f,
-            Repr::IStr(_) | Repr::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
+        match self.view() {
+            V::Null | V::Undef => 0.0,
+            V::Bool(b) => f64::from(u8::from(b)),
+            V::Int(i) => i as f64,
+            V::Float(f) => f,
+            V::IStr(_) | V::Str(_) => match leading_numeric(self.as_str().expect("a string").as_bytes()) {
                 Some((Number::Int(i), _)) => i as f64,
                 Some((Number::Float(f), _)) => f,
                 None => 0.0,
             },
-            Repr::Array(a) => f64::from(u8::from(!a.is_empty())),
-            Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => f64::from(o.id),
-            Repr::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_float(),
-            Repr::Object(_) => 1.0,
-            Repr::Ref(cell) => cell.borrow().to_float(),
+            V::Array(a) => f64::from(u8::from(!a.is_empty())),
+            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => f64::from(o.id),
+            V::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_float(),
+            V::Object(_) => 1.0,
+            V::Ref(cell) => cell.borrow().to_float(),
         }
     }
 
     /// The string a scalar converts to (zval_get_string); None for an array,
     /// which the engine reports ("Array to string conversion").
     pub fn to_php_string(&self) -> Option<PhpStr> {
-        Some(match &self.0 {
-            Repr::Null | Repr::Undef => PhpStr::empty(),
-            Repr::Bool(b) => if b.get() { PhpStr::from("1") } else { PhpStr::empty() },
-            Repr::Int(i) => PhpStr::from_int(*i),
-            Repr::Float(f) => PhpStr::from(float_to_string(*f, Precision::ECHO, 'E')),
-            Repr::Str(s) => PhpStr::clone(s),
-            Repr::IStr(s) => s.to_php_str(),
-            Repr::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
-            Repr::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
+        Some(match self.view() {
+            V::Null | V::Undef => PhpStr::empty(),
+            V::Bool(b) => if b { PhpStr::from("1") } else { PhpStr::empty() },
+            V::Int(i) => PhpStr::from_int(i),
+            V::Float(f) => PhpStr::from(float_to_string(f, Precision::ECHO, 'E')),
+            V::Str(s) => PhpStr::clone(s),
+            V::IStr(s) => s.to_php_str(),
+            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
+            V::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
             // An object's string comes from __toString, which the engine
             // calls; neither converts here.
-            Repr::Array(_) | Repr::Object(_) => return None,
-            Repr::Ref(cell) => return cell.borrow().to_php_string(),
+            V::Array(_) | V::Object(_) => return None,
+            V::Ref(cell) => return cell.borrow().to_php_string(),
         })
     }
 
@@ -885,6 +911,8 @@ impl Value {
 
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
+        // (On the representation, not the view: a hot operator, and the
+        // view's pair match measured +33 instructions per `===`.)
         match (&self.0, &other.0) {
             // One program-memory string per bytes: the same bytes are
             // the same pointer.
@@ -892,10 +920,10 @@ impl Value {
             (Repr::Str(a), Repr::Str(b)) => a == b,
             (Repr::Ref(a), _) => a.borrow().identical(other),
             (_, Repr::Ref(b)) => self.identical(&b.borrow()),
-            (Repr::Null | Repr::Undef, Repr::Null | Repr::Undef) => true,
-            (Repr::Bool(a), Repr::Bool(b)) => a == b,
-            (Repr::Int(a), Repr::Int(b)) => a == b,
-            (Repr::Float(a), Repr::Float(b)) => a == b,
+            (Repr::Null(_) | Repr::Undef(_), Repr::Null(_) | Repr::Undef(_)) => true,
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => a == b,
+            // (As floats, not bits: NAN is not itself, 0.0 is -0.0.)
+            (Repr::Float(a), Repr::Float(b)) => f64::from_bits(*a as u64) == f64::from_bits(*b as u64),
             (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str() == other.as_str(),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
             (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
@@ -921,8 +949,8 @@ impl Value {
     /// of the left missing on the right), which PHP treats as greater (1)
     /// and unequal.
     pub fn compare(&self, other: &Value) -> Option<Ordering> {
-        use Repr::*;
-        Some(match (&self.0, &other.0) {
+        use V::*;
+        Some(match (self.view(), other.view()) {
             (Ref(a), _) => return a.borrow().compare(other),
             (_, Ref(b)) => return self.compare(&b.borrow()),
             // An object with a scalar cast against a scalar: compared as its string.
@@ -934,10 +962,10 @@ impl Value {
             }
             (Undef, _) => return Value::NULL.compare(other),
             (_, Undef) => return self.compare(&Value::NULL),
-            (Int(a), Int(b)) => a.cmp(b),
-            (Int(a), Float(b)) => float_cmp(*a as f64, *b),
-            (Float(a), Int(b)) => float_cmp(*a, *b as f64),
-            (Float(a), Float(b)) => float_cmp(*a, *b),
+            (Int(a), Int(b)) => a.cmp(&b),
+            (Int(a), Float(b)) => float_cmp(a as f64, b),
+            (Float(a), Int(b)) => float_cmp(a, b as f64),
+            (Float(a), Float(b)) => float_cmp(a, b),
             (Array(a), Array(b)) => return a.compare(b),
             // zend_std_compare_objects: the same object, or the same class
             // compared property by property; other classes can't be compared.
@@ -960,14 +988,14 @@ impl Value {
                 return a.dynamic.borrow().compare(&b.dynamic.borrow());
             }
             (Null, Null) => Ordering::Equal,
-            (Null, Bool(b)) => false.cmp(&b.get()),
-            (Bool(a), Null) => a.get().cmp(&false),
-            (Bool(a), Bool(b)) => a.get().cmp(&b.get()),
+            (Null, Bool(b)) => false.cmp(&b),
+            (Bool(a), Null) => a.cmp(&false),
+            (Bool(a), Bool(b)) => a.cmp(&b),
             (Null, IStr(_) | Str(_)) => if other.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Less },
             (IStr(_) | Str(_), Null) => if self.as_str().expect("a string").is_empty() { Ordering::Equal } else { Ordering::Greater },
             (IStr(_) | Str(_), IStr(_) | Str(_)) => smart_strcmp(self.as_str().expect("a string"), other.as_str().expect("a string")),
-            (Bool(a), _) => a.get().cmp(&other.to_bool()),
-            (_, Bool(b)) => self.to_bool().cmp(&b.get()),
+            (Bool(a), _) => a.cmp(&other.to_bool()),
+            (_, Bool(b)) => self.to_bool().cmp(&b),
             (Null, _) => false.cmp(&other.to_bool()),
             (_, Null) => self.to_bool().cmp(&false),
             // NAN against a string is "greater" either way round (zend_compare)
@@ -1022,9 +1050,9 @@ fn smart_strcmp(a: &StrHead, b: &StrHead) -> Ordering {
 /// numeric string compares as a number; otherwise the number is compared
 /// as a string.
 fn compare_number_to_string(number: &Value, s: &StrHead) -> Ordering {
-    let n = match number.0 {
-        Repr::Int(i) => Number::Int(i),
-        Repr::Float(f) => Number::Float(f),
+    let n = match number.view() {
+        V::Int(i) => Number::Int(i),
+        V::Float(f) => Number::Float(f),
         _ => unreachable!("only numbers are compared to strings here"),
     };
     match numeric_string(s.as_bytes()) {
@@ -1065,5 +1093,91 @@ mod tests {
         m.str_mut().expect("a string").clear();
         assert!(m.as_str().expect("a string").is_empty());
         assert_eq!(lit.as_str().expect("a string").as_bytes(), b"10 program-memory apples");
+    }
+
+    /// A payload that keeps [`Repr`] a scalar pair to rustc: one 8-byte
+    /// scalar of the integer register class (an integer or a pointer;
+    /// rustc unifies the two). Implemented for exactly the payload types
+    /// that are one; not for `f64` (another register class), `bool` or
+    /// any narrower integer, a tuple, or an array.
+    trait Word {}
+    impl Word for i64 {}
+    impl Word for &'static IStr {}
+    impl Word for Handle<PhpStr> {}
+    impl<T> Word for Handle<Rc<T>> {}
+    // (A handle is one pointer: no fat pointer, no second field.)
+    const _: () = assert!(
+        mem::size_of::<PhpStr>() == 8
+            && mem::size_of::<Rc<PhpArray>>() == 8
+            && mem::size_of::<Rc<RefCell<Value>>>() == 8
+            && mem::size_of::<Rc<Object>>() == 8
+    );
+
+    fn word<T: Word>(_: &T) {}
+
+    /// The layout invariant on [`Repr`] (two registers, no stack slot):
+    /// every variant binds one payload that is a [`Word`]. Checked by the
+    /// compiler wherever the tests build (`cargo check --all-targets`
+    /// included), not by a disassembly: a variant with no payload or two
+    /// is a pattern error here, a new variant a non-exhaustive match, an
+    /// `f64`/`bool`/`u32` payload an unsatisfied `Word` bound. Before
+    /// loosening it, measure `assign` (cycles and
+    /// `ld_blocks.store_forward`, #391): rustc's rule is that every
+    /// variant holds one scalar at the same offset.
+    fn one_word_per_variant(r: &Repr) {
+        match r {
+            Repr::Null(w) => word(w),
+            Repr::Bool(w) => word(w),
+            Repr::Int(w) => word(w),
+            Repr::Float(w) => word(w),
+            Repr::Undef(w) => word(w),
+            Repr::IStr(s) => word(s),
+            Repr::Str(s) => word(s),
+            Repr::Array(a) => word(a),
+            Repr::Ref(c) => word(c),
+            Repr::Object(o) => word(o),
+        }
+    }
+
+    #[test]
+    fn value_is_a_scalar_pair() {
+        let values = [
+            Value::NULL,
+            Value::UNDEF,
+            Value::TRUE,
+            Value::int(-7),
+            Value::float(1.5),
+            Value::istr(IStr::intern(b"a scalar pair").expect("room")),
+            Value::str("heap"),
+            Value::array(PhpArray::new()),
+            Value::new_reference(Value::int(1)),
+        ];
+        for v in &values {
+            one_word_per_variant(&v.0);
+        }
+        // Two words, the tag first: the payload at offset 8 in every variant.
+        assert_eq!((mem::size_of::<Repr>(), mem::align_of::<Repr>()), (16, 8));
+    }
+
+    #[test]
+    fn plain_payloads_round_trip_through_one_word() {
+        for f in [0.0, -0.0, 1.5, -2.25e300, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MIN_POSITIVE, 5e-324] {
+            let v = Value::float(f);
+            assert_eq!(v.as_float().map(f64::to_bits), Some(f.to_bits()));
+            assert_eq!(v.clone().as_float().map(f64::to_bits), Some(f.to_bits()));
+            assert!(v.is_plain() && v.is_float() && v.kind() == Kind::Float);
+        }
+        assert_eq!((Value::TRUE.as_bool(), Value::FALSE.as_bool(), Value::bool(true).as_bool()), (Some(true), Some(false), Some(true)));
+        assert_eq!((Value::int(i64::MIN).as_int(), Value::int(-1).clone().as_int()), (Some(i64::MIN), Some(-1)));
+        // The same payload word under other tags is never the same value.
+        assert!(!Value::int(0).same_handle(&Value::NULL) && !Value::int(0).same_handle(&Value::FALSE));
+        assert!(!Value::int(1).identical(&Value::TRUE) && !Value::float(0.0).identical(&Value::int(0)));
+        assert!(!Value::NULL.same_handle(&Value::UNDEF) && Value::NULL.identical(&Value::UNDEF));
+        // A float compares as a float, not as its bits.
+        assert!(Value::float(0.0).identical(&Value::float(-0.0)) && !Value::float(f64::NAN).identical(&Value::float(f64::NAN)));
+        assert!(Value::float(f64::NAN).same_handle(&Value::float(f64::NAN)) && !Value::float(0.0).same_handle(&Value::float(-0.0)));
+        assert_eq!(Value::float(-1.5).compare(&Value::float(1.0)), Some(Ordering::Less));
+        assert_eq!((Value::float(2.5).to_int(), Value::float(0.0).to_bool(), Value::TRUE.to_float()), (2, false, 1.0));
+        assert_eq!(format!("{:?}", Value::float(1.5)), "Float(1.5)");
     }
 }
