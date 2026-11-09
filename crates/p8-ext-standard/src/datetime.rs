@@ -834,7 +834,7 @@ fn own_props(o: &Object, out: &mut PhpArray) {
             out.insert(Key::from_string(p.name.clone()), v.deref());
         }
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.deref());
     }
 }
@@ -849,7 +849,7 @@ fn restore_props(o: &Object, a: &PhpArray, skip: &[&str]) {
         match o.class.slot(name.as_bytes(), None) {
             Some(i) => o.slots()[i].set(v.deref()),
             None => {
-                o.dynamic.borrow_mut().insert(k.clone(), v.deref());
+                o.dynamic_mut().insert(k.clone(), v.deref());
             }
         }
     }

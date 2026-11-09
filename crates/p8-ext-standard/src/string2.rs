@@ -475,7 +475,7 @@ fn http_build_query(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
                     e.push((Key::from_string(p.name.clone()), val.deref()));
                 }
             }
-            e.extend(o.dynamic.borrow().iter().map(|(k, v)| (k, v.deref())));
+            e.extend(o.dynamic().iter().map(|(k, v)| (k, v.deref())));
             e
         } else {
             return;

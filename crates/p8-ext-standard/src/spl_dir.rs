@@ -511,7 +511,7 @@ fn info_to_string(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R
 
 fn debug_info(o: &Object) -> PhpArray {
     let mut out = PhpArray::new();
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.clone());
     }
     let private = |class: &str, name: &str| Key::from_string(PhpStr::from(format!("\0{class}\0{name}").as_str()));

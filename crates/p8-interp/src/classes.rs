@@ -746,7 +746,7 @@ impl Context<'_> {
     fn new_object(&self, info: &crate::instances::NewInfo) -> Rc<Object> {
         let class = &info.class;
         let data = class.make_data.map(|make| make());
-        Object::with_slots(Rc::clone(class), &self.ids, data, p8_runtime::object::Props::from_slice(&info.defaults))
+        Object::with_defaults(Rc::clone(class), &self.ids, data, &info.defaults)
     }
 
     /// `new C` (the loop's) for a class `make_from` has nothing more to do
@@ -1076,7 +1076,7 @@ impl Context<'_> {
             }
             None => {
                 let key = Key::from_string(name.clone());
-                let found = object.dynamic.borrow().get(&key).map(Value::deref);
+                let found = object.dynamic().get(&key).map(Value::deref);
                 match found {
                     Some(v) => Ok(v),
                     None if quiet => Ok(Value::NULL),
@@ -1148,7 +1148,7 @@ impl Context<'_> {
             None if name.as_bytes().first() == Some(&0) => Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
-                if !object.dynamic.borrow().contains_key(&key) {
+                if !object.dynamic().contains_key(&key) {
                     if object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
                         self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
                             "Creation of dynamic property {}::${} is deprecated",
@@ -1157,9 +1157,9 @@ impl Context<'_> {
                         )));
                         self.report_diags();
                     }
-                    object.dynamic.borrow_mut().insert(key.clone(), Value::NULL);
+                    object.dynamic_mut().insert(key.clone(), Value::NULL);
                 }
-                let mut dynamic = object.dynamic.borrow_mut();
+                let mut dynamic = object.dynamic_mut();
                 let slot = dynamic.get_mut(&key).expect("just made");
                 Ok(crate::refs::make_ref(slot))
             }
@@ -1183,7 +1183,7 @@ impl Context<'_> {
             Some((slot, _)) => object.slots()[slot].set(Value::reference(cell)),
             None => {
                 self.write_prop(target, name, Value::NULL)?;
-                object.dynamic.borrow_mut().insert(Key::from_string(pname), Value::reference(cell));
+                object.dynamic_mut().insert(Key::from_string(pname), Value::reference(cell));
             }
         }
         Ok(())
@@ -1198,7 +1198,7 @@ impl Context<'_> {
             None if name.as_bytes().first() == Some(&0) => return Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
-                let exists = object.dynamic.borrow().contains_key(&key);
+                let exists = object.dynamic().contains_key(&key);
                 if !exists && object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
                     self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
                         "Creation of dynamic property {}::${} is deprecated",
@@ -1207,7 +1207,7 @@ impl Context<'_> {
                     )));
                     self.report_diags();
                 }
-                object.dynamic.borrow_mut().insert(key, value);
+                object.dynamic_mut().insert(key, value);
             }
         }
         Ok(())
@@ -1343,7 +1343,7 @@ impl Context<'_> {
         let mut root = match slot {
             Some(i) => object.slots()[i].modify(take),
             None => {
-                let v = take(object.dynamic.borrow_mut().slot_mut(&key()));
+                let v = take(object.dynamic_mut().slot_mut(&key()));
                 if v.is_undef() { Value::NULL } else { v }
             }
         };
@@ -1352,7 +1352,7 @@ impl Context<'_> {
         // instruction, as every `step` write's does.)
         match slot {
             Some(i) => object.slots()[i].modify(|v| put(v, root)),
-            None => put(object.dynamic.borrow_mut().slot_mut(&key()), root),
+            None => put(object.dynamic_mut().slot_mut(&key()), root),
         }
         result
     }
@@ -1373,7 +1373,7 @@ impl Context<'_> {
         };
         Ok(match slot {
             Some((i, _)) => !object.slots()[i].peek(|v| v.deref().is_null_or_undef()),
-            None => object.dynamic.borrow().get(&Key::from_string(name)).is_some_and(|v| !v.deref().is_null()),
+            None => object.dynamic().get(&Key::from_string(name)).is_some_and(|v| !v.deref().is_null()),
         })
     }
 
@@ -1398,7 +1398,7 @@ impl Context<'_> {
                 object.slots()[i].set(Value::UNDEF);
             }
             None => {
-                object.dynamic.borrow_mut().remove(&Key::from_string(name));
+                object.dynamic_mut().remove(&Key::from_string(name));
             }
         }
         Ok(())
@@ -1570,7 +1570,7 @@ impl Context<'_> {
                 }
             }
             None => {
-                if o.dynamic.borrow().contains_key(&Key::from_string(name.clone())) {
+                if o.dynamic().contains_key(&Key::from_string(name.clone())) {
                     return None;
                 }
             }
@@ -1836,7 +1836,7 @@ impl Context<'_> {
         let class = Rc::clone(self.class_named(b"stdclass").expect("stdClass"));
         let o = Object::new(class, &self.ids);
         {
-            let mut props = o.dynamic.borrow_mut();
+            let mut props = o.dynamic_mut();
             if v.is_null_or_undef() {
             } else if let Some(a) = v.as_array() {
                 for (k, v) in a.iter() {
@@ -1925,9 +1925,9 @@ impl Context<'_> {
             let (inst_copy, hook) = self.clone_object(&Value::object(inst))?;
             let copy = o.copy();
             copy.lazy.set(p8_runtime::object::LAZY_PROXY);
-            *copy.lazy_info.borrow_mut() = Some(Box::new(p8_runtime::object::Lazy {
+            *copy.lazy_info_mut() = Some(Box::new(p8_runtime::object::Lazy {
                 initializer: Value::NULL,
-                options: o.lazy_info.borrow().as_ref().map_or(0, |l| l.options),
+                options: o.lazy_info().as_ref().map_or(0, |l| l.options),
                 lazy_slots: vec![true; o.class.properties.len()],
                 instance: Some(inst_copy),
             }));
@@ -2082,7 +2082,7 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
         return props(o);
     }
     let slots = o.slot_values();
-    let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic.borrow().len());
+    let mut out = p8_runtime::array::PhpArray::hashed(slots.len() + o.dynamic().len());
     for (p, v) in o.class.properties.iter().zip(slots.iter()) {
         if v.is_undef() || p.is_internal() {
             continue;
@@ -2096,7 +2096,7 @@ pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
         };
         out.insert(Key::from_string(name), v.clone());
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.clone());
     }
     out

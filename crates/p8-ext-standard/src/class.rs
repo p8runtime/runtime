@@ -386,7 +386,7 @@ fn get_mangled_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Valu
         name.extend_from_slice(p.name.as_bytes());
         out.insert(Key::from_string(PhpStr::new(name)), v.clone());
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.clone());
     }
     Ok(Value::array(out))
@@ -431,7 +431,7 @@ fn get_object_vars(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
             out.insert(Key::from_string(p.name.clone()), v);
         }
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         out.insert(k, v.deref());
     }
     Ok(Value::array(out))
@@ -525,7 +525,7 @@ fn property_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     if class.slots.contains_key(property.as_bytes()) || class.statics.contains_key(property.as_bytes()) {
         return Ok(Value::TRUE);
     }
-    Ok(Value::bool(target.as_object().is_some_and(|o| o.dynamic.borrow().contains_key(&Key::from_string(property)))))
+    Ok(Value::bool(target.as_object().is_some_and(|o| o.dynamic().contains_key(&Key::from_string(property)))))
 }
 
 /// The class `$class` names, autoloaded when `$autoload` (argument 1) is.

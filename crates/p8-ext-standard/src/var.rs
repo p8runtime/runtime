@@ -534,7 +534,7 @@ fn entries(o: &Object) -> Vec<Entry> {
         };
         list.push(Entry { numeric: false, name: p.name.clone(), visibility: p.visibility, declaring: p.declaring_name.clone(), value, ty: p.ty.clone() });
     }
-    for (k, v) in o.dynamic.borrow().iter() {
+    for (k, v) in o.dynamic().iter() {
         let name = match k {
             Key::Int(i) => PhpStr::from(i.to_string()),
             Key::Str(s) => s,
