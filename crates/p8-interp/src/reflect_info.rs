@@ -166,6 +166,16 @@ impl Context<'_> {
         }
     }
 
+    /// The class that declares a method of `class` (`declaring`, its
+    /// lowercase name): `class` or a parent of it, as zend_function's scope
+    /// points at it (no lookup by name), else the class of that name.
+    fn declaring_class(&self, class: &Rc<Class>, declaring: &[u8]) -> Rc<Class> {
+        std::iter::successors(Some(Rc::clone(class)), |c| c.parent.clone())
+            .find(|c| c.lower == declaring)
+            .or_else(|| self.class_named(declaring).cloned())
+            .unwrap_or_else(|| Rc::clone(class))
+    }
+
     pub(crate) fn info_of(&self, callee: &Callee) -> Option<FnInfo> {
         match callee {
             Callee::Function(name) => {
@@ -179,7 +189,7 @@ impl Context<'_> {
             }
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
-                let declaring = self.class_named(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.declaring_class(class, &m.declaring);
                 // A builtin interface's abstract method has no code: its stub describes it.
                 // Read from its code: describing a method makes no closure.
                 let user = m.native.is_none() && m.func != u32::MAX;
@@ -224,7 +234,7 @@ impl Context<'_> {
                 let Some(m) = class.method(&name.as_bytes().to_ascii_lowercase()).cloned() else {
                     return Err(self.throw("ReflectionException", format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()))));
                 };
-                let declaring = self.class_named(&m.declaring).cloned().unwrap_or_else(|| Rc::clone(class));
+                let declaring = self.declaring_class(class, &m.declaring);
                 let called = this.as_ref().map_or_else(|| Rc::clone(class), |o| Rc::clone(&o.class));
                 let this = if m.is_static { None } else { this };
                 let mut regs = std::mem::take(&mut self.isolate.regs);

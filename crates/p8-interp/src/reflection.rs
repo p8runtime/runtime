@@ -83,9 +83,62 @@ fn class_arg(ctx: &mut dyn Ctx, v: &Value) -> Result<Rc<Class>, Throw> {
     }
 }
 
+/// What a reflection object's hidden "\0class" and "\0callee" resolved to
+/// when they were set (PHP's reflection_object keeps the pointer): kept
+/// with the value set, so a read that finds that same value (the same
+/// handle) looks nothing up by name. A value set any other way is
+/// resolved by name, as before. The class is weak, as call sites hold
+/// theirs: a class's static holding its own reflection is no cycle.
+#[derive(Default)]
+struct Held {
+    class: std::cell::RefCell<Option<(Value, std::rc::Weak<Class>)>>,
+    /// A method's: its class and name (a function's or a closure's callee
+    /// is no lookup to save).
+    method: std::cell::RefCell<Option<(Value, std::rc::Weak<Class>, PhpStr)>>,
+}
+
+fn make_held() -> Rc<dyn std::any::Any> {
+    Rc::new(Held::default())
+}
+
+/// The native state of the reflection classes that hold a class or a
+/// callee (their subclasses inherit it).
+pub(crate) fn data_maker(class: &str) -> Option<p8_runtime::object::MakeData> {
+    matches!(class, "ReflectionClass" | "ReflectionFunctionAbstract" | "ReflectionParameter" | "ReflectionProperty" | "ReflectionClassConstant")
+        .then_some(make_held as p8_runtime::object::MakeData)
+}
+
+/// Set the class a reflection object holds.
+fn hold_class(o: &Object, class: &Rc<Class>) {
+    let v = Value::str(class.name.clone());
+    if let Some(h) = o.native::<Held>() {
+        *h.class.borrow_mut() = Some((v.clone(), Rc::downgrade(class)));
+    }
+    set(o, "\0class", v);
+}
+
+/// Set the callee a reflection object holds.
+fn hold_callee(o: &Object, callee: &Callee) {
+    let v = encode(callee);
+    if let Some(h) = o.native::<Held>() {
+        *h.method.borrow_mut() = match callee {
+            Callee::Method(class, name) => Some((v.clone(), Rc::downgrade(class), name.clone())),
+            _ => None,
+        };
+    }
+    set(o, "\0callee", v);
+}
+
 /// The class a reflection object holds (its "\0class" name).
 fn held_class(ctx: &mut dyn Ctx, o: &Object) -> Result<Rc<Class>, Throw> {
     let name = get(o, "\0class");
+    if let Some(h) = o.native::<Held>()
+        && let Some((v, class)) = &*h.class.borrow()
+        && v.same_handle(&name)
+        && let Some(class) = class.upgrade()
+    {
+        return Ok(class);
+    }
     match ctx.class(name.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()) {
         Some(c) => Ok(c),
         None => Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
@@ -95,7 +148,7 @@ fn held_class(ctx: &mut dyn Ctx, o: &Object) -> Result<Rc<Class>, Throw> {
 fn new_class_reflection(ctx: &mut dyn Ctx, class: &Rc<Class>) -> Value {
     let o = make(ctx, if class.flags & CLASS_ENUM != 0 { b"ReflectionEnum" } else { b"ReflectionClass" });
     set(&o, "name", Value::str(shown_class(class)));
-    set(&o, "\0class", Value::str(class.name.clone()));
+    hold_class(&o, class);
     Value::object(o)
 }
 
@@ -121,7 +174,15 @@ fn decode(ctx: &mut dyn Ctx, v: &Value) -> Result<Callee, Throw> {
 }
 
 fn callee_of(ctx: &mut dyn Ctx, o: &Object) -> Result<Callee, Throw> {
-    decode(ctx, &get(o, "\0callee"))
+    let v = get(o, "\0callee");
+    if let Some(h) = o.native::<Held>()
+        && let Some((held, class, name)) = &*h.method.borrow()
+        && held.same_handle(&v)
+        && let Some(class) = class.upgrade()
+    {
+        return Ok(Callee::Method(class, name.clone()));
+    }
+    decode(ctx, &v)
 }
 
 fn info_of(ctx: &mut dyn Ctx, o: &Object) -> Result<FnInfo, Throw> {
@@ -240,7 +301,7 @@ fn ut_to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
 fn rc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = class_arg(ctx, &arg(args, 0))?;
     set(this, "name", Value::str(shown_class(&class)));
-    set(this, "\0class", Value::str(class.name.clone()));
+    hold_class(this, &class);
     Ok(Value::NULL)
 }
 
@@ -448,7 +509,7 @@ fn new_constant(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
     let o = make(ctx, b"ReflectionClassConstant");
     set(&o, "name", s(name));
     set(&o, "class", class.constants.get(name).map_or_else(|| Value::str(class.name.clone()), |c| Value::str(c.declaring_name.clone())));
-    set(&o, "\0class", Value::str(class.name.clone()));
+    hold_class(&o, class);
     Value::object(o)
 }
 
@@ -579,7 +640,7 @@ fn ro_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         return Err(ctx.throw("TypeError", "ReflectionObject::__construct(): Argument #1 ($object) must be of type object".into()));
     };
     set(this, "name", Value::str(o.class.name.clone()));
-    set(this, "\0class", Value::str(o.class.name.clone()));
+    hold_class(this, &o.class);
     set(this, "\0object", Value::object(o));
     Ok(Value::NULL)
 }
@@ -637,7 +698,7 @@ fn fill_method(ctx: &mut dyn Ctx, o: &Rc<Object>, class: &Rc<Class>, name: &[u8]
     let _ = ctx;
     set(o, "name", Value::str(shown.clone()));
     set(o, "class", Value::str(declaring));
-    set(o, "\0callee", encode(&Callee::Method(Rc::clone(class), shown)));
+    hold_callee(o, &Callee::Method(Rc::clone(class), shown));
 }
 
 fn rm_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -688,7 +749,7 @@ fn rf_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
     let shown = if info.is_closure && info.user { PhpStr::from("{closure}") } else { info.name.clone() };
     let shown = if info.is_closure && info.name.as_bytes().starts_with(b"{closure") { info.name.clone() } else { shown };
     set(this, "name", Value::str(shown));
-    set(this, "\0callee", encode(&callee));
+    hold_callee(this, &callee);
     Ok(Value::NULL)
 }
 
@@ -716,7 +777,7 @@ fn_method!(fa_get_parameters, |ctx, info, this, args| {
     let callee = get(this, "\0callee");
     let mut out = Vec::new();
     for i in 0..info.params.len() {
-        out.push(new_parameter(ctx, &callee, &info, i));
+        out.push(new_parameter(ctx, this, &callee, &info, i));
     }
     Ok(list(out))
 });
@@ -909,9 +970,14 @@ fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Thro
 // ---------------------------------------------------------------------------
 // ReflectionParameter
 
-fn new_parameter(ctx: &mut dyn Ctx, callee: &Value, info: &FnInfo, i: usize) -> Value {
+/// Parameter `i` of the function `from` (a ReflectionFunctionAbstract)
+/// holds as `callee`: the same callee, held as `from` holds it.
+fn new_parameter(ctx: &mut dyn Ctx, from: &Object, callee: &Value, info: &FnInfo, i: usize) -> Value {
     let o = make(ctx, b"ReflectionParameter");
     set(&o, "name", Value::str(info.params[i].name.clone()));
+    if let (Some(from), Some(to)) = (from.native::<Held>(), o.native::<Held>()) {
+        *to.method.borrow_mut() = from.method.borrow().clone();
+    }
     set(&o, "\0callee", callee.clone());
     set(&o, "\0pos", Value::int(i as i64));
     Value::object(o)
@@ -946,7 +1012,7 @@ fn rp_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         }
     };
     set(this, "name", Value::str(info.params[pos].name.clone()));
-    set(this, "\0callee", encode(&callee));
+    hold_callee(this, &callee);
     set(this, "\0pos", Value::int(pos as i64));
     Ok(Value::NULL)
 }
@@ -1303,7 +1369,7 @@ fn fill_property(o: &Object, class: &Rc<Class>, name: &[u8]) {
         .unwrap_or_else(|| class.name.clone());
     set(o, "name", s(name));
     set(o, "class", Value::str(declaring));
-    set(o, "\0class", Value::str(class.name.clone()));
+    hold_class(o, class);
 }
 
 fn rpr_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1969,7 +2035,7 @@ fn rcc_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     };
     set(this, "name", s(name.as_bytes()));
     set(this, "class", Value::str(c.declaring_name.clone()));
-    set(this, "\0class", Value::str(class.name.clone()));
+    hold_class(this, &class);
     Ok(Value::NULL)
 }
 
@@ -2042,7 +2108,7 @@ fn new_case(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &str) -> Value {
     let o = make(ctx, if class.enum_backing.is_some() { b"ReflectionEnumBackedCase" } else { b"ReflectionEnumUnitCase" });
     set(&o, "name", s(name.as_bytes()));
     set(&o, "class", Value::str(class.name.clone()));
-    set(&o, "\0class", Value::str(class.name.clone()));
+    hold_class(&o, class);
     Value::object(o)
 }
 

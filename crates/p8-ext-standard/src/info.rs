@@ -239,6 +239,11 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
     let mut trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0, usize::try_from(limit).unwrap_or(0));
     let mut out = PhpArray::new();
+    // ("args", hashed once per thread: PHPUnit asks for a trace per test.)
+    thread_local! {
+        static ARGS: [PhpStr; 1] = p8_runtime::array::record_keys(["args"]);
+    }
+    let args_key = ARGS.with(|k| Key::Str(k[0].clone()));
     // Each frame is moved out of the trace (the only holder), so dropping
     // "args" edits it in place: no frame is copied.
     for i in 0..trace.len() {
@@ -249,7 +254,7 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
         let mut frame = std::mem::take(slot);
         let Some(fields) = frame.array_mut() else { continue };
         if options & DEBUG_BACKTRACE_IGNORE_ARGS != 0 {
-            fields.remove(&Key::from_string(PhpStr::from("args")));
+            fields.remove(&args_key);
         }
         let _ = out.push(frame);
     }

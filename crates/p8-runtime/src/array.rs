@@ -179,6 +179,21 @@ impl Key {
     }
 }
 
+/// The keys of a record ([`PhpArray::record`]), each hashed now: made once
+/// (a thread-local of the builtin's) and shared by every record built from
+/// them. Distinct strings that are not integers (asserted).
+pub fn record_keys<const N: usize>(names: [&str; N]) -> [PhpStr; N] {
+    for (i, n) in names.iter().enumerate() {
+        assert!(!names[..i].contains(n), "record keys are distinct");
+    }
+    names.map(|n| {
+        assert!(int_key(n.as_bytes()).is_none(), "a record key is a string key");
+        let s = PhpStr::from(n);
+        s.hash();
+        s
+    })
+}
+
 /// A canonical decimal integer: "0", "-12", not "012", "-0", "+1", " 1".
 ///
 /// ZEND_HANDLE_NUMERIC_STR: the first byte is tested inline, and only a
@@ -265,6 +280,22 @@ impl Packed {
     #[inline]
     fn get_mut(&mut self, i: i64) -> Option<&mut Value> {
         usize::try_from(i).ok().and_then(|i| self.slots.get_mut(i)).filter(|v| !v.is_undef())
+    }
+
+    /// A buffer to put key `i` (past the end) in where the buffer is
+    /// none, or the eight-slot one and `i` is below sixteen: a kept buffer
+    /// of the pool's size (the values moved to it). Anything larger grows
+    /// as the vector does.
+    #[inline]
+    fn room_for(&mut self, i: usize) {
+        if self.slots.capacity() == 0 {
+            self.slots = take(&VALUES, MIN_PACKED.max(i + 1));
+        } else if i >= self.slots.capacity() && self.slots.capacity() == 8 && i < 16 {
+            // From eight to sixteen: a kept buffer, the values moved.
+            let mut more = take(&VALUES, 16);
+            more.append(&mut self.slots);
+            give(&VALUES, std::mem::replace(&mut self.slots, more));
+        }
     }
 
     /// Whether key `i`, past the end, still fits a packed array: no more
@@ -865,6 +896,18 @@ impl PhpArray {
         }
     }
 
+    /// A record a builtin returns (getrusage(), gc_status()): `keys` in
+    /// order with `values`, the keys made once (see [`record_keys`]), so
+    /// no key is allocated, hashed or looked for here. PHP builds these
+    /// with add_assoc_*, which hashes and allocates every key every call.
+    pub fn record(keys: &[PhpStr], values: impl IntoIterator<Item = Value>) -> PhpArray {
+        let mut h = Hashed::with_capacity(keys.len());
+        for (k, v) in keys.iter().zip(values) {
+            h.insert_new(k.hash(), Some(k.clone()), v);
+        }
+        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0 }
+    }
+
     /// `get` for an int key.
     #[inline]
     pub fn get_int(&self, i: i64) -> Option<&Value> {
@@ -923,6 +966,7 @@ impl PhpArray {
 
     /// Set `key` to `value` (in place if present, else appended in order).
     pub fn insert(&mut self, key: Key, value: Value) {
+        crate::counts::bump(crate::counts::Count::Insert);
         if let Key::Int(k) = key {
             self.note_int_key(k);
         }
@@ -931,14 +975,7 @@ impl PhpArray {
                 Key::Int(i) if p.get(i).is_some() => p.slots[i as usize] = value,
                 Key::Int(i) if p.fits(i) => {
                     let gap = i as usize - p.slots.len();
-                    if p.slots.capacity() == 0 {
-                        p.slots = take(&VALUES, MIN_PACKED.max(i as usize + 1));
-                    } else if i as usize >= p.slots.capacity() && p.slots.capacity() == 8 && i < 16 {
-                        // From eight to sixteen: a kept buffer, the values moved.
-                        let mut more = take(&VALUES, 16);
-                        more.append(&mut p.slots);
-                        give(&VALUES, std::mem::replace(&mut p.slots, more));
-                    }
+                    p.room_for(i as usize);
                     p.slots.resize(i as usize, Value::UNDEF);
                     p.holes += gap;
                     p.slots.push(value);
@@ -975,6 +1012,21 @@ impl PhpArray {
 
     /// `$a[] = value`; Err when the next key is taken.
     pub fn push(&mut self, value: Value) -> Result<(), NextKeyOccupied> {
+        // A list without holes whose next key is its length: the value
+        // goes on the end (zend_hash_next_index_insert's packed path,
+        // ZEND_HASH_FILL_PACKED). What `insert` of that key does (it fits:
+        // no holes), without its key tests.
+        if let Storage::Packed(p) = &mut self.storage {
+            let n = p.slots.len();
+            if p.holes == 0 && self.next_free.unwrap_or(0) == n as i64 {
+                if n == p.slots.capacity() {
+                    p.room_for(n);
+                }
+                p.slots.push(value);
+                self.next_free = Some(n as i64 + 1);
+                return Ok(());
+            }
+        }
         let key = self.next_key().ok_or(NextKeyOccupied)?;
         self.insert(Key::Int(key), value);
         Ok(())

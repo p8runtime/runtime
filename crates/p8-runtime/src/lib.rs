@@ -6,6 +6,7 @@
 pub mod sort;
 pub mod args;
 pub mod array;
+pub mod counts;
 pub mod ext;
 pub mod fast;
 pub mod frozen;

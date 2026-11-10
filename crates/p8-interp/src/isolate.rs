@@ -353,7 +353,7 @@ impl Isolate {
             declared_order: Vec::new(),
             binding_file: None,
             loader: None,
-            included: std::collections::HashSet::new(),
+            included: p8_runtime::fast::HashSet::default(),
             included_order: Vec::new(),
             ids,
             native_class: None,
@@ -363,7 +363,7 @@ impl Isolate {
             resource_classes: HashMap::default(),
             resource_ids,
             enum_objects: HashMap::default(),
-            resolved: std::collections::HashSet::new(),
+            resolved: p8_runtime::fast::HashSet::default(),
             stack_base: 0,
             ref_wanted: Vec::new(),
             named_extra: None,
@@ -476,8 +476,10 @@ pub struct Context<'i> {
     pub(crate) binding_file: Option<Rc<str>>,
     /// Compiles the files `include` runs (the embedder's compiler).
     pub(crate) loader: Option<Rc<dyn Loader>>,
-    /// Files included so far, for `_once` (resolved paths).
-    pub(crate) included: std::collections::HashSet<std::path::PathBuf>,
+    /// Files included so far, for `_once` (resolved paths). Hashed as the
+    /// name tables are (fast.rs), not with SipHash, which a framework's
+    /// thousands of include_once paths paid for (#411).
+    pub(crate) included: p8_runtime::fast::HashSet<std::path::PathBuf>,
     /// The files run so far, in order (get_included_files).
     pub(crate) included_order: Vec<String>,
     /// Object ids (handles), reused as PHP reuses them.
@@ -515,7 +517,7 @@ pub struct Context<'i> {
     /// to stop runaway nesting (PHP's "Maximum call stack size").
     pub(crate) stack_base: usize,
     /// Lazy classes (CLASS_LAZY) whose default code has run, by address.
-    pub(crate) resolved: std::collections::HashSet<usize>,
+    pub(crate) resolved: p8_runtime::fast::HashSet<usize>,
     /// A lazy class's computed instance defaults: (slot, value).
     pub(crate) class_defaults: HashMap<usize, Rc<Vec<(usize, Value)>>>,
     /// How to make each class's objects, by the class's address

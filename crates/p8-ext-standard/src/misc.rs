@@ -434,26 +434,30 @@ fn gc_mem_caches(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
 /// gc_status(): the collector's counters, as PHP 8.4 reports them.
 fn gc_status(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     let (runs, collected) = ctx.gc_counts();
-    let mut out = PhpArray::hashed(12);
-    for (k, v) in [
-        ("running", Value::FALSE),
-        ("protected", Value::FALSE),
-        ("full", Value::FALSE),
-        ("runs", Value::int(runs)),
-        ("collected", Value::int(collected)),
-        ("threshold", Value::int(10001)),
-        ("buffer_size", Value::int(16384)),
-        ("roots", Value::int(0)),
+    let values = [
+        Value::FALSE,
+        Value::FALSE,
+        Value::FALSE,
+        Value::int(runs),
+        Value::int(collected),
+        Value::int(10001),
+        Value::int(16384),
+        Value::int(0),
         // No collector runs (reference counting frees what it can), so all
         // the time is the application's.
-        ("application_time", Value::float(ctx.running_for().as_secs_f64())),
-        ("collector_time", Value::float(0.0)),
-        ("destructor_time", Value::float(0.0)),
-        ("free_time", Value::float(0.0)),
-    ] {
-        out.insert(Key::from_string(PhpStr::from(k)), v);
+        Value::float(ctx.running_for().as_secs_f64()),
+        Value::float(0.0),
+        Value::float(0.0),
+        Value::float(0.0),
+    ];
+    // (PHPUnit calls this around every test: the keys are made once.)
+    thread_local! {
+        static KEYS: [PhpStr; 12] = p8_runtime::array::record_keys([
+            "running", "protected", "full", "runs", "collected", "threshold", "buffer_size", "roots",
+            "application_time", "collector_time", "destructor_time", "free_time",
+        ]);
     }
-    Ok(Value::array(out))
+    Ok(Value::array(KEYS.with(|k| PhpArray::record(k, values))))
 }
 
 fn gc_switch(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {

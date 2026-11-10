@@ -197,6 +197,7 @@ impl Context<'_> {
     /// an optional leading `\`: None when no code ever named it (so no
     /// function or class has that name). Allocates nothing.
     pub(crate) fn sym_of(&self, name: &[u8]) -> Option<Sym> {
+        p8_runtime::counts::bump(p8_runtime::counts::Count::NameLookup);
         self.isolate.names.find_lower(name.strip_prefix(b"\\").unwrap_or(name))
     }
 
