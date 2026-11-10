@@ -237,20 +237,21 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let options = if args.is_empty() { 1 } else { arg(args, 0).to_int() };
     let limit = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
     const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
-    let trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0);
+    let mut trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0);
     let mut out = PhpArray::new();
-    for (i, (_, frame)) in trace.iter().enumerate() {
+    // Each frame is moved out of the trace (the only holder), so dropping
+    // "args" edits it in place: no frame is copied.
+    for i in 0..trace.len() {
         if limit > 0 && i as i64 >= limit {
             break;
         }
-        let mut frame = match frame.as_array() {
-            Some(f) => f.clone(),
-            None => continue,
-        };
+        let Some(slot) = trace.get_int_mut(i as i64) else { continue };
+        let mut frame = std::mem::take(slot);
+        let Some(fields) = frame.array_mut() else { continue };
         if options & DEBUG_BACKTRACE_IGNORE_ARGS != 0 {
-            frame.remove(&Key::from_string(PhpStr::from("args")));
+            fields.remove(&Key::from_string(PhpStr::from("args")));
         }
-        let _ = out.push(Value::array(frame));
+        let _ = out.push(frame);
     }
     Ok(Value::array(out))
 }
