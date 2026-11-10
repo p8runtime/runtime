@@ -14,8 +14,29 @@ use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
 use std::rc::Rc;
 
-fn key(k: &str) -> Key {
-    Key::from_string(PhpStr::from(k))
+// A trace entry's keys (PHP's known strings: ZSTR_KNOWN(ZEND_STR_FILE),
+// …), made once per thread with their hashes: an entry allocates and
+// hashes none of them, and each is appended with no lookup
+// (_zend_hash_append_ex), an entry holding each key at most once.
+const FILE: usize = 0;
+const LINE: usize = 1;
+const FUNCTION: usize = 2;
+const CLASS: usize = 3;
+const OBJECT: usize = 4;
+const TYPE: usize = 5;
+const ARGS: usize = 6;
+
+thread_local! {
+    static KEYS: [PhpStr; 7] = p8_runtime::array::record_keys(["file", "line", "function", "class", "object", "type", "args"]);
+}
+
+fn key(k: usize) -> Key {
+    KEYS.with(|keys| Key::Str(keys[k].clone()))
+}
+
+/// An empty trace entry: room for its keys (array_init_size(8)).
+fn new_entry() -> PhpArray {
+    PhpArray::hashed(8)
 }
 
 impl Context<'_> {
@@ -48,32 +69,32 @@ impl Context<'_> {
         // An internal method the error was raised in, called from the top frame.
         if let Some(&(_, n)) = natives.last().filter(|(depth, n)| n.top && *depth == frames.len()) {
             let (file, line) = self.location();
-            let mut entry = PhpArray::new();
-            entry.insert(key("file"), Value::str(PhpStr::from(&*file)));
-            entry.insert(key("line"), Value::int(i64::from(line)));
-            entry.insert(key("function"), Value::str(n.name));
-            entry.insert(key("args"), Value::array(PhpArray::from_list(n.args.clone())));
+            let mut entry = new_entry();
+            entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*file)));
+            entry.insert_absent(key(LINE), Value::int(i64::from(line)));
+            entry.insert_absent(key(FUNCTION), Value::str(n.name));
+            entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(n.args.clone())));
             let _ = trace.push(Value::array(entry));
         }
         // A builtin's entry: called from `caller`, at `line`.
         let native_entry = |n: &NativeCall, caller: &Frame, line: u32| {
-            let mut entry = PhpArray::new();
-            entry.insert(key("file"), Value::str(PhpStr::from(&*caller.func.code.file)));
-            entry.insert(key("line"), Value::int(i64::from(line)));
+            let mut entry = new_entry();
+            entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*caller.func.code.file)));
+            entry.insert_absent(key(LINE), Value::int(i64::from(line)));
             match &n.method {
                 Some((name, class, this)) => {
-                    entry.insert(key("function"), Value::str(name.clone()));
-                    entry.insert(key("class"), Value::str(class.clone()));
+                    entry.insert_absent(key(FUNCTION), Value::str(name.clone()));
+                    entry.insert_absent(key(CLASS), Value::str(class.clone()));
                     if objects && let Some(this) = this {
-                        entry.insert(key("object"), Value::object(Rc::clone(this)));
+                        entry.insert_absent(key(OBJECT), Value::object(Rc::clone(this)));
                     }
-                    entry.insert(key("type"), Value::str(if this.is_some() { "->" } else { "::" }));
+                    entry.insert_absent(key(TYPE), Value::str(if this.is_some() { "->" } else { "::" }));
                 }
                 None => {
-                    entry.insert(key("function"), Value::str(n.name));
+                    entry.insert_absent(key(FUNCTION), Value::str(n.name));
                 }
             }
-            entry.insert(key("args"), Value::array(PhpArray::from_list(n.args.clone())));
+            entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(n.args.clone())));
             entry
         };
         for k in (1..frames.len()).rev() {
@@ -90,10 +111,10 @@ impl Context<'_> {
                     let entry = match natives.iter().find(|(depth, _)| *depth == k) {
                         Some(&(_, n)) => native_entry(n, caller, line),
                         None => {
-                            let mut entry = PhpArray::new();
-                            entry.insert(key("file"), Value::str(PhpStr::from(&*caller.func.code.file)));
-                            entry.insert(key("line"), Value::int(i64::from(line)));
-                            entry.insert(key("function"), Value::str("[constant expression]"));
+                            let mut entry = new_entry();
+                            entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*caller.func.code.file)));
+                            entry.insert_absent(key(LINE), Value::int(i64::from(line)));
+                            entry.insert_absent(key(FUNCTION), Value::str("[constant expression]"));
                             entry
                         }
                     };
@@ -101,14 +122,14 @@ impl Context<'_> {
                 }
                 continue;
             }
-            let mut entry = PhpArray::new();
+            let mut entry = new_entry();
             let code = &caller.func.code;
             let line = code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
             // A frame a builtin called (a callback): from no file.
             let native = natives.iter().find(|(depth, _)| *depth == k).map(|&(_, n)| n);
             if native.is_none() {
-                entry.insert(key("file"), Value::str(PhpStr::from(&*code.file)));
-                entry.insert(key("line"), Value::int(i64::from(line)));
+                entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*code.file)));
+                entry.insert_absent(key(LINE), Value::int(i64::from(line)));
             }
             let at = caller.func.code.code.get((caller.pc as usize).saturating_sub(1));
             let code = &frame.func.code;
@@ -131,21 +152,21 @@ impl Context<'_> {
                     _ => ("{main}", false),
                 };
                 if path {
-                    entry.insert(key("args"), Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(&*code.file))])));
+                    entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(&*code.file))])));
                 }
-                entry.insert(key("function"), Value::str(function));
+                entry.insert_absent(key(FUNCTION), Value::str(function));
                 let _ = trace.push(Value::array(entry));
                 continue;
             }
-            entry.insert(key("function"), Value::str(PhpStr::from(code.name.as_bytes())));
+            entry.insert_absent(key(FUNCTION), Value::str(PhpStr::from(code.name.as_bytes())));
             // A closure made in a class shows that class, as a method does.
             if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
                 let class = frame.scope.as_ref().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
-                entry.insert(key("class"), Value::str(class));
+                entry.insert_absent(key(CLASS), Value::str(class));
                 if objects && let Some(this) = &frame.this {
-                    entry.insert(key("object"), Value::object(Rc::clone(this)));
+                    entry.insert_absent(key(OBJECT), Value::object(Rc::clone(this)));
                 }
-                entry.insert(key("type"), Value::str(if frame.this.is_some() { "->" } else { "::" }));
+                entry.insert_absent(key(TYPE), Value::str(if frame.this.is_some() { "->" } else { "::" }));
             }
             let mut args = PhpArray::new();
             let base = frame.base as usize;
@@ -159,7 +180,7 @@ impl Context<'_> {
             for v in frame.args().iter() {
                 let _ = args.push(v.deref());
             }
-            entry.insert(key("args"), Value::array(args));
+            entry.insert_absent(key(ARGS), Value::array(args));
             let _ = trace.push(Value::array(entry));
             if let Some(n) = native {
                 let _ = trace.push(Value::array(native_entry(n, caller, line)));
@@ -172,16 +193,16 @@ impl Context<'_> {
     /// function given too few arguments): the trace shows it on top.
     pub(crate) fn failed_call(&mut self, function: &[u8], class: Option<(&PhpStr, bool)>, args: &[Value]) {
         let (file, line) = self.location();
-        let mut entry = PhpArray::new();
-        entry.insert(key("file"), Value::str(PhpStr::from(&*file)));
-        entry.insert(key("line"), Value::int(i64::from(line)));
-        entry.insert(key("function"), Value::str(PhpStr::from(function)));
+        let mut entry = new_entry();
+        entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*file)));
+        entry.insert_absent(key(LINE), Value::int(i64::from(line)));
+        entry.insert_absent(key(FUNCTION), Value::str(PhpStr::from(function)));
         if let Some((class, this)) = class {
-            entry.insert(key("class"), Value::str(class.clone()));
-            entry.insert(key("type"), Value::str(if this { "->" } else { "::" }));
+            entry.insert_absent(key(CLASS), Value::str(class.clone()));
+            entry.insert_absent(key(TYPE), Value::str(if this { "->" } else { "::" }));
         }
         let args: Vec<Value> = args.iter().filter(|v| !v.is_undef()).map(Value::deref).collect();
-        entry.insert(key("args"), Value::array(PhpArray::from_list(args)));
+        entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(args)));
         self.failed_call = Some(entry);
     }
 

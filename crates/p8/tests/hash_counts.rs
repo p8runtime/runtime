@@ -67,3 +67,17 @@ fn builtin_records_reuse_their_keys() {
     );
     flat(body, Count::Insert);
 }
+
+/// A trace's entries (an exception's, debug_backtrace()'s) are built from
+/// keys made once per thread and appended (PHP's known strings,
+/// _zend_hash_append_ex): no key hashed and no keyed insert per frame.
+#[test]
+fn trace_entries_reuse_their_keys() {
+    let body = "class C { function m($x) { return [(new Exception('e'))->getTrace(), debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)]; } }
+         function f($o, $i) { return $o->m($i); }
+         $s = 0; for ($i = 0; $i < $n; $i++) { [$t, $b] = f(new C, $i); $s += count($t) + count($t[0]) + count($t[1]) + count($b[0]) + count($b[1]); }
+         echo $s / $n; foreach ([$t[0], $t[1], $b[0], $b[1]] as $e) { echo ' ', implode(',', array_keys($e)); }";
+    let out = flat(body, Count::Hash);
+    assert_eq!(out, "20 file,line,function,class,type,args file,line,function,args file,line,function,class,type file,line,function");
+    flat(body, Count::Insert);
+}
