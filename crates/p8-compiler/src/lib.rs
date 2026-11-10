@@ -457,18 +457,22 @@ impl FnBuilder<'_> {
         self.temps = to;
     }
 
-    fn site(&mut self, constant: bool, name: Text, sym: Sym, display: Text) -> u16 {
+    /// The site of the name spelled `display`; a new one's name, symbol
+    /// and spelling from `make`, and whether it is new.
+    fn site(&mut self, constant: bool, display: &[u8], make: impl FnOnce() -> (Text, Sym, Text)) -> (u16, bool) {
         // One site per spelling: a call's messages name it as written
         // (`$o->foobar()` after `$o->FooBar()` says "foobar").
-        // (The spelling is copied only for a site not seen before.)
+        // (The spelling and the site's texts are made only for a site not
+        // seen before: #412, a call compiled made and dropped them.)
         let index = &mut self.site_index[usize::from(constant)];
-        if let Some(&i) = index.get(display.as_bytes()) {
-            return i;
+        if let Some(&i) = index.get(display) {
+            return (i, false);
         }
         let i = self.sites.len() as u16;
-        index.insert(display.as_bytes().to_vec(), i);
+        index.insert(display.to_vec(), i);
+        let (name, sym, display) = make();
         self.sites.push(Site { name, sym, fallback: None, display });
-        i
+        (i, true)
     }
 
     /// Lay the frame out and renumber every register: the variables, then
@@ -1319,11 +1323,14 @@ impl<'src> Compiler<'src> {
 
     /// The call site of a function or method named `display` (any case).
     fn named_site(&self, f: &mut FnBuilder, display: &[u8]) -> u16 {
-        let lower = display.to_ascii_lowercase();
-        let sym = self.sym(&lower);
-        let display = Text::from(display);
-        let lower = if lower.as_slice() == display.as_bytes() { display.clone() } else { Text::from(lower) };
-        f.site(false, lower, sym, display)
+        f.site(false, display, || {
+            let lower = display.to_ascii_lowercase();
+            let sym = self.sym(&lower);
+            let display = Text::from(display);
+            let lower = if lower.as_slice() == display.as_bytes() { display.clone() } else { Text::from(lower) };
+            (lower, sym, display)
+        })
+        .0
     }
 
     /// A class named in code: its symbol, lowercase name and the name as written.
@@ -2023,7 +2030,7 @@ impl<'src> Compiler<'src> {
                     let value = self.expr(f, c.value);
                     self.in_const = in_const;
                     let value = value?;
-                    let site = f.site(false, Text::from("define"), self.sym(b"define"), Text::from("define"));
+                    let (site, _) = f.site(false, b"define", || (Text::from("define"), self.sym(b"define"), Text::from("define")));
                     let base = f.temp();
                     let second = f.temp();
                     f.emit(Instr::Move { dst: base, src: name });
@@ -5606,8 +5613,12 @@ impl<'src> Compiler<'src> {
         let (full, fallback) = self.ns_name(name, &self.use_consts, false);
         // A namespace's part is case-insensitive; the constant's own is not.
         let key = p8_runtime::ext::const_key(&full).into_owned();
-        let site = f.site(true, Text::from(key.as_slice()), self.sym(&key), Text::from(full.as_slice()));
-        if let Some(global) = fallback {
+        let (site, _) = f.site(true, &full, || (Text::from(key.as_slice()), self.sym(&key), Text::from(full.as_slice())));
+        // (A site's fallback is the same each time it is set: its spelling
+        // decides it. Set once.)
+        if f.sites[site as usize].fallback.is_none()
+            && let Some(global) = fallback
+        {
             f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), self.sym(&p8_runtime::ext::const_key(&global))));
         }
         let dst = f.temp();
@@ -6021,11 +6032,17 @@ impl<'src> Compiler<'src> {
             builtin.map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        // One text for both when the name is written in lowercase.
-        let display = Text::from(text);
-        let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
-        let site = f.site(false, lower_text, sym, display);
-        if let (Some(global), Some(fallback_sym)) = (&fallback, fallback_sym) {
+        let (site, _) = f.site(false, text, || {
+            // One text for both when the name is written in lowercase.
+            let display = Text::from(text);
+            let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
+            (lower_text, sym, display)
+        });
+        // (A site's fallback is the same each time it is set: its spelling
+        // decides it. Set once.)
+        if f.sites[site as usize].fallback.is_none()
+            && let (Some(global), Some(fallback_sym)) = (&fallback, fallback_sym)
+        {
             f.sites[site as usize].fallback = Some((Text::from(global.as_slice()), fallback_sym));
         }
         // assert() gets its source as a hidden last argument (the message

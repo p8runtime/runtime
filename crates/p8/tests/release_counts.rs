@@ -70,6 +70,26 @@ fn array_diff_of_arrays_makes_no_text_per_value() {
     assert_eq!(out, "3 2");
 }
 
+/// The compiled texts (names, literals) a file of `n` calls makes.
+fn texts_compiling(n: usize) -> u64 {
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD]);
+    let calls = "f(1); Foo(2); strlen($x); \\strlen($x); m\\g(); m\\G(); echo PHP_EOL, \\PHP_EOL, M\\C;\n".repeat(n);
+    let source = format!("<?php namespace m; const C = 1; function f($a) {{}} function foo($a) {{}} function g() {{}} $x = 'ab';\n{calls}");
+    let before = get(Count::TextMade);
+    platform.compile(source.as_bytes(), "t.php").expect("compiles");
+    get(Count::TextMade) - before
+}
+
+/// A function or constant named again in the same function is the same
+/// call site: its texts (the name as written, lowercase, the global name
+/// to fall back to) are made once, not made and dropped at each call.
+#[test]
+fn a_call_site_named_again_makes_no_texts() {
+    texts_compiling(1);
+    let (a, b) = (texts_compiling(20), texts_compiling(120));
+    assert_eq!(b, a, "texts made grew with the calls: {a} for 20 lines of calls, {b} for 120");
+}
+
 /// A class named to reflection is looked up by its bytes as they are (a
 /// name may hold any byte from 0x80 up, as PHP's names may): not through
 /// a UTF-8 copy, which replaced such bytes and named another class.

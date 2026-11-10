@@ -23,11 +23,14 @@ pub enum Count {
     /// An array let go of by its last value holding it (its free, PHP's
     /// `zend_array_destroy` from `rc_dtor_func`).
     ArrayFreed = 4,
+    /// A compiled text made (`frozen::Text`: a name or literal in
+    /// compiled code, an allocation of its own).
+    TextMade = 5,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 5] = const { [const { std::cell::Cell::new(0) }; 5] };
+    static COUNTS: [std::cell::Cell<u64>; 6] = const { [const { std::cell::Cell::new(0) }; 6] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).
