@@ -1,0 +1,91 @@
+-- to the caller
+
+Warning: Undefined variable $nope in %s on line 16
+int(2)
+int(4)
+string(3) "lit"
+NULL
+int(5)
+string(6) "global"
+string(2) "x3"
+~local;kept
+~ret; after
+-- from a callback
+array(3) {
+  [0]=>
+  int(10)
+  [1]=>
+  int(20)
+  [2]=>
+  int(30)
+}
+array(2) {
+  [0]=>
+  string(2) "v1"
+  [1]=>
+  string(2) "v2"
+}
+array(1) {
+  [0]=>
+  NULL
+}
+array(2) {
+  [0]=>
+  NULL
+  [1]=>
+  NULL
+}
+
+Warning: Undefined variable $undefined_in_callback in %s on line 57
+array(1) {
+  [0]=>
+  NULL
+}
+array(2) {
+  [2]=>
+  int(2)
+  [3]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+~cb1;~cb2;array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+array(1) {
+  [0]=>
+  int(7)
+}
+thrown 1
+finally array(1) {
+  [0]=>
+  int(4)
+}
+array(1) {
+  [0]=>
+  int(101)
+}
+array(2) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(6)
+}
+-- generators
+1
+string(4) "done"
+NULL
+-- a method and a static method
+string(4) "prop"
+bool(true)
+string(2) "C!"
+-- main

@@ -53,6 +53,10 @@ op FETCH_PROP fetch_prop cold=cold_run dst=REG obj=REG|THIS site=IMM16
 /// `obj->(property site) = val` (`AssignProp`); `dst` = the value when USED.
 op ASSIGN_PROP assign_prop cold=cold_run obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
 drop val=K mode=TAKE
+/// `return src` (`Return`): to the calling frame, or out of this run of
+/// the loop when the frame is its bottom one (a callback a builtin
+/// called). The script's end and a generator's return are cold (`step`).
+op RETURN ret cold=step src=TMP|CV|K
 
 # ---- written by hand ---------------------------------------------------
 
@@ -135,15 +139,11 @@ hand Construct
 /// a = class reference imm >> 16's method (site imm & 0xffff) with
 /// the c arguments at b; sends no variables itself (`vars` is NO_VARS)
 hand StaticCall
-/// return a
-hand Return
 hand ReturnNull
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as
 # PHP's handlers read a CONST operand. `K` below is that constant.
-/// return K (imm)
-hand ReturnC
 /// a = b (cmp imm & 15, `cmp`) K (imm >> 8)
 hand CompareC
 /// a = b op K (imm)

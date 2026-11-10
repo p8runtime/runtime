@@ -306,8 +306,32 @@ impl Context<'_> {
             // the handler is inlined) ...
             macro_rules! hx {
                 () => {
-                    Hx { w: &mut *w, clo, top, reinit: !self.reinit.is_empty() }
+                    Hx { w: &mut *w, clo, top, frames: &self.frames, reinit: !self.reinit.is_empty() }
                 };
+            }
+            // A return of `$v` from the top frame (not the script's main
+            // frame, not a generator's): to the calling frame; from the
+            // bottom frame of this run of the loop (a callback a builtin
+            // called), out of the loop, as `slow` leaves it, with the
+            // destructors the return made due run first.
+            macro_rules! ret {
+                ($v:expr) => {{
+                    let value: Value = $v;
+                    if self.frames.len() == self.frames.floor + 1 {
+                        self.pc = pc + 1;
+                        leave(&mut self.frames, regs, value);
+                        if self.ids.has_pending() {
+                            self.run_destructors(regs)?;
+                        }
+                        return Ok(());
+                    }
+                    leave(&mut self.frames, regs, value);
+                    pc = self.frames.last().expect("the caller's frame").pc as usize;
+                    if self.ids.has_pending() {
+                        pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    }
+                    continue 'frame;
+                }};
             }
             // ... its cold method, run out of line as `step` would run the
             // instruction (with nothing of `step`'s own dispatch), then the
@@ -339,6 +363,7 @@ impl Context<'_> {
                             }
                             pc = target as usize;
                         }
+                        Ctl::Return(value) => ret!(value),
                         Ctl::Cold => cold!($m),
                     }
                 }};
@@ -934,44 +959,13 @@ impl Context<'_> {
                         pc = 0;
                         continue 'frame;
                     }
-                    // A return to the calling frame. The main frame's return
-                    // ends the run, and the bottom frame of this `execute`
-                    // returns to the builtin that called it: `step` does those.
-                    Op::Return => {
-                        if self.frames.len() == self.frames.floor + 1 {
-                            slow!();
-                        }
-                        let Some(value) = returned(regs, top, base, Reg::from(insn.a)) else { slow!() };
-                        leave(&mut self.frames, regs, value);
-                        pc = self.frames.last().expect("the caller's frame").pc as usize;
-                        if self.ids.has_pending() {
-                            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-                        }
-                        continue 'frame;
-                    }
-                    // `return 'literal'`, `return true`.
-                    Op::ReturnC => {
-                        if self.frames.len() == self.frames.floor + 1 {
-                            slow!();
-                        }
-                        let value = cst!(insn.imm).clone();
-                        leave(&mut self.frames, regs, value);
-                        pc = self.frames.last().expect("the caller's frame").pc as usize;
-                        if self.ids.has_pending() {
-                            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-                        }
-                        continue 'frame;
-                    }
+                    // `return;` (`ret!`; the main frame's and a generator's:
+                    // `step`).
                     Op::ReturnNull => {
-                        if self.frames.len() == self.frames.floor + 1 {
+                        if self.frames.len() == self.frames.floor + 1 && (self.frames.floor == 0 || clo.code.is_generator) {
                             slow!();
                         }
-                        leave(&mut self.frames, regs, Value::NULL);
-                        pc = self.frames.last().expect("the caller's frame").pc as usize;
-                        if self.ids.has_pending() {
-                            pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
-                        }
-                        continue 'frame;
+                        ret!(Value::NULL);
                     }
                 })
             }

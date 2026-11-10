@@ -338,6 +338,7 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
         Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
+        Instr::Return { src } => enc::ret(enc::Ret { src: o(src)? }),
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)
@@ -439,10 +440,6 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
         Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
-        Instr::Return { src } => match k(src) {
-            Some(kk) => i(Op::ReturnC, 0, 0, 0, kk),
-            None => i(Op::Return, src, 0, 0, 0),
-        },
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }
@@ -573,7 +570,7 @@ mod tests {
         assert_eq!(at(8), Insn { op: Op::CallRegs, a: 7, b: 1, c: 12, imm: 4 | 10 << 16 | ARG_CONST });
         assert_eq!(at(10), Insn { op: Op::P8_ASSIGN_K, a: 1, b: 0, c: 0, imm: 2 });
         assert_eq!(at(11), Insn { op: Op::IncJumpLtC, a: 1, b: 2, c: 1, imm: 0 });
-        assert_eq!(at(12), Insn { op: Op::ReturnC, a: 0, b: 0, c: 0, imm: 2 });
+        assert_eq!(at(12), Insn { op: Op::P8_RETURN_K, a: 0, b: 0, c: 0, imm: 2 });
         assert!(lower_at(&code, 13, &consts, 0).is_none());
         // A constant past the table is no form either.
         assert!(lower_at(&code, 0, &consts[..3], 0).is_none());

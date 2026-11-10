@@ -34,6 +34,9 @@ pub(crate) enum Ctl {
     Skip(bool),
     /// Go to the target (a backward one is where an interrupt is noticed).
     Jump(u32),
+    /// Return this value from the frame (`ret!` in the loop: the caller's
+    /// frame, or out of the loop's run from its bottom frame).
+    Return(Value),
     /// Run the instruction's cold method instead.
     Cold,
 }
@@ -44,6 +47,8 @@ pub(crate) struct Hx<'a> {
     pub(crate) w: &'a mut [Value; WINDOW],
     pub(crate) clo: &'a Closure,
     pub(crate) top: &'a Frame,
+    /// The frame stack (`top` is its last).
+    pub(crate) frames: &'a Frames,
     /// A clone's re-initialization is running (readonly properties).
     pub(crate) reinit: bool,
 }
@@ -406,4 +411,38 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
         let _ = clear(&mut hx.w[r(val)]);
     }
     ctl
+}
+
+/// `return src`: the value moved out of its register when nothing reads
+/// the register again (a temporary; a variable of a frame whose variables
+/// are its own), else copied; a reference's value read through it. To
+/// the calling frame, or out of the loop's run from its bottom frame.
+/// The script's end (the main frame's return), a generator's return and
+/// an undefined variable (the warning) are cold.
+#[inline(always)]
+pub(crate) fn ret<S: spec::Ret>(hx: Hx, args::Ret { src }: args::Ret) -> Ctl {
+    let f = hx.frames;
+    if f.len() == f.floor + 1 && (f.floor == 0 || hx.clo.code.is_generator) {
+        return Ctl::Cold;
+    }
+    if is_k(S::Src::ID) {
+        return Ctl::Return(hx.v::<S::Src>(src).clone());
+    }
+    let temp = S::Src::ID == TMP;
+    let slot = &mut hx.w[r(src)];
+    let v = if slot.is_undef() {
+        return Ctl::Cold;
+    } else if let Some(cell) = slot.as_reference() {
+        let v = cell.borrow().clone();
+        // A temporary lets go of the reference (none is left at exit).
+        if temp {
+            drop(std::mem::take(slot));
+        }
+        v
+    } else if temp || (!hx.top.global && hx.top.extra.is_none()) {
+        std::mem::take(slot)
+    } else {
+        slot.clone()
+    };
+    Ctl::Return(v)
 }
