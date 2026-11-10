@@ -55,3 +55,17 @@ fn an_empty_array_literal_is_shared() {
     );
     assert_eq!(out, "1 2300 0,k,1 []");
 }
+
+/// array_diff()/array_intersect() compare a value with no string of its
+/// own (an array) as "Array": PHP's known string, one per thread here, not
+/// one made per value compared.
+#[test]
+fn array_diff_of_arrays_makes_no_text_per_value() {
+    let out = flat(
+        "$a = [[1], [2], 'x']; $b = [[3]]; $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s += count(@array_diff($a, $b)) + count(@array_intersect($a, $b)); }
+         echo $s / $n, ' ', implode(',', array_keys(@array_diff($a, $b)));",
+        Count::StrMade,
+    );
+    assert_eq!(out, "3 2");
+}

@@ -473,8 +473,16 @@ fn text(v: &Value) -> Vec<u8> {
 fn text_view(v: &Value) -> StrView<'_> {
     match v.as_str() {
         Some(s) => StrView::Borrowed(s),
-        None => StrView::Owned(v.deref().to_php_string().unwrap_or_else(|| PhpStr::from("Array"))),
+        None => StrView::Owned(v.deref().to_php_string().unwrap_or_else(|| ARRAY_TEXT.with(PhpStr::clone))),
     }
+}
+
+thread_local! {
+    /// "Array", an array's text here (PHP's ZSTR_KNOWN(ZEND_STR_ARRAY_CAPITALIZED)):
+    /// one string per thread, shared, not one made per value compared (#412:
+    /// array_diff and array_intersect made 83k of them on Laravel's
+    /// Collection tests).
+    static ARRAY_TEXT: PhpStr = PhpStr::from("Array");
 }
 
 fn by_values(args: &[Value], keep_if_found: bool) -> Result<Value, Throw> {
