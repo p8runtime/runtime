@@ -864,7 +864,8 @@ impl Context<'_> {
                     }
                     // `new C` of a class the site's cache has, whose objects
                     // need only their slots (`make_plain`): anything else
-                    // (a Throwable, a constructor to check) is `step`'s.
+                    // (a Throwable, a constructor this scope may not call:
+                    // the error) is `step`'s.
                     Op::New => {
                         ops!(a, b, c, imm);
                         let Some(info) = Self::cached_new(clo, imm as u16) else { slow!() };

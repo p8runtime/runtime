@@ -751,12 +751,15 @@ impl Context<'_> {
 
     /// `new C` (the loop's) for a class `make_from` has nothing more to do
     /// for: one that can be instantiated, not a Throwable (no location or
-    /// trace to record), with a public constructor or none. None: `make_from`'s.
+    /// trace to record), with no constructor or one the running code may
+    /// call (a private or protected one from its class: `self::make()`
+    /// doing `new self`, as PHP's get_constructor checks it). None:
+    /// `make_from`'s.
     #[inline]
     pub(crate) fn make_plain(&self, info: &crate::instances::NewInfo) -> Option<Rc<Object>> {
         if info.throwable
             || info.class.flags & (CLASS_INTERFACE | CLASS_ABSTRACT | CLASS_TRAIT | CLASS_ENUM) != 0
-            || info.ctor.as_ref().is_some_and(|c| c.visibility != Visibility::Public)
+            || info.ctor.as_ref().is_some_and(|c| c.visibility != Visibility::Public && !visible(c.visibility, &c.declaring, self.frames.last().and_then(|f| f.scope.as_deref())))
         {
             return None;
         }
