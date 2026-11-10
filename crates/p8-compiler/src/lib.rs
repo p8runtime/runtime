@@ -6052,8 +6052,16 @@ impl<'src> Compiler<'src> {
             Some(_) => 3 - args.len().min(2),
             None => 0,
         };
-        let all: Vec<Reg> = (0..args.len() + extra).map(|_| f.temp()).collect();
-        for (n, (arg, r)) in args.iter().zip(&all[..args.len()]).enumerate() {
+        // The arguments' registers: consecutive temporaries, the first and
+        // a count (no list of them made per call compiled, #412).
+        let argc = args.len() + extra;
+        let first = (argc > 0).then(|| f.temp());
+        for _ in 1..argc {
+            f.temp();
+        }
+        let at = |i: usize| first.expect("an argument's register") + i as Reg;
+        for (n, arg) in args.iter().enumerate() {
+            let r = &at(n);
             if arg.unpack || arg.name.is_some() {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
             }
@@ -6100,22 +6108,22 @@ impl<'src> Compiler<'src> {
             let mut i = args.len();
             if args.len() < 2 {
                 let null = f.constant(Frozen::Null);
-                f.emit(Instr::Move { dst: all[i], src: null });
+                f.emit(Instr::Move { dst: at(i), src: null });
                 i += 1;
             }
             let text = f.constant(Frozen::Str(Text::from(source.as_slice())));
-            f.emit(Instr::Move { dst: all[i], src: text });
+            f.emit(Instr::Move { dst: at(i), src: text });
         }
-        let base = all.first().copied().unwrap_or_else(|| f.temp());
+        let base = first.unwrap_or_else(|| f.temp());
         // The arguments' registers are free again once the call has them:
         // the result may land in the first (the callee's frame is cleared
         // before its result is written).
         let dst = out(f, hint, mark);
         // A builtin PHP compiles to an opcode (zend_try_compile_special_func),
         // when the name means it at compile time (no namespace fallback).
-        match Rare::intrinsic(&lower, all.len()).filter(|_| fallback.is_none()) {
-            Some(op) => f.emit(Instr::rare(op, dst, base, all.len() as Reg, site)),
-            None => f.emit(Instr::Call { site, base, argc: all.len() as u8, dst }),
+        match Rare::intrinsic(&lower, argc).filter(|_| fallback.is_none()) {
+            Some(op) => f.emit(Instr::rare(op, dst, base, argc as Reg, site)),
+            None => f.emit(Instr::Call { site, base, argc: argc as u8, dst }),
         };
         Ok(dst)
     }
