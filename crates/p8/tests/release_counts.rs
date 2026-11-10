@@ -69,3 +69,18 @@ fn array_diff_of_arrays_makes_no_text_per_value() {
     );
     assert_eq!(out, "3 2");
 }
+
+/// A class named to reflection is looked up by its bytes as they are (a
+/// name may hold any byte from 0x80 up, as PHP's names may): not through
+/// a UTF-8 copy, which replaced such bytes and named another class.
+#[test]
+fn reflection_looks_a_class_up_by_its_bytes() {
+    let (out, _) = run(
+        "class Foo {} class_alias('Foo', \"F\\xffo\");
+         echo (new ReflectionClass(\"F\\xffo\"))->getName(), ' ', class_exists(\"F\\xffo\") ? 'y' : 'n';
+         try { new ReflectionClass('Nope'); } catch (ReflectionException $e) { echo ' ', $e->getMessage(); }",
+        1,
+        Count::StrMade,
+    );
+    assert_eq!(out, "Foo y Class \"Nope\" does not exist");
+}
