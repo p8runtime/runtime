@@ -104,7 +104,8 @@ fn check(code: &[Instr]) {
 /// stay are the ones the loop's constant forms cover (`insn::lower`): one
 /// side of a comparison or a branch, the right side of `-` (both sides of
 /// `+`, `*` and `Binary`: a literal on the left is swapped, or CONST_LEFT),
-/// an assignment's or `op=`'s value, a fused step's bound, a return, an
+/// an assignment's or `op=`'s value, a property assignment's value
+/// (`$o->p = K`), a fused step's bound, a return, an
 /// echo, a dimension's one key (or the value written, when the key is a
 /// register), an array literal's keys and values, and the name operands
 /// (a property's, a class constant's, a static property's), which `step`
@@ -176,7 +177,10 @@ fn rewrite(instr: &mut Instr, load: &mut impl FnMut(Reg) -> Reg) {
         }
         // Name operands stay; what else they name is loaded.
         FetchProp { obj, .. } | IssetProp { obj, .. } | UnsetProp { obj, .. } | PropIncDec { obj, .. } => ld!(obj),
-        AssignProp { obj, val, .. } | AssignPropOp { obj, val, .. } => ld!(obj, val),
+        // A literal value stays (PHP's ASSIGN_OBJ with OP_DATA CONST):
+        // `$o->p = 'x'` is P8_ASSIGN_PROP_*_K_*, read in place.
+        AssignProp { obj, .. } => ld!(obj),
+        AssignPropOp { obj, val, .. } => ld!(obj, val),
         AssignPropDim { val, .. } => ld!(val),
         ClassConst { .. } | FetchStaticProp { .. } => {}
         AssignStaticProp { val, .. } | AssignStaticPropOp { val, .. } => ld!(val),
@@ -197,8 +201,9 @@ mod tests {
             Instr::Assign { var: 1, src: k(2) },
             Instr::FetchProp { dst: 2, obj: 1, name: k(3), quiet: false },
             Instr::ArraySet { arr: 2, key: k(0), val: k(1), take: false },
+            Instr::AssignProp { obj: 1, name: k(3), val: k(2), dst: 2, take: false },
         ];
-        let mut lines = vec![1; 5];
+        let mut lines = vec![1; 6];
         let before = code.clone();
         assert_eq!(place_consts(&mut code, &mut lines, &mut [], &mut [], 10, &mut Scratch::default()), 0);
         assert_eq!(format!("{code:?}"), format!("{before:?}"));

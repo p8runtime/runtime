@@ -20,6 +20,7 @@ use p8_bytecode::{
 use p8_runtime::object::{CLASS_ABSTRACT, CLASS_FINAL, CLASS_INTERFACE, CLASS_ENUM, CLASS_READONLY, CLASS_TRAIT, HOOK_GET, HOOK_SET, HOOK_VIRTUAL, Visibility};
 use p8_runtime::ext::Registry;
 use p8_runtime::ops::BinOp;
+use p8_runtime::array::int_key;
 use p8_runtime::frozen::{Frozen, Text};
 use p8_syntax::literal::{self, Number};
 use p8_syntax::ast::{AssignOp, BinaryOp, CastKind as AstCast, Expr, MagicConstKind, Stmt, StmtId, UnaryOp};
@@ -385,6 +386,33 @@ impl FnBuilder<'_> {
         reg(CONST, index)
     }
 
+    /// For each literal key naming an integer (`$a['5']`) of a dimension
+    /// the generated handlers take, that int's constant too. Lowering
+    /// gives the handler the int (`KINT`), as PHP's compiler makes the key
+    /// (zend_handle_numeric_dim); the `Instr` keeps the string, which the
+    /// cold path gives an ArrayAccess object as written (PHP keeps it
+    /// beside the int for that, bug #63217). So a string literal key a
+    /// handler is given is never a canonical integer: `KSTR`'s promise.
+    fn int_dim_keys(&mut self) {
+        for pc in 0..self.code.len() {
+            let r = match self.code[pc] {
+                Instr::FetchDim { key, .. } => key,
+                Instr::IssetDim { keys, n: 1, .. } | Instr::AssignDim { keys, n: 1, append: false, .. } => keys,
+                _ => continue,
+            };
+            if r >> KIND_SHIFT != CONST {
+                continue;
+            }
+            let i = match self.consts.get(usize::from(r & ((1 << KIND_SHIFT) - 1))) {
+                Some(Frozen::Str(s)) => int_key(s.as_bytes()),
+                _ => None,
+            };
+            if let Some(i) = i {
+                self.constant_slot(Frozen::Int(i));
+            }
+        }
+    }
+
     fn constant_slot(&mut self, value: Frozen) -> usize {
         let key = match &value {
             Frozen::Null => ConstKey::Null,
@@ -453,6 +481,7 @@ impl FnBuilder<'_> {
         if !self.returns_ref {
             thread_returns(&mut self.code);
         }
+        self.int_dim_keys();
         let ncv = self.cvs.len();
         // The temporaries follow the variables, from register 1 at least: a
         // call's frame starts at the caller's argument block (a temporary),

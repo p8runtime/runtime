@@ -20,6 +20,12 @@ mod reflection;
 mod refs;
 mod throw;
 mod fast;
+mod vmops;
+
+/// How one instruction is run out of the loop (`step`, `cold_run`): on the
+/// context `C`, its registers, the frame's closure, base, argument count
+/// and the instruction's pc.
+type Run<C> = fn(&mut C, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>;
 mod frames;
 mod isolate;
 mod sites;
@@ -1323,13 +1329,31 @@ impl Context<'_> {
     /// the pc this gives back.
     #[cold]
     #[inline(never)]
-    fn slow(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<Flow, Throw> {
+    fn slow(&mut self, regs: &mut Vec<Value>, pc: usize) -> Result<Flow, Throw> {
+        self.detour(regs, pc, Self::step)
+    }
+
+    /// A generated instruction's case its handler does not take (`Ctl::Cold`):
+    /// its cold method `run` (the instruction whole, as `step` runs it, with
+    /// none of `step`'s dispatch), then what `slow` does after. An
+    /// interrupt due (a backward jump's) is raised first.
+    #[cold]
+    #[inline(never)]
+    fn cold(&mut self, regs: &mut Vec<Value>, pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
+        self.detour(regs, pc, run)
+    }
+
+    /// Run the instruction at `pc` by `run` out of the loop, and what it
+    /// raised (`slow`'s doc).
+    #[inline(always)]
+    fn detour(&mut self, regs: &mut Vec<Value>, mut pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
         let frame = self.frames.last().expect("a frame");
         let func = Rc::clone(&frame.func);
         let (base, argc) = (frame.base as usize, frame.argc as usize);
         self.pc = pc + 1;
         let at = pc;
-        match self.step(regs, &func, base, argc, pc) {
+        let ran = if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT { Err(self.interrupted()) } else { run(self, regs, &func, base, argc, pc) };
+        match ran {
             Ok(Next::Go(next)) => {
                 pc = next;
                 // Fiber::suspend(): leave the fiber's frames where they are.
@@ -1503,24 +1527,29 @@ impl Context<'_> {
             };
         }
         match instr {
-                Instr::Move { dst, src } => {
-                    let v = self.operand(w, clo, src);
-                    reg!(dst) = v;
-                }
-                Instr::Assign { var, src } => {
-                    let v = self.operand(w, clo, src);
-                    assign(w, var, v);
-                }
-                Instr::AssignTake { var, src } => {
-                    let v = self.operand(w, clo, src);
-                    clear(&mut reg!(src));
-                    assign(w, var, v);
-                }
-                Instr::Free { reg } => {
-                    clear(&mut reg!(reg));
-                }
+                // The generated instructions' (`cold_run`, their cold path).
+                Instr::Move { .. }
+                | Instr::Assign { .. }
+                | Instr::AssignTake { .. }
+                | Instr::Free { .. }
+                | Instr::LoadConst { .. }
+                | Instr::This { .. }
+                | Instr::JumpIf { .. }
+                | Instr::JumpIfNot { .. }
+                | Instr::JumpLt { .. }
+                | Instr::JumpNotLt { .. }
+                | Instr::JumpLe { .. }
+                | Instr::JumpNotLe { .. }
+                | Instr::JumpEq { .. }
+                | Instr::JumpNotEq { .. }
+                | Instr::JumpIdentical { .. }
+                | Instr::JumpNotIdentical { .. }
+                | Instr::FetchDim { .. }
+                | Instr::AssignDim { .. }
+                | Instr::IssetDim { .. }
+                | Instr::FetchProp { .. }
+                | Instr::AssignProp { .. } => return self.cold_run(regs, clo, base, argc, at),
                 Instr::LoadNull { dst } => reg!(dst) = Value::NULL,
-                Instr::LoadConst { dst, k } => reg!(dst) = clo.consts[k as usize].clone(),
                 Instr::Add { .. } | Instr::Sub { .. } | Instr::Mul { .. } => unreachable!("normalized to Binary above"),
                 Instr::Binary { op, dst, a, b } => {
                     // Fast paths for the common int cases.
@@ -1606,19 +1635,6 @@ impl Context<'_> {
                         Value::bool(self.test_regs(w, clo, cmp, a, b))
                     };
                     assign(w, dst, v);
-                }
-                Instr::JumpLt { .. }
-                | Instr::JumpNotLt { .. }
-                | Instr::JumpLe { .. }
-                | Instr::JumpNotLe { .. }
-                | Instr::JumpEq { .. }
-                | Instr::JumpNotEq { .. }
-                | Instr::JumpIdentical { .. }
-                | Instr::JumpNotIdentical { .. } => {
-                    let Some((cmp, a, b, when, target)) = instr.as_jump_cmp() else { unreachable!("a compare-and-branch") };
-                    if self.test_regs(w, clo, cmp, a, b) == when {
-                        pc = target as usize;
-                    }
                 }
                 // A fused step and test runs here as its step alone; the
                 // test is the next instruction.
@@ -1746,24 +1762,6 @@ impl Context<'_> {
                     reg!(dst) = if post { old } else { new };
                 }
                 Instr::Jump { target } => pc = target as usize,
-                Instr::JumpIf { cond, target } => {
-                    let c = match reg!(cond).as_bool() {
-                        Some(b) => b,
-                        None => self.truthy(w, clo, cond),
-                    };
-                    if c {
-                        pc = target as usize;
-                    }
-                }
-                Instr::JumpIfNot { cond, target } => {
-                    let c = match reg!(cond).as_bool() {
-                        Some(b) => b,
-                        None => self.truthy(w, clo, cond),
-                    };
-                    if !c {
-                        pc = target as usize;
-                    }
-                }
                 Instr::JumpIfSet { src, dst, target } => {
                     let s = &reg!(src);
                     let v = if s.is_null_or_undef() {
@@ -1795,69 +1793,6 @@ impl Context<'_> {
                         a.insert(k, v);
                     }
                 }
-                Instr::FetchDim { dst, arr, key, quiet, empty } => {
-                    let container = if quiet {
-                        match reg!(arr).as_reference() {
-                            Some(cell) => cell.borrow().clone(),
-                            None => reg!(arr).clone(),
-                        }
-                    } else {
-                        self.operand(w, clo, arr)
-                    };
-                    // An ArrayAccess object: its offsetGet.
-                    if let Some(o) = container.as_object() {
-                        let k = self.operand(w, clo, key);
-                        let v = self.aa_get(regs, o, k, quiet)?;
-                        regs[base + dst as usize] = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    // empty()'s last dimension: its key checked as isset
-                    // checks it (`fast` took an int or string key already).
-                    if empty {
-                        let k = self.operand(w, clo, key);
-                        let v = if let Some(a) = container.as_array() {
-                            let k = self.isset_key(&k, true)?;
-                            a.get(&k).map_or(Value::NULL, Value::deref)
-                        } else if let Some(s) = container.cloned_str() {
-                            self.isset_str_offset(&s, &k, true)?.unwrap_or(Value::NULL)
-                        } else {
-                            Value::NULL
-                        };
-                        reg!(dst) = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    let v = self.fetch_dim(&container, w, clo,key, quiet)?;
-                    reg!(dst) = v;
-                }
-                // The path is walked once: each level's key converted for its
-                // container; an ArrayAccess object on the way takes the rest.
-                Instr::AssignDim { var, keys, n, append, val, dst } => {
-                    let v = self.operand(w, clo, val);
-                    // `$a[] = v` on an array variable (the commonest write):
-                    // appended in place, nothing else to look at.
-                    if n == 0
-                        && append
-                        && let Some(a) = reg!(var).array_mut()
-                    {
-                        reg!(dst) = self.append(a, v)?;
-                        return Ok(Next::Go(pc));
-                    }
-                    // The result is what was stored: a string offset's one byte.
-                    reg!(dst) = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
-                        Written::Done(r) => r,
-                        Written::Object(o, at, v) => {
-                            // (The one key may be a constant operand.)
-                            let rest: Vec<Value> = match const_index(keys) {
-                                Some(k) if at == 0 => vec![clo.consts[k].clone()],
-                                Some(_) => Vec::new(),
-                                None => w[keys as usize + at..keys as usize + n as usize].iter().map(Value::deref).collect(),
-                            };
-                            let r = self.aa_write(regs, &Value::object(o), &rest, append, arrayaccess::DimOp::Set(v))?;
-                            regs[base + dst as usize] = r;
-                            return Ok(Next::Go(pc));
-                        }
-                    };
-                }
                 Instr::AssignDimOp { op, var, keys, n, val, dst } => {
                     let v = self.operand(w, clo, val);
                     reg!(dst) = match self.assign_dim(w, clo, var, keys, n, false, v, Some(op))? {
@@ -1869,56 +1804,6 @@ impl Context<'_> {
                             return Ok(Next::Go(pc));
                         }
                     };
-                }
-                Instr::IssetDim { dst, var, keys, n } => {
-                    // (The one key may be a constant operand, read in place.)
-                    let key_regs: &[Value] = match const_index(keys) {
-                        Some(k) => std::slice::from_ref(&clo.consts[k]),
-                        None => &w[keys as usize..keys as usize + n as usize],
-                    };
-                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
-                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
-                        let root = reg!(var).deref();
-                        let set = self.aa_isset(regs, &root, &key_values)?;
-                        regs[base + dst as usize] = Value::bool(set);
-                        return Ok(Next::Go(pc));
-                    }
-                    let mut cur = match reg!(var).as_reference() {
-                        Some(cell) => cell.borrow().clone(),
-                        None => reg!(var).clone(),
-                    };
-                    let mut set = true;
-                    for i in 0..n {
-                        let last = i + 1 == n;
-                        let next = if let Some(s) = cur.cloned_str() {
-                            // A string's offset: the character there.
-                            self.isset_str_offset(&s, &key_regs[i as usize], last)?
-                        } else if let Some(a) = cur.as_array() {
-                            // An int or string key as it is; anything
-                            // else by isset's rules (isset_key).
-                            // (A string key looked up as it is: no handle made.)
-                            let kv = &key_regs[i as usize];
-                            let found = if let Some(i) = kv.as_int() {
-                                a.get_int(i)
-                            } else if let Some(s) = kv.as_str() {
-                                a.get_str(s)
-                            } else {
-                                let other = kv.clone();
-                                a.get(&self.isset_key(&other, last)?)
-                            };
-                            found.map(|v| v.deref())
-                        } else {
-                            None
-                        };
-                        match next {
-                            Some(v) => cur = v,
-                            None => {
-                                set = false;
-                                break;
-                            }
-                        }
-                    }
-                    reg!(dst) = Value::bool(set && !cur.is_null_or_undef());
                 }
                 Instr::IssetVar { dst, var } => {
                     let v = &reg!(var);
@@ -2966,111 +2851,6 @@ impl Context<'_> {
                         }
                     }
                 }
-                Instr::This { dst } => match self.frames.last().and_then(|f| f.this.clone()) {
-                    Some(this) => reg!(dst) = Value::object(this),
-                    None => return Err(self.throw("Error", "Using $this when not in object context")),
-                },
-                Instr::FetchProp { dst, obj, name, quiet } => {
-                    let target = if quiet { reg!(obj).deref() } else { self.prop_target(w, clo, obj)? };
-                    // The name's constant: its cache entry.
-                    let site = const_index(name).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Some(o)) = (site, target.as_object())
-                        && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
-                    {
-                        reg!(dst) = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    let name = name!(name).clone();
-                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
-                        let v = self.run_nested(regs, hook?, &mut [])?;
-                        regs[base + dst as usize] = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(o) = target.as_object()
-                        && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0
-                        && (self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || (quiet && self.prop_magic(&target, &name, crate::classes::Magic::Isset).is_some()))
-                    {
-                        use crate::classes::Magic;
-                        let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                        // `??`: __isset decides when there is one, then __get reads.
-                        let set = if quiet {
-                            match self.prop_magic(&target, &name, Magic::Isset) {
-                                Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.to_bool(),
-                                None => true,
-                            }
-                        } else {
-                            true
-                        };
-                        let v = match self.prop_magic(&target, &name, Magic::Get) {
-                            Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
-                            Some(_) => Value::NULL,
-                            None => self.fetch_prop(&target, &name, quiet)?,
-                        };
-                        regs[base + dst as usize] = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(lo) = self.lazy_pending(&target, &name) {
-                        self.lazy_init(regs, &lo)?;
-                        return Ok(Next::Go(insn_at));
-                    }
-                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
-                    if let (Some(site), Some(o)) = (site, target.as_object()) {
-                        self.remember_prop(site, o, &name);
-                    }
-                }
-                Instr::AssignProp { obj, name, val, dst, take } => {
-                    let target = self.prop_target(w, clo, obj)?;
-                    // The name's constant: the same cache entry reads use.
-                    let site = const_index(name).and_then(|i| clo.props.get(i));
-                    if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                        && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
-                    {
-                        let pname = name!(name).clone();
-                        let v = self.operand_take(w, clo, val, take);
-                        self.write_cached(o, slot, &pname, v.clone())?;
-                        reg!(dst) = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    // (A lazy object's initialization below runs this
-                    // instruction again: the value is only copied here.)
-                    let v = self.operand(w, clo, val);
-                    let name = name!(name).clone();
-                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
-                        self.run_nested(regs, hook?, &mut [v.clone()])?;
-                        if take {
-                            clear(&mut regs[base + val as usize]);
-                        }
-                        regs[base + dst as usize] = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
-                        let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                        self.run_magic(regs, found, &mut [pname, v.clone()])?;
-                        if take {
-                            clear(&mut regs[base + val as usize]);
-                        }
-                        regs[base + dst as usize] = v;
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(lo) = self.lazy_pending(&target, &name) {
-                        self.lazy_init(regs, &lo)?;
-                        return Ok(Next::Go(insn_at));
-                    }
-                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    self.write_prop(&target, &name, v.clone())?;
-                    // A site already holding this class missed for another
-                    // reason (an unset slot with __set): looking again finds the same.
-                    if let (Some(site), Some(o)) = (site, target.as_object())
-                        && site.get().class != Rc::as_ptr(&o.class) as usize
-                    {
-                        self.remember_prop(site, o, &name);
-                    }
-                    if take {
-                        clear(&mut reg!(val));
-                    }
-                    reg!(dst) = v;
-                }
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
                     let target = self.prop_target(w, clo, obj)?;
                     let y = self.operand(w, clo, val);
@@ -3535,6 +3315,293 @@ impl Context<'_> {
                         Err(result) => regs[base + dst as usize] = result,
                     }
                 }
+        }
+        Ok(Next::Go(pc))
+    }
+
+    /// The generated instructions' cold path (`cold=` in ops.def): their
+    /// `Instr` run whole, every case (warnings, references, objects, magic
+    /// and hooked properties), with none of `step`'s dispatch; `step` runs
+    /// them here too (a function with registers past the window).
+    #[cold]
+    #[inline(never)]
+    fn cold_run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
+        // This instruction's index (a lazy object's initialization runs it again).
+        let insn_at = at;
+        let func = &*clo.code;
+        let mut pc = at + 1;
+        let w = &mut regs[base..];
+        let w = &mut w[..func.nregs as usize];
+        macro_rules! reg {
+            ($r:expr) => {
+                w[$r as usize]
+            };
+        }
+        macro_rules! name {
+            ($r:expr) => {
+                Self::val(w, clo, $r)
+            };
+        }
+        let instr = func.code[at];
+        match instr {
+            Instr::Move { dst, src } => {
+                let v = self.operand(w, clo, src);
+                reg!(dst) = v;
+            }
+            Instr::LoadConst { dst, k } => reg!(dst) = clo.consts[k as usize].clone(),
+            Instr::Assign { var, src } => {
+                let v = self.operand(w, clo, src);
+                assign(w, var, v);
+            }
+            Instr::AssignTake { var, src } => {
+                let v = self.operand(w, clo, src);
+                clear(&mut reg!(src));
+                assign(w, var, v);
+            }
+            Instr::Free { reg } => {
+                clear(&mut reg!(reg));
+            }
+            Instr::This { dst } => match self.frames.last().and_then(|f| f.this.clone()) {
+                Some(this) => reg!(dst) = Value::object(this),
+                None => return Err(self.throw("Error", "Using $this when not in object context")),
+            },
+            Instr::JumpIf { cond, target } | Instr::JumpIfNot { cond, target } => {
+                let c = match reg!(cond).as_bool() {
+                    Some(b) => b,
+                    None => self.truthy(w, clo, cond),
+                };
+                if c == matches!(instr, Instr::JumpIf { .. }) {
+                    pc = target as usize;
+                }
+            }
+            Instr::JumpLt { .. }
+            | Instr::JumpNotLt { .. }
+            | Instr::JumpLe { .. }
+            | Instr::JumpNotLe { .. }
+            | Instr::JumpEq { .. }
+            | Instr::JumpNotEq { .. }
+            | Instr::JumpIdentical { .. }
+            | Instr::JumpNotIdentical { .. } => {
+                let Some((cmp, a, b, when, target)) = instr.as_jump_cmp() else { unreachable!("a compare-and-branch") };
+                if self.test_regs(w, clo, cmp, a, b) == when {
+                    pc = target as usize;
+                }
+            }
+            Instr::FetchDim { dst, arr, key, quiet, empty } => {
+                let container = if quiet {
+                    match reg!(arr).as_reference() {
+                        Some(cell) => cell.borrow().clone(),
+                        None => reg!(arr).clone(),
+                    }
+                } else {
+                    self.operand(w, clo, arr)
+                };
+                // An ArrayAccess object: its offsetGet.
+                if let Some(o) = container.as_object() {
+                    let k = self.operand(w, clo, key);
+                    let v = self.aa_get(regs, o, k, quiet)?;
+                    regs[base + dst as usize] = v;
+                    return Ok(Next::Go(pc));
+                }
+                // empty()'s last dimension: its key checked as isset
+                // checks it (`fast` took an int or string key already).
+                if empty {
+                    let k = self.operand(w, clo, key);
+                    let v = if let Some(a) = container.as_array() {
+                        let k = self.isset_key(&k, true)?;
+                        a.get(&k).map_or(Value::NULL, Value::deref)
+                    } else if let Some(s) = container.cloned_str() {
+                        self.isset_str_offset(&s, &k, true)?.unwrap_or(Value::NULL)
+                    } else {
+                        Value::NULL
+                    };
+                    reg!(dst) = v;
+                    return Ok(Next::Go(pc));
+                }
+                let v = self.fetch_dim(&container, w, clo, key, quiet)?;
+                reg!(dst) = v;
+            }
+            // The path is walked once: each level's key converted for its
+            // container; an ArrayAccess object on the way takes the rest.
+            Instr::AssignDim { var, keys, n, append, val, dst } => {
+                let v = self.operand(w, clo, val);
+                // `$a[] = v` on an array variable (the commonest write):
+                // appended in place, nothing else to look at.
+                if n == 0
+                    && append
+                    && let Some(a) = reg!(var).array_mut()
+                {
+                    reg!(dst) = self.append(a, v)?;
+                    return Ok(Next::Go(pc));
+                }
+                // The result is what was stored: a string offset's one byte.
+                reg!(dst) = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
+                    Written::Done(r) => r,
+                    Written::Object(o, at, v) => {
+                        // (The one key may be a constant operand.)
+                        let rest: Vec<Value> = match const_index(keys) {
+                            Some(k) if at == 0 => vec![clo.consts[k].clone()],
+                            Some(_) => Vec::new(),
+                            None => w[keys as usize + at..keys as usize + n as usize].iter().map(Value::deref).collect(),
+                        };
+                        let r = self.aa_write(regs, &Value::object(o), &rest, append, arrayaccess::DimOp::Set(v))?;
+                        regs[base + dst as usize] = r;
+                        return Ok(Next::Go(pc));
+                    }
+                };
+            }
+            Instr::IssetDim { dst, var, keys, n } => {
+                // (The one key may be a constant operand, read in place.)
+                let key_regs: &[Value] = match const_index(keys) {
+                    Some(k) => std::slice::from_ref(&clo.consts[k]),
+                    None => &w[keys as usize..keys as usize + n as usize],
+                };
+                if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
+                    let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
+                    let root = reg!(var).deref();
+                    let set = self.aa_isset(regs, &root, &key_values)?;
+                    regs[base + dst as usize] = Value::bool(set);
+                    return Ok(Next::Go(pc));
+                }
+                let mut cur = match reg!(var).as_reference() {
+                    Some(cell) => cell.borrow().clone(),
+                    None => reg!(var).clone(),
+                };
+                let mut set = true;
+                for i in 0..n {
+                    let last = i + 1 == n;
+                    let next = if let Some(s) = cur.cloned_str() {
+                        // A string's offset: the character there.
+                        self.isset_str_offset(&s, &key_regs[i as usize], last)?
+                    } else if let Some(a) = cur.as_array() {
+                        // An int or string key as it is; anything
+                        // else by isset's rules (isset_key).
+                        // (A string key looked up as it is: no handle made.)
+                        let kv = &key_regs[i as usize];
+                        let found = if let Some(i) = kv.as_int() {
+                            a.get_int(i)
+                        } else if let Some(s) = kv.as_str() {
+                            a.get_str(s)
+                        } else {
+                            let other = kv.clone();
+                            a.get(&self.isset_key(&other, last)?)
+                        };
+                        found.map(|v| v.deref())
+                    } else {
+                        None
+                    };
+                    match next {
+                        Some(v) => cur = v,
+                        None => {
+                            set = false;
+                            break;
+                        }
+                    }
+                }
+                reg!(dst) = Value::bool(set && !cur.is_null_or_undef());
+            }
+            Instr::FetchProp { dst, obj, name, quiet } => {
+                let target = if quiet { reg!(obj).deref() } else { self.prop_target(w, clo, obj)? };
+                // The name's constant: its cache entry.
+                let site = const_index(name).and_then(|i| clo.props.get(i));
+                if let (Some(site), Some(o)) = (site, target.as_object())
+                    && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+                {
+                    reg!(dst) = v;
+                    return Ok(Next::Go(pc));
+                }
+                let name = name!(name).clone();
+                if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
+                    let v = self.run_nested(regs, hook?, &mut [])?;
+                    regs[base + dst as usize] = v;
+                    return Ok(Next::Go(pc));
+                }
+                if let Some(o) = target.as_object()
+                    && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0
+                    && (self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || (quiet && self.prop_magic(&target, &name, crate::classes::Magic::Isset).is_some()))
+                {
+                    use crate::classes::Magic;
+                    let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                    // `??`: __isset decides when there is one, then __get reads.
+                    let set = if quiet {
+                        match self.prop_magic(&target, &name, Magic::Isset) {
+                            Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.to_bool(),
+                            None => true,
+                        }
+                    } else {
+                        true
+                    };
+                    let v = match self.prop_magic(&target, &name, Magic::Get) {
+                        Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
+                        Some(_) => Value::NULL,
+                        None => self.fetch_prop(&target, &name, quiet)?,
+                    };
+                    regs[base + dst as usize] = v;
+                    return Ok(Next::Go(pc));
+                }
+                if let Some(lo) = self.lazy_pending(&target, &name) {
+                    self.lazy_init(regs, &lo)?;
+                    return Ok(Next::Go(insn_at));
+                }
+                let target = self.lazy_forward(&target, &name).unwrap_or(target);
+                reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
+                if let (Some(site), Some(o)) = (site, target.as_object()) {
+                    self.remember_prop(site, o, &name);
+                }
+            }
+            Instr::AssignProp { obj, name, val, dst, take } => {
+                let target = self.prop_target(w, clo, obj)?;
+                // The name's constant: the same cache entry reads use.
+                let site = const_index(name).and_then(|i| clo.props.get(i));
+                if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
+                    && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
+                {
+                    let pname = name!(name).clone();
+                    let v = self.operand_take(w, clo, val, take);
+                    self.write_cached(o, slot, &pname, v.clone())?;
+                    reg!(dst) = v;
+                    return Ok(Next::Go(pc));
+                }
+                // (A lazy object's initialization below runs this
+                // instruction again: the value is only copied here.)
+                let v = self.operand(w, clo, val);
+                let name = name!(name).clone();
+                if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
+                    self.run_nested(regs, hook?, &mut [v.clone()])?;
+                    if take {
+                        clear(&mut regs[base + val as usize]);
+                    }
+                    regs[base + dst as usize] = v;
+                    return Ok(Next::Go(pc));
+                }
+                if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
+                    let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+                    self.run_magic(regs, found, &mut [pname, v.clone()])?;
+                    if take {
+                        clear(&mut regs[base + val as usize]);
+                    }
+                    regs[base + dst as usize] = v;
+                    return Ok(Next::Go(pc));
+                }
+                if let Some(lo) = self.lazy_pending(&target, &name) {
+                    self.lazy_init(regs, &lo)?;
+                    return Ok(Next::Go(insn_at));
+                }
+                let target = self.lazy_forward(&target, &name).unwrap_or(target);
+                self.write_prop(&target, &name, v.clone())?;
+                // A site already holding this class missed for another
+                // reason (an unset slot with __set): looking again finds the same.
+                if let (Some(site), Some(o)) = (site, target.as_object())
+                    && site.get().class != Rc::as_ptr(&o.class) as usize
+                {
+                    self.remember_prop(site, o, &name);
+                }
+                if take {
+                    clear(&mut reg!(val));
+                }
+                reg!(dst) = v;
+            }
+            _ => unreachable!("cold_run runs the generated instructions"),
         }
         Ok(Next::Go(pc))
     }
@@ -5839,28 +5906,6 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
         return false;
     };
     w[dst as usize] = r;
-    true
-}
-
-/// `$a[string] = v`, `$a` an array whose element there (if any) is not a
-/// reference, `v` defined and not a reference; false (nothing done) for
-/// anything else.
-#[inline(never)]
-fn set_str_elem(w: &mut [Value], var: Reg, keys: Src, val: Src, dst: Reg) -> bool {
-    // The key's value copied out of the frame (a literal or a count: no
-    // string copied), so the array can be written while it is borrowed.
-    let key = src(w, keys).clone();
-    let (Some(s), Some(v)) = (key.as_str(), copied(src(w, val))) else { return false };
-    // One lookup, as zend_hash_lookup: the slot is written in place, or
-    // the key added with no second search. (A shared array is separated
-    // first: the write `step` would do instead separates it too.)
-    let Some(a) = w[var as usize].array_mut() else { return false };
-    match a.get_str_mut(s) {
-        Some(slot) if slot.is_reference() => return false,
-        Some(slot) => *slot = v.clone(),
-        None => a.insert_absent(Key::from_string(key.cloned_str().expect("a string")), v.clone()),
-    }
-    w[dst as usize] = v;
     true
 }
 
