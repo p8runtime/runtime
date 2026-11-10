@@ -81,3 +81,21 @@ fn trace_entries_reuse_their_keys() {
     assert_eq!(out, "20 file,line,function,class,type,args file,line,function,args file,line,function,class,type file,line,function");
     flat(body, Count::Insert);
 }
+
+/// A reflection object holds the class (and a method's class) it was made
+/// for, as PHP's reflection_object holds the pointer: asking it again
+/// looks no class up by name, also through a parameter it made.
+#[test]
+fn reflection_holds_its_class() {
+    let out = flat(
+        "class C { function m(int $a, $b = 2) {} }
+         $rc = new ReflectionClass('C'); $rm = new ReflectionMethod('C', 'm'); $rp = $rm->getParameters()[1];
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) {
+             $s += strlen($rc->getName()) + strlen($rm->getName()) + $rm->getNumberOfParameters() + ($rm->isPublic() ? 1 : 0) + $rp->getPosition();
+         }
+         echo $s / $n, ' ', $rm->class, ' ', $rp->getName(), ' ', $rp->getDeclaringClass()->getName(), ' ', $rp->getDefaultValue();",
+        Count::NameLookup,
+    );
+    assert_eq!(out, "6 C b C 2");
+}

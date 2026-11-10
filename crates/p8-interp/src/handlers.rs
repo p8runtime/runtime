@@ -92,7 +92,12 @@ impl Context<'_> {
                 self.builtin_on_demand(dep)?;
             }
         }
-        let make_data = self.isolate.registry.data_maker(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData));
+        let make_data = self
+            .isolate
+            .registry
+            .data_maker(spec.name)
+            .or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData))
+            .or_else(|| crate::reflection::data_maker(spec.name));
         let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
         let hooks = self.isolate.registry.class_hooks(spec.name);
         crate::builtin_classes::declare_spec(&mut crate::builtin_classes::Classes { table: &mut self.classes, symbols: &self.isolate.names }, spec, make_data, dtor);

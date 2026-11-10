@@ -13,11 +13,15 @@ pub enum Count {
     Insert = 0,
     /// A string's hash computed (`StrHead::hash` the first time).
     Hash = 1,
+    /// A function or class name, given as bytes, resolved to its symbol
+    /// while running (the interpreter's `sym_of`: a hash of the name and a
+    /// lookup).
+    NameLookup = 2,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 2] = const { [const { std::cell::Cell::new(0) }; 2] };
+    static COUNTS: [std::cell::Cell<u64>; 3] = const { [const { std::cell::Cell::new(0) }; 3] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).
