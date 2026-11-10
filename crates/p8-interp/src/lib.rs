@@ -5488,9 +5488,9 @@ impl Ctx for Context<'_> {
         out
     }
 
-    fn backtrace(&self, objects: bool) -> PhpArray {
+    fn backtrace(&self, objects: bool, limit: usize) -> PhpArray {
         let regs = &self.isolate.regs;
-        self.trace_with(&|i| regs.get(i).cloned().unwrap_or_default(), objects)
+        self.trace_with(&|i| regs.get(i).cloned().unwrap_or_default(), objects, limit)
     }
 
     fn included_files(&self) -> Vec<String> {
