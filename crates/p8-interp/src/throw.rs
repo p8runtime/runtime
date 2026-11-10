@@ -23,13 +23,16 @@ impl Context<'_> {
     /// debug_backtrace() gives them: where each was called from, the
     /// function (and class), its arguments. `regs` reads a register.
     pub(crate) fn trace(&self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
-        self.trace_with(regs, false)
+        self.trace_with(regs, false, 0)
     }
 
     /// trace(), with each method call's `$this` as `object` when `objects`
-    /// (DEBUG_BACKTRACE_PROVIDE_OBJECT).
-    pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool) -> PhpArray {
+    /// (DEBUG_BACKTRACE_PROVIDE_OBJECT), and at most `limit` entries (0:
+    /// all): the walk stops there, as zend_fetch_debug_backtrace's does,
+    /// so the frames under them cost nothing.
+    pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool, limit: usize) -> PhpArray {
         let mut trace = PhpArray::new();
+        let full = |trace: &PhpArray| limit != 0 && trace.len() >= limit;
         // The running task's frames over those of the tasks waiting under
         // it (a fiber's above whoever started or resumed it), as one
         // stack, as PHP shows it; each frame with its task's registers
@@ -77,6 +80,9 @@ impl Context<'_> {
             entry
         };
         for k in (1..frames.len()).rev() {
+            if full(&trace) {
+                break;
+            }
             let ((frame, frame_regs), (caller, _)) = (frames[k], frames[k - 1]);
             if frame.func.code.name.as_bytes() == p8_bytecode::CONST_EXPR.as_bytes() {
                 // A function's constant expression runs in place: no frame
@@ -311,4 +317,56 @@ pub(crate) fn drop_frame(frames: &mut Frames, regs: &mut [Value]) {
     frame.scope = None;
     frame.called = None;
     frame.owner = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Isolate;
+    use crate::tests::{Sink, compile};
+    use p8_runtime::array::PhpArray;
+    use p8_runtime::ext::{Builtin, Ctx, Registry, Throw};
+    use p8_runtime::value::Value;
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
+    thread_local! {
+        /// What `probe()` saw: the whole trace, and the trace limited to 2.
+        static SEEN: RefCell<Vec<(PhpArray, PhpArray)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn probe(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+        let pair = (ctx.backtrace(false, 0), ctx.backtrace(false, 2));
+        SEEN.with(|s| s.borrow_mut().push(pair));
+        Ok(Value::NULL)
+    }
+
+    static PROBE: [Builtin; 1] = [Builtin { name: "probe", run: probe, by_ref: &[] }];
+
+    /// A limited backtrace walks no further than its limit (as
+    /// zend_fetch_debug_backtrace stops there): 300 frames deep, a limit
+    /// of 2 builds the 2 innermost entries, the same as the whole trace's
+    /// first 2, and none of the frames under them.
+    #[test]
+    fn a_limited_backtrace_stops_at_its_limit() {
+        let mut registry = Registry::default();
+        registry.add_functions(&PROBE);
+        let registry = Arc::new(registry);
+        let program = compile("<?php function deep($n, $s) { return $n === 0 ? probe() : deep($n - 1, \"$s.\"); } deep(300, '');", &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let mut host = Sink;
+        let mut cx = isolate.new_context(&mut host);
+        for f in &program.functions {
+            cx.declare(Arc::clone(f)).expect("declares");
+        }
+        assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+        let seen = SEEN.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        assert_eq!(seen.len(), 1);
+        let (whole, limited) = &seen[0];
+        assert!(whole.len() > 300, "the whole trace has every frame: {}", whole.len());
+        assert!((2..=3).contains(&limited.len()), "the limited walk stopped at 2 (+1 for a builtin's entry): {}", limited.len());
+        for ((_, a), (_, b)) in limited.iter().zip(whole.iter()) {
+            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else { panic!("trace entries are arrays") };
+            assert!(a.identical(b), "a limited entry is the whole trace's entry");
+        }
+    }
 }

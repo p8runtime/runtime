@@ -237,7 +237,7 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     let options = if args.is_empty() { 1 } else { arg(args, 0).to_int() };
     let limit = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
     const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
-    let mut trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0);
+    let mut trace = ctx.backtrace(options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0, usize::try_from(limit).unwrap_or(0));
     let mut out = PhpArray::new();
     // Each frame is moved out of the trace (the only holder), so dropping
     // "args" edits it in place: no frame is copied.
@@ -258,7 +258,7 @@ fn debug_backtrace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
 
 /// debug_print_backtrace: the trace as getTraceAsString shows it, no {main}.
 fn debug_print_backtrace(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let trace = Value::array(ctx.backtrace(false));
+    let trace = Value::array(ctx.backtrace(false, 0));
     let shown = p8_runtime::trace::trace_string(&trace);
     // Everything up to the "#N {main}" line.
     let cut = shown.rfind('#').unwrap_or(0);
