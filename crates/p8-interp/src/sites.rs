@@ -43,6 +43,23 @@ pub struct Closure {
     /// is always the same class (`class_refs`): PHP's runtime cache slot of
     /// FETCH_CLASS_CONSTANT, polymorphic as PHP's is for `static::`.
     pub(crate) class_consts: Box<[RefCell<ConstSite>]>,
+    /// `C::$name`: the property's cell, as last read, by the name's
+    /// constant (as `class_consts`), with the class and the scope it was
+    /// read for (its visibility was checked from that scope): PHP's
+    /// runtime cache slot of FETCH_STATIC_PROP. A class's static
+    /// properties are its cells for good (a reference bound into one is a
+    /// value in its cell).
+    pub(crate) statics: Box<[RefCell<StaticSite>]>,
+}
+
+/// A static property's cache entry (`Closure::statics`).
+#[derive(Default)]
+pub(crate) struct StaticSite {
+    /// The class, as `ConstSite::key` (0: empty), and the scope's address.
+    pub(crate) key: usize,
+    pub(crate) scope: usize,
+    pub(crate) keep: std::rc::Weak<Class>,
+    pub(crate) cell: Option<Rc<RefCell<Value>>>,
 }
 
 /// A class constant's cache entry (`Closure::class_consts`).
@@ -127,7 +144,8 @@ impl Closure {
             Box::default()
         };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts })
+        let statics = code.consts.iter().map(|_| RefCell::default()).collect();
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics })
     }
 
     /// The stand-in for a declared function or method whose closure has not

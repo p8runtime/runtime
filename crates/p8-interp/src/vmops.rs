@@ -76,6 +76,19 @@ impl Hx<'_> {
         if is_k(K::ID) { Src::Const(&self.clo.consts[x as usize]) } else { Src::Reg(x as Reg) }
     }
 
+    /// Class reference `class` of kind `C` (NAMED, STATIC, SCOPE) as a
+    /// cache entry keys it (`ConstSite::key`, `Context::class_key`): a
+    /// named one by its index, the called class or the scope by its
+    /// address; None when there is no such class.
+    #[inline(always)]
+    fn class_key<C: Kind>(&self, class: u32) -> Option<usize> {
+        if C::ID == NAMED {
+            return Some(class as usize + 1);
+        }
+        let c = if C::ID == STATIC { self.top.called.as_ref() } else { self.top.scope.as_ref() };
+        Some(Rc::as_ptr(c?) as usize)
+    }
+
     /// The class the frame's code is in, as a cache entry keys it.
     #[inline(always)]
     fn scope(&self) -> usize {
@@ -493,13 +506,7 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, s
 /// constant that is not cached), no called class or scope, are cold.
 #[inline(always)]
 pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, class, site }: args::ClassConst) -> Ctl {
-    let key = if S::Cls::ID == NAMED {
-        class as usize + 1
-    } else {
-        let c = if S::Cls::ID == STATIC { &hx.top.called } else { &hx.top.scope };
-        let Some(c) = c else { return Ctl::Cold };
-        Rc::as_ptr(c) as usize
-    };
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
     let Some(entry) = hx.clo.class_consts.get(site as usize) else { return Ctl::Cold };
     let v = {
         let e = entry.borrow();
@@ -507,6 +514,30 @@ pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, c
             return Ctl::Cold;
         }
         e.value.clone()
+    };
+    Ctl::Next(put(&mut hx.w[r(dst)], v))
+}
+
+/// `C::$name` the name's cache entry holds the cell of for this class
+/// (`StaticSite`, keyed as `class_const`'s) and this scope: its value, a
+/// reference's read through it. A miss (the first read, another class or
+/// scope, a class whose initializers have not run), no called class or
+/// scope, an unset value (a typed property not initialized) are cold.
+#[inline(always)]
+pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(hx: Hx, args::FetchStaticProp { dst, class, site }: args::FetchStaticProp) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.statics.get(site as usize) else { return Ctl::Cold };
+    let v = {
+        let e = entry.borrow();
+        let Some(cell) = &e.cell else { return Ctl::Cold };
+        if e.key != key || e.scope != hx.scope() {
+            return Ctl::Cold;
+        }
+        let v = cell.borrow().deref();
+        if v.is_undef() {
+            return Ctl::Cold;
+        }
+        v
     };
     Ctl::Next(put(&mut hx.w[r(dst)], v))
 }

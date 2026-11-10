@@ -1446,6 +1446,21 @@ impl Context<'_> {
         }
     }
 
+    /// Class reference `class` of the running code, and the key a cache
+    /// entry keeps it by (`ConstSite::key`) with the class it keeps: a
+    /// class the code names (always the same one; `self`/`parent` in a
+    /// class too) by its index, the called class or a trait's class by its
+    /// address. None for the rest.
+    pub(crate) fn class_key(&mut self, clo: &Closure, class: u16, w: &[Value]) -> Option<(Rc<Class>, (usize, std::rc::Weak<Class>))> {
+        let c = self.class_at(clo, class, w).ok()?;
+        let key = match clo.code.classes[class as usize] {
+            ClassRef::Named(..) | ClassRef::Forward(..) => (class as usize + 1, std::rc::Weak::new()),
+            ClassRef::Static | ClassRef::Scope => (Rc::as_ptr(&c) as usize, Rc::downgrade(&c)),
+            ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
+        };
+        Some((c, key))
+    }
+
     /// The cache entry (`Closure::class_consts`) for `class::name`, just
     /// read, when it is the same value every time this code reads it for
     /// that class: its key (`ConstSite::key`) and the class it keeps. A
@@ -1455,12 +1470,7 @@ impl Context<'_> {
     /// one's access depends on the scope a closure is bound to). Its value,
     /// if it is code, has been computed.
     pub(crate) fn class_const_key(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> Option<(usize, std::rc::Weak<Class>)> {
-        let c = self.class_at(clo, class, w).ok()?;
-        let key = match clo.code.classes[class as usize] {
-            ClassRef::Named(..) | ClassRef::Forward(..) => (class as usize + 1, std::rc::Weak::new()),
-            ClassRef::Static | ClassRef::Scope => (Rc::as_ptr(&c) as usize, Rc::downgrade(&c)),
-            ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
-        };
+        let (c, key) = self.class_key(clo, class, w)?;
         let name = name_view(name);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
             return Some(key);

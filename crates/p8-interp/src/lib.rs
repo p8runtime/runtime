@@ -3193,8 +3193,15 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
+                    let name_reg = name;
                     let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
+                    // For the loop's handler: the cell, for this class and scope.
+                    if let Some(site) = const_index(name_reg).and_then(|i| clo.statics.get(i))
+                        && let Some((_, (key, keep))) = self.class_key(clo, class, w)
+                    {
+                        *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), keep, cell: Some(Rc::clone(&cell)) };
+                    }
                     let v = cell.borrow().deref();
                     reg!(dst) = if v.is_undef() { Value::NULL } else { v };
                 }

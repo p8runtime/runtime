@@ -65,6 +65,11 @@ op INSTANCEOF instance_of cold=step cls=NAMED|STATIC|SCOPE dst=REG src=REG class
 /// (`site`, the name's constant) holds for the class, C as INSTANCEOF's;
 /// a miss is cold (`step`, which fills the entry).
 op CLASS_CONST class_const cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
+/// `dst = C::$name` (`FetchStaticProp`): the property's cell the name's
+/// cache entry (`site`, the name's constant) holds for the class and the
+/// code's scope, C as INSTANCEOF's; a miss is cold (`step`, which fills
+/// the entry).
+op FETCH_STATIC_PROP fetch_static_prop cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
 
 # ---- written by hand ---------------------------------------------------
 

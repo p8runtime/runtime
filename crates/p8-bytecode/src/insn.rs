@@ -366,6 +366,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let site = Opnd::Imm(prop_site(name, nconsts)?);
             enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
         }
+        Instr::FetchStaticProp { dst, class, name } => {
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::fetch_static_prop(enc::FetchStaticProp { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+        }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)
