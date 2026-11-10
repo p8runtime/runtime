@@ -199,30 +199,34 @@ fn getrusage(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let who = if args.first().is_some_and(|v| v.deref().to_int() == 1) { UsageWho::RUSAGE_CHILDREN } else { UsageWho::RUSAGE_SELF };
     let Ok(u) = getrusage(who) else { return Ok(Value::FALSE) };
     let (ut, st) = (u.user_time(), u.system_time());
-    let fields: [(&str, i64); 17] = [
-        ("ru_oublock", u.block_writes()),
-        ("ru_inblock", u.block_reads()),
-        ("ru_msgsnd", u.ipc_sends()),
-        ("ru_msgrcv", u.ipc_receives()),
-        ("ru_maxrss", u.max_rss()),
-        ("ru_ixrss", u.shared_integral()),
-        ("ru_idrss", u.unshared_data_integral()),
-        ("ru_minflt", u.minor_page_faults()),
-        ("ru_majflt", u.major_page_faults()),
-        ("ru_nsignals", u.signals()),
-        ("ru_nvcsw", u.voluntary_context_switches()),
-        ("ru_nivcsw", u.involuntary_context_switches()),
-        ("ru_nswap", u.full_swaps()),
-        ("ru_utime.tv_usec", i64::from(ut.tv_usec())),
-        ("ru_utime.tv_sec", ut.tv_sec()),
-        ("ru_stime.tv_usec", i64::from(st.tv_usec())),
-        ("ru_stime.tv_sec", st.tv_sec()),
+    let fields: [i64; 17] = [
+        u.block_writes(),
+        u.block_reads(),
+        u.ipc_sends(),
+        u.ipc_receives(),
+        u.max_rss(),
+        u.shared_integral(),
+        u.unshared_data_integral(),
+        u.minor_page_faults(),
+        u.major_page_faults(),
+        u.signals(),
+        u.voluntary_context_switches(),
+        u.involuntary_context_switches(),
+        u.full_swaps(),
+        i64::from(ut.tv_usec()),
+        ut.tv_sec(),
+        i64::from(st.tv_usec()),
+        st.tv_sec(),
     ];
-    let mut out = PhpArray::hashed(fields.len());
-    for (k, v) in fields {
-        out.insert(Key::from_string(PhpStr::from(k)), Value::int(v));
+    // (PHPUnit calls this around every test: the keys are made once.)
+    thread_local! {
+        static KEYS: [PhpStr; 17] = p8_runtime::array::record_keys([
+            "ru_oublock", "ru_inblock", "ru_msgsnd", "ru_msgrcv", "ru_maxrss", "ru_ixrss", "ru_idrss", "ru_minflt",
+            "ru_majflt", "ru_nsignals", "ru_nvcsw", "ru_nivcsw", "ru_nswap", "ru_utime.tv_usec", "ru_utime.tv_sec",
+            "ru_stime.tv_usec", "ru_stime.tv_sec",
+        ]);
     }
-    Ok(Value::array(out))
+    Ok(Value::array(KEYS.with(|k| PhpArray::record(k, fields.map(Value::int)))))
 }
 
 /// getrusage(): false, as PHP gives when getrusage(2) fails: WASI has no

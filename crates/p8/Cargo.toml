@@ -27,6 +27,10 @@ p8-ext-pdo-sqlite = { path = "../p8-ext-pdo-sqlite" }
 p8-ext-openssl = { path = "../p8-ext-openssl" }
 p8-ext-intl = { path = "../p8-ext-intl" }
 
+# The tests count hash-table work (p8_runtime::counts).
+[dev-dependencies]
+p8-runtime = { path = "../p8-runtime", features = ["counts"] }
+
 # The extensions that exist to talk over the network (to a server, a
 # database or a socket): not in a WASI build, where wasm32-wasip1 has no
 # sockets; that p8 is a PHP built without them.

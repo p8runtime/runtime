@@ -88,6 +88,7 @@ impl StrHead {
     #[cold]
     #[inline(never)]
     fn compute_hash(&self) -> u64 {
+        crate::counts::bump(crate::counts::Count::Hash);
         let h = hash_bytes(self.as_bytes()).max(1);
         self.hash.store(h, Ordering::Relaxed);
         h
