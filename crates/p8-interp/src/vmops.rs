@@ -486,3 +486,27 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, s
     let Some(t) = t else { return Ctl::Cold };
     Ctl::Next(put(&mut hx.w[r(dst)], Value::bool(t)))
 }
+
+/// `C::NAME` the name's cache entry holds for this class (`ConstSite`):
+/// a named class's by its reference, the called class's or a trait's
+/// class's by its address. A miss (the first read, another class, a
+/// constant that is not cached), no called class or scope, are cold.
+#[inline(always)]
+pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, class, site }: args::ClassConst) -> Ctl {
+    let key = if S::Cls::ID == NAMED {
+        class as usize + 1
+    } else {
+        let c = if S::Cls::ID == STATIC { &hx.top.called } else { &hx.top.scope };
+        let Some(c) = c else { return Ctl::Cold };
+        Rc::as_ptr(c) as usize
+    };
+    let Some(entry) = hx.clo.class_consts.get(site as usize) else { return Ctl::Cold };
+    let v = {
+        let e = entry.borrow();
+        if e.key != key {
+            return Ctl::Cold;
+        }
+        e.value.clone()
+    };
+    Ctl::Next(put(&mut hx.w[r(dst)], v))
+}

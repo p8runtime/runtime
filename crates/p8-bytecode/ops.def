@@ -61,6 +61,10 @@ op RETURN ret cold=step src=TMP|CV|K
 /// (NAMED: `C`, and `self`/`parent` in a class), the called class
 /// (STATIC: `static`) or the class using a trait (SCOPE: `self` in one).
 op INSTANCEOF instance_of cold=step cls=NAMED|STATIC|SCOPE dst=REG src=REG class=IMM16
+/// `dst = C::NAME` (`ClassConst`): the value the name's cache entry
+/// (`site`, the name's constant) holds for the class, C as INSTANCEOF's;
+/// a miss is cold (`step`, which fills the entry).
+op CLASS_CONST class_const cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
 
 # ---- written by hand ---------------------------------------------------
 
@@ -116,9 +120,6 @@ hand ArrayPush
 hand ArraySet
 /// a = constant of site imm
 hand FetchConst
-/// a = class constant: class reference imm >> 16, the name the
-/// constant imm & 0xffff (its cache entry, as a property name's)
-hand ClassConst
 /// foreach over a: the array (b, b + 1 = it and its position 0), or to
 /// imm when it is empty
 hand IterInit

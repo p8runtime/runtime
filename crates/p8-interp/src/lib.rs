@@ -3182,10 +3182,9 @@ impl Context<'_> {
                     }
                     let v = self.class_constant(func, class, &name, w)?;
                     if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
-                        && site.get().is_none()
-                        && self.class_const_cacheable(clo, class, &name, w)
+                        && let Some((key, keep)) = self.class_const_key(clo, class, &name, w)
                     {
-                        let _ = site.set((class, v.clone()));
+                        *site.borrow_mut() = ConstSite { key, keep, value: v.clone() };
                     }
                     reg!(dst) = v;
                 }

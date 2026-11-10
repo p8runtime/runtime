@@ -1429,6 +1429,10 @@ impl Context<'_> {
                         ));
                     }
                 }
+                // (A trait's code reads them through the class using it.)
+                if class.flags & CLASS_TRAIT != 0 {
+                    return Err(self.throw("Error", format!("Cannot access trait constant {}::{} directly", text(&class.name), text(&name))));
+                }
                 if c.is_case {
                     return Ok(Value::object(self.enum_case(&class, name.as_bytes())));
                 }
@@ -1442,21 +1446,26 @@ impl Context<'_> {
         }
     }
 
-    /// Whether `class::name`, just read, is the same value every time this
-    /// code reads it (`Closure::class_consts`): a named class (always the
-    /// same one), and `::class` or a public constant that is not an enum
-    /// case (a private or protected one's access depends on the scope a
-    /// closure is bound to). Its value, if it is code, has been computed.
-    pub(crate) fn class_const_cacheable(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> bool {
-        if !matches!(clo.code.classes[class as usize], p8_bytecode::ClassRef::Named(..)) {
-            return false;
-        }
-        let Ok(c) = self.class_at(clo, class, w) else { return false };
+    /// The cache entry (`Closure::class_consts`) for `class::name`, just
+    /// read, when it is the same value every time this code reads it for
+    /// that class: its key (`ConstSite::key`) and the class it keeps. A
+    /// class the code names (always the same one; `self`/`parent` in a
+    /// class too), the called class, a trait's class; and `::class` or a
+    /// public constant that is not an enum case (a private or protected
+    /// one's access depends on the scope a closure is bound to). Its value,
+    /// if it is code, has been computed.
+    pub(crate) fn class_const_key(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> Option<(usize, std::rc::Weak<Class>)> {
+        let c = self.class_at(clo, class, w).ok()?;
+        let key = match clo.code.classes[class as usize] {
+            ClassRef::Named(..) | ClassRef::Forward(..) => (class as usize + 1, std::rc::Weak::new()),
+            ClassRef::Static | ClassRef::Scope => (Rc::as_ptr(&c) as usize, Rc::downgrade(&c)),
+            ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
+        };
         let name = name_view(name);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
-            return true;
+            return Some(key);
         }
-        c.constants.get(name.as_bytes()).is_some_and(|k| k.visibility == Visibility::Public && !k.is_case)
+        c.constants.get(name.as_bytes()).is_some_and(|k| k.visibility == Visibility::Public && !k.is_case).then_some(key)
     }
 
     /// A class constant whose value is code not yet run: the code, the

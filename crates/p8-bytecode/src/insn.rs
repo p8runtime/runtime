@@ -362,6 +362,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::InstanceOf { dst, src, class } => {
             enc::instance_of(enc::InstanceOf { cls: class_flag(classes, class)?, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
         }
+        Instr::ClassConst { dst, class, name } => {
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+        }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)
@@ -454,10 +458,6 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::IterInit, src, iter, 0, end)
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
-        Instr::ClassConst { dst, class, name } => {
-            let site = prop_site(name, nconsts).filter(|&s| s <= 0xffff)?;
-            i(Op::ClassConst, dst, 0, 0, site | u32::from(class) << 16)
-        }
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),

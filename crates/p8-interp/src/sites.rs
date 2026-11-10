@@ -35,13 +35,25 @@ pub struct Closure {
     /// one per parameter, then the return type's; empty when no type
     /// names a class.
     pub(crate) type_memo: Box<[ClassMemo]>,
-    /// `C::NAME` of a named class, a public constant (or `C::class`):
-    /// its value, once read, by the name's constant (one entry per
-    /// constant, as `props`), with the class reference it was read
-    /// through (another class with the same name reads past it). A
-    /// class's constants never change, and a name is always the same
-    /// class (`class_refs`): PHP's runtime cache slot of FETCH_CLASS_CONSTANT.
-    pub(crate) class_consts: Box<[OnceCell<(u16, Value)>]>,
+    /// `C::NAME`, a public constant that is not an enum case (or
+    /// `C::class`): its value, as last read, by the name's constant (one
+    /// entry per constant, as `props`), with the class it was read for
+    /// (`ConstSite::key`; another class reads past it, and its read
+    /// replaces the entry). A class's constants never change, and a name
+    /// is always the same class (`class_refs`): PHP's runtime cache slot of
+    /// FETCH_CLASS_CONSTANT, polymorphic as PHP's is for `static::`.
+    pub(crate) class_consts: Box<[RefCell<ConstSite>]>,
+}
+
+/// A class constant's cache entry (`Closure::class_consts`).
+#[derive(Default)]
+pub(crate) struct ConstSite {
+    /// The class it was read for: a named class reference, its index + 1;
+    /// the called class (`static::`) or a trait's class, its address,
+    /// which `keep` keeps from being reused by another class. 0: empty.
+    pub(crate) key: usize,
+    pub(crate) keep: std::rc::Weak<Class>,
+    pub(crate) value: Value,
 }
 
 /// A class a declared type accepted (`Closure::type_memo`): its address,
@@ -114,7 +126,7 @@ impl Closure {
         } else {
             Box::default()
         };
-        let class_consts = code.consts.iter().map(|_| OnceCell::new()).collect();
+        let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts })
     }
 
