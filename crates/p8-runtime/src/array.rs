@@ -737,7 +737,7 @@ impl Clone for PhpArray {
     fn clone(&self) -> Self {
         // (An empty array's copy, the first write to a shared `[]`, copies
         // no values: not counted, as PHP makes a new array there.)
-        if self.len() != 0 {
+        if !self.is_empty() {
             COPIES.with(|c| c.set(c.get() + 1));
         }
         let cursor = if self.cursor < self.end_pos() { self.cursor } else { 0 };
