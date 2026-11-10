@@ -11,3 +11,8 @@ hashbrown = { version = "0.16", default-features = false }
 indexmap = "2.0"
 # The name tables' hasher (see fast.rs); already hashbrown's default.
 foldhash = "0.1"
+
+[features]
+# Per-thread counts of hash-table work (counts.rs), for tests; off in
+# every ordinary build.
+counts = []
