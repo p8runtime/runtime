@@ -35,6 +35,14 @@ function assign_dim() {
     $b['s'] = 6;
     $b[$k] = 7;
     echo "$x $y ", json_encode($b), "\n";
+    // A plain copy of it (not itself a reference) keeps the reference
+    // elements: written through them too.
+    $c = $b;
+    $c['s'] = 8;
+    $c[0] = 9;
+    $sk = 's';
+    $c[$sk] = 10;
+    echo "$x $y\n";
     // Through a reference-held array: int and string keys.
     $arr = [1, 2];
     $ref = &$arr;
