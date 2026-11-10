@@ -34,6 +34,9 @@ pub(crate) enum Ctl {
     Skip(bool),
     /// Go to the target (a backward one is where an interrupt is noticed).
     Jump(u32),
+    /// Return this value from the frame (`ret!` in the loop: the caller's
+    /// frame, or out of the loop's run from its bottom frame).
+    Return(Value),
     /// Run the instruction's cold method instead.
     Cold,
 }
@@ -44,6 +47,8 @@ pub(crate) struct Hx<'a> {
     pub(crate) w: &'a mut [Value; WINDOW],
     pub(crate) clo: &'a Closure,
     pub(crate) top: &'a Frame,
+    /// The frame stack (`top` is its last).
+    pub(crate) frames: &'a Frames,
     /// A clone's re-initialization is running (readonly properties).
     pub(crate) reinit: bool,
 }
@@ -69,6 +74,19 @@ impl Hx<'_> {
     #[inline(always)]
     fn src<K: Kind>(&self, x: u32) -> Src<'_> {
         if is_k(K::ID) { Src::Const(&self.clo.consts[x as usize]) } else { Src::Reg(x as Reg) }
+    }
+
+    /// Class reference `class` of kind `C` (NAMED, STATIC, SCOPE) as a
+    /// cache entry keys it (`ConstSite::key`, `Context::class_key`): a
+    /// named one by its index, the called class or the scope by its
+    /// address; None when there is no such class.
+    #[inline(always)]
+    fn class_key<C: Kind>(&self, class: u32) -> Option<usize> {
+        if C::ID == NAMED {
+            return Some(class as usize + 1);
+        }
+        let c = if C::ID == STATIC { self.top.called.as_ref() } else { self.top.scope.as_ref() };
+        Some(Rc::as_ptr(c?) as usize)
     }
 
     /// The class the frame's code is in, as a cache entry keys it.
@@ -406,4 +424,120 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
         let _ = clear(&mut hx.w[r(val)]);
     }
     ctl
+}
+
+/// `return src`: the value moved out of its register when nothing reads
+/// the register again (a temporary; a variable of a frame whose variables
+/// are its own), else copied; a reference's value read through it. To
+/// the calling frame, or out of the loop's run from its bottom frame.
+/// The script's end (the main frame's return), a generator's return and
+/// an undefined variable (the warning) are cold.
+#[inline(always)]
+pub(crate) fn ret<S: spec::Ret>(hx: Hx, args::Ret { src }: args::Ret) -> Ctl {
+    let f = hx.frames;
+    if f.len() == f.floor + 1 && (f.floor == 0 || hx.clo.code.is_generator) {
+        return Ctl::Cold;
+    }
+    if is_k(S::Src::ID) {
+        return Ctl::Return(hx.v::<S::Src>(src).clone());
+    }
+    let temp = S::Src::ID == TMP;
+    let slot = &mut hx.w[r(src)];
+    let v = if slot.is_undef() {
+        return Ctl::Cold;
+    } else if let Some(cell) = slot.as_reference() {
+        let v = cell.borrow().clone();
+        // A temporary lets go of the reference (none is left at exit).
+        if temp {
+            drop(std::mem::take(slot));
+        }
+        v
+    } else if temp || (!hx.top.global && hx.top.extra.is_none()) {
+        std::mem::take(slot)
+    } else {
+        slot.clone()
+    };
+    Ctl::Return(v)
+}
+
+/// `src instanceof C`: an object (or a reference to one) tested against
+/// the class (`Class::is_a`, its parents and interfaces by name); anything
+/// else is false. A named class not resolved yet (the cold path resolves
+/// it, never autoloading), no called class or scope, an undefined
+/// variable (the warning) are cold.
+#[inline(always)]
+pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, src, class }: args::InstanceOf) -> Ctl {
+    let is = |o: &Object| -> Option<bool> {
+        if S::Cls::ID == NAMED {
+            let (p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name)) = &hx.clo.code.classes[class as usize] else { return None };
+            let target = hx.clo.class_refs[class as usize].borrow();
+            if std::ptr::eq(Rc::as_ptr(&o.class), target.as_ptr()) {
+                return Some(true);
+            }
+            let target = target.upgrade()?;
+            // (Through an alias, the class it names, and the name itself.)
+            Some(o.class.is_a(&target.lower) || (target.lower != name.lower.as_bytes() &&o.class.is_a(name.lower.as_bytes())))
+        } else {
+            let c = if S::Cls::ID == STATIC { hx.top.called.as_ref()? } else { hx.top.scope.as_ref()? };
+            Some(Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
+        }
+    };
+    let v = &hx.w[r(src)];
+    let t = if let Some(o) = v.as_object() {
+        is(o)
+    } else if let Some(cell) = v.as_reference() {
+        let v = cell.borrow();
+        match v.as_object() {
+            Some(o) => is(o),
+            None => Some(false),
+        }
+    } else if v.is_undef() {
+        None
+    } else {
+        Some(false)
+    };
+    let Some(t) = t else { return Ctl::Cold };
+    Ctl::Next(put(&mut hx.w[r(dst)], Value::bool(t)))
+}
+
+/// `C::NAME` the name's cache entry holds for this class (`ConstSite`):
+/// a named class's by its reference, the called class's or a trait's
+/// class's by its address. A miss (the first read, another class, a
+/// constant that is not cached), no called class or scope, are cold.
+#[inline(always)]
+pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, class, site }: args::ClassConst) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.class_consts.get(site as usize) else { return Ctl::Cold };
+    let v = {
+        let e = entry.borrow();
+        if e.key != key {
+            return Ctl::Cold;
+        }
+        e.value.clone()
+    };
+    Ctl::Next(put(&mut hx.w[r(dst)], v))
+}
+
+/// `C::$name` the name's cache entry holds the cell of for this class
+/// (`StaticSite`, keyed as `class_const`'s) and this scope: its value, a
+/// reference's read through it. A miss (the first read, another class or
+/// scope, a class whose initializers have not run), no called class or
+/// scope, an unset value (a typed property not initialized) are cold.
+#[inline(always)]
+pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(hx: Hx, args::FetchStaticProp { dst, class, site }: args::FetchStaticProp) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.statics.get(site as usize) else { return Ctl::Cold };
+    let v = {
+        let e = entry.borrow();
+        let Some(cell) = &e.cell else { return Ctl::Cold };
+        if e.key != key || e.scope != hx.scope() {
+            return Ctl::Cold;
+        }
+        let v = cell.borrow().deref();
+        if v.is_undef() {
+            return Ctl::Cold;
+        }
+        v
+    };
+    Ctl::Next(put(&mut hx.w[r(dst)], v))
 }

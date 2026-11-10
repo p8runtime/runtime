@@ -1,0 +1,27 @@
+-- named, self, static
+["A","A","A"]["A","B","A"]["A","B","A"]
+["A","A","A"]["A","B","A"]["A","B","A"]
+1233
+[[1,2,3],[1,2]][[1,2,3],[1,2]]
+["ref1","ref1","ref1"]
+["ref2","ref2","ref2"]["ref2","B","ref2"]
+-- visibility
+a-secret a-secret a-prot b-prot b-prot
+a-secret a-secret a-prot b-prot b-prot
+Error: Cannot access private property A::$secret
+Error: Cannot access protected property B::$prot
+a-secret
+Error: Cannot access private property A::$secret
+a-secret
+-- typed, undeclared
+int(5)
+int(5)
+Error: Access to undeclared static property A::$nope
+Error: Access to undeclared static property A::$nope
+-- initializers, traits
+int(20)
+int(20)
+["t","t"]["t","t"]["ut3","ut3"]
+["t","t"]["t","t"]["ut3","ut3"]
+Error: Cannot access "static" when no class scope is active
+B B
