@@ -58,7 +58,8 @@ pub(crate) struct StaticSite {
     /// The class, as `ConstSite::key` (0: empty), and the scope's address.
     pub(crate) key: usize,
     pub(crate) scope: usize,
-    pub(crate) keep: std::rc::Weak<Class>,
+    /// (Held, never read: see `ConstSite::_keep`.)
+    pub(crate) _keep: std::rc::Weak<Class>,
     pub(crate) cell: Option<Rc<RefCell<Value>>>,
 }
 
@@ -67,11 +68,17 @@ pub(crate) struct StaticSite {
 pub(crate) struct ConstSite {
     /// The class it was read for: a named class reference, its index + 1;
     /// the called class (`static::`) or a trait's class, its address,
-    /// which `keep` keeps from being reused by another class. 0: empty.
+    /// which `_keep` keeps from being reused by another class. 0: empty.
     pub(crate) key: usize,
-    pub(crate) keep: std::rc::Weak<Class>,
+    /// (Held, never read: a weak handle keeps the class's allocation, so
+    /// its address, from being reused while the entry names it.)
+    pub(crate) _keep: std::rc::Weak<Class>,
     pub(crate) value: Value,
 }
+
+/// A class as a cache entry keys it (`ConstSite::key`), with the handle
+/// that keeps the key's address its own.
+pub(crate) type ClassKey = (usize, std::rc::Weak<Class>);
 
 /// A class a declared type accepted (`Closure::type_memo`): its address,
 /// compared; and a weak handle, which keeps the address from being reused

@@ -3184,7 +3184,7 @@ impl Context<'_> {
                     if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
                         && let Some((key, keep)) = self.class_const_key(clo, class, &name, w)
                     {
-                        *site.borrow_mut() = ConstSite { key, keep, value: v.clone() };
+                        *site.borrow_mut() = ConstSite { key, _keep: keep, value: v.clone() };
                     }
                     reg!(dst) = v;
                 }
@@ -3200,7 +3200,7 @@ impl Context<'_> {
                     if let Some(site) = const_index(name_reg).and_then(|i| clo.statics.get(i))
                         && let Some((_, (key, keep))) = self.class_key(clo, class, w)
                     {
-                        *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), keep, cell: Some(Rc::clone(&cell)) };
+                        *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), _keep: keep, cell: Some(Rc::clone(&cell)) };
                     }
                     let v = cell.borrow().deref();
                     reg!(dst) = if v.is_undef() { Value::NULL } else { v };
