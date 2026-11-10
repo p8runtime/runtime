@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::vmops::{self, Ctl, Hx};
-use p8_bytecode::insn::kinds;
 use p8_bytecode::{Insn, Op, insn};
 
 // `dispatch!(op, insn, { hand arms })`, written by p8-vmgen from ops.def:

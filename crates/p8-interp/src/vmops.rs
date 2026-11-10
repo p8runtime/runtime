@@ -1,15 +1,18 @@
 //! The handlers of the generated instructions (`p8-bytecode/ops.def`).
 //!
-//! Each instruction is written once here, its operand kinds and flags as
-//! `const` parameters (`p8_bytecode::insn::kinds`). The generator writes
-//! one dispatch arm per live combination (`P8_FETCH_DIM_KSTR` calls
-//! `fetch_dim::<{KSTR}>`), so every `if KEY == KSTR` below is a test of
-//! two constants, folded per arm. A handler is a plain function of the
-//! frame's view (`Hx`) and its decoded operands, which gives back what
-//! the loop does next (`Ctl`): it never leaves the loop itself. A case it
-//! does not take inline is `Ctl::Cold`: the loop runs the instruction's
-//! cold method (`cold=` in ops.def, the `Context::cold_*` below, which
-//! `step` runs for it too), out of line.
+//! Each instruction is written once here. Its signature is generated
+//! (p8-vmgen, from ops.def) and matched by name: the decoded operands are
+//! the fields of `args::<Op>`, destructured, and the kind of each operand
+//! that has several (a flag's too) is an associated type of the
+//! specialisation's `spec::<Op>` impl (`S::Key`, `kind::KSTR` in
+//! `P8_FETCH_DIM_R_KSTR`). The generator writes one dispatch arm per live
+//! combination, so every `if S::Key::ID == KSTR` below is a test of two
+//! constants, folded per arm. A handler is a plain function of the frame's
+//! view (`Hx`) and its operands, which gives back what the loop does next
+//! (`Ctl`): it never leaves the loop itself. A case it does not take
+//! inline is `Ctl::Cold`: the loop runs the instruction's cold method
+//! (`cold=` in ops.def, `Context::cold_run`, which `step` runs for it
+//! too), out of line.
 //!
 //! Operand values: a register is its window index, a literal its
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
@@ -17,7 +20,10 @@
 use super::*;
 use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, plain, put, put_var, read_ref, set_int_elem, test, truth};
 use crate::sites::{Plain, cached_prop, plain_slot};
+use p8_bytecode::insn::args;
+use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
+use p8_bytecode::insn::spec;
 
 /// What the loop does after a handler.
 pub(crate) enum Ctl {
@@ -53,16 +59,16 @@ const fn is_k(kind: u8) -> bool {
 }
 
 impl Hx<'_> {
-    /// A value operand of kind `KIND`: a literal read in place, or a register.
+    /// A value operand of kind `K`: a literal read in place, or a register.
     #[inline(always)]
-    fn v<const KIND: u8>(&self, x: u32) -> &Value {
-        if is_k(KIND) { &self.clo.consts[x as usize] } else { &self.w[r(x)] }
+    fn v<K: Kind>(&self, x: u32) -> &Value {
+        if is_k(K::ID) { &self.clo.consts[x as usize] } else { &self.w[r(x)] }
     }
 
     /// The same as a `Src`, for the out-of-line helpers.
     #[inline(always)]
-    fn src<const KIND: u8>(&self, x: u32) -> Src<'_> {
-        if is_k(KIND) { Src::Const(&self.clo.consts[x as usize]) } else { Src::Reg(x as Reg) }
+    fn src<K: Kind>(&self, x: u32) -> Src<'_> {
+        if is_k(K::ID) { Src::Const(&self.clo.consts[x as usize]) } else { Src::Reg(x as Reg) }
     }
 
     /// The class the frame's code is in, as a cache entry keys it.
@@ -76,9 +82,9 @@ impl Hx<'_> {
 /// undefined: cold, the warning) or a literal. A write that released an
 /// object stops for its destructor before the next instruction.
 #[inline(always)]
-pub(crate) fn mov<const SRC: u8>(hx: Hx, dst: u32, src: u32) -> Ctl {
-    if is_k(SRC) {
-        let v = hx.v::<SRC>(src).clone();
+pub(crate) fn mov<S: spec::Mov>(hx: Hx, args::Mov { dst, src }: args::Mov) -> Ctl {
+    if is_k(S::Src::ID) {
+        let v = hx.v::<S::Src>(src).clone();
         return Ctl::Next(put(&mut hx.w[r(dst)], v));
     }
     let Some(v) = copied(&hx.w[r(src)]) else { return Ctl::Cold };
@@ -88,9 +94,9 @@ pub(crate) fn mov<const SRC: u8>(hx: Hx, dst: u32, src: u32) -> Ctl {
 
 /// `$var = src`, through a reference the variable holds.
 #[inline(always)]
-pub(crate) fn assign<const SRC: u8>(hx: Hx, var: u32, src: u32) -> Ctl {
-    let v = if is_k(SRC) {
-        hx.v::<SRC>(src).clone()
+pub(crate) fn assign<S: spec::Assign>(hx: Hx, args::Assign { var, src }: args::Assign) -> Ctl {
+    let v = if is_k(S::Src::ID) {
+        hx.v::<S::Src>(src).clone()
     } else {
         match copied(&hx.w[r(src)]) {
             Some(v) => v,
@@ -102,7 +108,7 @@ pub(crate) fn assign<const SRC: u8>(hx: Hx, var: u32, src: u32) -> Ctl {
 
 /// `$var = tmp`, the temporary read for the last time: moved out of it.
 #[inline(always)]
-pub(crate) fn assign_take(hx: Hx, var: u32, src: u32) -> Ctl {
+pub(crate) fn assign_take(hx: Hx, args::AssignTake { var, src }: args::AssignTake) -> Ctl {
     let taken = std::mem::replace(&mut hx.w[r(src)], Value::UNDEF);
     // Undefined: the warning (the register is as it was).
     if taken.is_undef() {
@@ -127,13 +133,13 @@ pub(crate) fn assign_take(hx: Hx, var: u32, src: u32) -> Ctl {
 }
 
 #[inline(always)]
-pub(crate) fn free(hx: Hx, reg: u32) -> Ctl {
+pub(crate) fn free(hx: Hx, args::Free { reg }: args::Free) -> Ctl {
     Ctl::Next(clear(&mut hx.w[r(reg)]))
 }
 
 /// `$this`, in a method that has one (else cold: the error).
 #[inline(always)]
-pub(crate) fn this(hx: Hx, dst: u32) -> Ctl {
+pub(crate) fn this(hx: Hx, args::This { dst }: args::This) -> Ctl {
     let Some(this) = &hx.top.this else { return Ctl::Cold };
     let this = Value::object(Rc::clone(this));
     Ctl::Next(put(&mut hx.w[r(dst)], this))
@@ -142,7 +148,7 @@ pub(crate) fn this(hx: Hx, dst: u32) -> Ctl {
 /// A condition: a bool inline, anything else through `truth` (what may
 /// warn, NAN and an undefined variable, is cold).
 #[inline(always)]
-pub(crate) fn jump_cond<const WHEN: u8>(hx: Hx, cond: u32, target: u32) -> Ctl {
+pub(crate) fn jump_cond<S: spec::JumpCond>(hx: Hx, args::JumpCond { cond, target }: args::JumpCond) -> Ctl {
     let v = &hx.w[r(cond)];
     let c = match v.as_bool() {
         Some(c) => c,
@@ -151,15 +157,15 @@ pub(crate) fn jump_cond<const WHEN: u8>(hx: Hx, cond: u32, target: u32) -> Ctl {
             None => return Ctl::Cold,
         },
     };
-    if c == (WHEN == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
+    if c == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
 /// A compare-and-branch: two ints inline, anything else (floats,
 /// references, strings, null) through `test`; an undefined variable (its
 /// warning) is cold.
 #[inline(always)]
-pub(crate) fn jump_cmp<const CMP: u8, const WHEN: u8, const B: u8>(hx: Hx, a: u32, b: u32, target: u32) -> Ctl {
-    let cmp = match CMP {
+pub(crate) fn jump_cmp<S: spec::JumpCmp>(hx: Hx, args::JumpCmp { a, b, target }: args::JumpCmp) -> Ctl {
+    let cmp = match S::Cmp::ID {
         LT => Cmp::Lt,
         LE => Cmp::Le,
         GT => Cmp::Gt,
@@ -167,7 +173,7 @@ pub(crate) fn jump_cmp<const CMP: u8, const WHEN: u8, const B: u8>(hx: Hx, a: u3
         EQ => Cmp::Eq,
         _ => Cmp::Identical,
     };
-    let (x, y) = (&hx.w[r(a)], hx.v::<B>(b));
+    let (x, y) = (&hx.w[r(a)], hx.v::<S::B>(b));
     let t = if let (Some(x), Some(y)) = (x.as_int(), y.as_int()) {
         int_test(cmp, x, y)
     } else {
@@ -176,7 +182,7 @@ pub(crate) fn jump_cmp<const CMP: u8, const WHEN: u8, const B: u8>(hx: Hx, a: u3
             None => return Ctl::Cold,
         }
     };
-    if t == (WHEN == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
+    if t == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
 /// `$a[k]` on an array holding a plain value at that key: an int key, a
@@ -185,17 +191,18 @@ pub(crate) fn jump_cmp<const CMP: u8, const WHEN: u8, const B: u8>(hx: Hx, a: u3
 /// key of an array is null. Anything else (a missing key's warning, an
 /// object, a string's offset) is cold.
 #[inline(always)]
-pub(crate) fn fetch_dim<const MODE: u8, const KEY: u8>(hx: Hx, dst: u32, arr: u32, key: u32) -> Ctl {
-    let kv = hx.v::<KEY>(key);
+pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, key }: args::FetchDim) -> Ctl {
+    let kv = hx.v::<S::Key>(key);
     let v = if let Some(a) = hx.w[r(arr)].as_array() {
-        let e = if KEY == KSTR {
+        let e = if S::Key::ID == KSTR {
+            // (Never a canonical integer: lowering's promise.)
             match kv.as_str() {
-                Some(s) => a.get_str(s),
+                Some(s) => a.get_str_key(s),
                 None => return Ctl::Cold,
             }
         } else if let Some(i) = kv.as_int() {
             a.get_int(i)
-        } else if KEY == REG
+        } else if S::Key::ID == REG
             && let Some(s) = kv.as_str()
         {
             a.get_str(s)
@@ -204,11 +211,11 @@ pub(crate) fn fetch_dim<const MODE: u8, const KEY: u8>(hx: Hx, dst: u32, arr: u3
         };
         match e {
             Some(v) if !v.is_reference() => v.clone(),
-            None if MODE == IS => Value::NULL,
+            None if S::Mode::ID == IS => Value::NULL,
             _ => return Ctl::Cold,
         }
     } else {
-        match elem(&hx.w[..], arr as Reg, hx.src::<KEY>(key)) {
+        match elem(&hx.w[..], arr as Reg, hx.src::<S::Key>(key)) {
             Some(v) => v,
             None => return Ctl::Cold,
         }
@@ -221,17 +228,17 @@ pub(crate) fn fetch_dim<const MODE: u8, const KEY: u8>(hx: Hx, dst: u32, arr: u3
 /// string; the rest (an object, a string's offset, a key of another type)
 /// is cold.
 #[inline(always)]
-pub(crate) fn isset_dim<const KEY: u8>(hx: Hx, dst: u32, var: u32, key: u32) -> Ctl {
-    let kv = hx.v::<KEY>(key);
+pub(crate) fn isset_dim<S: spec::IssetDim>(hx: Hx, args::IssetDim { dst, var, key }: args::IssetDim) -> Ctl {
+    let kv = hx.v::<S::Key>(key);
     let set = if let Some(a) = hx.w[r(var)].as_array() {
-        if KEY == KSTR {
+        if S::Key::ID == KSTR {
             match kv.as_str() {
-                Some(s) => a.get_str(s).is_some_and(is_set),
+                Some(s) => a.get_str_key(s).is_some_and(is_set),
                 None => return Ctl::Cold,
             }
         } else if let Some(i) = kv.as_int() {
             a.get_int(i).is_some_and(is_set)
-        } else if KEY == REG
+        } else if S::Key::ID == REG
             && let Some(s) = kv.as_str()
         {
             a.get_str(s).is_some_and(is_set)
@@ -239,7 +246,7 @@ pub(crate) fn isset_dim<const KEY: u8>(hx: Hx, dst: u32, var: u32, key: u32) -> 
             return Ctl::Cold;
         }
     } else {
-        match isset_elem(&hx.w[..], var as Reg, hx.src::<KEY>(key)) {
+        match isset_elem(&hx.w[..], var as Reg, hx.src::<S::Key>(key)) {
             Some(set) => set,
             None => return Ctl::Cold,
         }
@@ -253,27 +260,32 @@ pub(crate) fn isset_dim<const KEY: u8>(hx: Hx, dst: u32, var: u32, key: u32) -> 
 /// holder: tested as for any write. USED: the value to `dst` too; UNUSED:
 /// nothing there, and the Free after is skipped.
 #[inline(always)]
-pub(crate) fn assign_dim<const KEY: u8, const VAL: u8, const RES: u8>(hx: Hx, var: u32, key: u32, val: u32, dst: u32) -> Ctl {
-    let kv = hx.v::<KEY>(key);
-    let v = if KEY == KSTR || (KEY == REG && kv.is_str()) {
+pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key, val, dst }: args::AssignDim) -> Ctl {
+    let kv = hx.v::<S::Key>(key);
+    let v = if S::Key::ID == KSTR || (S::Key::ID == REG && kv.is_str()) {
         // The key's value copied out of the frame (a literal or a count: no
         // string copied), so the array can be written while it is borrowed.
         let key = kv.clone();
-        let (Some(s), Some(v)) = (key.as_str(), copied(hx.v::<VAL>(val))) else { return Ctl::Cold };
+        let (Some(s), Some(v)) = (key.as_str(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         // One lookup, as zend_hash_lookup: the slot is written in place, or
         // the key added with no second search. (A shared array is separated
         // first: the cold write would separate it too.)
         let Some(a) = hx.w[r(var)].array_mut() else { return Ctl::Cold };
-        let (stored, result) = if RES == USED { (v.clone(), Some(v)) } else { (v, None) };
-        match a.get_str_mut(s) {
+        let (stored, result) = if S::Res::ID == USED { (v.clone(), Some(v)) } else { (v, None) };
+        // (A KSTR literal is never a canonical integer: lowering's promise.)
+        let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
+        match found {
             Some(e) if e.is_reference() => return Ctl::Cold,
             // (The old element's release: tested below, as for any write.)
             Some(e) => *e = stored,
-            None => a.insert_absent(Key::from_string(key.cloned_str().expect("a string")), stored),
+            None => {
+                let s = key.cloned_str().expect("a string");
+                a.insert_absent(if S::Key::ID == KSTR { Key::Str(s) } else { Key::from_string(s) }, stored)
+            }
         }
         result
     } else {
-        let (Some(k), Some(v)) = (kv.as_int(), plain(hx.v::<VAL>(val))) else { return Ctl::Cold };
+        let (Some(k), Some(v)) = (kv.as_int(), plain(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         let slot = &mut hx.w[r(var)];
         let done = if slot.is_array() {
             set_int_elem(slot, k, &v)
@@ -285,7 +297,7 @@ pub(crate) fn assign_dim<const KEY: u8, const VAL: u8, const RES: u8>(hx: Hx, va
         if !done {
             return Ctl::Cold;
         }
-        (RES == USED).then_some(v)
+        (S::Res::ID == USED).then_some(v)
     };
     match v {
         Some(v) => {
@@ -304,9 +316,9 @@ pub(crate) fn assign_dim<const KEY: u8, const VAL: u8, const RES: u8>(hx: Hx, va
 /// key; an occupied next key (the error), anything but an array, an
 /// undefined value is cold.
 #[inline(always)]
-pub(crate) fn append_dim<const VAL: u8, const RES: u8>(hx: Hx, var: u32, val: u32, dst: u32) -> Ctl {
-    let v = if is_k(VAL) {
-        hx.v::<VAL>(val).clone()
+pub(crate) fn append_dim<S: spec::AppendDim>(hx: Hx, args::AppendDim { var, val, dst }: args::AppendDim) -> Ctl {
+    let v = if is_k(S::Val::ID) {
+        hx.v::<S::Val>(val).clone()
     } else {
         match copied(&hx.w[r(val)]) {
             Some(v) => v,
@@ -317,7 +329,7 @@ pub(crate) fn append_dim<const VAL: u8, const RES: u8>(hx: Hx, var: u32, val: u3
     if a.next_key().is_none() {
         return Ctl::Cold;
     }
-    if RES == USED {
+    if S::Res::ID == USED {
         let _ = a.push(v.clone());
         let _ = put(&mut hx.w[r(dst)], v);
         Ctl::Next(true)
@@ -331,9 +343,9 @@ pub(crate) fn append_dim<const VAL: u8, const RES: u8>(hx: Hx, var: u32, val: u3
 /// A property read the name's cache entry answers (anything else is
 /// cold: a miss, an unset slot, a reference operand).
 #[inline(always)]
-pub(crate) fn fetch_prop<const OBJ: u8>(hx: Hx, dst: u32, obj: u32, site: u32) -> Ctl {
+pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj, site }: args::FetchProp) -> Ctl {
     let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
-    let o = if OBJ == THIS {
+    let o = if S::Obj::ID == THIS {
         let Some(o) = &hx.top.this else { return Ctl::Cold };
         o
     } else {
@@ -350,16 +362,16 @@ pub(crate) fn fetch_prop<const OBJ: u8>(hx: Hx, dst: u32, obj: u32, site: u32) -
 /// slot of a class with __set and its kin, and anything `plain_slot`
 /// declines, is cold. TAKE: the value's temporary is released after.
 #[inline(always)]
-pub(crate) fn assign_prop<const OBJ: u8, const VAL: u8, const MODE: u8, const RES: u8>(hx: Hx, obj: u32, val: u32, dst: u32, site: u32) -> Ctl {
+pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, val, dst, site }: args::AssignProp) -> Ctl {
     let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
-    let o = if OBJ == THIS {
+    let o = if S::Obj::ID == THIS {
         let Some(o) = &hx.top.this else { return Ctl::Cold };
         o
     } else {
         let Some(o) = hx.w[r(obj)].as_object() else { return Ctl::Cold };
         o
     };
-    let v = hx.v::<VAL>(val);
+    let v = hx.v::<S::Val>(val);
     let Some((slot, plain)) = plain_slot(entry.get(), o, (hx.scope(), hx.top.scope.as_deref()), v, hx.reinit) else { return Ctl::Cold };
     let written = match o.slots().get(slot) {
         Some(s)
@@ -381,8 +393,8 @@ pub(crate) fn assign_prop<const OBJ: u8, const VAL: u8, const MODE: u8, const RE
     if !written {
         return Ctl::Cold;
     }
-    let ctl = if RES == USED {
-        let v = hx.v::<VAL>(val).clone();
+    let ctl = if S::Res::ID == USED {
+        let v = hx.v::<S::Val>(val).clone();
         let _ = put(&mut hx.w[r(dst)], v);
         Ctl::Next(true)
     } else {
@@ -390,7 +402,7 @@ pub(crate) fn assign_prop<const OBJ: u8, const VAL: u8, const MODE: u8, const RE
         let _ = clear(&mut hx.w[r(dst)]);
         Ctl::Skip(true)
     };
-    if MODE == TAKE {
+    if S::Mode::ID == TAKE {
         let _ = clear(&mut hx.w[r(val)]);
     }
     ctl

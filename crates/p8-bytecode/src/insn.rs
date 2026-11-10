@@ -223,11 +223,14 @@ fn k(reg: Reg, nconsts: usize) -> Option<u32> {
     (i < nconsts).then_some(i as u32)
 }
 
-/// Constant `i` as an operand: of its type.
+/// Constant `i` as an operand: of its type. `KStr` is a string that is not
+/// a canonical integer, so a KSTR handler looks it up as a string key
+/// with no numeric test; a numeric one is `K` (a dimension's is its int:
+/// `key_opnd`).
 fn konst(consts: &[Frozen], i: usize) -> Option<Opnd> {
     Some(match consts.get(i)? {
         Frozen::Int(_) => Opnd::KInt(i as u32),
-        Frozen::Str(_) => Opnd::KStr(i as u32),
+        Frozen::Str(s) if p8_runtime::array::int_key(s.as_bytes()).is_none() => Opnd::KStr(i as u32),
         _ => Opnd::K(i as u32),
     })
 }
@@ -242,6 +245,21 @@ fn opnd(reg: Reg, consts: &[Frozen], ncv: Reg) -> Option<Opnd> {
     }
 }
 
+/// A dimension's key operand: a literal naming an integer (`'5'`) is that
+/// int's constant (the compiler interns it), as PHP's compiler makes the
+/// key (zend_handle_numeric_dim); None (not inline) without one. The
+/// `Instr` keeps the string, for an ArrayAccess object on the cold path.
+fn key_opnd(reg: Reg, consts: &[Frozen], ncv: Reg) -> Option<Opnd> {
+    let int = match const_index(reg).and_then(|i| consts.get(i)) {
+        Some(Frozen::Str(s)) => p8_runtime::array::int_key(s.as_bytes()),
+        _ => None,
+    };
+    match int {
+        Some(n) => consts.iter().position(|c| matches!(c, Frozen::Int(x) if *x == n)).map(|j| Opnd::KInt(j as u32)),
+        None => opnd(reg, consts, ncv),
+    }
+}
+
 /// UNUSED when the instruction after `pc` frees `dst` (the handler then
 /// writes no result and goes past that Free), else USED.
 fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
@@ -252,6 +270,7 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     let o = |reg: Reg| opnd(reg, consts, ncv);
+    let ko = |reg: Reg| key_opnd(reg, consts, ncv);
     // A constant operand: its index, when the instruction has one there.
     let k = |reg: Reg| k(reg, nconsts);
     // The constant forms: `a` a register and K in the b and c bytes (a
@@ -289,15 +308,16 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
     match code[pc] {
         // The generated instructions (`ops.def`): the encoder picks the
         // specialisation of the operands' kinds.
-        Instr::This { dst } => enc::this([o(dst)?]),
+        Instr::This { dst } => enc::this(enc::This { dst: o(dst)? }),
         Instr::FetchProp { dst, obj, name, .. } => {
             let site = Opnd::Imm(prop_site(name, nconsts)?);
-            enc::fetch_prop([o(dst)?, if obj == THIS { Opnd::This } else { o(obj)? }, site])
+            enc::fetch_prop(enc::FetchProp { dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site })
         }
         Instr::AssignProp { obj, name, val, dst, take: t } => {
             let site = Opnd::Imm(prop_site(name, nconsts)?);
             let obj = if obj == THIS { Opnd::This } else { o(obj)? };
-            enc::assign_prop([obj, o(val)?, Opnd::Flag(if t { kinds::TAKE } else { kinds::COPY }), res(code, pc, dst), o(dst)?, site])
+            let mode = Opnd::Flag(if t { kinds::TAKE } else { kinds::COPY });
+            enc::assign_prop(enc::AssignProp { obj, val: o(val)?, mode, res: res(code, pc, dst), dst: o(dst)?, site })
         }
         Instr::JumpLt { .. }
         | Instr::JumpNotLt { .. }
@@ -310,23 +330,28 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
             let (cmp, a, b, when, target) = code[pc].as_jump_cmp()?;
             // A literal on the left goes to the right.
             let (cmp, a, b) = if const_index(a).is_some() && const_index(b).is_none() { (swapped(cmp), b, a) } else { (cmp, a, b) };
-            enc::jump_cmp([Opnd::Flag(cmp_flag(cmp)?), Opnd::Flag(if when { kinds::T } else { kinds::F }), o(a)?, o(b)?, Opnd::Imm(target)])
+            let when = Opnd::Flag(if when { kinds::T } else { kinds::F });
+            enc::jump_cmp(enc::JumpCmp { cmp: Opnd::Flag(cmp_flag(cmp)?), when, a: o(a)?, b: o(b)?, target: Opnd::Imm(target) })
         }
-        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| enc::mov([o(dst)?, o(src)?])),
-        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| enc::mov([o(dst)?, konst(consts, usize::from(kk))?])),
-        Instr::Assign { var, src } => enc::assign([o(var)?, o(src)?]),
-        Instr::AssignTake { var, src } => enc::assign_take([o(var)?, o(src)?]),
-        Instr::Free { reg } => enc::free([o(reg)?]),
-        Instr::JumpIf { cond, target } => enc::jump_cond([Opnd::Flag(kinds::T), o(cond)?, Opnd::Imm(target)]),
-        Instr::JumpIfNot { cond, target } => enc::jump_cond([Opnd::Flag(kinds::F), o(cond)?, Opnd::Imm(target)]),
+        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? })),
+        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: konst(consts, usize::from(kk))? })),
+        Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
+        Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
+        Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
+        Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
+        Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)
         Instr::FetchDim { dst, arr, key, quiet, empty } => {
             let mode = Opnd::Flag(if quiet && !empty { kinds::IS } else { kinds::R });
-            enc::fetch_dim([mode, o(dst)?, o(arr)?, o(key)?])
+            enc::fetch_dim(enc::FetchDim { mode, dst: o(dst)?, arr: o(arr)?, key: ko(key)? })
         }
-        Instr::AssignDim { var, n: 0, append: true, val, dst, .. } => enc::append_dim([o(var)?, o(val)?, res(code, pc, dst), o(dst)?]),
-        Instr::IssetDim { dst, var, keys, n: 1 } => enc::isset_dim([o(dst)?, o(var)?, o(keys)?]),
-        Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => enc::assign_dim([o(var)?, o(keys)?, o(val)?, res(code, pc, dst), o(dst)?]),
+        Instr::AssignDim { var, n: 0, append: true, val, dst, .. } => {
+            enc::append_dim(enc::AppendDim { var: o(var)?, val: o(val)?, res: res(code, pc, dst), dst: o(dst)? })
+        }
+        Instr::IssetDim { dst, var, keys, n: 1 } => enc::isset_dim(enc::IssetDim { dst: o(dst)?, var: o(var)?, key: ko(keys)? }),
+        Instr::AssignDim { var, keys, n: 1, append: false, val, dst } => {
+            enc::assign_dim(enc::AssignDim { var: o(var)?, key: ko(keys)?, val: o(val)?, res: res(code, pc, dst), dst: o(dst)? })
+        }
 
         // The hand-written ones.
         Instr::Rare { op: Rare::VerifyArgs, .. } => i(Op::VerifyArgs, 0, 0, 0, 0),
@@ -474,7 +499,15 @@ mod tests {
 
     /// 512 constants: ints, but 7 is a string and 9 a float.
     fn consts() -> Vec<Frozen> {
-        (0..512).map(|i| if i == 7 { Frozen::Str("k".into()) } else if i == 9 { Frozen::Float(0.5) } else { Frozen::Int(i) }).collect()
+        (0..512)
+            .map(|i| match i {
+                7 => Frozen::Str("k".into()),
+                8 => Frozen::Str("5".into()),
+                10 => Frozen::Str("600".into()),
+                9 => Frozen::Float(0.5),
+                _ => Frozen::Int(i),
+            })
+            .collect()
     }
 
     #[test]
@@ -568,6 +601,14 @@ mod tests {
             Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: true, empty: false },
             Instr::AssignDim { var: 1, keys: 0, n: 0, append: true, val: 3, dst: 6 },
             Instr::Free { reg: 6 },
+            // A numeric string literal key is no KSTR: its int's constant
+            // (5 here), or none when the compiler interned none.
+            Instr::FetchDim { dst: 5, arr: 1, key: c(8), quiet: false, empty: false },
+            // `$o->p = K` (a literal value the compiler leaves in place).
+            Instr::AssignProp { obj: 1, name: c(4), val: c(7), dst: 6, take: false },
+            Instr::IssetDim { dst: 5, var: 1, keys: c(10), n: 1 },
+            // As a value (not a key) a numeric string is K.
+            Instr::Move { dst: 5, src: c(8) },
         ];
         let consts = consts();
         let at = |pc| lower_at(&code, pc, &consts, 2);
@@ -582,6 +623,10 @@ mod tests {
         assert_eq!(at(7).unwrap(), Insn { op: Op::P8_JUMP_COND_F, a: 1, b: 0, c: 0, imm: 77 });
         assert_eq!(at(8).unwrap(), Insn { op: Op::P8_ASSIGN_DIM_KSTR_REG_UNUSED, a: 1, b: 3, c: 6, imm: 7 });
         assert!(at(10).is_none());
+        assert_eq!(at(14).unwrap(), Insn { op: Op::P8_FETCH_DIM_R_KINT, a: 5, b: 1, c: 0, imm: 5 });
+        assert_eq!(at(15).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_REG_K_COPY_USED, a: 1, b: 6, c: 0, imm: 7 | 4 << 16 });
+        assert!(at(16).is_none());
+        assert_eq!(at(17).unwrap(), Insn { op: Op::P8_MOVE_K, a: 5, b: 0, c: 0, imm: 8 });
     }
 
     #[test]
