@@ -1731,16 +1731,18 @@ impl Context<'_> {
         for (i, p) in func.code.params.iter().enumerate() {
             let Some(ty) = &p.ty else { continue };
             if p.variadic {
-                // Each extra argument, by the same type.
+                // Each extra argument, by the same type; a coerced one is
+                // written back into the list in place (ZEND_RECV_VARIADIC
+                // checks the list it built, no copy).
                 let Some(list) = regs[base + i].cloned_array() else { continue };
-                let mut checked = (*list).clone();
+                let mut coerced_args = Vec::new();
                 for (k, v) in list.iter() {
                     let coerced = match self.check_type(ty, &v.deref(), strict)? {
                         Err(()) => self.stringable(regs, ty, &v.deref(), strict)?.map(Some).ok_or(()),
                         other => other,
                     };
                     match coerced {
-                        Ok(Some(converted)) => checked.insert(k, converted),
+                        Ok(Some(converted)) => coerced_args.push((k, converted)),
                         Ok(None) => {}
                         Err(()) => {
                             let pos = match k {
@@ -1751,7 +1753,13 @@ impl Context<'_> {
                         }
                     }
                 }
-                regs[base + i] = Value::array(checked);
+                drop(list);
+                if !coerced_args.is_empty() {
+                    let checked = regs[base + i].array_mut().expect("the variadic list");
+                    for (k, converted) in coerced_args {
+                        checked.insert(k, converted);
+                    }
+                }
                 continue;
             }
             if i >= argc || regs[base + i].is_undef() || ty.quick(&regs[base + i]) {

@@ -90,10 +90,25 @@ const H_FLAGS: (&str, Constant, Visibility) = ("\0flags", Constant::Int(0), PUBL
 const H_ITCLASS: (&str, Constant, Visibility) = ("\0itclass", Constant::Str(b"ArrayIterator"), PUBLIC);
 const H_POS: (&str, Constant, Visibility) = ("\0pos", Constant::Int(0), PUBLIC);
 
-/// The elements: the array, or the object's properties.
-fn elements(o: &Object) -> PhpArray {
+/// The array property `name`, moved out of its slot to be changed and then
+/// put back with `set`: its slot was its only holder, so the change edits it
+/// in place (a copy only when something else holds it too: SEPARATE_ARRAY).
+fn take_array(o: &Object, name: &str) -> PhpArray {
+    let Some(i) = slot(o, name) else { return PhpArray::new() };
+    let v = o.slots()[i].take();
+    if v.as_reference().is_some() {
+        let inner = v.deref();
+        o.slots()[i].set(v);
+        return array_of(inner);
+    }
+    array_of(v)
+}
+
+/// The elements, to read: the storage array itself (a shared handle, as
+/// spl_array_get_hash_table reads it in place), or the object's properties.
+fn elements(o: &Object) -> Rc<PhpArray> {
     let storage = get(o, "storage");
-    let Some(inner) = storage.as_object() else { return array_of(storage) };
+    let Some(inner) = storage.as_object() else { return storage.into_array().unwrap_or_default() };
     let mut out = PhpArray::new();
     let slots = inner.slot_values();
     for (p, v) in inner.class.properties.iter().zip(slots.iter()) {
@@ -104,14 +119,14 @@ fn elements(o: &Object) -> PhpArray {
     for (k, v) in inner.dynamic().iter() {
         out.insert(k, v.deref());
     }
-    out
+    Rc::new(out)
 }
 
 /// Change the elements (an object's properties are written back to it).
 fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
     match get(o, "storage").into_object() {
         Ok(inner) => {
-            let mut els = elements(o);
+            let mut els = Rc::unwrap_or_clone(elements(o));
             let r = f(&mut els);
             let mut dynamic = PhpArray::new();
             for (k, v) in els.iter() {
@@ -128,7 +143,8 @@ fn change<R>(o: &Object, f: impl FnOnce(&mut PhpArray) -> R) -> R {
             r
         }
         Err(other) => {
-            let mut a = array_of(other);
+            drop(other);
+            let mut a = take_array(o, "storage");
             let r = f(&mut a);
             set(o, "storage", Value::array(a));
             r
@@ -358,7 +374,7 @@ fn sorted(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], builtin: &st
     let mut call_args = vec![Value::reference(Rc::clone(&cell))];
     call_args.extend(args.iter().map(Value::deref));
     let r = ctx.call(&s(builtin), &mut call_args)?;
-    let sorted = array_of(cell.borrow().clone());
+    let sorted = array_of(cell.take());
     change(this, |a| *a = sorted);
     Ok(r)
 }
@@ -594,8 +610,14 @@ fn no_op(_: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Thro
 const H_MAP: (&str, Constant, Visibility) = ("\0map", Constant::Null, PUBLIC);
 const H_INDEX: (&str, Constant, Visibility) = ("\0index", Constant::Int(0), PUBLIC);
 
-fn store(o: &Object) -> PhpArray {
-    array_of(get(o, "\0map"))
+/// The map, to read (a shared handle: no copy).
+fn store(o: &Object) -> Rc<PhpArray> {
+    get(o, "\0map").into_array().unwrap_or_default()
+}
+
+/// The map, to change and put back with `put_store` (in place: no copy).
+fn take_store(o: &Object) -> PhpArray {
+    take_array(o, "\0map")
 }
 
 fn put_store(o: &Object, map: PhpArray) {
@@ -624,7 +646,7 @@ fn object_arg(ctx: &mut dyn Ctx, args: &[Value], method: &str) -> Result<Rc<Obje
 }
 
 fn os_attach_to(this: &Object, o: Rc<Object>, inf: Value) {
-    let mut map = store(this);
+    let mut map = take_store(this);
     let pair = PhpArray::from_list(vec![Value::object(Rc::clone(&o)), inf]);
     map.insert(Key::Int(i64::from(o.id)), Value::array(pair));
     put_store(this, map);
@@ -731,7 +753,7 @@ fn os_attach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 
 fn os_detach(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "detach")?;
-    let mut map = store(this);
+    let mut map = take_store(this);
     map.remove(&Key::Int(i64::from(o.id)));
     put_store(this, map);
     Ok(Value::NULL)
@@ -750,7 +772,7 @@ fn os_offset_exists(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) ->
 fn os_offset_get(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let o = object_arg(ctx, args, "offsetGet")?;
     match store(this).get(&Key::Int(i64::from(o.id))) {
-        Some(pair) => Ok(array_of(pair.clone()).get_int(1).cloned().unwrap_or(Value::NULL)),
+        Some(pair) => Ok(pair.as_array().and_then(|p| p.get_int(1)).cloned().unwrap_or(Value::NULL)),
         None => Err(ctx.throw("UnexpectedValueException", "Object not found".into())),
     }
 }
@@ -771,7 +793,7 @@ fn os_count(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<
         // COUNT_RECURSIVE: the stored objects' own counts too.
         let mut n = map.len() as i64;
         for v in map.values() {
-            if let Some(inner) = array_of(v.clone()).get_int(0).and_then(Value::cloned_object)
+            if let Some(inner) = v.as_array().and_then(|p| p.get_int(0)).and_then(Value::cloned_object)
                 && inner.class.is_a(b"countable")
             {
                 n += call_this(ctx, &inner, "count", &mut [])?.to_int();
@@ -792,8 +814,10 @@ fn storage_arg(ctx: &mut dyn Ctx, args: &[Value], method: &str) -> Result<Rc<Obj
 
 fn os_add_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let other = storage_arg(ctx, args, "addAll")?;
-    let mut map = store(this);
-    for (k, v) in store(&other).iter() {
+    // (Theirs read first: `$s->addAll($s)` reads the map it changes.)
+    let theirs = store(&other);
+    let mut map = take_store(this);
+    for (k, v) in theirs.iter() {
         map.insert(k, v.clone());
     }
     let n = map.len();
@@ -803,8 +827,9 @@ fn os_add_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Resul
 
 fn os_remove_all(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let other = storage_arg(ctx, args, "removeAll")?;
-    let mut map = store(this);
-    for (k, _) in store(&other).iter() {
+    let theirs = store(&other);
+    let mut map = take_store(this);
+    for (k, _) in theirs.iter() {
         map.remove(&k);
     }
     let n = map.len();
@@ -827,8 +852,8 @@ fn os_remove_all_except(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]
 }
 
 /// The entry at the position, if valid.
-fn os_entry(o: &Object) -> Option<PhpArray> {
-    store(o).entry_at(int(o, "\0pos") as usize).map(|(_, _, v)| array_of(v.clone()))
+fn os_entry(o: &Object) -> Option<Rc<PhpArray>> {
+    store(o).entry_at(int(o, "\0pos") as usize).map(|(_, _, v)| v.cloned_array().unwrap_or_default())
 }
 
 fn os_rewind(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -866,13 +891,13 @@ fn os_get_info(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Va
 }
 
 fn os_set_info(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut map = store(this);
+    let mut map = take_store(this);
     if let Some((_, k, v)) = map.entry_at(int(this, "\0pos") as usize) {
         let mut pair = array_of(v.clone());
         pair.insert(Key::Int(1), arg(args, 0));
         map.insert(k, Value::array(pair));
-        put_store(this, map);
     }
+    put_store(this, map);
     Ok(Value::NULL)
 }
 

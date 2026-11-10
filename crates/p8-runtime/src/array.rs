@@ -25,6 +25,15 @@ const POOL_MAX: usize = 256;
 thread_local! {
     static VALUES: RefCell<Pool<Value>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
     static BUCKETS: RefCell<Pool<Bucket>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
+    /// Arrays copied on this thread (zend_array_dup's count): every copy
+    /// allocates, so counting one is noise beside it.
+    static COPIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many arrays this thread has copied (a separation before a write,
+/// or an explicit copy): what tests of copy-on-write assert on.
+pub fn copies() -> u64 {
+    COPIES.with(std::cell::Cell::get)
 }
 
 /// The pool size for room of `n` (None: not pooled).
@@ -695,6 +704,7 @@ pub struct PhpArray {
 /// at the beginning in the copy.
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
+        COPIES.with(|c| c.set(c.get() + 1));
         let cursor = if self.cursor < self.end_pos() { self.cursor } else { 0 };
         PhpArray { storage: self.storage.clone(), next_free: self.next_free, cursor }
     }
