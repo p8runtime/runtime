@@ -1,0 +1,57 @@
+//! Allocation and release (#412): where PHP shares one value (its empty
+//! array, its known strings), p8 makes and frees nothing per use. Each
+//! test runs a loop at two sizes: the counted work must not grow with the
+//! iterations, and the output must be PHP's. Counted per thread by
+//! p8_runtime::counts, which this crate's tests turn on (see hash_counts.rs).
+
+use p8_runtime::counts::{Count, get};
+
+#[derive(Default)]
+struct Capture(Vec<u8>);
+
+impl p8::Host for Capture {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+}
+
+/// `body` with `$n` set to `n`, as one request: its output, and how many
+/// of `c` it did.
+fn run(body: &str, n: u32, c: Count) -> (String, u64) {
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD]);
+    let mut isolate = platform.new_isolate();
+    let script = platform.compile(format!("<?php $n = {n};\n{body}").as_bytes(), "t.php").expect("compiles");
+    let mut host = Capture::default();
+    let before = get(c);
+    let status = isolate.new_context(&mut host).run(&script);
+    let done = get(c) - before;
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&host.0));
+    (String::from_utf8_lossy(&host.0).into_owned(), done)
+}
+
+/// The output at n = 20, after checking that the `c` done is the same at
+/// n = 20 and n = 120. A run at n = 1 first makes what a thread makes once.
+fn flat(body: &str, c: Count) -> String {
+    run(body, 1, c);
+    let (a, b) = (run(body, 20, c), run(body, 120, c));
+    assert_eq!(b.1, a.1, "{c:?} grew with the iterations: {} at n = 20, {} at n = 120", a.1, b.1);
+    a.0
+}
+
+/// `[]` is one shared empty array, as PHP's immutable empty array: an
+/// empty array assigned, passed, returned or tested is not made and freed
+/// each time; one written to is separated first, so another `[]` (and the
+/// array it was copied from) stays empty.
+#[test]
+fn an_empty_array_literal_is_shared() {
+    let out = flat(
+        "function none($a = []) { return []; }
+         function filled() { $a = []; $a[] = 1; $a['k'] = 2; return $a; }
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) { $x = []; $y = none([]); $s += count($x) + count($y) + ($x === [] ? 1 : 0); }
+         $p = filled(); $q = filled(); $q[] = 3; $e = [];
+         echo $s / $n, ' ', count($p), count($q), count($e), count([]), ' ', implode(',', array_keys($q)), ' ', json_encode($e);",
+        Count::ArrayFreed,
+    );
+    assert_eq!(out, "1 2300 0,k,1 []");
+}

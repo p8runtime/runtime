@@ -17,11 +17,17 @@ pub enum Count {
     /// while running (the interpreter's `sym_of`: a hash of the name and a
     /// lookup).
     NameLookup = 2,
+    /// A string made in an allocation of its own (`PhpStr`'s handle
+    /// allocated): what #412's changes stop doing per call.
+    StrMade = 3,
+    /// An array let go of by its last value holding it (its free, PHP's
+    /// `zend_array_destroy` from `rc_dtor_func`).
+    ArrayFreed = 4,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 3] = const { [const { std::cell::Cell::new(0) }; 3] };
+    static COUNTS: [std::cell::Cell<u64>; 5] = const { [const { std::cell::Cell::new(0) }; 5] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

@@ -4924,8 +4924,11 @@ impl<'src> Compiler<'src> {
             // An array known at compile time (`['a' => 1, 'b' => [2, 3]]`,
             // `[__DIR__ . '/x.php']`) is one constant, as PHP folds it: a
             // large one (100,000 words, a 15,000-class map) takes a single
-            // register.
-            Expr::Array { items, .. } if !items.is_empty() && self.foldable(e) && self.const_value(e).is_ok() => {
+            // register. The empty array too, as PHP's `[]` is its one
+            // immutable empty array: one made per function, shared, and
+            // separated at its first write (#412: 150k empty arrays were
+            // made and freed on Laravel's Collection tests).
+            Expr::Array { .. } if self.foldable(e) && self.const_value(e).is_ok() => {
                 let value = self.const_value(e)?;
                 f.constant(value)
             }

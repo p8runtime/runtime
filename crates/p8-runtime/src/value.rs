@@ -242,7 +242,10 @@ fn release_repr(r: Repr) -> bool {
 fn free_last(r: Repr) {
     match r {
         Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
-        Repr::Array(a) => drop(ManuallyDrop::into_inner(a)),
+        Repr::Array(a) => {
+            crate::counts::bump(crate::counts::Count::ArrayFreed);
+            drop(ManuallyDrop::into_inner(a))
+        }
         Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
         Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
         _ => {}
