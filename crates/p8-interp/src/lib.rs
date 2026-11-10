@@ -3476,16 +3476,17 @@ impl Context<'_> {
                     } else if let Some(a) = cur.as_array() {
                         // An int or string key as it is; anything
                         // else by isset's rules (isset_key).
+                        // (A string key looked up as it is: no handle made.)
                         let kv = &key_regs[i as usize];
-                        let k = if let Some(i) = kv.as_int() {
-                            Key::Int(i)
-                        } else if let Some(s) = kv.cloned_str() {
-                            Key::from_string(s)
+                        let found = if let Some(i) = kv.as_int() {
+                            a.get_int(i)
+                        } else if let Some(s) = kv.as_str() {
+                            a.get_str(s)
                         } else {
                             let other = kv.clone();
-                            self.isset_key(&other, last)?
+                            a.get(&self.isset_key(&other, last)?)
                         };
-                        a.get(&k).map(|v| v.deref())
+                        found.map(|v| v.deref())
                     } else {
                         None
                     };
@@ -5890,13 +5891,14 @@ fn dim_op(w: &mut [Value], op: BinOp, var: Reg, keys: Reg, val: Reg, dst: Reg) -
             None => return false,
         }
         r
-    } else if let Some(s) = key.cloned_str() {
+    } else if key.is_str() {
         // One lookup: the array is made writable first (a copy, if it is
         // shared, is invisible to PHP code even when nothing is written).
-        let key = Key::from_string(s);
+        let key = key.clone();
+        let s = key.as_str().expect("a string");
         let v = w[val as usize].clone();
         let Some(a) = w[var as usize].array_mut() else { return false };
-        let Some(slot) = a.get_mut(&key) else { return false };
+        let Some(slot) = a.get_str_mut(s) else { return false };
         let Some(r) = num_op(op, slot, &v) else { return false };
         *slot = r.clone();
         r

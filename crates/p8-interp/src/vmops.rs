@@ -256,19 +256,20 @@ pub(crate) fn isset_dim<const KEY: u8>(hx: Hx, dst: u32, var: u32, key: u32) -> 
 pub(crate) fn assign_dim<const KEY: u8, const VAL: u8, const RES: u8>(hx: Hx, var: u32, key: u32, val: u32, dst: u32) -> Ctl {
     let kv = hx.v::<KEY>(key);
     let v = if KEY == KSTR || (KEY == REG && kv.is_str()) {
-        let (Some(s), Some(v)) = (kv.cloned_str(), copied(hx.v::<VAL>(val))) else { return Ctl::Cold };
-        let key = Key::from_string(s);
-        let slot = &mut hx.w[r(var)];
-        match slot.as_array() {
-            Some(a) if !a.get(&key).is_some_and(Value::is_reference) => {}
-            _ => return Ctl::Cold,
-        }
-        let a = slot.array_mut().expect("an array");
+        // The key's value copied out of the frame (a literal or a count: no
+        // string copied), so the array can be written while it is borrowed.
+        let key = kv.clone();
+        let (Some(s), Some(v)) = (key.as_str(), copied(hx.v::<VAL>(val))) else { return Ctl::Cold };
+        // One lookup, as zend_hash_lookup: the slot is written in place, or
+        // the key added with no second search. (A shared array is separated
+        // first: the cold write would separate it too.)
+        let Some(a) = hx.w[r(var)].array_mut() else { return Ctl::Cold };
         let (stored, result) = if RES == USED { (v.clone(), Some(v)) } else { (v, None) };
-        match a.get_mut(&key) {
+        match a.get_str_mut(s) {
+            Some(e) if e.is_reference() => return Ctl::Cold,
             // (The old element's release: tested below, as for any write.)
             Some(e) => *e = stored,
-            None => a.insert(key, stored),
+            None => a.insert_absent(Key::from_string(key.cloned_str().expect("a string")), stored),
         }
         result
     } else {
