@@ -3894,6 +3894,7 @@ name = "p8-bytecode"
 version = "0.1.0"
 dependencies = [
  "p8-runtime",
+ "p8-vmgen",
 ]
 
 [[package]]
@@ -4144,6 +4145,7 @@ dependencies = [
  "p8-runtime",
  "p8-stubs",
  "p8-syntax",
+ "p8-vmgen",
 ]
 
 [[package]]
@@ -4184,6 +4186,10 @@ dependencies = [
  "memchr",
  "serde",
 ]
+
+[[package]]
+name = "p8-vmgen"
+version = "0.1.0"
 
 [[package]]
 name = "pack1"

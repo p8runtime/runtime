@@ -11,6 +11,9 @@ p8-bytecode = { path = "../p8-bytecode" }
 p8-runtime = { path = "../p8-runtime" }
 p8-stubs = { path = "../p8-stubs" }
 
+[build-dependencies]
+p8-vmgen = { path = "../p8-vmgen" }
+
 [dev-dependencies]
 bumpalo = { version = "3.12", features = ["collections"] }
 p8-compiler = { path = "../p8-compiler" }
