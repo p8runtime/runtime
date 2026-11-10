@@ -185,6 +185,15 @@ fn canonical_int(s: &StrHead) -> Option<i64> {
     canonical_int_rest(s.as_bytes())
 }
 
+/// The int key a string's bytes name, if any: [`Key::from_string`]'s test,
+/// for a compiler that has bytes, not a string (no string made).
+pub fn int_key(b: &[u8]) -> Option<i64> {
+    match b.first() {
+        Some(&c) if c.is_ascii_digit() || c == b'-' => canonical_int_rest(b),
+        _ => None,
+    }
+}
+
 /// `canonical_int` past its first byte (a digit or '-'): as
 /// _zend_handle_numeric_str_ex, digit by digit, no leading zero, no "-0",
 /// and in the i64 range.
@@ -808,6 +817,33 @@ impl PhpArray {
         }
     }
 
+    /// [`get_str`](Self::get_str) of a string that is not a canonical
+    /// integer (a literal key lowering marked `KSTR`), so with no numeric
+    /// test: as PHP's handlers look up a CONST dimension the compiler left
+    /// a string.
+    #[inline]
+    pub fn get_str_key(&self, s: &StrHead) -> Option<&Value> {
+        debug_assert!(canonical_int(s).is_none(), "get_str_key of an int key");
+        match &self.storage {
+            Storage::Packed(_) => None,
+            Storage::Hashed(h) => h.find(s.hash(), Probe::Str(s)).and_then(|i| h.get(i)),
+        }
+    }
+
+    /// [`get_str_mut`](Self::get_str_mut) of a string that is not a
+    /// canonical integer (see [`get_str_key`](Self::get_str_key)).
+    #[inline]
+    pub fn get_str_key_mut(&mut self, s: &StrHead) -> Option<&mut Value> {
+        debug_assert!(canonical_int(s).is_none(), "get_str_key_mut of an int key");
+        match &mut self.storage {
+            Storage::Packed(_) => None,
+            Storage::Hashed(h) => {
+                let i = h.find(s.hash(), Probe::Str(s))?;
+                Some(&mut h.buckets[i].value)
+            }
+        }
+    }
+
     /// `insert` of a string key just looked up and not found (a write's
     /// miss, after [`get_str_mut`](Self::get_str_mut)): appended with no
     /// second lookup, as zend_hash_add_new.
@@ -1097,6 +1133,10 @@ mod tests {
         assert_eq!(k("-9223372036854775808"), Key::Int(i64::MIN));
         for s in ["", "-", "-01", "00", "08", "+1", " 1", "1 ", "1a", "a1", "--1", "1.0", "0x1", "\0", "-9223372036854775809", "18446744073709551616", "12345678901234567890"] {
             assert_eq!(k(s), Key::Str(PhpStr::from(s)), "{s:?}");
+            assert_eq!(int_key(s.as_bytes()), None, "{s:?}");
+        }
+        for (s, i) in [("0", 0), ("-12", -12), ("9223372036854775807", i64::MAX), ("-9223372036854775808", i64::MIN)] {
+            assert_eq!(int_key(s.as_bytes()), Some(i), "{s:?}");
         }
         // A key on the heap (not a short string) the same.
         assert_eq!(Key::from_string(PhpStr::new(b"42".to_vec())), Key::Int(42));
