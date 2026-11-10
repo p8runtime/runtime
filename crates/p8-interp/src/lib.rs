@@ -3227,7 +3227,22 @@ impl Context<'_> {
                 }
                 Instr::InstanceOf { dst, src, class } => {
                     let v = self.operand(w, clo, src);
+                    // PHP fetches `static`/`self`/`parent` for an object
+                    // only: with no class scope, the error.
+                    if v.deref().as_object().is_some()
+                        && matches!(func.classes[class as usize], p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope)
+                    {
+                        self.class_of(func, class, w)?;
+                    }
                     reg!(dst) = Value::bool(self.instance_of(func, &v, class, w));
+                    // The class a name the code names resolved to, declared
+                    // (never autoloaded), for the loop's handler.
+                    if let p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name) = &func.classes[class as usize]
+                        && let Some(c) = self.classes.get(&name.sym)
+                        && clo.class_refs[class as usize].borrow().strong_count() == 0
+                    {
+                        *clo.class_refs[class as usize].borrow_mut() = Rc::downgrade(c);
+                    }
                 }
                 Instr::Clone { dst, src } => {
                     let v = self.operand(w, clo, src);

@@ -446,3 +446,43 @@ pub(crate) fn ret<S: spec::Ret>(hx: Hx, args::Ret { src }: args::Ret) -> Ctl {
     };
     Ctl::Return(v)
 }
+
+/// `src instanceof C`: an object (or a reference to one) tested against
+/// the class (`Class::is_a`, its parents and interfaces by name); anything
+/// else is false. A named class not resolved yet (the cold path resolves
+/// it, never autoloading), no called class or scope, an undefined
+/// variable (the warning) are cold.
+#[inline(always)]
+pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, src, class }: args::InstanceOf) -> Ctl {
+    let is = |o: &Object| -> Option<bool> {
+        if S::Cls::ID == NAMED {
+            let (p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name)) = &hx.clo.code.classes[class as usize] else { return None };
+            let target = hx.clo.class_refs[class as usize].borrow();
+            if std::ptr::eq(Rc::as_ptr(&o.class), target.as_ptr()) {
+                return Some(true);
+            }
+            let target = target.upgrade()?;
+            // (Through an alias, the class it names, and the name itself.)
+            Some(o.class.is_a(&target.lower) || (target.lower != name.lower.as_bytes() &&o.class.is_a(name.lower.as_bytes())))
+        } else {
+            let c = if S::Cls::ID == STATIC { hx.top.called.as_ref()? } else { hx.top.scope.as_ref()? };
+            Some(Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
+        }
+    };
+    let v = &hx.w[r(src)];
+    let t = if let Some(o) = v.as_object() {
+        is(o)
+    } else if let Some(cell) = v.as_reference() {
+        let v = cell.borrow();
+        match v.as_object() {
+            Some(o) => is(o),
+            None => Some(false),
+        }
+    } else if v.is_undef() {
+        None
+    } else {
+        Some(false)
+    };
+    let Some(t) = t else { return Ctl::Cold };
+    Ctl::Next(put(&mut hx.w[r(dst)], Value::bool(t)))
+}

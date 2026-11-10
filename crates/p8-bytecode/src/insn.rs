@@ -20,7 +20,7 @@
 //! temporary, a variable, a literal of a type, a flag it knows) and the
 //! instruction's encoder (`enc`) picks the exact opcode and packs it.
 
-use crate::{Cmp, Function, Instr, Rare, Reg, THIS, const_index};
+use crate::{ClassRef, Cmp, Function, Instr, Rare, Reg, THIS, const_index};
 use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
 
@@ -208,7 +208,21 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_at(code, pc, &func.consts, func.ncv).unwrap_or(SLOW)).collect()
+    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes).unwrap_or(SLOW)).collect()
+}
+
+/// A class reference as the flag of an instruction that names a class:
+/// NAMED for a class the code names (a name, once declared, is always the
+/// same class, `self`/`parent` in a class included), STATIC for the called
+/// class, SCOPE for the class a trait's code runs in; None for the rest
+/// (a trait's `parent`, a class in a register).
+fn class_flag(classes: &[ClassRef], class: u16) -> Option<Opnd> {
+    Some(Opnd::Flag(match classes.get(usize::from(class))? {
+        ClassRef::Named(..) | ClassRef::Forward(..) => kinds::NAMED,
+        ClassRef::Static => kinds::STATIC,
+        ClassRef::Scope => kinds::SCOPE,
+        ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
+    }))
 }
 
 /// The property cache entry of a name operand: its constant's index.
@@ -266,7 +280,13 @@ fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
     Opnd::Flag(if matches!(code.get(pc + 1), Some(&Instr::Free { reg }) if reg == dst) { kinds::UNUSED } else { kinds::USED })
 }
 
+/// `lower_in` of code that names no class (the unit tests').
+#[cfg(test)]
 fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<Insn> {
+    lower_in(code, pc, consts, ncv, &[])
+}
+
+fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef]) -> Option<Insn> {
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     let o = |reg: Reg| opnd(reg, consts, ncv);
@@ -339,6 +359,9 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
         Instr::Return { src } => enc::ret(enc::Ret { src: o(src)? }),
+        Instr::InstanceOf { dst, src, class } => {
+            enc::instance_of(enc::InstanceOf { cls: class_flag(classes, class)?, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
+        }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)

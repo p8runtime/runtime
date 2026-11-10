@@ -57,6 +57,10 @@ drop val=K mode=TAKE
 /// the loop when the frame is its bottom one (a callback a builtin
 /// called). The script's end and a generator's return are cold (`step`).
 op RETURN ret cold=step src=TMP|CV|K
+/// `dst = src instanceof C` (`InstanceOf`), C a class the code names
+/// (NAMED: `C`, and `self`/`parent` in a class), the called class
+/// (STATIC: `static`) or the class using a trait (SCOPE: `self` in one).
+op INSTANCEOF instance_of cold=step cls=NAMED|STATIC|SCOPE dst=REG src=REG class=IMM16
 
 # ---- written by hand ---------------------------------------------------
 
