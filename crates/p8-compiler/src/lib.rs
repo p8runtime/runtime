@@ -3817,8 +3817,14 @@ impl<'src> Compiler<'src> {
         send: impl Fn(u8, Reg, Reg) -> Instr,
         asks: impl Fn(Reg, u8) -> Instr,
     ) -> Result<(Reg, u8)> {
-        let regs: Vec<Reg> = (0..args.len().max(1)).map(|_| f.temp()).collect();
-        for (n, (arg, r)) in args.iter().zip(&regs).enumerate() {
+        // Consecutive temporaries (at least one): the first and a count,
+        // no list of them made per call compiled (#412).
+        let first = f.temp();
+        for _ in 1..args.len() {
+            f.temp();
+        }
+        for (n, arg) in args.iter().enumerate() {
+            let r = &(first + n as Reg);
             if arg.unpack || arg.name.is_some() {
                 return Err(self.unsupported(arg.span, "spread or named arguments"));
             }
@@ -3835,7 +3841,7 @@ impl<'src> Compiler<'src> {
                 value => self.expr_into(f, value, *r)?,
             }
         }
-        Ok((regs[0], args.len() as u8))
+        Ok((first, args.len() as u8))
     }
 
     /// The arguments of a StaticCall or CallValue when each is a variable
