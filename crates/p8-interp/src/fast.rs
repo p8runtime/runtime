@@ -8,6 +8,10 @@ use crate::vmops::{self, Ctl, Hx};
 use p8_bytecode::insn::kinds;
 use p8_bytecode::{Insn, Op, insn};
 
+// `dispatch!(op, insn, { hand arms })`, written by p8-vmgen from ops.def:
+// the loop's match, its hand arms then one arm per generated opcode.
+include!(concat!(env!("OUT_DIR"), "/dispatch.rs"));
+
 impl Context<'_> {
     /// Run frames until the bottom one returns. The loop itself runs the
     /// common cases of the hottest instructions: those that need only the
@@ -340,12 +344,6 @@ impl Context<'_> {
                     }
                 }};
             }
-            // (`dispatch.rs`'s last arm: a hand opcode, matched before it.)
-            macro_rules! hand_arm {
-                () => {
-                    slow!()
-                };
-            }
             loop {
                 let insn: &Insn = &code[pc];
                 let op = insn.op;
@@ -358,7 +356,10 @@ impl Context<'_> {
                         let ($a, $b, $c, $imm) = (insn.a, insn.b, insn.c, insn.imm);
                     };
                 }
-                match op {
+                // `dispatch!`: one match of these hand arms and the generated
+                // instructions' (ops.def, vmops.rs), so that every opcode is
+                // one jump table away.
+                dispatch!(op, insn, {
                     Op::Slow => slow!(),
                     // Function entry, when every passed argument is plainly of
                     // its declared type (`verify_args` would accept each as it
@@ -973,10 +974,7 @@ impl Context<'_> {
                         }
                         continue 'frame;
                     }
-                    // The generated instructions (ops.def, vmops.rs): one arm
-                    // per specialisation, written by p8-vmgen.
-                    _ => include!(concat!(env!("OUT_DIR"), "/dispatch.rs")),
-                }
+                })
             }
         }
     }
