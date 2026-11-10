@@ -179,6 +179,21 @@ impl Key {
     }
 }
 
+/// The keys of a record ([`PhpArray::record`]), each hashed now: made once
+/// (a thread-local of the builtin's) and shared by every record built from
+/// them. Distinct strings that are not integers (asserted).
+pub fn record_keys<const N: usize>(names: [&str; N]) -> [PhpStr; N] {
+    for (i, n) in names.iter().enumerate() {
+        assert!(!names[..i].contains(n), "record keys are distinct");
+    }
+    names.map(|n| {
+        assert!(int_key(n.as_bytes()).is_none(), "a record key is a string key");
+        let s = PhpStr::from(n);
+        s.hash();
+        s
+    })
+}
+
 /// A canonical decimal integer: "0", "-12", not "012", "-0", "+1", " 1".
 ///
 /// ZEND_HANDLE_NUMERIC_STR: the first byte is tested inline, and only a
@@ -879,6 +894,18 @@ impl PhpArray {
             (Storage::Hashed(h), Key::Str(s)) => h.insert_new(s.hash(), Some(s), value),
             (_, key) => self.insert(key, value),
         }
+    }
+
+    /// A record a builtin returns (getrusage(), gc_status()): `keys` in
+    /// order with `values`, the keys made once (see [`record_keys`]), so
+    /// no key is allocated, hashed or looked for here. PHP builds these
+    /// with add_assoc_*, which hashes and allocates every key every call.
+    pub fn record(keys: &[PhpStr], values: impl IntoIterator<Item = Value>) -> PhpArray {
+        let mut h = Hashed::with_capacity(keys.len());
+        for (k, v) in keys.iter().zip(values) {
+            h.insert_new(k.hash(), Some(k.clone()), v);
+        }
+        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0 }
     }
 
     /// `get` for an int key.

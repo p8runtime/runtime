@@ -53,3 +53,17 @@ fn appending_to_a_list_is_not_a_keyed_insert() {
     );
     assert_eq!(out, "20 42 0 list 41 42");
 }
+
+/// getrusage() and gc_status() return records whose keys are made once
+/// per thread: no key hashed and no keyed insert per call.
+#[test]
+fn builtin_records_reuse_their_keys() {
+    let body = "$s = 0; for ($i = 0; $i < $n; $i++) { $r = getrusage(); $g = gc_status(); $s += count($r) + count($g); }
+         echo $s / $n, ' ', implode(',', array_keys($g)), ' ', isset($r['ru_utime.tv_sec']) ? 'y' : 'n', ' ', $g['threshold'];";
+    let out = flat(body, Count::Hash);
+    assert_eq!(
+        out,
+        "29 running,protected,full,runs,collected,threshold,buffer_size,roots,application_time,collector_time,destructor_time,free_time y 10001"
+    );
+    flat(body, Count::Insert);
+}
