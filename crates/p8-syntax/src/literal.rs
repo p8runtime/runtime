@@ -80,8 +80,11 @@ pub fn unescape(s: &[u8]) -> Vec<u8> {
 /// leading-0 octal, with `_` separators; too large for an int, it is a float.
 /// Reference: $PHP_SRC_PATH/Zend/zend_language_scanner.l - LNUM/HNUM/BNUM/ONUM
 pub fn integer(value: &[u8]) -> Number {
-    let digits: Vec<u8> = value.iter().copied().filter(|b| *b != b'_').collect();
-    let (radix, body) = match digits.as_slice() {
+    // (A copy only when there are separators to take out: most literals
+    // have none, and the compiler reads each one more than once, #412.)
+    let digits: std::borrow::Cow<'_, [u8]> =
+        if value.contains(&b'_') { value.iter().copied().filter(|b| *b != b'_').collect::<Vec<u8>>().into() } else { value.into() };
+    let (radix, body) = match &*digits {
         [b'0', b'x' | b'X', rest @ ..] => (16, rest),
         [b'0', b'b' | b'B', rest @ ..] => (2, rest),
         [b'0', b'o' | b'O', rest @ ..] => (8, rest),
