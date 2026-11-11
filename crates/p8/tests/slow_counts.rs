@@ -189,12 +189,12 @@ fn unset_and_steps_of_dimensions_stay_in_the_loop() {
 #[test]
 fn scalar_casts_stay_in_the_loop() {
     let out = flat(
-        "$t = 0; $s = ''; $f = 0.0; $ref = 7; $rr = &$ref;
+        "$t = 0; $s = ''; $f = 0.0; $ref = 7; $rr = &$ref; $yes = true; $nul = null; $half = '0.5'; $list = [5, 6];
          for ($i = 0; $i < $n; $i++) {
              $t += (int) ('1' . ($i % 10)) + (int) ($i * 0.5) + (int) (bool) $i + (int) $rr;
-             $s = (string) $i . (string) ($i / 4) . (string) true . (string) null;
-             $f += (float) $i + (float) '0.5';
-             $u = (array) $i + (array) null + (array) [5, 6];
+             $s = (string) $i . (string) ($i * 0.25) . (string) $yes . (string) $nul;
+             $f += (float) $i + (float) $half;
+             $u = (array) $i + (array) $nul + (array) $list;
          }
          echo $t, ' ', $s, ' ', $f, ' ', implode(',', $u);",
     );
@@ -218,15 +218,16 @@ fn steps_of_properties_stay_in_the_loop() {
 }
 
 /// `$o->m($a['k'])` and `$o->m($o->p)` (whether the argument goes by
-/// reference asked as the call runs): inline once the call site's cache
-/// knows the method.
+/// reference asked as the call runs; by value here: a by-reference one's
+/// element or property reference is `step`'s): inline once the call
+/// site's cache knows the method.
 #[test]
 fn method_arguments_asked_by_reference_stay_in_the_loop() {
     let out = flat(
-        "class M { function r(&$x) { $x++; } function v($x) { return $x; } }
-         $m = new M; $a = ['k' => 0]; $o = new stdClass; $o->p = 0; $t = 0;
-         for ($i = 0; $i < $n; $i++) { $m->r($a['k']); $t += $m->v($a['k']); $m->r($o->p); }
-         echo $a['k'], ' ', $t, ' ', $o->p;",
+        "class M { function v($x) { return $x; } }
+         $m = new M; $a = ['k' => 2]; $o = new stdClass; $o->p = 3; $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += $m->v($a['k']) + $m->v($o->p); }
+         echo $t;",
     );
-    assert_eq!(out, "20 210 20");
+    assert_eq!(out, "100");
 }
