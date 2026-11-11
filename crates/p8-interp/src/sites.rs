@@ -50,6 +50,24 @@ pub struct Closure {
     /// properties are its cells for good (a reference bound into one is a
     /// value in its cell).
     pub(crate) statics: Box<[RefCell<StaticSite>]>,
+    /// `global $name` in a function: where the global's cell was found
+    /// last, by the name's constant (as `props`); made at the first
+    /// `global` the closure runs (none for the code that has none). PHP's
+    /// runtime cache slot of ZEND_BIND_GLOBAL.
+    pub(crate) globals: OnceCell<Box<[Cell<GlobalSite>]>>,
+}
+
+/// A `global $name` cache entry (`Closure::globals`): the global's index
+/// in `Context::globals` when the main script has no variable of that
+/// name. Valid only while the main frame runs the code it was found for
+/// (`main`, its address: which names are the main script's variables
+/// depends on it) and while the entry at `index` has that name (a removal
+/// moves the entries after it: the name is checked on use, as PHP checks
+/// the bucket's key). `main` 0: empty.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GlobalSite {
+    pub(crate) main: usize,
+    pub(crate) index: usize,
 }
 
 /// A static property's cache entry (`Closure::statics`).
@@ -152,7 +170,7 @@ impl Closure {
         };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics })
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -250,8 +268,9 @@ pub(crate) enum MethodCode {
     User(std::rc::Weak<Closure>),
     /// A builtin class's method, its name, and which of its first 64
     /// parameters its stub signature takes by reference (bit n: parameter
-    /// n; looked up once, when the site remembers it).
-    Native(p8_runtime::object::Native, PhpStr, u64),
+    /// n; looked up once, the first time a send asks: most calls never
+    /// do, and a site that misses remembers its method again each time).
+    Native(p8_runtime::object::Native, PhpStr, Cell<Option<u64>>),
 }
 
 /// The parameters (bit n: parameter n, the first 64) that builtin method
@@ -378,7 +397,17 @@ impl Context<'_> {
         }
         match &s.code {
             MethodCode::User(c) => Some(c.upgrade()?.code.param_by_ref(n)),
-            MethodCode::Native(_, _, refs) if n < 64 => Some(refs & 1 << n != 0),
+            MethodCode::Native(_, name, refs) if n < 64 => {
+                let bits = match refs.get() {
+                    Some(bits) => bits,
+                    None => {
+                        let bits = native_refs(&*s.declaring.upgrade()?, name);
+                        refs.set(Some(bits));
+                        bits
+                    }
+                };
+                Some(bits & 1 << n != 0)
+            }
             MethodCode::Native(..) => None,
         }
     }
@@ -419,7 +448,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(&o.class) as usize,
@@ -443,14 +472,23 @@ impl Context<'_> {
         if clo.code.sites[method].display.as_bytes().first() == Some(&b'$') {
             return None;
         }
-        let target = match &clo.code.classes[class as usize] {
+        let target = self.static_target(clo, class)?;
+        self.cached_static(&clo.methods[method], &target, &clo.code, class)
+    }
+
+    /// The class a static-syntax site's class reference names, when it is
+    /// known without a lookup (a named class resolved before, the scope,
+    /// its parent, the called class); None for the rest (a class in a
+    /// register, a name not resolved yet).
+    #[inline]
+    pub(crate) fn static_target(&self, clo: &Closure, class: u16) -> Option<Rc<p8_runtime::object::Class>> {
+        Some(match &clo.code.classes[class as usize] {
             p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => clo.class_refs[class as usize].borrow().upgrade()?,
             p8_bytecode::ClassRef::Scope => self.scope().0?,
             p8_bytecode::ClassRef::ParentScope => self.scope().0?.parent.clone()?,
             p8_bytecode::ClassRef::Static => self.scope().1?,
             p8_bytecode::ClassRef::Dynamic(_) => return None,
-        };
-        self.cached_static(&clo.methods[method], &target, &clo.code, class)
+        })
     }
 
     pub(crate) fn cached_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, func: &Function, class: u16) -> Option<crate::classes::MethodFrame> {
@@ -490,7 +528,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(target) as usize,

@@ -89,3 +89,72 @@ fn closures_class_names_and_unpacking_stay_in_the_loop() {
     );
     assert_eq!(out, "Closure Closure P 5 0,1,k,2,3");
 }
+
+/// `global $x` in a function (a global of an included file's kind: not
+/// the main script's variable), read and written: inline once its
+/// first run cached the global's index.
+#[test]
+fn globals_bound_in_functions_stay_in_the_loop() {
+    let out = flat(
+        "$GLOBALS['g'] = 1; $GLOBALS['h'] = 'x';
+         function bump() { global $g; $g++; return $g; }
+         function both() { global $g, $h; return $g * 2 + ($h === 'x' ? 1 : 0); }
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += bump(); $s = both(); }
+         echo $t, ' ', $s;",
+    );
+    // n = 20: 2 + .. + 21, and 21 * 2 + 1.
+    assert_eq!(out, "230 43");
+}
+
+/// `$a[k1][k2] = v` and three keys, on a variable and on a property
+/// (`$this->p[k] = v`, `$o->p[k1][k2] = v`): inline.
+#[test]
+fn dimension_paths_stay_in_the_loop() {
+    let out = flat(
+        "class P { public $d = []; public $list; function put($k, $v) { $this->d[$k] = $v; $this->d['all'][$k] = 1; $this->list[] = $v; } }
+         $o = new P; $a = []; $b = ['x' => ['y' => []]]; $c = [];
+         for ($i = 0; $i < $n; $i++) {
+             $a['k' . ($i % 3)]['n'] = $i;
+             $b['x']['y'][$i % 4] = [$i];
+             $o->put($i % 5, 'v');
+             $o->d['two'][$i % 2] = $i;
+             $o->d['seq'][] = $i;
+             $c['k' . ($i % 2)][] = $i;
+         }
+         echo count($a), ' ', count($b['x']['y']), ' ', count($o->d), ' ', count($o->d['all']), ' ', implode(',', $o->d['two']), ' ', count($o->list), ' ', count($o->d['seq']), ' ', count($c['k1']);",
+    );
+    assert_eq!(out, "3 4 8 5 18,19 20 20 10");
+}
+
+/// `new C(...$args)` with a PHP constructor, positions only (a list, and
+/// int keys out of order): inline.
+#[test]
+fn new_with_spread_arguments_stays_in_the_loop() {
+    let out = flat(
+        "class V { public $s; function __construct($a, $b = 0, ...$more) { $this->s = $a + $b + count($more); } }
+         $t = 0; $args = [1, 2, 3, 4]; $odd = [3 => 5, 1 => 6];
+         for ($i = 0; $i < $n; $i++) { $t += (new V(...$args))->s + (new V(...$odd))->s; }
+         echo $t / $n;",
+    );
+    assert_eq!(out, "16");
+}
+
+/// `static::f($x, $y + 1)` (the method, so by-reference or not, known
+/// only when it runs; an argument that is no variable, so each is sent
+/// on its own, SendVarStatic): the sends inline.
+#[test]
+fn static_call_sends_stay_in_the_loop() {
+    let out = flat(
+        "class S {
+             static function r(&$x, $d) { $x += $d; return $x; }
+             static function v($x, $d) { return $x + $d; }
+             static function go($y) { $z = $y; return static::r($z, $y * 0 + 1) + static::v($y, $y * 0 + 1); }
+         }
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += S::go($i); }
+         echo $t;",
+    );
+    // n = 20: 2 * (1 + .. + 20).
+    assert_eq!(out, "420");
+}

@@ -163,6 +163,24 @@ hand MakeClosure
 hand CollectVariadic
 /// the array in a gets b's elements (`[...$b]`)
 hand ArrayUnpack
+/// the constructor of the object in a, with b's values as its arguments
+/// (`new C(...$b)`)
+hand ConstructSpread
+/// pass b's variable as argument c of `C::m()` (method site imm & 0xffff,
+/// class reference imm >> 16) into register a
+hand SendVarStatic
+/// `global $name` in a function: a = a reference to the global named by
+/// constant imm (its cache entry, `Closure::globals`)
+hand BindGlobal
+/// a[k0]..[kn-1] = c (or `..[] = c`, PATH_APPEND), the n keys the
+/// registers from b (1 to PATH_KEYS); imm: n, the result register (bits
+/// 8..16), PATH_APPEND, PATH_UNUSED
+hand AssignDimPath
+/// a->(property site imm & 0xffff)[k0]..[kn-1] = c (or `..[] = c`), the
+/// n keys the registers from b (0 to PATH_KEYS); imm: the result register
+/// (bits 16..24), n (bits 24..28), PROP_PATH_THIS (`$this`, not a),
+/// PATH_APPEND, PATH_UNUSED
+hand AssignPropDim
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

@@ -1,0 +1,627 @@
+-- global in functions
+int(11)
+int(12)
+string(2) "w0"
+string(2) "w0"
+NULL
+bool(true)
+int(13)
+int(14)
+string(2) "w1"
+string(2) "w1"
+NULL
+bool(true)
+-- $GLOBALS writes, unset, rebinding
+string(4) "set0"
+NULL
+bool(false)
+bool(true)
+int(1)
+int(2)
+string(4) "set1"
+NULL
+bool(false)
+bool(true)
+int(1)
+int(2)
+-- by-reference globals
+string(2) "a+"
+string(2) "b+"
+string(2) "a+"
+string(3) "a++"
+string(2) "b+"
+string(3) "a++"
+-- global of a main script variable
+int(2)
+int(2)
+int(3)
+int(3)
+-- dimension paths
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    array(1) {
+      [0]=>
+      int(0)
+    }
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    string(7) "changed"
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    int(5)
+  }
+}
+string(4) "used"
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    string(7) "changed"
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    int(5)
+  }
+}
+string(4) "used"
+-- dimension paths: cold levels
+set k
+get k
+
+Notice: Indirect modification of overloaded element of AA has no effect in %s on line 111
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 112
+Error: Cannot use a scalar value as an array
+TypeError: Cannot access offset of type string on string
+Error: Cannot use string offset as an array
+array(2) {
+  ["q"]=>
+  string(7) "through"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  int(1)
+}
+string(3) "aZc"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 135
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 137
+array(2) {
+  [1]=>
+  string(4) "bool"
+  [""]=>
+  string(4) "null"
+}
+
+Warning: Undefined variable $nope in %s on line 140
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    NULL
+  }
+}
+
+Warning: Undefined variable $undefkey in %s on line 142
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 142
+array(1) {
+  [""]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+set k
+get k
+
+Notice: Indirect modification of overloaded element of AA has no effect in %s on line 111
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 112
+Error: Cannot use a scalar value as an array
+TypeError: Cannot access offset of type string on string
+Error: Cannot use string offset as an array
+array(2) {
+  ["q"]=>
+  string(7) "through"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  int(1)
+}
+string(3) "aZc"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 135
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 137
+array(2) {
+  [1]=>
+  string(4) "bool"
+  [""]=>
+  string(4) "null"
+}
+
+Warning: Undefined variable $nope in %s on line 140
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    NULL
+  }
+}
+
+Warning: Undefined variable $undefkey in %s on line 142
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 142
+array(1) {
+  [""]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+-- property dimension paths
+array(1) {
+  ["h"]=>
+  array(1) {
+    [0]=>
+    bool(true)
+  }
+}
+array(3) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(1)
+    ["c"]=>
+    int(0)
+  }
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    array(1) {
+      ["z"]=>
+      string(4) "deep"
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  string(4) "made"
+}
+string(4) "used"
+array(2) {
+  ["b"]=>
+  string(3) "out"
+  ["c"]=>
+  int(0)
+}
+string(3) "out"
+string(5) "again"
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot access private property Holder::$hidden
+TypeError: Cannot access offset of type string on string
+set k
+array(1) {
+  ["through"]=>
+  string(3) "ref"
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 215
+
+Warning: Undefined variable $undefk in %s on line 216
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 216
+array(2) {
+  [1]=>
+  array(1) {
+    ["k"]=>
+    string(9) "float key"
+  }
+  [""]=>
+  string(9) "undef key"
+}
+array(1) {
+  ["h"]=>
+  array(1) {
+    [1]=>
+    bool(true)
+  }
+}
+array(3) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(1)
+    ["c"]=>
+    int(1)
+  }
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    array(1) {
+      ["z"]=>
+      string(4) "deep"
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  string(4) "made"
+}
+string(4) "used"
+array(2) {
+  ["b"]=>
+  string(3) "out"
+  ["c"]=>
+  int(1)
+}
+string(3) "out"
+string(5) "again"
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot access private property Holder::$hidden
+TypeError: Cannot access offset of type string on string
+set k
+array(1) {
+  ["through"]=>
+  string(3) "ref"
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 215
+
+Warning: Undefined variable $undefk in %s on line 216
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 216
+array(2) {
+  [1]=>
+  array(1) {
+    ["k"]=>
+    string(9) "float key"
+  }
+  [""]=>
+  string(9) "undef key"
+}
+-- static calls choosing by-reference
+string(2) "a!"
+string(2) "a!"
+string(2) "b?"
+string(1) "b"
+
+Warning: Undefined variable $nope in %s on line 229
+string(2) "p!"
+string(2) "q#"
+string(2) "v?"
+string(1) "?"
+string(1) "!"
+string(1) "!"
+string(2) "a!"
+string(2) "a!"
+string(2) "b?"
+string(1) "b"
+
+Warning: Undefined variable $nope in %s on line 229
+string(2) "p!"
+string(2) "q#"
+string(2) "v?"
+string(1) "?"
+string(2) "!!"
+string(2) "!!"
+-- new with spread arguments
+Point(1, 2) rest []
+Point(3, 4) rest [5,6]
+Point(0, 0) rest []
+Point(a, b) rest []
+Point(0, 7) rest []
+Point(1, 0) rest {"extra":2}
+Point(8, 9) rest []
+Point(by ref, 2) rest []
+Error: Named parameter $x overwrites previous argument
+ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 276 and exactly 2 expected
+Error: Unknown named parameter $c
+bool(true)
+Point(1, 2) rest []
+Point(1, 2) rest []
+Point(3, 4) rest [5,6]
+Point(0, 0) rest []
+Point(a, b) rest []
+Point(0, 7) rest []
+Point(1, 0) rest {"extra":2}
+Point(8, 9) rest []
+Point(by ref, 2) rest []
+Error: Named parameter $x overwrites previous argument
+ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 276 and exactly 2 expected
+Error: Unknown named parameter $c
+bool(true)
+Point(1, 2) rest []
+-- appends at the end of a path
+Error: Cannot add element to the array as the next element is already occupied
+Error: Cannot add element to the array as the next element is already occupied
+int(1)
+int(2)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["by"]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [1]=>
+  string(1) "b"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 321
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+array(5) {
+  ["key"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    ["in"]=>
+    array(1) {
+      [0]=>
+      int(3)
+    }
+  }
+  ["x0"]=>
+  array(1) {
+    [0]=>
+    string(4) "made"
+  }
+  ["keyf"]=>
+  array(1) {
+    [0]=>
+    string(10) "from false"
+  }
+  ["keym"]=>
+  array(1) {
+    [9223372036854775807]=>
+    int(0)
+  }
+  ["keys"]=>
+  string(3) "str"
+}
+string(4) "used"
+Error: Cannot add element to the array as the next element is already occupied
+Error: Cannot add element to the array as the next element is already occupied
+int(1)
+int(2)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["by"]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [1]=>
+  string(1) "b"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 321
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+array(5) {
+  ["key"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    ["in"]=>
+    array(1) {
+      [0]=>
+      int(3)
+    }
+  }
+  ["x1"]=>
+  array(1) {
+    [0]=>
+    string(4) "made"
+  }
+  ["keyf"]=>
+  array(1) {
+    [0]=>
+    string(10) "from false"
+  }
+  ["keym"]=>
+  array(1) {
+    [9223372036854775807]=>
+    int(0)
+  }
+  ["keys"]=>
+  string(3) "str"
+}
+string(4) "used"
+-- method calls: native methods, classes a site has not seen
+int(19)
+int(2)
+int(3)
+int(99)
+int(0)
+string(11) "hidden(1,2)"
+string(6) "nope()"
+Error: Call to private method Ci::hidden() from global scope
+Error: Call to undefined method Ci::nope()
+string(10) "2020-01-02"
+int(1577934245)
+Error: Call to a member function area() on null
+int(19)
+int(2)
+int(3)
+int(99)
+int(0)
+string(11) "hidden(1,2)"
+string(6) "nope()"
+Error: Call to private method Ci::hidden() from global scope
+Error: Call to undefined method Ci::nope()
+string(10) "2020-01-02"
+int(1577934245)
+Error: Call to a member function area() on null
