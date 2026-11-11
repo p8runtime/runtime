@@ -1482,16 +1482,20 @@ impl Context<'_> {
     /// that class: its key (`ConstSite::key`) and the class it keeps. A
     /// class the code names (always the same one; `self`/`parent` in a
     /// class too), the called class, a trait's class; and `::class` or a
-    /// public constant that is not an enum case (a private or protected
-    /// one's access depends on the scope a closure is bound to). Its value,
-    /// if it is code, has been computed.
-    pub(crate) fn class_const_key(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> Option<crate::sites::ClassKey> {
+    /// constant that is not an enum case. The second value is the scope
+    /// the entry holds for (`ConstSite::scope`): 0 for `::class` and a
+    /// public constant, the running scope's address for a private or
+    /// protected one (its access depends on the scope, which a closure's
+    /// binding may change). Its value, if it is code, has been computed.
+    pub(crate) fn class_const_key(&mut self, clo: &Closure, class: u16, name: &Value, w: &[Value]) -> Option<(crate::sites::ClassKey, usize)> {
         let (c, key) = self.class_key(clo, class, w)?;
         let name = name_view(name);
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
-            return Some(key);
+            return Some((key, 0));
         }
-        c.constants.get(name.as_bytes()).is_some_and(|k| k.visibility == Visibility::Public && !k.is_case).then_some(key)
+        let k = c.constants.get(name.as_bytes()).filter(|k| !k.is_case)?;
+        let scope = if k.visibility == Visibility::Public { 0 } else { self.scope_addr() };
+        Some((key, scope))
     }
 
     /// A class constant whose value is code not yet run: the code, the

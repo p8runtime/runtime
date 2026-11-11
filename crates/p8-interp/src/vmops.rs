@@ -18,8 +18,8 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, plain, put, put_var, read_ref, set_int_elem, test, truth};
-use crate::sites::{Plain, cached_prop, plain_slot};
+use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, put, put_var, read_ref, set_int_elem, test, truth};
+use crate::sites::{Plain, cached_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -283,13 +283,28 @@ fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Va
     elem(w, arr, key)
 }
 
-/// `$x::class` of an object: its class's name (shared, as PHP's interned
-/// name). A reference, a string naming a class, anything else: cold.
+/// `$x::class` of an object (through a reference too: out of line): its
+/// class's name (shared, as PHP's interned name). A string naming a
+/// class, anything else: cold.
 #[inline(always)]
 pub(crate) fn class_name(hx: Hx, args::ClassName { dst, src }: args::ClassName) -> Ctl {
-    let Some(o) = hx.w[r(src)].as_object() else { return Ctl::Cold };
-    let name = Value::str(o.class.name.clone());
+    let name = match hx.w[r(src)].as_object() {
+        Some(o) => Value::str(o.class.name.clone()),
+        None => match ref_class_name(&hx.w[r(src)]) {
+            Some(name) => name,
+            None => return Ctl::Cold,
+        },
+    };
     Ctl::Next(put(&mut hx.w[r(dst)], name))
+}
+
+/// `$x::class` of an object a reference holds (`global $o; $o::class`).
+#[cold]
+#[inline(never)]
+fn ref_class_name(v: &Value) -> Option<Value> {
+    let cell = v.as_reference()?;
+    let held = cell.borrow();
+    Some(Value::str(held.as_object()?.class.name.clone()))
 }
 
 /// `isset($a[k])` on an array (or a reference to one), k an int or a
@@ -337,8 +352,19 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         let (Some(s), Some(v)) = (key.as_str(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         // One lookup, as zend_hash_lookup: the slot is written in place, or
         // the key added with no second search. (A shared array is separated
-        // first: the cold write would separate it too.)
-        let Some(a) = hx.w[r(var)].array_mut() else { return Ctl::Cold };
+        // first: the cold write would separate it too.) A variable bound by
+        // reference: the array its cell holds.
+        let slot = &mut hx.w[r(var)];
+        let cell = slot.as_reference().map(Rc::clone);
+        let mut held;
+        let root: &mut Value = match &cell {
+            Some(cell) => {
+                held = cell.borrow_mut();
+                &mut held
+            }
+            None => slot,
+        };
+        let Some(a) = root.array_mut() else { return Ctl::Cold };
         let (stored, result) = if S::Res::ID == USED { (v.clone(), Some(v)) } else { (v, None) };
         // (A KSTR literal is never a canonical integer: lowering's promise.)
         let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
@@ -353,7 +379,9 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         }
         result
     } else {
-        let (Some(k), Some(v)) = (kv.as_int(), plain(hx.v::<S::Val>(val))) else { return Ctl::Cold };
+        // (Any defined value, copied: a string, an array shares its
+        // storage until either is written.)
+        let (Some(k), Some(v)) = (kv.as_int(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         let slot = &mut hx.w[r(var)];
         let done = if slot.is_array() {
             set_int_elem(slot, k, &v)
@@ -433,6 +461,31 @@ fn push_ref(var: &Value, v: Value) -> bool {
     true
 }
 
+/// `v` written to `o`'s declared slot `slot`, as `plain_slot` found it
+/// writable (`plain`): the slots borrowed once, the value out, written as
+/// a register is, back in. False (nothing written) for an unset slot of a
+/// class with __set and its kin, and a readonly property's slot set
+/// already. (Pending destructors are tested after, whatever this
+/// released.)
+#[inline(always)]
+pub(crate) fn write_slot(o: &p8_runtime::object::Object, slot: usize, plain: Plain, v: &Value) -> bool {
+    match o.slots().get(slot) {
+        Some(s)
+            if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
+                || {
+                    let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
+                    if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
+                } =>
+        {
+            let mut cur = s.replace(Value::UNDEF);
+            let _ = put_var(&mut cur, v.clone());
+            p8_runtime::object::put_slot(s, cur);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// A property read the name's cache entry answers (anything else is
 /// cold: a miss, an unset slot, a reference operand).
 #[inline(always)]
@@ -445,7 +498,16 @@ pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj,
         let Some(o) = hx.w[r(obj)].as_object() else { return Ctl::Cold };
         o
     };
-    let Some(v) = cached_prop(entry.get(), o, hx.scope()) else { return Ctl::Cold };
+    let v = match cached_prop(entry.get(), o, hx.scope()) {
+        Some(v) => v,
+        // A class or scope the entry has not seen: filled for this one
+        // (`refill_prop`, out of line), then read.
+        None if refill_prop(entry, o, &hx.clo.consts[site as usize], hx.top.scope.as_ref()) => match cached_prop(entry.get(), o, hx.scope()) {
+            Some(v) => v,
+            None => return Ctl::Cold,
+        },
+        None => return Ctl::Cold,
+    };
     Ctl::Next(put(&mut hx.w[r(dst)], v))
 }
 
@@ -465,25 +527,16 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
         o
     };
     let v = hx.v::<S::Val>(val);
-    let Some((slot, plain)) = plain_slot(entry.get(), o, (hx.scope(), hx.top.scope.as_deref()), v, hx.reinit) else { return Ctl::Cold };
-    let written = match o.slots().get(slot) {
-        Some(s)
-            if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
-                || {
-                    let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
-                    if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
-                } =>
-        {
-            // The slot's value out, written as a register is, back in.
-            // (Pending is tested after, whatever this released.)
-            let mut cur = s.replace(Value::UNDEF);
-            let _ = put_var(&mut cur, v.clone());
-            p8_runtime::object::put_slot(s, cur);
-            true
-        }
-        _ => false,
+    let scope = (hx.scope(), hx.top.scope.as_deref());
+    let found = match plain_slot(entry.get(), o, scope, v, hx.reinit) {
+        Some(found) => Some(found),
+        // A class or scope the entry has not seen: filled for this one
+        // (`refill_prop`, out of line), then asked again.
+        None if refill_prop(entry, o, &hx.clo.consts[site as usize], hx.top.scope.as_ref()) => plain_slot(entry.get(), o, scope, v, hx.reinit),
+        None => None,
     };
-    if !written {
+    let Some((slot, plain)) = found else { return Ctl::Cold };
+    if !write_slot(o, slot, plain, v) {
         return Ctl::Cold;
     }
     let ctl = if S::Res::ID == USED {
@@ -577,7 +630,8 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, s
 
 /// `C::NAME` the name's cache entry holds for this class (`ConstSite`):
 /// a named class's by its reference, the called class's or a trait's
-/// class's by its address. A miss (the first read, another class, a
+/// class's by its address; a private or protected one's for the scope it
+/// was read from. A miss (the first read, another class or scope, a
 /// constant that is not cached), no called class or scope, are cold.
 #[inline(always)]
 pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, class, site }: args::ClassConst) -> Ctl {
@@ -585,7 +639,7 @@ pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, c
     let Some(entry) = hx.clo.class_consts.get(site as usize) else { return Ctl::Cold };
     let v = {
         let e = entry.borrow();
-        if e.key != key {
+        if e.key != key || (e.scope != 0 && e.scope != hx.scope()) {
             return Ctl::Cold;
         }
         e.value.clone()
