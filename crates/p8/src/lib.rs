@@ -258,7 +258,6 @@ impl Platform {
     }
 }
 
-/// What compiles a script and the files it includes.
 thread_local! {
     /// Files compiled from source on this thread, by any Platform.
     static COMPILED_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -271,6 +270,7 @@ pub fn compiled_on_this_thread() -> usize {
     COMPILED_HERE.with(|n| n.get())
 }
 
+/// What compiles a script and the files it includes.
 struct Compiler {
     registry: Arc<Registry>,
     cache: Option<Mutex<HashMap<String, Kept>>>,
