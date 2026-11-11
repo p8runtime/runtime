@@ -210,6 +210,11 @@ mod tests {
         assert_eq!(p8_bytecode::serial::encode(&back, other.symbols()), p8_bytecode::serial::encode(&program, registry.symbols()));
         // A class declared by the file's code is the file's class, not a copy.
         assert!(std::sync::Arc::ptr_eq(&back.classes[0], &back.main.decls[0]));
+        // The executed form is read back as lowering made it, not made again.
+        assert!(!back.main.insns.is_empty());
+        for f in std::iter::once(&back.main).chain(&back.functions).chain(back.classes.iter().flat_map(|c| c.methods.iter().map(|m| &m.func))) {
+            assert_eq!(f.insns, p8_bytecode::insn::lower(f));
+        }
     }
 
     #[test]

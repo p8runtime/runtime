@@ -13,6 +13,7 @@
 //! range) give `None`. The caller checks a digest of the bytes first, so
 //! a file that decodes is the program that was written.
 
+use crate::insn::{Insn, Op};
 use crate::{AttrArg, AttrDef, CastKind, ClassDef, ClassName, ClassRef, Cmp, CompileDiag, ConstDef, Function, Handler, IncludeKind, Instr, Meta, MethodDef, Param, PartialArg, PartialSite, Program, PropDef, Rare, Site, Sym, TraitRule};
 use p8_runtime::frozen::{Frozen, Text};
 use p8_runtime::object::Visibility;
@@ -24,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 19;
+pub const FORMAT: u32 = 20;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -194,12 +195,13 @@ trait Code: Sized {
     fn put(&self, w: &mut Writer);
     fn get(r: &mut Reader) -> Got<Self>;
 
-    /// For a number: its size, so a list of them is read in one piece.
+    /// For a number (or an executed instruction): its size, so a list of
+    /// them is read in one piece.
     const SIZE: usize = 0;
 
-    /// For a number: the value of `SIZE` bytes.
+    /// For a number (or an executed instruction): the value of `SIZE` bytes.
     fn of(_bytes: &[u8]) -> Self {
-        unreachable!("only numbers are read in one piece")
+        unreachable!("only fixed-size values are read in one piece")
     }
 }
 
@@ -495,24 +497,54 @@ macro_rules! record {
             }
         }
     };
-    // A record with a field made from the others when it is read (not stored).
-    ($t:ident { $($f:ident),* $(,)? } made $m:ident by $by:path) => {
+    // A record whose fields must agree with each other: read only if `$ok` holds.
+    ($t:ident { $($f:ident),* $(,)? } if $ok:path) => {
         impl Code for $t {
             fn put(&self, w: &mut Writer) {
                 $(self.$f.put(w);)*
             }
             fn get(r: &mut Reader) -> Got<Self> {
-                Ok($by($t { $($f: Code::get(r)?,)* $m: Default::default() }))
+                let x = $t { $($f: Code::get(r)?),* };
+                if $ok(&x) { Ok(x) } else { Err(Bad) }
             }
         }
     };
 }
 record!(Program { main, functions, classes });
-// `insns` is the code's executed form, made again from `code`.
+// `insns`, the code's executed form, is stored as lowering made it: read
+// back, nothing is lowered again.
 record!(Function {
-    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, lines, consts, ncv, nregs, frees_temps, cv_names, sites, file, required, line,
+    name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, insns, lines, consts, ncv, nregs, frees_temps, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
-} made insns by Function::lowered);
+} if one_insn_per_instruction);
+
+/// The loop reads `insns[pc]` and `step` reads `code[pc]`: one of each per pc.
+fn one_insn_per_instruction(f: &Function) -> bool {
+    f.insns.len() == f.code.len()
+}
+
+/// An executed instruction: its opcode's number, the three register
+/// operands and the immediate (8 bytes), read as a run of them in one
+/// piece. An opcode number this engine does not have reads as `Slow`
+/// (what lowering gives any instruction the loop does not run itself:
+/// `step` runs the `Instr` at the same pc).
+impl Code for Insn {
+    fn put(&self, w: &mut Writer) {
+        w.out.extend_from_slice(&[self.op as u8, self.a, self.b, self.c]);
+        w.out.extend_from_slice(&self.imm.to_le_bytes());
+    }
+    fn get(r: &mut Reader) -> Got<Self> {
+        Ok(Insn::of(r.take(8)?))
+    }
+    const SIZE: usize = 8;
+    #[inline]
+    fn of(b: &[u8]) -> Self {
+        match Op::ALL.get(usize::from(b[0])) {
+            Some(&op) => Insn { op, a: b[1], b: b[2], c: b[3], imm: u32::from_le_bytes([b[4], b[5], b[6], b[7]]) },
+            None => Insn { op: Op::Slow, a: 0, b: 0, c: 0, imm: 0 },
+        }
+    }
+}
 record!(CompileDiag { level, message, line });
 record!(PartialSite { args, variadic, name, line });
 record!(PartialArg { name, placeholder });

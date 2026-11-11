@@ -25,6 +25,18 @@ pub trait Loader {
     fn code_cache(&self) -> Option<Arc<dyn p8_runtime::opcache::CodeCache>> {
         None
     }
+    /// Whether [`Loader::load_unread`] may answer: else an include reads
+    /// its file first, always.
+    fn loads_unread(&self) -> bool {
+        false
+    }
+    /// The program of the file at `file` (a resolved path) when the
+    /// loader can vouch for it without its source being read (compiled
+    /// ahead of time, and checked by its size and time, or trusted);
+    /// None: the source is read and [`Loader::load`]ed.
+    fn load_unread(&self, _file: &str) -> Option<Arc<Program>> {
+        None
+    }
     /// A partial application's closure (PHP 8.6): `source` is a file whose
     /// code makes one closure, compiled as part of `file`; the closure's
     /// code, named `name`, scoped to `class` (zend_accel_compile_pfa).
@@ -72,6 +84,23 @@ impl Context<'_> {
             }
         }
         let found = if name.is_empty() { None } else { resolve(&shown, &include_path, current) };
+        // A file the loader vouches for unread (a package checking files
+        // by size and time, or trusting itself) is not read.
+        if let Some(path) = &found
+            && self.loader.as_ref().is_some_and(|l| l.loads_unread())
+            && let Some(loader) = self.loader.clone()
+        {
+            let real = p8_runtime::os::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if kind.once() && self.included.contains(&real) {
+                return Ok(None);
+            }
+            let file = real.to_string_lossy().into_owned();
+            if let Some(program) = loader.load_unread(&file) {
+                self.included_order.push(file);
+                self.included.insert(real);
+                return self.declare_included(program).map(|p| Some(Ok(p)));
+            }
+        }
         let source = found.as_ref().and_then(|p| std::fs::read(p).ok().map(|s| (p.clone(), s)));
         let Some((path, source)) = source else {
             if name.is_empty() {
@@ -188,6 +217,12 @@ impl Context<'_> {
             Err(e) if e.parse => return Err(Throw::Error { class: "ParseError", message: e.message, file: Rc::from(file.as_str()), line: e.line, props: Vec::new() }),
             Err(e) => return Err(Throw::Fatal { message: e.message, file: Rc::from(file.as_str()), line: e.line }),
         };
+        self.declare_included(program)
+    }
+
+    /// An included file's compiled code declared: its compile-time
+    /// diagnostics raised, its functions and classes declared.
+    fn declare_included(&mut self, program: Arc<Program>) -> Result<Arc<Program>, Throw> {
         self.raise_compile_diags(&program.main);
         for f in &program.functions {
             if let Err(message) = self.declare(Arc::clone(f)) {
