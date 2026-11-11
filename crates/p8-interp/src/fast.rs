@@ -2063,15 +2063,18 @@ fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &
 #[inline(always)]
 pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     let top = frames.len - 1;
+    // A window's worth at least: the loop's fixed window (WINDOW) must exist.
+    let need = {
+        let frame = &frames.slots[top];
+        frame.base as usize + usize::from(frame.func.code.nregs).max(WINDOW)
+    };
+    if regs.len() < need {
+        frames.grow_regs(regs, need);
+    }
     let (slots, spare) = (&mut frames.slots, &mut frames.spare);
     let frame = &mut slots[top];
     let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
     let code = &*func.code;
-    // A window's worth at least: the loop's fixed window (WINDOW) must exist.
-    let need = base + usize::from(code.nregs).max(WINDOW);
-    if regs.len() < need {
-        regs.resize(need, Value::UNDEF);
-    }
     let nparams = code.params.len();
     if argc > nparams {
         frame.extra = take_extra(spare, regs, base, nparams, argc);
