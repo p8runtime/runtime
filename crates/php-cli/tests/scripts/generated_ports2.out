@@ -1,0 +1,183 @@
+-- string offsets
+string(1) "h"
+string(1) "o"
+string(1) "l"
+string(1) "h"
+string(4) "none"
+string(4) "none"
+bool(false)
+bool(true)
+string(1) "q"
+
+Warning: Uninitialized string offset 7 in %s on line 16
+|
+
+Warning: Uninitialized string offset -9 in %s on line 17
+|
+bool(true)
+bool(false)
+string(1) "h"
+string(1) "o"
+string(1) "l"
+string(1) "h"
+string(4) "none"
+string(4) "none"
+bool(false)
+bool(true)
+string(1) "q"
+
+Warning: Uninitialized string offset 7 in %s on line 16
+|
+
+Warning: Uninitialized string offset -9 in %s on line 17
+|
+bool(true)
+bool(false)
+-- quiet reads of null, scalars, missing keys
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+
+Warning: Trying to access array offset on null in %s on line 31
+NULL
+
+Warning: Trying to access array offset on int in %s on line 32
+NULL
+string(1) "v"
+string(1) "d"
+bool(true)
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+string(1) "d"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+
+Warning: Trying to access array offset on null in %s on line 31
+NULL
+
+Warning: Trying to access array offset on int in %s on line 32
+NULL
+string(1) "v"
+string(1) "d"
+bool(true)
+-- $x::class
+P Q P 
+Q
+-- static calls sending variables
+int(64)
+int(1)
+string(1) "y"
+string(1) "x"
+
+Warning: Undefined variable $nope in %s on line 77
+TypeError
+
+Warning: Undefined variable $nope in %s on line 77
+TypeError
+int(6)
+int(0)
+int(1)
+TypeError
+int(8)
+0,1 a,b 0,b
+int(3)
+-- method by-reference sends
+int(3)
+string(3) "012"
+int(1)
+-- typed parameters holding references
+int(4)
+int(9)
+int(6)
+int(4)
+int(9)
+int(6)
+int(10)
+int(3)
+TypeError
+-- closures
+string(1) "m"
+bool(false)
+string(2) "m!"
+string(1) "M"
+string(1) "n"
+bool(false)
+string(2) "n!"
+string(1) "N"
+012 distinct
+-- unpacking
+array(6) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["k"]=>
+  string(1) "v"
+  [2]=>
+  string(4) "five"
+  [3]=>
+  int(1)
+  [4]=>
+  int(2)
+}
+array(6) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["k"]=>
+  string(1) "v"
+  [2]=>
+  string(4) "five"
+  [3]=>
+  int(1)
+  [4]=>
+  int(2)
+}
+array(0) {
+}
+array(1) {
+  [0]=>
+  int(0)
+}
+array(2) {
+  [0]=>
+  &int(9)
+  [1]=>
+  int(2)
+}
+array(2) {
+  [0]=>
+  &int(9)
+  [1]=>
+  int(2)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  [0]=>
+  int(2)
+}
+Error: Only arrays and Traversables can be unpacked, int given
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+}
