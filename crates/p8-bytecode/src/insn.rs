@@ -114,6 +114,12 @@ pub const VAL_CONST: u32 = 1 << 29;
 /// 256), not the register.
 pub const ARG_CONST: u32 = 1 << 30;
 
+/// IterNextRef's `imm` bit (above the end's pc): the key is assigned too.
+pub const ITER_KEY: u32 = 1 << 31;
+
+/// FetchList's `imm`: the key is register c (else it is constant imm).
+pub const LIST_KEY_REG: u32 = 1 << 31;
+
 /// The most keys `Op::AssignDimPath` writes through.
 pub const PATH_KEYS: u8 = 4;
 
@@ -592,6 +598,23 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::StaticArgByRef { dst, class, method, n } => i(Op::StaticArgByRef, dst, 0, Reg::from(n), u32::from(method) | u32::from(class) << 16),
         // (Parameter n is register n.)
         Instr::ArgDefault { n, target } => i(Op::ArgDefault, Reg::from(n), 0, 0, target),
+        Instr::FuncArgByRef { dst, site, n } => i(Op::FuncArgByRef, dst, 0, Reg::from(n), u32::from(site)),
+        Instr::StaticVar { var, index, skip } => i(Op::StaticVar, var, index & 0xff, index >> 8, skip),
+        // `$f(..)`: the arguments a block in the window.
+        Instr::CallValue { dst, callee, base, argc, vars } => {
+            block(base, argc)?;
+            i(Op::CallValue, dst, callee, base, u32::from(argc) | u32::from(vars) << 8)
+        }
+        // `[$a, 'k' => $b] = $src`: the key a literal or a register.
+        Instr::FetchList { dst, arr, key } => match k(key) {
+            Some(kk) => i(Op::FetchList, dst, arr, 0, kk),
+            None => i(Op::FetchList, dst, arr, key, LIST_KEY_REG),
+        },
+        // (The iterator and its state: a block in the window.)
+        Instr::IterNextRef { iter, val, key, has_key, end } if end < ITER_KEY => {
+            block(iter, 2)?;
+            i(Op::IterNextRef, iter, val, if has_key { key } else { 0 }, end | if has_key { ITER_KEY } else { 0 })
+        }
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }

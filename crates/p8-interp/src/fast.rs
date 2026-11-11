@@ -345,6 +345,19 @@ impl Context<'_> {
                     continue 'frame;
                 }};
             }
+            // A hand arm's own out-of-line part (`out_of_line`): its helper
+            // `$run` on the operands `$ops` the arm decoded (no `Instr`
+            // read again, nothing of `step`'s), then the frame as it left
+            // it.
+            macro_rules! out {
+                ($ops:expr, $run:expr) => {{
+                    match self.out_of_line(regs, pc, $ops, $run)? {
+                        Flow::Go(next) => pc = next,
+                        Flow::Done => return Ok(()),
+                    }
+                    continue 'frame;
+                }};
+            }
             // ... and what the handler said to do next.
             macro_rules! gen_arm {
                 ($m:ident, $call:expr) => {{
@@ -416,8 +429,9 @@ impl Context<'_> {
                     }};
                 }
                 // A foreach step over an array (`$key`: the key too). An
-                // object (a generator, an Iterator) runs out of line
-                // (`iter_next_object`, with none of `step`'s dispatch).
+                // object (a generator, an Iterator: its methods called)
+                // runs out of line on the arm's operands
+                // (`iter_next_object_ops`).
                 // (One arm per opcode, so that no arm reads the opcode
                 // again: kept for that, it would hold a register through
                 // every arm.)
@@ -426,7 +440,8 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         if !w[rx!(a)].is_array() {
                             if w[rx!(a)].is_object() {
-                                cold!(iter_next_object);
+                                let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
                             }
                             slow!();
                         }
@@ -553,20 +568,22 @@ impl Context<'_> {
                             }
                             _ => None,
                         });
+                        // A miss (a class or scope the site has not seen, a
+                        // megamorphic site): the class's method by name
+                        // (`method_takes_ref_out`), as `step` asks.
                         let by_ref = match by_ref {
-                            Some(by_ref) => Some(by_ref),
-                            None => self.cached_takes_ref_out(&clo.methods[method], &o.class, n),
+                            Some(by_ref) => by_ref,
+                            None => match self.cached_takes_ref_out(&clo.methods[method], &o.class, n) {
+                                Some(by_ref) => by_ref,
+                                None => self.method_takes_ref_out(&o.class, clo.code.sites[method].sym, n),
+                            },
                         };
-                        match by_ref {
-                            Some(false) => {
-                                let Some(v) = copied(&w[rx!(var)]) else { slow!() };
-                                done!(put(&mut w[rx!(arg)], v));
-                            }
-                            Some(true) => {
-                                let cell = make_ref(&mut w[..], Reg::from(var));
-                                done!(put(&mut w[rx!(arg)], Value::reference(cell)));
-                            }
-                            None => slow!(),
+                        if by_ref {
+                            let cell = make_ref(&mut w[..], Reg::from(var));
+                            done!(put(&mut w[rx!(arg)], Value::reference(cell)));
+                        } else {
+                            let Some(v) = copied(&w[rx!(var)]) else { slow!() };
+                            done!(put(&mut w[rx!(arg)], v));
                         }
                     }
                     Op::Jump => {
@@ -762,13 +779,13 @@ impl Context<'_> {
                     // foreach over an array (a defined, non-reference
                     // register): the iterator is the array and position 0;
                     // an empty one jumps past the loop. An object runs out
-                    // of line (`iter_init_object`, with none of `step`'s
-                    // dispatch). (A reference, anything that warns: `step`.)
+                    // of line on the arm's operands (`iter_init_object_ops`).
+                    // (A reference, anything that warns: `step`.)
                     Op::IterInit => {
                         ops!(a, b, c, imm);
                         let Some(arr) = w[rx!(a)].as_array() else {
                             if w[rx!(a)].is_object() {
-                                cold!(iter_init_object);
+                                out!((Reg::from(a), Reg::from(b), imm), |cx, regs, clo, base, _, at, ops| cx.iter_init_object_ops(regs, clo, base, at, ops));
                             }
                             slow!()
                         };
@@ -908,11 +925,23 @@ impl Context<'_> {
                     }
                     // A user method the call site's cache names for this class
                     // and scope, on an object, with its required arguments, and
-                    // no interrupt pending: anything else is `method_call`'s
-                    // (out of line) or `step`'s.
+                    // no interrupt pending: anything else is `method_call_ops`'s
+                    // (out of line).
                     Op::MethodCall => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
+                        // What the cached case does not take (a native
+                        // method, a class or scope the site has not seen:
+                        // the lookup by name, remembered; __call, a
+                        // generator, missing arguments, the errors, an
+                        // interrupt due): out of line on the arm's operands
+                        // (`method_call_ops`).
+                        macro_rules! uncached {
+                            () => {{
+                                let ops = MethodCallOps { dst: Reg::from(dst), obj: Reg::from(obj), args: Reg::from(args), argc: n as u8, method: method as u16 };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_ops(regs, clo, base, at, ops))
+                            }};
+                        }
                         // (An object through a reference: `global $o; $o->m()`.)
                         let held;
                         let o = match w[rx!(obj)].as_object() {
@@ -921,7 +950,7 @@ impl Context<'_> {
                                 held = ref_object(&w[rx!(obj)]);
                                 match &held {
                                     Some(o) => o,
-                                    None => slow!(),
+                                    None => uncached!(),
                                 }
                             }
                         };
@@ -938,13 +967,10 @@ impl Context<'_> {
                                 _ => None,
                             }
                         };
-                        // A native method, a class the site has not seen:
-                        // the instruction whole (`method_call`), with none
-                        // of `step`'s dispatch.
-                        let Some((target, declaring)) = found else { cold!(method_call) };
+                        let Some((target, declaring)) = found else { uncached!() };
                         let code = &self.frames.next_code(target.as_ref()).code;
                         if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                            slow!();
+                            uncached!();
                         }
                         let this = Rc::clone(o);
                         // A temporary (`(new A)->f()`) is released as it is used:
@@ -979,6 +1005,15 @@ impl Context<'_> {
                     Op::Construct => {
                         ops!(a, b, c, imm);
                         let (obj, args, n) = (a, b, rx!(c));
+                        // A native constructor, a generator's, one missing
+                        // arguments (the error), an interrupt due, a class
+                        // with no NewInfo kept: out of line on the arm's
+                        // operands (`construct`).
+                        macro_rules! uncached {
+                            () => {
+                                out!((Reg::from(obj), Reg::from(args), c), |cx, regs, _, base, _, at, ops| cx.construct(regs, base, at, ops))
+                            };
+                        }
                         let Some(object) = w[rx!(obj)].as_object() else { slow!() };
                         // Its class's NewInfo: the one its `new` left, else the
                         // kept one (a `new` in the arguments took `last_new`).
@@ -986,7 +1021,7 @@ impl Context<'_> {
                             Some(i) if Rc::ptr_eq(&i.class, &object.class) => i,
                             _ => match self.new_infos.get(&(Rc::as_ptr(&object.class) as usize)) {
                                 Some(i) => i,
-                                None => slow!(),
+                                None => uncached!(),
                             },
                         };
                         match &info.ctor {
@@ -1015,7 +1050,7 @@ impl Context<'_> {
                                 }
                                 done!(released);
                             }
-                            Some(_) => slow!(),
+                            Some(_) => uncached!(),
                         }
                     }
                     // `new C(...$args)`: a PHP constructor's frame pushed
@@ -1241,10 +1276,29 @@ impl Context<'_> {
                     // the call site's cache knows the method for this class
                     // and scope (`cached_takes_ref`, a user method's or a
                     // native one's); else `step`'s lookup.
+                    // A miss asks the class by name (`method_takes_ref_out`);
+                    // not an object (through a reference either): no.
                     Op::MethodArgByRef => {
                         ops!(a, b, c, imm);
-                        let Some(o) = w[rx!(b)].as_object() else { slow!() };
-                        let Some(by_ref) = self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, usize::from(c)) else { slow!() };
+                        let held;
+                        let o = match w[rx!(b)].as_object() {
+                            Some(o) => o,
+                            None => {
+                                held = ref_object(&w[rx!(b)]);
+                                match &held {
+                                    Some(o) => o,
+                                    None => {
+                                        done!(put(&mut w[rx!(a)], Value::FALSE));
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        let n = usize::from(c);
+                        let by_ref = match self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, n) {
+                            Some(by_ref) => by_ref,
+                            None => self.method_takes_ref_out(&o.class, clo.code.sites[imm as usize].sym, n),
+                        };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
                     }
                     // `&$o->p`: the declared slot the name's cache entry has
@@ -1272,6 +1326,117 @@ impl Context<'_> {
                     Op::ArgDefault => {
                         ops!(a, b, c, imm);
                         pc = if usize::from(a) < top.argc as usize && !w[rx!(a)].is_undef() { imm as usize } else { pc + 1 };
+                    }
+                    // Whether `f($a['k'])` sends by reference, from the
+                    // function or builtin the call site resolved to (not
+                    // resolved yet: `step` resolves it).
+                    Op::FuncArgByRef => {
+                        ops!(a, b, c, imm);
+                        let n = usize::from(c);
+                        let by_ref = match clo.sites[imm as usize].get() {
+                            Some(&Callee::User(f)) => self.codes[f as usize].param_by_ref(n),
+                            Some(&Callee::Builtin(i)) => self.isolate.registry.by_ref(i, n),
+                            Some(Callee::Constant(_)) => false,
+                            None => slow!(),
+                        };
+                        done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
+                    // A `foreach (.. as &$v)` step over an array (the state a
+                    // reference to it): its next element made a reference
+                    // (`next_ref`), the key assigned; past the loop at the
+                    // end. An object's properties: `step`.
+                    Op::IterNextRef => {
+                        ops!(a, b, c, imm);
+                        let it = rx!(a);
+                        let Some(cell) = w[rk!(it + 1)].as_reference() else { slow!() };
+                        let pos = w[it].as_int().map_or(0, |p| p as usize);
+                        match crate::refs::next_ref(cell, pos) {
+                            Some((p, k, cell)) => {
+                                let mut released = put(&mut w[it], Value::int(p as i64 + 1)) | put(&mut w[rx!(b)], Value::reference(cell));
+                                if imm & insn::ITER_KEY != 0 {
+                                    released |= put_var(&mut w[rx!(c)], k.into_value());
+                                }
+                                done!(released);
+                            }
+                            None => pc = (imm & !insn::ITER_KEY) as usize,
+                        }
+                    }
+                    // `$f(..)` of a Closure of PHP code (not a generator's,
+                    // not a trampoline's), its required arguments passed as
+                    // values and no variable sent by the call itself, no
+                    // interrupt due: its frame pushed here, its `use`
+                    // values put in its variables (as `call_method` does).
+                    // Any other callable, the errors: out of line on the
+                    // arm's operands (`call_value_ops`).
+                    Op::CallValue => {
+                        ops!(a, b, c, imm);
+                        let (dst, args, n, vars) = (a, rx!(c), (imm & 0xff) as usize, (imm >> 8) as u16);
+                        macro_rules! general {
+                            () => {
+                                out!((Reg::from(dst), Reg::from(b), Reg::from(c), n as u8, vars), |cx, regs, clo, base, _, at, ops| cx.call_value_ops(regs, clo, base, at, ops))
+                            };
+                        }
+                        let Some(o) = w[rx!(b)].as_object() else { general!() };
+                        let Some(data) = callable::closure_data(o) else { general!() };
+                        let callable::ClosureFunc::User(f) = &data.func else { general!() };
+                        if vars != p8_bytecode::NO_VARS
+                            || f.code.is_generator
+                            || data.trampoline.is_some()
+                            || n < f.code.required
+                            || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                            || w[args..args + n].iter().any(Value::is_reference)
+                        {
+                            general!();
+                        }
+                        let (f, this, scope, called, owner) = (Rc::clone(f), data.this.clone(), data.scope.clone(), data.called.clone(), Rc::clone(o));
+                        let frame = self.frames.call(Some(&f), pc + 1, base + args, n, (base + dst as usize) as u32);
+                        frame.this = this;
+                        frame.scope = scope;
+                        frame.called = called;
+                        frame.owner = Some(Rc::clone(&owner));
+                        enter(&mut self.frames, regs);
+                        if !f.code.bound.is_empty()
+                            && let Some(data) = callable::closure_data(&owner)
+                        {
+                            for (r, v) in f.code.bound.iter().zip(data.captured.borrow().iter()) {
+                                regs[base + args + *r as usize] = v.clone();
+                            }
+                        }
+                        pc = 0;
+                        continue 'frame;
+                    }
+                    // `[$a, 'k' => $b] = $src`: an element there of an array
+                    // (through a reference too), copied (`elem`); a missing
+                    // key (the warning), an ArrayAccess object, anything
+                    // else: `step`.
+                    Op::FetchList => {
+                        ops!(a, b, c, imm);
+                        let key = if imm & insn::LIST_KEY_REG != 0 { reg_src!(c) } else { cst_src!(imm) };
+                        let Some(v) = elem(&w[..], Reg::from(b), key) else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `static $x = ..;`: the running code's static variable
+                    // (`static_var`) bound to its register; past its
+                    // initializer when it was made before.
+                    Op::StaticVar => {
+                        ops!(a, b, c, imm);
+                        let func = Arc::clone(&clo.code);
+                        let (cell, new) = self.static_var(&func, u16::from(b) | u16::from(c) << 8);
+                        drop(func);
+                        // (The context was borrowed whole: the frame's view
+                        // is read again, as after MakeClosure.)
+                        top = self.frames.last().expect("a frame");
+                        clo = &*top.func;
+                        code = &clo.code.insns[..];
+                        let released = put(&mut w[rx!(a)], Value::reference(cell));
+                        if new {
+                            done!(released);
+                        } else {
+                            if released && self.ids.has_pending() {
+                                pending_at!(imm as usize, pc);
+                            }
+                            pc = imm as usize;
+                        }
                     }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).

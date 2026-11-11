@@ -209,6 +209,22 @@ hand StaticArgByRef
 /// parameter a was passed (not a hole a named argument left): pc = imm,
 /// past its default's code
 hand ArgDefault
+/// a = whether argument c of the function call site imm is passed by
+/// reference
+hand FuncArgByRef
+/// `static $a`: a = a reference to static variable b | c << 8 of the
+/// running code; pc = imm (past its initializer) when it was made before
+hand StaticVar
+/// A `foreach (.. as &$v)` step (iterator a, its position; the state at
+/// a + 1): b = a reference to the next element, c = its key when imm has
+/// ITER_KEY, else pc = imm & !ITER_KEY (past the loop)
+hand IterNextRef
+/// a = b[key] for a list() destructuring, the key register c with
+/// LIST_KEY_REG, else constant imm
+hand FetchList
+/// a = b(the imm & 0xff arguments at c), the variables of `arg_vars`
+/// entry imm >> 8 (NO_VARS: none) sent as the callable takes them
+hand CallValue
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as
