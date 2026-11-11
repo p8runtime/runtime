@@ -419,6 +419,39 @@ impl Context<'_> {
                         continue 'frame;
                     }};
                 }
+                // A foreach step over an array (`$key`: the key too). An
+                // object (a generator, an Iterator) is `step`'s. (One arm
+                // per opcode, so that no arm reads the opcode again: kept
+                // for that, it would hold a register through every arm.)
+                macro_rules! iter_next {
+                    ($key:expr) => {{
+                        ops!(a, b, c, imm);
+                        if !w[rx!(a)].is_array() {
+                            slow!();
+                        }
+                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize };
+                        if self.ids.has_pending() {
+                            pending_at!(next, pc);
+                        }
+                        pc = next;
+                    }};
+                }
+                // `!x` (`$not`) and a condition made a value, as `truth`
+                // decides (NAN and an undefined variable warn: `step`).
+                macro_rules! truth {
+                    ($not:expr) => {{
+                        ops!(a, b, c, imm);
+                        let v = &w[rx!(b)];
+                        let t = match v.as_bool() {
+                            Some(b) => b,
+                            None => match truth(v) {
+                                Some(t) => t,
+                                None => slow!(),
+                            },
+                        };
+                        done!(put(&mut w[rx!(a)], Value::bool(t != $not)));
+                    }};
+                }
                 // `dispatch!`: one match of these hand arms and the generated
                 // instructions' (ops.def, vmops.rs), so that every opcode is
                 // one jump table away.
@@ -618,18 +651,8 @@ impl Context<'_> {
                     // The loop variable's old value may have been an object's
                     // last holder: a destructor due runs before the body, at
                     // this instruction.
-                    Op::IterNext | Op::IterNextKey => {
-                        ops!(a, b, c, imm);
-                        // An object (a generator, an Iterator) is `step`'s.
-                        if !w[rx!(a)].is_array() {
-                            slow!();
-                        }
-                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), op == Op::IterNextKey) { pc + 1 } else { imm as usize };
-                        if self.ids.has_pending() {
-                            pending_at!(next, pc);
-                        }
-                        pc = next;
-                    }
+                    Op::IterNext => iter_next!(false),
+                    Op::IterNextKey => iter_next!(true),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
@@ -653,20 +676,8 @@ impl Context<'_> {
                     Op::LoadNull => {
                         done!(put(&mut w[rx!(insn.a)], Value::NULL));
                     }
-                    // `!x` and a condition made a value: as `truth` decides
-                    // (NAN and an undefined variable warn: `step`).
-                    Op::Not | Op::ToBool => {
-                        ops!(a, b, c, imm);
-                        let v = &w[rx!(b)];
-                        let t = match v.as_bool() {
-                            Some(b) => b,
-                            None => match truth(v) {
-                                Some(t) => t,
-                                None => slow!(),
-                            },
-                        };
-                        done!(put(&mut w[rx!(a)], Value::bool(t != (op == Op::Not))));
-                    }
+                    Op::Not => truth!(true),
+                    Op::ToBool => truth!(false),
                     Op::IssetVar => {
                         ops!(a, b, c, imm);
                         let set = is_set(&w[rx!(b)]);
