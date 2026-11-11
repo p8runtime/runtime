@@ -1,21 +1,21 @@
-// What vite-plugin-p8 asks php2 to do: serve one web request, or render a
-// template with props. Both are php2's own command lines; nothing here
+// What vite-plugin-p8 asks p8 to do: serve one web request, or render a
+// template with props. Both are p8's own command lines; nothing here
 // sets a PHP variable itself.
 //
-// A request: `php2 -S <host>:<port> --stdio <client> -t <root> -q`, the raw
-// HTTP/1.1 request on stdin, the raw response on stdout. php2 runs it as
+// A request: `p8 -S <host>:<port> --stdio <client> -t <root> -q`, the raw
+// HTTP/1.1 request on stdin, the raw response on stdout. p8 runs it as
 // `php -S` (the cli-server SAPI) runs a request off a socket, so $_SERVER,
 // $_GET, $_POST, $_COOKIE, $_FILES, php://input, header() and
 // http_response_code() are PHP's own.
 //
-// A render: `php2 -r <bootstrap> -- <file>`, the props as JSON on stdin.
+// A render: `p8 -r <bootstrap> -- <file>`, the props as JSON on stdin.
 // The bootstrap decodes them into the global `$props` (an array: JSON
 // objects become associative arrays) and requires the file, so the
 // template runs in the global scope with its own __FILE__ and __DIR__.
 
 import { P8, type RunResult } from './runtime.ts';
 
-/** Where php2 runs and what it may touch. */
+/** Where p8 runs and what it may touch. */
 export interface Host {
   p8: P8;
   /** The document root (read-only, at its own path). */
@@ -28,7 +28,7 @@ export interface Host {
   ini: Record<string, string>;
 }
 
-/** A web request as php2 reads it off a connection. */
+/** A web request as p8 reads it off a connection. */
 export interface PhpRequest {
   method: string;
   /** The request target: path and query string. */
@@ -42,12 +42,12 @@ export interface PhpRequest {
   client: { address: string; port: number };
 }
 
-/** A response as php2 wrote it. */
+/** A response as p8 wrote it. */
 export interface PhpResponse {
   status: number;
   headers: [string, string][];
   body: Buffer;
-  /** php2's log (warnings it could not put in the page). */
+  /** p8's log (warnings it could not put in the page). */
   log: string;
 }
 
@@ -84,10 +84,10 @@ export function requestBytes(request: PhpRequest): Buffer {
 /** An HTTP/1.x response's status, headers and body. */
 export function parseResponse(raw: Buffer): Omit<PhpResponse, 'log'> {
   const end = raw.indexOf('\r\n\r\n');
-  if (end < 0) throw new Error(`php2 wrote no HTTP response: ${raw.toString('latin1').slice(0, 200)}`);
+  if (end < 0) throw new Error(`p8 wrote no HTTP response: ${raw.toString('latin1').slice(0, 200)}`);
   const lines = raw.subarray(0, end).toString('latin1').split('\r\n');
   const status = Number(/^HTTP\/\d\.\d (\d{3})/.exec(lines[0])?.[1]);
-  if (!status) throw new Error(`php2 wrote no status line: ${lines[0]}`);
+  if (!status) throw new Error(`p8 wrote no status line: ${lines[0]}`);
   const headers: [string, string][] = [];
   for (const line of lines.slice(1)) {
     const colon = line.indexOf(':');
@@ -102,7 +102,7 @@ export function parseResponse(raw: Buffer): Omit<PhpResponse, 'log'> {
 export async function serve(host: Host, request: PhpRequest, router?: string): Promise<PhpResponse> {
   const args = ['-S', address(request.server.host, request.server.port), '--stdio', address(request.client.address, request.client.port), '-t', host.root, '-q', ...iniArgs(host.ini), ...(router ? [router] : [])];
   const ran = await run(host, args, requestBytes(request));
-  if (ran.stdout.length === 0) throw new Error(`php2 served no response (exit ${ran.status}): ${ran.stderr.toString()}`);
+  if (ran.stdout.length === 0) throw new Error(`p8 served no response (exit ${ran.status}): ${ran.stderr.toString()}`);
   return { ...parseResponse(ran.stdout), log: ran.stderr.toString() };
 }
 
@@ -114,7 +114,7 @@ export async function render(host: Host, file: string, props: unknown): Promise<
   const args = [...iniArgs(host.ini), '-r', RENDER_BOOTSTRAP, '--', file];
   const ran = await run(host, args, Buffer.from(JSON.stringify(props ?? null)));
   if (ran.status !== 0) {
-    throw new Error(`php2 exited with ${ran.status} rendering ${file}:\n${ran.stdout.toString()}${ran.stderr.toString()}`);
+    throw new Error(`p8 exited with ${ran.status} rendering ${file}:\n${ran.stdout.toString()}${ran.stderr.toString()}`);
   }
   return ran.stdout.toString();
 }

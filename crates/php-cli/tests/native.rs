@@ -1,13 +1,13 @@
-//! `php2 --compile <dir> --native <exe>` (#402, Phase 4): an executable
+//! `p8 compile [dir] --native <exe>` (#402, Phase 4): an executable
 //! holding the runtime, the package and the package's functions as
-//! machine code. Its runs print what php2's print, byte for byte (and
+//! machine code. Its runs print what p8's print, byte for byte (and
 //! what PHP 8.6 prints, recorded below); its native functions run (the
 //! executable's `--native-counts` says how many were entered and how
 //! many handed the frame back), and what they do not handle runs on the
 //! interpreter, from the instruction they stopped at, with the state they
 //! left (#388).
 //!
-//! It needs the runtime library beside php2: `cargo build --release
+//! It needs the runtime library beside p8: `cargo build --release
 //! --locked -p p8-native` (the gates build it first).
 
 use std::path::{Path, PathBuf};
@@ -75,13 +75,13 @@ var_dump(mix(10));
 /// What PHP 8.6.0RC5 prints for FALLBACK.
 const FALLBACK_OUT: &str = "int(5)\nint(9)\nfloat(9.223372036854776E+18)\nfloat(3.5)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(3)\n}\nint(3)\nint(1225050)\nint(45010)\n";
 
-fn php2() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_php2"))
+fn p8() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_p8"))
 }
 
-/// The runtime library php2 links native executables with.
+/// The runtime library p8 links native executables with.
 fn host_library() -> PathBuf {
-    let lib = php2().with_file_name("libp8_native.a");
+    let lib = p8().with_file_name("libp8_native.a");
     assert!(lib.is_file(), "{} is missing: build it with `cargo build --release --locked -p p8-native`", lib.display());
     lib
 }
@@ -99,10 +99,10 @@ pub fn build(name: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
     (dir.join("src"), exe)
 }
 
-/// `php2 --compile src --package package --native exe`; the executable.
+/// `p8 compile src --package package --native exe`; the executable.
 pub fn native(src: &Path, package: &Path, exe: &Path) -> PathBuf {
-    let out = Command::new(php2())
-        .arg("--compile")
+    let out = Command::new(p8())
+        .arg("compile")
         .arg(src)
         .arg("--package")
         .arg(package)
@@ -111,7 +111,7 @@ pub fn native(src: &Path, package: &Path, exe: &Path) -> PathBuf {
         .arg("--native-host")
         .arg(host_library())
         .output()
-        .expect("run php2 --compile --native");
+        .expect("run p8 compile --native");
     let said = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success() && exe.is_file(), "{said}");
     exe.to_path_buf()
@@ -130,10 +130,10 @@ fn counts(out: &Output) -> (u64, u64, u64) {
 }
 
 #[test]
-fn a_native_executable_prints_what_php2_prints_and_runs_native_code() {
+fn a_native_executable_prints_what_p8_prints_and_runs_native_code() {
     let (src, exe) = build("hot", &[("hot.php", HOT)]);
     let script = src.join("hot.php");
-    let plain = run(php2(), &[&script]);
+    let plain = run(p8(), &[&script]);
     assert_eq!(String::from_utf8_lossy(&plain.stdout), HOT_OUT);
     let native = run(&exe, &[Path::new("--native-counts"), &script]);
     assert!(native.status.success(), "{}", String::from_utf8_lossy(&native.stderr));
@@ -150,7 +150,7 @@ fn a_native_executable_prints_what_php2_prints_and_runs_native_code() {
 fn what_native_code_does_not_handle_runs_on_the_interpreter_from_where_it_stopped() {
     let (src, exe) = build("fallback", &[("fallback.php", FALLBACK)]);
     let script = src.join("fallback.php");
-    let plain = run(php2(), &[&script]);
+    let plain = run(p8(), &[&script]);
     assert_eq!(String::from_utf8_lossy(&plain.stdout), FALLBACK_OUT);
     let native = run(&exe, &[Path::new("--native-counts"), &script]);
     assert_eq!(String::from_utf8_lossy(&native.stdout), FALLBACK_OUT, "{}", String::from_utf8_lossy(&native.stderr));

@@ -1,4 +1,4 @@
-//! p8 end to end through the php2 host: each tests/scripts/NAME.php must print exactly
+//! p8 end to end through the p8 host: each tests/scripts/NAME.php must print exactly
 //! what real PHP printed for it (NAME.out, recorded reading the script from
 //! stdin, its file name replaced by %s). Recorded with php:8.4-cli; p8's
 //! target is PHP 8.6 since 4 Nov 2026, and a script is re-recorded with 8.6
@@ -18,33 +18,32 @@ fn scripts_match_php_8_4() {
 }
 
 /// The same scripts, every one taken from a package of them all
-/// (`php2 --compile`, #381): the output is the same, byte for byte.
+/// (`p8 compile --cli`, #381): the output is the same, byte for byte.
 #[test]
 fn scripts_match_php_8_4_from_a_package() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
     let package = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scripts.package");
-    let out = Command::new(env!("CARGO_BIN_EXE_php2")).arg("--compile").arg(&dir).arg("--package").arg(&package).output().expect("run php2 --compile");
+    let out = Command::new(env!("CARGO_BIN_EXE_p8")).arg("compile").arg(&dir).arg("--cli").arg("--package").arg(&package).output().expect("run p8 compile");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     check(&["--package".as_ref(), package.as_os_str()]);
 }
 
-/// The same scripts through a native executable of them all (`php2
-/// --compile --native`, #402): the functions with machine code run as it,
-/// every other one (most of them), and whatever the machine code hands
-/// back, on the interpreter; the output is the same, byte for byte.
-/// Needs the runtime library beside php2 (`cargo build --release --locked
-/// -p p8-native`).
+/// The same scripts through a native executable of them all (`p8 compile
+/// --native`, #402): the functions with machine code run as it, every
+/// other one (most of them), and whatever the machine code hands back, on
+/// the interpreter; the output is the same, byte for byte. Needs the
+/// runtime library beside p8 (`cargo build --release --locked -p p8-native`).
 #[test]
 fn scripts_match_php_8_4_as_a_native_executable() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
     let (package, exe) = (tmp.join("scripts.native.package"), tmp.join("scripts.native"));
-    let host = Path::new(env!("CARGO_BIN_EXE_php2")).with_file_name("libp8_native.a");
+    let host = Path::new(env!("CARGO_BIN_EXE_p8")).with_file_name("libp8_native.a");
     assert!(host.is_file(), "{} is missing: build it with `cargo build --release --locked -p p8-native`", host.display());
-    let out = Command::new(env!("CARGO_BIN_EXE_php2"))
-        .arg("--compile")
+    let out = Command::new(env!("CARGO_BIN_EXE_p8"))
+        .arg("compile")
         .arg(&dir)
         .arg("--package")
         .arg(&package)
@@ -53,7 +52,7 @@ fn scripts_match_php_8_4_as_a_native_executable() {
         .arg("--native-host")
         .arg(&host)
         .output()
-        .expect("run php2 --compile --native");
+        .expect("run p8 compile --native");
     assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     // (Some of the corpus's functions are native: else this tests nothing.)
     let said = String::from_utf8_lossy(&out.stdout);
@@ -63,7 +62,7 @@ fn scripts_match_php_8_4_as_a_native_executable() {
 
 /// Every tests/scripts/NAME.php run with `options` prints NAME.out.
 fn check(options: &[&std::ffi::OsStr]) {
-    check_with(env!("CARGO_BIN_EXE_php2").as_ref(), options);
+    check_with(env!("CARGO_BIN_EXE_p8").as_ref(), options);
 }
 
 /// The same, run by `exe`.
@@ -80,8 +79,8 @@ fn check_with(exe: &std::ffi::OsStr, options: &[&std::ffi::OsStr]) {
     for script in &scripts {
         // Bytes: a script may print text in another encoding (XMLWriter's ISO-8859-1).
         let want = std::fs::read(script.with_extension("out")).expect("expected output");
-        let out = Command::new(exe).args(options).arg(script).output().expect("run php2");
-        if String::from_utf8_lossy(&out.stderr).contains("php2: not using the package") {
+        let out = Command::new(exe).args(options).arg(script).output().expect("run p8");
+        if String::from_utf8_lossy(&out.stderr).contains("p8: not using the package") {
             failures.push(format!("{}: the package was not used", script.display()));
         }
         let shown = std::fs::canonicalize(script).expect("canonical path");

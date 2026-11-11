@@ -1,6 +1,6 @@
 //! Time p8-test-suite's perf snippets under PHP and under p8.
 //!
-//!   php-perf --suite ../p8-test-suite --php target/release/php2 --reference docker:php:8.4-cli [--write]
+//!   php-perf --suite ../p8-test-suite --php target/release/p8 --reference docker:php:8.4-cli [--write]
 //!
 //! Each `perf/NAME.php` times its own work with hrtime and prints one JSON
 //! line, `{"check": …, "ns": …}` (perf/_bench.php), so process start-up and

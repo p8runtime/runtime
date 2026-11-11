@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! What php2 shares with the executables it builds (`--compile --native`,
+//! What p8 shares with the executables it builds (`p8 compile --native`,
 //! whose runtime is the `p8-native` crate's library): the extensions it
 //! loads (a package is used only by an engine with the same ones), the
 //! terminal host, the deep stack, and the native option itself
@@ -9,7 +9,7 @@ use std::io::Write;
 
 pub mod native;
 
-/// The extensions php2 loads (`server`: with what the built-in web server
+/// The extensions p8 loads (`server`: with what the built-in web server
 /// adds). A WASI build has no sockets, so it is a PHP built without
 /// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
 pub fn extensions(server: bool) -> Vec<p8::Extension> {

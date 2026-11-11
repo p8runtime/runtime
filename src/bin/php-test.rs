@@ -1,10 +1,10 @@
-//! Run php-src style .phpt tests against the `php` binary.
+//! Run php-src style .phpt tests against a php binary (default: p8).
 //!
 //!   php-test path/to/php-src/Zend/tests -r --by-dir 2 --list results.txt
 //!
 //! Against p8-test-suite (the target tests and p8's recorded results):
 //!
-//!   php-test ../php-src --suite ../p8-test-suite --php target/release/php2 [-f zlib] [--only fail]
+//!   php-test ../php-src --suite ../p8-test-suite --php target/release/p8 [-f zlib] [--only fail]
 #![forbid(unsafe_code)] // memory safety is the point of this runtime; see SECURITY.md
 
 use clap::Parser;
@@ -35,7 +35,7 @@ struct Cli {
     #[arg(short = 'f', long)]
     filter: Option<String>,
 
-    /// The php binary under test (default: `php` next to this binary)
+    /// The php binary under test (default: `p8` next to this binary)
     #[arg(long)]
     php: Option<PathBuf>,
 
@@ -114,7 +114,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let php = match cli.php.clone() {
         Some(p) => p,
-        None => std::env::current_exe()?.with_file_name("php"),
+        None => std::env::current_exe()?.with_file_name("p8"),
     };
     anyhow::ensure!(php.is_file(), "php binary not found: {}", php.display());
     // Tests run from their own directory, so a relative path would break.

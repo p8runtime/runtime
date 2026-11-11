@@ -11,7 +11,7 @@ compiler rejects `unsafe` blocks, functions and impls anywhere in our code.
 `forbid` cannot be overridden by an inner `#[allow]`.
 
 One crate is the exception, by decision (#402): `crates/p8-native`, the
-boundary to the machine code of an executable `--compile --native` builds.
+boundary to the machine code of an executable `p8 compile --native` builds.
 Calling generated code and exposing a helper to it cannot be done in safe
 Rust, so that crate, and only it, holds `unsafe`: one file, every block
 with its `SAFETY:` comment (clippy's `undocumented_unsafe_blocks` denied),

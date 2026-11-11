@@ -12,13 +12,13 @@ fn mail_matches_php_8_4() {
     let mailbox = Path::new(env!("CARGO_TARGET_TMPDIR")).join("mail.mbox");
     let _ = std::fs::remove_file(&mailbox);
     let script = dir.join("send.php");
-    let out = Command::new(env!("CARGO_BIN_EXE_php2"))
+    let out = Command::new(env!("CARGO_BIN_EXE_p8"))
         .arg("-d")
         .arg(format!("sendmail_path={}", dir.join("sendmail.sh").display()))
         .arg(&script)
         .env("MAILBOX", &mailbox)
         .output()
-        .expect("run php2");
+        .expect("run p8");
     let shown = std::fs::canonicalize(&script).expect("canonical path");
     let got = String::from_utf8_lossy(&out.stdout).replace(&*shown.to_string_lossy(), "%s");
     assert_eq!(got, std::fs::read_to_string(dir.join("send.out")).expect("send.out"));

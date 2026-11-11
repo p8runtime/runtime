@@ -6,7 +6,7 @@
 //! # What this crate is
 //!
 //! The runtime library of a p8-built executable (`libp8_native.a`):
-//! `php2 --compile <dir> --native <exe>` links it with an object file
+//! `p8 compile [dir] --native <exe>` links it with an object file
 //! Cranelift wrote (`p8-native-gen`), which holds the native functions,
 //! the image (`p8_native_abi::image`: their table, which package function
 //! each is, the package's bytes) and a C `main` that calls [`p8_native_main`]
@@ -23,7 +23,7 @@
 //!    [`Image`] declares (checked by `const` asserts below). The magic and
 //!    version words are read and checked before any other field.
 //!    Guaranteed by: the code generator and the linker (the object and
-//!    this library are linked into one executable by `php2`).
+//!    this library are linked into one executable by `p8`).
 //! 2. It reads the C `argv` the C runtime passed `main`: `argc` pointers
 //!    to NUL-terminated strings. Guaranteed by: the C runtime.
 //! 3. [`Code::run`] calls a native function: `extern "C" fn(*mut Ctx) ->
@@ -72,7 +72,7 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::{self, offset_of};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// The executable's allocator: php2's (see php-cli).
+// The executable's allocator: p8's (see php-cli).
 #[global_allocator]
 static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
@@ -226,7 +226,7 @@ pub fn check_layout() {
 }
 
 /// The entry the generated `main` calls with the image: check the
-/// layout and the image, then run the script as php2 runs one, with the
+/// layout and the image, then run the script as p8 runs one, with the
 /// image's package and its native functions. `--native-counts` first
 /// says on stderr, at the end, how the native code ran.
 ///

@@ -1,4 +1,4 @@
-//! The native option (#402, Phase 4), in one place: `--compile <dir>
+//! The native option (#402, Phase 4), in one place: `p8 compile [dir]
 //! --native <exe>` writes an executable holding the runtime, the package
 //! and the package's functions as machine code ([`write`]); that
 //! executable's runtime runs a script with them ([`run`], called by the
@@ -46,7 +46,7 @@ pub struct Embedded {
 }
 
 /// Run a native executable's script: `[-d name=value]... <file>
-/// [args...]`, as php2 runs it with the executable's package, the
+/// [args...]`, as p8 runs it with the executable's package, the
 /// package's functions that have machine code run as it.
 pub fn run(args: Vec<String>, native: Embedded) -> i32 {
     let mut args = args.into_iter().peekable();

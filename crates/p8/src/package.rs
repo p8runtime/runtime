@@ -1,5 +1,5 @@
 //! A package: every compiled file of a project in one file, written ahead
-//! of time (`php2 --compile <dir>`), so that a run takes each file it
+//! of time (`p8 compile <dir>`), so that a run takes each file it
 //! includes from the package and parses and compiles none of them (#381).
 //!
 //! A packaged file is used only while it is the file on disk: the

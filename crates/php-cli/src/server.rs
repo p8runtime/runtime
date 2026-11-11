@@ -34,6 +34,45 @@ pub struct Config {
     pub quiet: u8,
     /// `-d name=value` settings, in order.
     pub ini: Vec<(String, String)>,
+    /// `p8 serve`: the project served (the document root) from its
+    /// package; none for `php -S`.
+    pub project: Option<Project>,
+}
+
+/// What `p8 serve` adds to the built-in server: the project's package,
+/// which files are taken from (compiled ahead by `p8 compile`, for this
+/// server's engine), and a log that says how many files each request
+/// compiled from source.
+pub struct Project {
+    /// The package (`<dir>/.p8/package`); missing or not usable, the
+    /// project is served from source, and stderr says so once.
+    pub package: PathBuf,
+}
+
+impl Project {
+    /// `platform` taking compiled files from the package, when it can.
+    /// The default check (each file's source hashed and compared with the
+    /// package's) is the one a server needs: it reads each source anyway,
+    /// and an edited or new file runs its new code (#382, #383).
+    fn attach(&self, platform: p8::Platform) -> p8::Platform {
+        let shown = self.package.display();
+        match platform.open_package(&self.package, p8::PackageCheck::Hash) {
+            Ok(package) => return platform.with_package(package),
+            Err(p8::PackageError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("p8: there is no compiled package at {shown}, so every file is compiled from source (`p8 compile` writes it).");
+            }
+            Err(p8::PackageError::Io(e)) => {
+                eprintln!("p8: the package at {shown} could not be read ({}), so every file is compiled from source.", strerror(&e));
+            }
+            Err(p8::PackageError::OtherEngine) => {
+                eprintln!("p8: the package at {shown} was written by another build of p8 or for other extensions, so every file is compiled from source (`p8 compile` writes it again).");
+            }
+            Err(e) => {
+                eprintln!("p8: the package at {shown} cannot be used ({e}), so every file is compiled from source (`p8 compile` writes it again).");
+            }
+        }
+        platform
+    }
 }
 
 /// What `php -S` sets that differs from the CLI's own defaults: the CLI
@@ -480,16 +519,30 @@ fn with_server(config: &Config, host: String, port: u16, docroot: String, serve:
     let platform = p8::Platform::new(&crate::extensions(true))
         // Each file is compiled once, and again only when its source changes.
         .keep_compiled();
+    let platform = match &config.project {
+        Some(project) => project.attach(platform),
+        None => platform,
+    };
     let mut ini: Vec<(String, String)> = SERVER_INI.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
     ini.extend(config.ini.iter().cloned());
-    let platform = crate::file_cache(platform, &ini, false);
-    // php -S is not the CLI: OPcache runs with opcache.enable alone, as in PHP.
-    let platform = crate::opcache(platform, &ini, false);
+    // `p8 serve`: the package and the files kept by their source are its
+    // cache (APS 8: by path and content), so an edited file runs its new
+    // code at the next request; OPcache's rules (a file checked by its
+    // time every revalidate_freq seconds) are php -S's only.
+    let platform = match config.project {
+        Some(_) => platform,
+        None => {
+            let platform = crate::file_cache(platform, &ini, false);
+            // php -S is not the CLI: OPcache runs with opcache.enable alone, as in PHP.
+            crate::opcache(platform, &ini, false)
+        }
+    };
     let mut isolate = platform.new_isolate();
     let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
     LIMIT_SECONDS.store(limit, Ordering::Relaxed);
     let watchdog = Watchdog::start(isolate.interrupt_handle());
-    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit) };
+    let counts = config.project.is_some();
+    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit), counts };
     serve(&mut server, &mut isolate);
 }
 
@@ -552,7 +605,10 @@ pub fn run(config: Config) -> i32 {
     };
     let port = listener.local_addr().map_or(port, |a| a.port());
     let shown = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
-    log(LOG_PROCESS, &format!("PHP {} Development Server (http://{shown}) started", p8::PHP_VERSION));
+    match &config.project {
+        Some(_) => log(LOG_PROCESS, &format!("p8 {} serving {docroot} at http://{shown}", p8::P8_VERSION)),
+        None => log(LOG_PROCESS, &format!("PHP {} Development Server (http://{shown}) started", p8::PHP_VERSION)),
+    }
 
     let (tx, rx) = mpsc::channel::<Incoming>();
     std::thread::spawn(move || accept_loop(listener, tx));
@@ -635,6 +691,9 @@ struct Server<'p> {
     ini: Vec<(String, String)>,
     watchdog: Watchdog,
     limit: u64,
+    /// `p8 serve`: each request's log line says how many files it
+    /// compiled from source (none, for a project served from its package).
+    counts: bool,
 }
 
 /// How a script run ended.
@@ -799,6 +858,7 @@ impl Server<'_> {
             self.error_page(incoming, conn, 501);
             return;
         }
+        let compiled = self.platform.compiled_files();
         let vpath = normalize_vpath(req.path.as_deref().unwrap_or_default());
         let resolved = translate_vpath(self.docroot.as_bytes(), vpath);
         let ext = extension(&resolved.vpath).to_ascii_lowercase();
@@ -827,7 +887,11 @@ impl Server<'_> {
         }
         let p8req = self.p8_request(incoming, &resolved, false);
         let ran = self.execute(isolate, conn, &to_path(&path), &p8req, true, carried);
-        self.log_response(incoming, ran.status, None, ran.fatal.as_deref());
+        let counted = self.counts.then(|| match self.platform.compiled_files() - compiled {
+            1 => "1 file compiled from source".to_string(),
+            n => format!("{n} files compiled from source"),
+        });
+        self.log_response(incoming, ran.status, counted.as_deref(), ran.fatal.as_deref());
     }
 
     /// php_cli_server_begin_send_static()

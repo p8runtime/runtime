@@ -21,7 +21,7 @@ let http: Server;
 let base: string;
 
 before(async () => {
-  assert.ok(existsSync(DEFAULT_WASM), `php2.wasm is built (npm run build:wasm): ${DEFAULT_WASM}`);
+  assert.ok(existsSync(DEFAULT_WASM), `p8.wasm is built (npm run build:wasm): ${DEFAULT_WASM}`);
   vite = await createServer({
     root: example,
     configFile: false,

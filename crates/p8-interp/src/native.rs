@@ -1,7 +1,7 @@
 //! Native code (#402, Phase 4): the interpreter's side of running a
 //! function as machine code, in safe Rust.
 //!
-//! A p8-built executable (`php2 --compile <dir> --native <exe>`) carries
+//! A p8-built executable (`p8 compile [dir] --native <exe>`) carries
 //! machine code for some of its package's functions. The machine code is
 //! called through the one crate allowed `unsafe` (`p8-native`), which
 //! implements [`NativeCode`]; this module is what that crate is given:
