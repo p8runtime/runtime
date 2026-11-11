@@ -1009,7 +1009,18 @@ impl Context<'_> {
                     // the error) is `step`'s.
                     Op::New => {
                         ops!(a, b, c, imm);
-                        let Some(info) = Self::cached_new(clo, imm as u16) else { slow!() };
+                        // A named class: the site's cache; `new static`,
+                        // `new self`, `new parent`: the class known without a
+                        // lookup (`static_target`) and the NewInfo kept for it
+                        // (`new_info_kept`). A class in a register, one not
+                        // made before: `step`.
+                        let info = match Self::cached_new(clo, imm as u16) {
+                            Some(info) => info,
+                            None => match self.new_info_kept(clo, imm as u16) {
+                                Some(info) => info,
+                                None => slow!(),
+                            },
+                        };
                         let Some(object) = self.make_plain(&info) else { slow!() };
                         // Not destructed unless constructed (an argument may throw first).
                         object.destructed.set(true);
@@ -1292,9 +1303,9 @@ impl Context<'_> {
                     // Whether `$o->m(..)` takes argument c by reference, when
                     // the call site's cache knows the method for this class
                     // and scope (`cached_takes_ref`, a user method's or a
-                    // native one's); else `step`'s lookup.
-                    // A miss asks the class by name (`method_takes_ref_out`);
-                    // not an object (through a reference either): no.
+                    // native one's); a miss asks the class by name
+                    // (`method_takes_ref_out`, as `step` does); not an
+                    // object (through a reference either): no.
                     Op::MethodArgByRef => {
                         ops!(a, b, c, imm);
                         let held;
@@ -1476,6 +1487,87 @@ impl Context<'_> {
                             pc = imm as usize;
                         }
                     }
+                    // `$o->p op= v` on a scalar in the declared slot the
+                    // name's cache entry answers, with a scalar, computed
+                    // with nothing to report (`prop_op`); anything else
+                    // (magic, hooks, a conversion's warning, a type the
+                    // property does not take) is `step`'s.
+                    Op::AssignPropOp => {
+                        ops!(a, b, c, imm);
+                        let o = if imm & insn::PROP_PATH_THIS != 0 {
+                            let Some(o) = &top.this else { slow!() };
+                            o
+                        } else {
+                            let Some(o) = w[rx!(a)].as_object() else { slow!() };
+                            o
+                        };
+                        let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let y = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
+                        let Some(v) = prop_op(o, site.get(), scope, insn::binop(imm >> 16), y) else { slow!() };
+                        done!(put(&mut w[rx!(c)], v));
+                    }
+                    // `f(...$args)`: the values placed and the call made out
+                    // of line on the arm's operands (`call_spread_ops`).
+                    Op::CallSpread => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b), Reg::from(c)), |cx, regs, clo, base, _, at, ops| cx.call_spread_ops(regs, clo, base, at, ops));
+                    }
+                    // `@expr`: the error level saved, then narrowed to the
+                    // fatal kinds (E_ERROR | E_CORE_ERROR | E_COMPILE_ERROR
+                    // | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE), as
+                    // `step` does.
+                    Op::Silence => {
+                        ops!(a, b, c, imm);
+                        let level = self.error_level;
+                        self.error_level &= 4437;
+                        done!(put(&mut w[rx!(a)], Value::int(level)));
+                    }
+                    // Its end: a level the silenced code set stays (as in
+                    // PHP), unless it only narrowed it to the silenced one.
+                    Op::Unsilence => {
+                        ops!(a, b, c, imm);
+                        if let Some(level) = w[rx!(a)].as_int()
+                            && self.error_level == level & 4437
+                        {
+                            self.error_level = level;
+                        }
+                        pc += 1;
+                    }
+                    // `-$x` of an int (not the least: a float) or a float
+                    // (`negate_float`); anything else (a conversion, a
+                    // warning) is `step`'s.
+                    Op::Neg => {
+                        ops!(a, b, c, imm);
+                        let x = &w[rx!(b)];
+                        let v = if let Some(n) = x.as_int().and_then(i64::checked_neg) {
+                            Value::int(n)
+                        } else if let Some(f) = x.as_float() {
+                            Value::float(p8_runtime::ops::negate_float(f))
+                        } else {
+                            slow!()
+                        };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `use ($x)` / `use (&$x)` of the closure just made (in
+                    // a): the variable's value (defined), or the variable
+                    // made a reference, added to its captured values. An
+                    // undefined one (the warning, or null quietly) is
+                    // `step`'s.
+                    Op::Capture => {
+                        ops!(a, b, c, imm);
+                        let v = if imm & insn::CAPTURE_REF != 0 {
+                            Value::reference(make_ref(&mut w[..], Reg::from(b)))
+                        } else {
+                            match copied(&w[rx!(b)]) {
+                                Some(v) => v,
+                                None => slow!(),
+                            }
+                        };
+                        let Some(data) = w[rx!(a)].as_object().and_then(|o| callable::closure_data(o)) else { slow!() };
+                        data.captured.borrow_mut().push(v);
+                        pc += 1;
+                    }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).
                     Op::ReturnNull => {
@@ -1619,15 +1711,32 @@ pub(crate) struct Path {
 #[inline(never)]
 fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usize>) -> Option<bool> {
     let path = p.keys..p.keys + p.n;
-    if path.contains(&var) || !w[var].is_array() || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
+    // (A variable bound by reference: the array its cell holds.)
+    let cell = w[var].as_reference().map(Rc::clone);
+    let is_array = match &cell {
+        Some(cell) => cell.borrow().is_array(),
+        None => w[var].is_array(),
+    };
+    if path.contains(&var) || !is_array || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
     let v = copied(&w[val])?;
-    // The root out of its register while it is written (nothing else
-    // reads it meanwhile), then back.
-    let mut root = std::mem::take(&mut w[var]);
-    let written = write_path(&mut root, &w[path], p.append, v.clone());
-    w[var] = root;
+    // The root out of its register (or cell) while it is written (nothing
+    // else reads it meanwhile), then back.
+    let written = match &cell {
+        Some(cell) => {
+            let mut root = std::mem::take(&mut *cell.borrow_mut());
+            let written = write_path(&mut root, &w[path], p.append, v.clone());
+            *cell.borrow_mut() = root;
+            written
+        }
+        None => {
+            let mut root = std::mem::take(&mut w[var]);
+            let written = write_path(&mut root, &w[path], p.append, v.clone());
+            w[var] = root;
+            written
+        }
+    };
     let released = written?;
     Some(match dst {
         Some(dst) => released | put(&mut w[dst], v),
@@ -1861,6 +1970,33 @@ fn prop_inc_dec(o: &Rc<Object>, site: PropSite, scope: usize, imm: u32) -> Optio
     }
     cell.assign(new.clone());
     Some(if imm & insn::PROP_POST != 0 { Value::int(old) } else { new })
+}
+
+/// `$o->p op= y` (`Op::AssignPropOp`): the declared slot the name's cache
+/// entry `site` holds for this class and `scope` (`cached_slot`), of a
+/// class with no hooked property, the property neither readonly nor of a
+/// narrower set visibility, holding a scalar; `y` a scalar; the result
+/// computed with no diagnostic and no error (`ops::binary`: no user code
+/// runs for scalars) and of the property's type: written, and returned.
+/// None for anything else (`step`'s: magic, hooks, a reference, an unset
+/// slot, a warning, a coercion).
+#[inline(never)]
+fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -> Option<Value> {
+    let scalar = |v: &Value| matches!(v.kind(), Kind::Null | Kind::Bool | Kind::Int | Kind::Float | Kind::Str);
+    let slot = cached_slot(site, o, scope)?;
+    let p = &o.class.properties[slot];
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() || !scalar(y) {
+        return None;
+    }
+    let cell = &o.slots()[slot];
+    let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
+    let mut diags = Vec::new();
+    let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;
+    if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+        return None;
+    }
+    cell.assign(new.clone());
+    Some(new)
 }
 
 /// The object a reference holds (a method call's receiver bound by

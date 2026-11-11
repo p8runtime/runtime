@@ -120,6 +120,15 @@ pub const ITER_KEY: u32 = 1 << 31;
 /// FetchList's `imm`: the key is register c (else it is constant imm).
 pub const LIST_KEY_REG: u32 = 1 << 31;
 
+/// AssignPropOp's `imm` bit (with PROP_PATH_THIS; the operator in bits
+/// 16..20): the value is constant b, not register b.
+pub const PROP_OP_K: u32 = 1 << 30;
+
+/// Capture's `imm` bits: by reference (`use (&$x)`); quiet (no warning
+/// for an undefined variable).
+pub const CAPTURE_REF: u32 = 1;
+pub const CAPTURE_QUIET: u32 = 2;
+
 /// The most keys `Op::AssignDimPath` writes through.
 pub const PATH_KEYS: u8 = 4;
 
@@ -605,6 +614,25 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             block(base, argc)?;
             i(Op::CallValue, dst, callee, base, u32::from(argc) | u32::from(vars) << 8)
         }
+        Instr::CallSpread { dst, callee, args } => i(Op::CallSpread, dst, callee, args, 0),
+        // `$o->p op= v`, `$this->p op= v` (the name a constant: its cache
+        // entry; the value a register, or a constant below 256).
+        Instr::AssignPropOp { op, obj, name, val, dst } => {
+            let site = prop_site(name, nconsts).filter(|&s| s < 1 << 16)?;
+            let this = obj == THIS;
+            let (v, kflag) = match k(val) {
+                Some(kk) if kk < 256 => (kk as Reg, PROP_OP_K),
+                Some(_) => return None,
+                None => (val, 0),
+            };
+            i(Op::AssignPropOp, if this { 0 } else { obj }, v, dst, site | binop_imm(op) << 16 | kflag | if this { PROP_PATH_THIS } else { 0 })
+        }
+        Instr::Silence { saved } => i(Op::Silence, saved, 0, 0, 0),
+        Instr::Unsilence { saved } => i(Op::Unsilence, saved, 0, 0, 0),
+        Instr::Neg { dst, src } => i(Op::Neg, dst, src, 0, 0),
+        Instr::Capture { closure, var, by_ref, quiet } => {
+            i(Op::Capture, closure, var, 0, if by_ref { CAPTURE_REF } else { 0 } | if quiet { CAPTURE_QUIET } else { 0 })
+        }
         // `[$a, 'k' => $b] = $src`: the key a literal or a register.
         Instr::FetchList { dst, arr, key } => match k(key) {
             Some(kk) => i(Op::FetchList, dst, arr, 0, kk),
@@ -951,6 +979,14 @@ mod tests {
             Instr::FetchList { dst: 300, arr: 5, key: 8 },
             Instr::CallValue { dst: 6, callee: 5, base: 10, argc: 2, vars: crate::NO_VARS },
             Instr::CallValue { dst: 6, callee: 5, base: 10, argc: 2, vars: 3 },
+            // `$this->p .= 'k'` (a constant value below 256), `$o->p += $v`;
+            // a value constant past 256 is not inline.
+            Instr::AssignPropOp { op: BinOp::Concat, obj: THIS, name: c(7), val: c(8), dst: 6 },
+            Instr::AssignPropOp { op: BinOp::Add, obj: 5, name: c(7), val: 3, dst: 6 },
+            Instr::AssignPropOp { op: BinOp::Add, obj: 5, name: c(7), val: c(300), dst: 6 },
+            Instr::Capture { closure: 5, var: 3, by_ref: true, quiet: false },
+            Instr::Neg { dst: 6, src: 3 },
+            Instr::CallSpread { dst: 6, callee: 5, args: 4 },
         ];
         let consts = consts();
         let at = |pc| lower_in(&code, pc, &consts, 2, &[], &[]);
@@ -964,6 +1000,12 @@ mod tests {
         assert!(at(7).is_none());
         assert_eq!(at(8).unwrap(), Insn { op: Op::CallValue, a: 6, b: 5, c: 10, imm: 2 | u32::from(crate::NO_VARS) << 8 });
         assert_eq!(at(9).unwrap(), Insn { op: Op::CallValue, a: 6, b: 5, c: 10, imm: 2 | 3 << 8 });
+        assert_eq!(at(10).unwrap(), Insn { op: Op::AssignPropOp, a: 0, b: 8, c: 6, imm: 7 | 6 << 16 | PROP_OP_K | PROP_PATH_THIS });
+        assert_eq!(at(11).unwrap(), Insn { op: Op::AssignPropOp, a: 5, b: 3, c: 6, imm: 7 });
+        assert!(at(12).is_none());
+        assert_eq!(at(13).unwrap(), Insn { op: Op::Capture, a: 5, b: 3, c: 0, imm: CAPTURE_REF });
+        assert_eq!(at(14).unwrap(), Insn { op: Op::Neg, a: 6, b: 3, c: 0, imm: 0 });
+        assert_eq!(at(15).unwrap(), Insn { op: Op::CallSpread, a: 6, b: 5, c: 4, imm: 0 });
     }
 
     #[test]

@@ -308,4 +308,133 @@ for ($r = 0; $r < 2; $r++) {
     echo fact(5), "\n";
     echo (new St)->bump(), ' ', (new St)->bump(), ' ', (new StChild)->bump(), "\n";
 }
+echo "-- appends through references\n";
+$GLOBALS['glist'] = [];
+function gadd($x) { global $glist; $glist[] = $x; return count($glist); }
+for ($r = 0; $r < 2; $r++) {
+    echo gadd('a'), gadd('b'), "\n";
+    $base = ['k' => [1]];
+    $alias = &$base;
+    $alias['k'][] = 2;
+    $alias['new'][] = 3;
+    $alias[] = 'tail';
+    echo json_encode($base), "\n";
+    $nul = null;
+    $nref = &$nul;
+    $nref[] = 'from null';
+    echo json_encode($nul), "\n";
+    $full = [PHP_INT_MAX => 1];
+    $fref = &$full;
+    try {
+        $fref[] = 2;
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    $str = 'abc';
+    $sref = &$str;
+    try {
+        $sref[] = 'd';
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    unset($alias, $nref, $fref, $sref);
+}
+echo json_encode($glist), "\n";
+
+echo "-- property op-assignments\n";
+class PO {
+    public $s = 'a'; public int $i = 1; public ?float $f = null; public $n = null; public $arr = [];
+    public readonly int $ro;
+    private $priv = 1;
+    function __construct() { $this->ro = 1; }
+    function inside() { $this->priv *= 10; $this->s .= '!'; return $this->priv; }
+}
+class POMagic {
+    private $data = ['m' => 1];
+    function __get($k) { echo "__get $k\n"; return $this->data[$k] ?? null; }
+    function __set($k, $v) { echo "__set $k\n"; $this->data[$k] = $v; }
+}
+for ($r = 0; $r < 2; $r++) {
+    $o = new PO;
+    $o->s .= 'b';
+    $o->s .= 5;
+    $o->i += 2;
+    $o->i <<= 1;
+    $o->n += 3;
+    $o->f = 1.0;
+    $o->f *= 2;
+    echo $o->s, ' ', $o->i, ' ', $o->n, ' ', var_export($o->f, true), ' ', $o->inside(), ' ', $o->s, "\n";
+    $held = &$o->s;
+    $o->s .= 'ref';
+    echo $held, "\n";
+    unset($held);
+    try {
+        $o->i += 1.5;
+    } catch (TypeError $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    try {
+        $o->ro += 1;
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    try {
+        $o->n %= 0;
+    } catch (DivisionByZeroError $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    $o->s .= $o->arr;
+    $o->i += '3';
+    echo $o->s, ' ', $o->i, "\n";
+    $m = new POMagic;
+    $m->m += 5;
+    echo $m->m, "\n";
+}
+
+echo "-- silence, negation, captures, new static, spreads\n";
+class Fac { static function make() { return new static; } static function self() { return new self; } protected function __construct() {} }
+class FacChild extends Fac { static function viaParent() { return new parent; } }
+function spread_me($a, $b = 'B', ...$rest) { return "$a $b " . json_encode($rest); }
+function spread_ref(&$x, $y) { $x .= $y; }
+class Magic2 { function __call($m, $a) { return "$m " . json_encode($a); } }
+for ($r = 0; $r < 2; $r++) {
+    echo @$undefined_one ?? 'null', ' ', @(10 / 1), ' ', var_export(@file_get_contents('/no/such/file'), true), "\n";
+    $level = error_reporting();
+    @error_reporting(E_ALL & ~E_NOTICE);
+    echo error_reporting() === (E_ALL & ~E_NOTICE) ? 'kept' : 'restored', "\n";
+    error_reporting($level);
+    $i = 5; $f = 2.5; $s = '7'; $nan = NAN; $min = PHP_INT_MIN;
+    var_dump(-$i, -$f, -$s, -$min, -null, -$nan);
+    try {
+        $arr = [];
+        var_dump(-$arr);
+    } catch (TypeError $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    $k = 3;
+    $by = 1;
+    $c1 = function () use ($k, &$by) { $by++; return $k; };
+    echo $c1(), $c1(), ' ', $by, "\n";
+    $c2 = function () use ($never_set) { return var_export($never_set, true); };
+    echo $c2(), "\n";
+    $c3 = fn () => isset($never_set2) ? 'set' : 'unset';
+    echo $c3(), "\n";
+    echo get_class(FacChild::make()), ' ', get_class(Fac::make()), ' ', get_class(FacChild::self()), ' ', get_class(FacChild::viaParent()), "\n";
+    echo spread_me(...[1]), ' | ', spread_me(...[1, 2, 3, 4]), ' | ', spread_me(...['b' => 'named', 'a' => 'first']), "\n";
+    $v = 'x';
+    spread_ref(...[&$v, 'y']);
+    echo $v, ' ', strtoupper(...['abc']), ' ', (new Magic2)->go(...[2 => 'q', 'p' => 1]), "\n";
+    $fn = fn (...$xs) => count($xs);
+    echo $fn(...[1, 2], ...[3]), "\n";
+    try {
+        spread_me(...[]);
+    } catch (ArgumentCountError $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    try {
+        spread_me(...['nope' => 1, 'a' => 2]);
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+}
 echo "done\n";

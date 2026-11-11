@@ -178,4 +178,82 @@ calls
 2
 120
 4 5 6
+-- appends through references
+12
+{"k":[1,2],"new":[3],"0":"tail"}
+["from null"]
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+34
+{"k":[1,2],"new":[3],"0":"tail"}
+["from null"]
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+["a","b","a","b"]
+-- property op-assignments
+ab5 6 3 2.0 10 ab5!
+ab5!ref
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 372
+Error: Cannot modify readonly property PO::$ro
+DivisionByZeroError: Modulo by zero
+
+Warning: Array to string conversion in %s on line 386
+ab5!refArray 10
+__get m
+__set m
+__get m
+6
+ab5 6 3 2.0 10 ab5!
+ab5!ref
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 372
+Error: Cannot modify readonly property PO::$ro
+DivisionByZeroError: Modulo by zero
+
+Warning: Array to string conversion in %s on line 386
+ab5!refArray 10
+__get m
+__set m
+__get m
+6
+-- silence, negation, captures, new static, spreads
+null 10 false
+kept
+int(-5)
+float(-2.5)
+int(-7)
+float(9.223372036854776E+18)
+int(0)
+float(NAN)
+TypeError: Unsupported operand types: array * int
+33 3
+
+Warning: Undefined variable $never_set in %s on line 418
+NULL
+unset
+FacChild Fac Fac Fac
+1 B [] | 1 2 [3,4] | first named []
+xy ABC go {"0":"q","p":1}
+3
+ArgumentCountError: Too few arguments to function spread_me(), 0 passed in %s on line 430 and at least 1 expected
+null 10 false
+kept
+int(-5)
+float(-2.5)
+int(-7)
+float(9.223372036854776E+18)
+int(0)
+float(NAN)
+TypeError: Unsupported operand types: array * int
+33 3
+
+Warning: Undefined variable $never_set in %s on line 418
+NULL
+unset
+FacChild Fac Fac Fac
+1 B [] | 1 2 [3,4] | first named []
+xy ABC go {"0":"q","p":1}
+3
+ArgumentCountError: Too few arguments to function spread_me(), 0 passed in %s on line 430 and at least 1 expected
 done

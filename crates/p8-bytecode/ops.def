@@ -228,6 +228,21 @@ hand FetchList
 /// a = b(the imm & 0xff arguments at c), the variables of `arg_vars`
 /// entry imm >> 8 (NO_VARS: none) sent as the callable takes them
 hand CallValue
+/// a->(property site imm & 0xffff) (op imm >> 16 & 15) = b (constant b
+/// with PROP_OP_K), the result into c; PROP_PATH_THIS (`$this`, not a)
+hand AssignPropOp
+/// a = b(...c): the call with the array's values as its arguments
+hand CallSpread
+/// `@`: a = the error level, then the level narrowed to the fatal kinds
+hand Silence
+/// the end of `@`: the level saved in a back, unless the silenced code
+/// changed it
+hand Unsilence
+/// a = -b
+hand Neg
+/// closure a captures variable b (`use ($b)`; imm: CAPTURE_REF `use (&$b)`,
+/// CAPTURE_QUIET no warning for an undefined one)
+hand Capture
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

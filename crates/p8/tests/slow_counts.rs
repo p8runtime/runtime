@@ -381,6 +381,38 @@ fn native_constructors_and_calls_of_values_stay_in_the_loop() {
     assert_eq!(out, "19");
 }
 
+/// `$list[] = v` and `$a['k'][] = v` on variables bound by reference
+/// (`global`, `&`), `@expr`, `-$x`, a closure's `use ($x)` and `use
+/// (&$x)`, `new static`, `f(...$args)`, and `$this->s .= 'x'`, `$o->n
+/// -= 1` on declared properties: in the loop's arms (the spread call out
+/// of line on the arm's operands), not the detour.
+#[test]
+fn appends_through_references_silence_negation_captures_and_spreads_stay_in_the_loop() {
+    let out = flat(
+        "$GLOBALS['list'] = [];
+         function add($x) { global $list; $list[] = $x; }
+         class M { static function make() { return new static; } }
+         class N extends M {}
+         function sum3($a, $b, $c) { return $a + $b + $c; }
+         class Acc { public $s = ''; public int $n = 0; function add() { $this->s .= 'x'; $this->n += 2; } }
+         $b = ['k' => []]; $a = &$b; $t = 0; $f = 1.5; $args = [1, 2, 3]; $k = 2; $acc = new Acc;
+         for ($i = 0; $i < $n; $i++) {
+             $acc->add();
+             $acc->n -= 1;
+             add($i);
+             $a['k'][] = $i;
+             $t += @strlen('ab') + (-$i) + (-$f);
+             $g = function ($x) use ($k, &$t) { return $x * $k; };
+             $t += $g(1);
+             $o = N::make();
+             $t += sum3(...$args);
+         }
+         echo count($GLOBALS['list']), ' ', count($b['k']), ' ', $t, ' ', get_class($o), ' ', strlen($acc->s), ' ', $acc->n;",
+    );
+    // $t: the sum of 2 - $i - 1.5 + 2 + 6.
+    assert_eq!(out, "20 20 -20 N 20 20");
+}
+
 /// `[$a, $b] = ..` and `$a[1]` (of elements bound by reference too),
 /// `['k' => $v] = ..`, a function's and a method's `static $x` (stepped through the
 /// reference), `foreach ($a as $k => &$v)` over an array, and `f($a['k'])`
