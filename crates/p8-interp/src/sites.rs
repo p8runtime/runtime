@@ -467,7 +467,7 @@ impl Context<'_> {
         let frame = self.frames.last();
         if s.is_static {
             let forward = matches!(func.classes[class as usize], p8_bytecode::ClassRef::Forward(..) | p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope);
-            let called = match frame.and_then(|f| f.called.as_ref()) {
+            let called = match frame.and_then(|f| f.called_class()) {
                 Some(c) if forward && (extends(c, target) || c.is_a(&target.lower)) => Rc::clone(c),
                 _ => Rc::clone(target),
             };

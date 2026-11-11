@@ -391,7 +391,8 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
                         let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
-                        let classes::Code::User(target) = &m.func else { slow!() };
+                        // (Taken apart: the frame takes its parts, no copy.)
+                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { slow!() };
                         if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
                         }
@@ -404,16 +405,11 @@ impl Context<'_> {
                                 _ => slow!(),
                             }
                         }
-                        let target = Rc::clone(target);
-                        if let Some(caller) = self.frames.last_mut() {
-                            caller.pc = (pc + 1) as u32;
-                        }
-                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
-                        let frame = self.frames.last_mut().expect("the frame just pushed");
-                        frame.this = m.this;
-                        frame.scope = m.scope;
-                        frame.called = m.called;
-                        frame.owner = m.closure;
+                        let frame = self.frames.call(Some(&target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.this = this;
+                        frame.scope = scope;
+                        frame.called = called;
+                        frame.owner = closure;
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -535,7 +531,10 @@ impl Context<'_> {
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
                         let (class, scope) = (Rc::as_ptr(&o.class) as usize, top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
                         let by_ref = clo.methods[method].borrow().as_ref().and_then(|s| match &s.code {
-                            MethodCode::User(code) if s.class == class && s.scope == scope => code.upgrade().map(|c| c.code.param_by_ref(n)),
+                            // (Not counted when the next frame slot runs it.)
+                            MethodCode::User(code) if s.class == class && s.scope == scope => {
+                                self.frames.site_code(code).map(|t| self.frames.next_code(t.as_ref()).code.param_by_ref(n))
+                            }
                             _ => None,
                         });
                         match by_ref {
@@ -787,10 +786,7 @@ impl Context<'_> {
                                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     slow!();
                                 }
-                                if let Some(caller) = self.frames.last_mut() {
-                                    caller.pc = (pc + 1) as u32;
-                                }
-                                self.frames.push(target, base + args as usize, n as usize, (base + dst as usize) as u32);
+                                self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
                                 continue 'frame;
@@ -890,15 +886,18 @@ impl Context<'_> {
                         let found = {
                             let site = clo.methods[method].borrow();
                             match site.as_ref() {
+                                // (The code not counted when the frame slot
+                                // the call reuses runs it already.)
                                 Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
-                                    MethodCode::User(code) => code.upgrade().zip(s.declaring.upgrade()),
+                                    MethodCode::User(code) => self.frames.site_code(code).zip(s.declaring.upgrade()),
                                     MethodCode::Native(..) => None,
                                 },
                                 _ => None,
                             }
                         };
                         let Some((target, declaring)) = found else { slow!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        let code = &self.frames.next_code(target.as_ref()).code;
+                        if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
                         }
                         let this = Rc::clone(o);
@@ -907,12 +906,8 @@ impl Context<'_> {
                         if is_temp(&clo.code, Reg::from(obj)) {
                             clear(&mut w[rx!(obj)]);
                         }
-                        if let Some(caller) = self.frames.last_mut() {
-                            caller.pc = (pc + 1) as u32;
-                        }
-                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
-                        let frame = self.frames.last_mut().expect("the frame just pushed");
-                        frame.called = Some(Rc::clone(&this.class));
+                        // (No `called`: it is `$this`'s class, `called_class`.)
+                        let frame = self.frames.call(target.as_ref(), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
@@ -952,18 +947,14 @@ impl Context<'_> {
                             Some(crate::instances::Ctor { func: classes::Code::User(f), declaring, .. })
                                 if !f.code.is_generator && n >= f.code.required && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT =>
                             {
-                                let (f, declaring, class) = (Rc::clone(f), Rc::clone(declaring), Rc::clone(&info.class));
+                                let (f, declaring) = (Rc::clone(f), Rc::clone(declaring));
                                 let object = Rc::clone(object);
                                 self.last_new = None;
                                 object.destructed.set(false);
-                                if let Some(caller) = self.frames.last_mut() {
-                                    caller.pc = (pc + 1) as u32;
-                                }
-                                self.frames.push(&f, base + args as usize, n, NO_RET);
-                                let frame = self.frames.last_mut().expect("the frame just pushed");
+                                // (No `called`: it is the object's class, `called_class`.)
+                                let frame = self.frames.call(Some(&f), pc + 1, base + args as usize, n, NO_RET);
                                 frame.this = Some(object);
                                 frame.scope = Some(declaring);
-                                frame.called = Some(class);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
                                 continue 'frame;
@@ -1245,27 +1236,26 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 /// register; the caller (if any) resumes at its saved pc.
 #[inline(always)]
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
-    give_back_shared(frames, regs);
-    frames.len -= 1;
-    let (slots, spare) = (&mut frames.slots, &mut frames.spare);
-    let frame = &mut slots[frames.len];
-    if let Some(extra) = frame.extra.take() {
-        crate::frames::recycle_extra(spare, extra);
+    let n = frames.len - 1;
+    // A frame with an Extra (arguments past its parameters, variables
+    // named at run time, an included file's shared scope): one test.
+    if frames.slots[n].extra.is_some() {
+        give_back_shared(frames, regs);
+        if let Some(extra) = frames.slots[n].extra.take() {
+            crate::frames::recycle_extra(&mut frames.spare, extra);
+        }
     }
+    frames.len = n;
+    let frame = &mut frames.slots[n];
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;
     let code = &frame.func.code;
-    // The variables. The temporaries are empty when the code frees each
-    // where it dies (`frees_temps`), as PHP's are.
-    let temps = base + code.ncv as usize;
-    for r in &mut regs[base..temps] {
+    // The variables, and the temporaries unless the code frees each
+    // where it dies (`frees_temps`), as PHP's are: then they are empty.
+    let end = base + if code.frees_temps { code.ncv as usize } else { usize::from(code.nregs) };
+    for r in &mut regs[base..end] {
         clear(r);
-    }
-    if !code.frees_temps {
-        for r in &mut regs[temps..base + usize::from(code.nregs)] {
-            clear(r);
-        }
     }
     // `$this` goes after the arguments, as in PHP (it decides which
     // object id is free first).

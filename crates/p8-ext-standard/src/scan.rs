@@ -653,6 +653,14 @@ fn parse_ini_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 /// assert.callback is called (file, line, null, description), then an
 /// AssertionError is thrown (assert.exception) or a warning shown
 /// (assert.warning); assert.bail ends the script.
+/// assert()'s result, read from its arguments, when the assertion holds
+/// as a true bool or a nonzero int (what `assert` returns first, before
+/// it reads any setting): true. Anything else is the call's.
+pub(crate) fn assert_holds(args: &[Value]) -> Option<Value> {
+    let v = args.first()?;
+    (v.as_bool() == Some(true) || v.as_int().is_some_and(|i| i != 0)).then_some(Value::TRUE)
+}
+
 fn assert(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let setting = |ctx: &mut dyn Ctx, name: &[u8]| match ctx.ini_get(name) {
         Some(v) if v.is_str() => {

@@ -516,7 +516,15 @@ pub struct Call {
     /// Its by-reference parameters take a value too (the stub's
     /// `@prefer-ref`: ZEND_SEND_PREFER_REF).
     pub prefer_ref: bool,
+    /// The result, for arguments that leave the builtin nothing to do,
+    /// read from the arguments alone ([`Registry::quick`]): the call is
+    /// then made with no checks, no lent registers and no frame for traces.
+    pub quick: Option<Quick>,
 }
+
+/// A builtin's result read from its arguments alone, when they leave it
+/// nothing to do (None: the call is made). See [`Call::quick`].
+pub type Quick = fn(&[Value]) -> Option<Value>;
 
 /// How many arguments a frameless call's test reads from [`Call::accepts`]
 /// (a call passing more is tested from the signature).
@@ -766,6 +774,7 @@ impl Registry {
             reenters,
             own_callbacks: false,
             prefer_ref: false,
+            quick: None,
         };
         call.frameless = frameless(&call);
         call.set_accepts();
@@ -954,6 +963,18 @@ impl Registry {
             if let Some(i) = self.lookup(n.as_bytes()) {
                 self.calls[i].own_callbacks = true;
             }
+        }
+    }
+
+    /// Builtin `name`'s result when its arguments leave it nothing to do
+    /// (`quick` gives it, or None): assert() of an assertion that holds is
+    /// true, though the builtin may run PHP code (assert.callback) when one
+    /// fails. Not for a deprecated builtin (its message is due at every call).
+    pub fn quick(&mut self, name: &str, quick: Quick) {
+        if let Some(i) = self.lookup(name.as_bytes())
+            && !self.calls[i].deprecated
+        {
+            self.calls[i].quick = Some(quick);
         }
     }
 

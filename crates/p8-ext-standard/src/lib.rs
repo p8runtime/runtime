@@ -253,6 +253,8 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(&["vsprintf", "vprintf", "vfprintf"]);
     registry.mark_reenters(class::REENTER);
     registry.mark_reenters(&["clone", "implode", "join", "getopt", "assert", "gc_collect_cycles", "is_callable", "defined", "func_get_args", "serialize", "unserialize", "json_encode", "get_object_vars", "var_export"]);
+    // (assert runs PHP code only for an assertion that fails.)
+    registry.quick("assert", scan::assert_holds);
     // (count: a Countable's count() is PHP code; on an array it is not,
     // so a call with no object argument may still be frameless.)
     registry.mark_reenters_on_objects(&["count", "sizeof"]);

@@ -123,6 +123,22 @@ fn same_autoloader(a: &Value, b: &Value) -> bool {
     same && xm == ym
 }
 
+/// The builtins running that may call back into PHP, innermost last. A
+/// finished one's entry stays for the next (its list keeps its room), as
+/// a popped frame's slot does: a call moves no entry and allocates
+/// nothing.
+#[derive(Default)]
+pub(crate) struct Natives {
+    slots: Vec<NativeCall>,
+    len: usize,
+}
+
+impl Natives {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, NativeCall> {
+        self.slots[..self.len].iter()
+    }
+}
+
 /// A builtin that is running PHP code (array_map's callback): where it
 /// was called (the frame count then), its name and arguments.
 struct NativeCall {
@@ -3806,7 +3822,7 @@ impl Context<'_> {
             });
         }
         let (this, scope, called) = match self.frames.last() {
-            Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
+            Some(f) => (f.this.clone(), f.scope.clone(), f.called_class().cloned()),
             None => (None, None, None),
         };
         if let Some(caller) = self.frames.last_mut() {
@@ -3954,16 +3970,30 @@ impl Context<'_> {
 
     /// A builtin starts running at the current frame count (see NativeCall).
     pub(crate) fn push_native(&mut self, name: &'static str, method: Option<(PhpStr, PhpStr, Option<Rc<Object>>)>, args: &[Value], top: bool) {
-        let mut list = self.native_args.pop().unwrap_or_default();
-        list.extend(args.iter().map(Value::deref));
-        self.natives.push(NativeCall { depth: self.frames.len(), name, method, args: list, top });
+        let depth = self.frames.len();
+        let natives = &mut self.natives;
+        match natives.slots.get_mut(natives.len) {
+            Some(n) => {
+                (n.depth, n.name, n.method, n.top) = (depth, name, method, top);
+                n.args.extend(args.iter().map(Value::deref));
+            }
+            None => {
+                p8_runtime::counts::bump(p8_runtime::counts::Count::NativeEntry);
+                natives.slots.push(NativeCall { depth, name, method, args: args.iter().map(Value::deref).collect(), top });
+            }
+        }
+        natives.len += 1;
     }
 
-    /// The innermost builtin of `natives` is done.
+    /// The innermost builtin of `natives` is done: what its entry holds
+    /// goes now, the entry stays for the next.
     pub(crate) fn pop_native(&mut self) {
-        if let Some(mut n) = self.natives.pop() {
+        let natives = &mut self.natives;
+        if natives.len > 0 {
+            natives.len -= 1;
+            let n = &mut natives.slots[natives.len];
             n.args.clear();
-            self.native_args.push(n.args);
+            n.method = None;
         }
     }
 
@@ -4070,12 +4100,25 @@ impl Context<'_> {
     #[inline(never)]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
-        // An object argument may need its __toString() (PHP code) to become
-        // a string parameter: that takes the path that can call back.
-        let objects = regs[start..start + argc as usize].iter().any(Value::is_object);
-        // Before the headers go out, output may run header_register_callback's callback.
-        let header_due = !self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback");
-        if !self.isolate.registry.reenters(i) && !objects && !header_due {
+        // Arguments that leave the builtin nothing to do (a holding
+        // assert()): its result, as the builtin would give it.
+        if let Some(quick) = self.isolate.registry.call(i).quick
+            && let Some(v) = quick(&regs[start..start + argc as usize])
+        {
+            for r in &mut regs[start..start + argc as usize] {
+                clear(r);
+            }
+            regs[base + dst as usize] = v;
+            return Ok(());
+        }
+        // A builtin that may run PHP code; an object argument, which may
+        // need its __toString() (PHP code) to become a string parameter;
+        // output before the headers, which may run
+        // header_register_callback's callback: the path that can call back.
+        let lent = self.isolate.registry.reenters(i)
+            || regs[start..start + argc as usize].iter().any(Value::is_object)
+            || (!self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback"));
+        if !lent {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
@@ -4085,6 +4128,7 @@ impl Context<'_> {
             regs[base + dst as usize] = r?;
             return Ok(());
         }
+        p8_runtime::counts::bump(p8_runtime::counts::Count::BuiltinLent);
         let mut buf = std::mem::take(&mut self.arg_buf);
         buf.extend(regs[start..start + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
         self.isolate.regs = std::mem::take(regs);
