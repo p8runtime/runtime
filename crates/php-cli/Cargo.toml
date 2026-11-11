@@ -5,6 +5,12 @@ edition = "2024"
 license = "MIT"
 description = "p8, the command: runs PHP as php does, and compiles and serves a project"
 
+# What p8 shares with the native executables it builds (p8-native's
+# runtime library runs scripts through it).
+[lib]
+name = "php_cli"
+path = "src/lib.rs"
+
 # The one command this workspace builds for users.
 [[bin]]
 name = "p8"
@@ -19,5 +25,13 @@ rusty_alloc-api = "=2.4.0"
 
 # `p8 serve` stops cleanly on SIGINT and SIGTERM (std has no signal API;
 # the version the workspace already locks, with SIGTERM: `termination`).
-[target.'cfg(not(target_os = "wasi"))'.dependencies]
+# The native backend (Cranelift), for `p8 compile --native` only: nothing
+# of it runs unless that option is given. Neither is in a wasm build (no
+# signals; native code is made for the machine it runs on).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 ctrlc = { version = "=3.5.1", features = ["termination"] }
+p8-native-gen = { path = "../p8-native-gen", optional = true }
+
+[features]
+default = ["native"]
+native = ["dep:p8-native-gen"]

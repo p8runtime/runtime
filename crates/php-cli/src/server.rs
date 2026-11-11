@@ -691,7 +691,7 @@ pub fn run(config: Config) -> i32 {
 }
 
 /// Send on `stop` when the process gets SIGINT or SIGTERM.
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(target_family = "wasm"))]
 fn stop_on_signal(stop: mpsc::Sender<()>) {
     if let Err(e) = ctrlc::set_handler(move || {
         let _ = stop.send(());
@@ -700,8 +700,8 @@ fn stop_on_signal(stop: mpsc::Sender<()>) {
     }
 }
 
-/// WASI has no signals.
-#[cfg(target_os = "wasi")]
+/// WebAssembly has no signals.
+#[cfg(target_family = "wasm")]
 fn stop_on_signal(_: mpsc::Sender<()>) {}
 
 /// The max_execution_time requests run with (the server's default, else
