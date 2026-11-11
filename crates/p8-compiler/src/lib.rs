@@ -2,10 +2,12 @@
 //! AST → p8 register bytecode.
 //!
 //! Every `$name` a function uses is a compiled variable with a fixed
-//! register; constants get registers too (filled when the frame starts),
-//! so instructions only ever name registers. While compiling, a register
-//! is numbered within its kind (variable, constant, temporary); `finish`
-//! lays a frame out as [variables][constants][temporaries] and renumbers.
+//! register. While compiling, an operand is numbered within its kind
+//! (variable, constant, temporary); `finish` lays a frame out as
+//! [variables][temporaries] and renumbers: a constant becomes a constant
+//! operand, read in place by the instructions that can, else loaded into a
+//! scratch temporary right before the one that reads it
+//! (`consts::place_consts`).
 //! Temporaries are allocated like a stack, so a call's arguments are
 //! always the caller's topmost registers: the callee's frame starts there.
 
@@ -4981,7 +4983,13 @@ impl<'src> Compiler<'src> {
                 let list = items.iter().all(|i| i.key.is_none() && !i.unpack && !i.by_ref);
                 let n = if list { u16::try_from(items.len()).unwrap_or(0) } else { 0 };
                 f.emit(Instr::NewArray { dst, n });
+                // Each element is added before the next is made: its
+                // temporaries go back after it (as PHP's ADD_ARRAY_ELEMENT
+                // frees its operands), so a literal of 2,000 elements takes
+                // the temporaries of one, not 2,000 (#456).
+                let keep = f.temps;
                 for item in *items {
+                    f.reset_temps(keep);
                     if item.unpack {
                         let src = self.expr(f, item.value)?;
                         f.emit(Instr::ArrayUnpack { arr: dst, src });
@@ -5014,6 +5022,7 @@ impl<'src> Compiler<'src> {
                     }
                     // (A temporary is taken, so released already: no Free.)
                 }
+                f.reset_temps(keep);
                 dst
             }
             Expr::ArrayDimFetch { array, dim, span } => {
