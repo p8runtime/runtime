@@ -2917,6 +2917,55 @@ pub(crate) fn owner_write(cell: &Rc<RefCell<Value>>, key: &Value, v: &Value) -> 
     hit
 }
 
+/// `owner_write` along a path (`$a['p'][0] = v` where `$a['p'][0]` is
+/// bound to `$a`'s own cell): the arrays the keys before the last lead to
+/// are looked in, nothing is written on the way; when the last key's
+/// element is bound to `cell`, the cell gets the value in place of the
+/// array. True when it was so; false, nothing done, otherwise.
+#[cold]
+#[inline(never)]
+pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Value) -> bool {
+    let Some((last, before)) = keys.split_last() else { return false };
+    if before.is_empty() {
+        return owner_write(cell, last, v);
+    }
+    let hit = {
+        let held = cell.borrow();
+        let find = |a: &PhpArray, k: &Value| -> Option<Value> {
+            let e = if let Some(i) = k.as_int() { a.get_int(i) } else { a.get_str(k.as_str()?) };
+            e.map(Value::deref)
+        };
+        let mut cur = held.clone();
+        let mut found = true;
+        for k in before {
+            match cur.as_array().and_then(|a| find(a, k)) {
+                Some(next) => cur = next,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        found
+            && cur.as_array().is_some_and(|a| {
+                let e = if let Some(i) = last.as_int() {
+                    a.get_int(i)
+                } else if let Some(s) = last.as_str() {
+                    a.get_str(s)
+                } else {
+                    None
+                };
+                e.is_some_and(|e| is_owner(e, Some(&**cell)))
+            })
+    };
+    if hit {
+        // (The array goes after the borrow: its element holds this cell.)
+        let old = cell.replace(v.clone());
+        drop(old);
+    }
+    hit
+}
+
 /// A copy of a register's value, as `step` makes one (strings and arrays
 /// are shared until written; a reference's value is read through it),
 /// unless it is undefined (a warning: `step`'s).

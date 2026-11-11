@@ -3910,20 +3910,22 @@ impl Context<'_> {
                     reg!(dst) = self.append(a, v)?;
                     return Ok(Next::Go(pc));
                 }
-                // A variable bound by reference whose element there is bound
-                // to the variable's own cell (`$a[k] = &$a`): the value
-                // replaces the array (`owner_write`), as the loop's arm does
-                // (`vmops::assign_dim`). Native code runs this instruction
-                // here, so this path must give what the arm gives.
-                if n == 1
+                // A variable bound by reference whose element at the path is
+                // bound to the variable's own cell (`$a[k] = &$a`, `$a['p'][0]
+                // = &$a`): the value replaces the array, as the loop's arms
+                // do (`vmops::assign_dim`'s `owner_write`, `assign_path`'s
+                // `Wrote::Owner`). Native code runs this instruction here, so
+                // this path must give what the arms give.
+                if n >= 1
                     && !append
                     && let Some(cell) = reg!(var).as_reference().map(Rc::clone)
                 {
-                    let key = match const_index(keys) {
-                        Some(k) => clo.consts[k].clone(),
-                        None => w[keys as usize].deref(),
+                    // (The one key may be a constant operand.)
+                    let path: Vec<Value> = match const_index(keys) {
+                        Some(k) => vec![clo.consts[k].clone()],
+                        None => w[keys as usize..keys as usize + n as usize].iter().map(Value::deref).collect(),
                     };
-                    if fast::owner_write(&cell, &key, &v.deref()) {
+                    if fast::owner_path_write(&cell, &path, &v.deref()) {
                         reg!(dst) = v.deref();
                         return Ok(Next::Go(pc));
                     }
