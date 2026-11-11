@@ -255,13 +255,12 @@ hand YieldFrom
 hand RefDim
 /// `$b[c].. = &$a` (imm as RefDim's)
 hand DimSetRef
-/// `$a = &C::$name` (class reference imm & 0xffff, the name constant
-/// imm >> 16)
+/// `$a = &C::$name` (class reference imm, the name in register b)
 hand StaticRef
 /// a = b->{c} (`$this` with PROP_PATH_THIS): the name in a register
 hand FetchPropDyn
-/// a->{c} = b (`$this` with PROP_PATH_THIS; TAKE), the value into
-/// register imm >> 8
+/// a->{c} = b (`$this` with PROP_PATH_THIS; TAKE; constant b with
+/// PROP_OP_K), the value into register imm >> 8
 hand AssignPropDyn
 /// a = isset(b->(property site imm)), or isset(b->{c}) with ISSET_PROP_DYN
 hand IssetProp

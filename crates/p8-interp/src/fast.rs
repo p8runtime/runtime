@@ -1625,7 +1625,7 @@ impl Context<'_> {
                     // (`static_ref_ops`).
                     Op::StaticRef => {
                         ops!(a, b, c, imm);
-                        let ops = (Reg::from(a), p8_bytecode::const_operand((imm >> 16) as usize), (imm & 0xffff) as u16);
+                        let ops = (Reg::from(a), Reg::from(b), imm as u16);
                         out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_ref_ops(regs, clo, base, at, ops));
                     }
                     // `$o->$name` (`$this->$name`): a declared, visible,
@@ -1661,7 +1661,7 @@ impl Context<'_> {
                         };
                         let Some(entry) = dyn_entry(&o, &w[rx!(c)], top.scope.as_ref()) else { slow!() };
                         let scope = (top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize), top.scope.as_deref());
-                        let v = &w[rx!(b)];
+                        let v = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
                         let Some((slot, plain)) = plain_slot(entry, &o, scope, v, !self.reinit.is_empty()) else { slow!() };
                         if !vmops::write_slot(&o, slot, plain, v) {
                             slow!();
@@ -1669,7 +1669,7 @@ impl Context<'_> {
                         let v = v.clone();
                         drop(o);
                         let _ = put(&mut w[rx!((imm >> 8) as u8)], v);
-                        if imm & insn::TAKE != 0 {
+                        if imm & insn::TAKE != 0 && imm & insn::PROP_OP_K == 0 {
                             let _ = clear(&mut w[rx!(b)]);
                         }
                         // (The slot's old value may have been released.)

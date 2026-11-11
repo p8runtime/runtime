@@ -501,10 +501,12 @@ fn generators_references_static_ops_and_includes_stay_in_the_loop() {
 }
 
 /// A class and a function declared where the code runs, then used: no
-/// instruction of the run goes to the detour (each declaration runs once,
-/// so this one counts instead of comparing two sizes).
+/// instruction of the run goes to the detour but the script's end, as for
+/// a script with nothing in it (each declaration runs once, so this one
+/// compares with that instead of comparing two sizes).
 #[test]
 fn declarations_run_in_the_loop() {
+    let (_, empty) = run("", 1);
     let (out, slow) = run(
         "if ($n > 0) { class Late { function m() { return 'm'; } } function late() { return 'f'; } }
          $o = new Late;
@@ -512,5 +514,5 @@ fn declarations_run_in_the_loop() {
          if ($s !== 'fm') { throw new Exception($s); }",
         1,
     );
-    assert_eq!((out.as_str(), slow), ("", 0));
+    assert_eq!((out.as_str(), slow), ("", empty));
 }

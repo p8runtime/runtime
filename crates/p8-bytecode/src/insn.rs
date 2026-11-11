@@ -454,7 +454,12 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             // arm; the result always written, the Free after run as it is).
             None => {
                 let flags = if obj == THIS { PROP_PATH_THIS } else { 0 } | if t { TAKE } else { 0 };
-                i(Op::AssignPropDyn, if obj == THIS { 0 } else { obj }, val, name, flags | u32::from(r(dst)?) << 8)
+                let (v, vk) = match k(val) {
+                    Some(kk) if kk < 256 => (kk as Reg, PROP_OP_K),
+                    Some(_) => return None,
+                    None => (val, 0),
+                };
+                i(Op::AssignPropDyn, if obj == THIS { 0 } else { obj }, v, name, flags | vk | u32::from(r(dst)?) << 8)
             }
         },
         Instr::JumpLt { .. }
@@ -731,8 +736,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
                 }
             }
         }
-        // `$x = &C::$name` (the name a constant).
-        Instr::Rare { op: Rare::StaticRef, a, b, class, .. } => i(Op::StaticRef, a, 0, 0, u32::from(class) | prop_site(b, nconsts).filter(|&s| s < 1 << 16)? << 16),
+        // `$x = &C::$name` (the name loaded into register b).
+        Instr::Rare { op: Rare::StaticRef, a, b, class, .. } => i(Op::StaticRef, a, b, 0, u32::from(class)),
         // `isset($a[k0][k1]..)`: the keys a block of registers in the window.
         Instr::IssetDim { dst, var, keys, n: n @ 2.. } if const_index(keys).is_none() => {
             block(keys, n)?;
