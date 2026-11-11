@@ -22,4 +22,4 @@ let status = match &script {
 };
 ```
 
-The command-line host is `php2`, in `crates/php-cli`.
+The command-line host is `p8`, in `crates/php-cli`.

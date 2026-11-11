@@ -11,7 +11,7 @@
   },
   "files": [
     "src",
-    "php2.wasm"
+    "p8.wasm"
   ],
   "engines": {
     "node": ">=23.6"

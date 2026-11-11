@@ -1,4 +1,4 @@
 node_modules/
 # Built by `npm run build:wasm` from crates/php-cli.
-php2.wasm
+p8.wasm
 example/node_modules/

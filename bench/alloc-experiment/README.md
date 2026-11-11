@@ -1,15 +1,15 @@
 # Allocator experiment (#319)
 
-Which pure-Rust allocator php2 should use. Candidates: the system allocator
+Which pure-Rust allocator p8 should use. Candidates: the system allocator
 (glibc / macOS libmalloc), dlmalloc, rlsf, talc and rusty_alloc (a pure-Rust
-mimalloc). php2 now uses rusty_alloc on every platform
+mimalloc). p8 now uses rusty_alloc on every platform
 (`crates/php-cli/src/main.rs`).
 
 The candidates were built from commit 865cb19, where each was a php-cli
 feature (`alloc-dlmalloc`, `alloc-rlsf`, `alloc-talc`, `alloc-rusty`; no
 feature = the system allocator). To rerun the comparison, for example before
 upgrading rusty_alloc, check that commit out, or add the candidate back as a
-feature, and keep one binary per candidate as `php2-<name>`.
+feature, and keep one binary per candidate as `p8-<name>`.
 
 - `measure-linux.sh <cg|wall> <rounds>`: on [addis], inside
   `flock ~/p8-perf/.build.lock`. Callgrind instructions, or wall time and peak

@@ -14,11 +14,13 @@ Code: `crates/p8/src/opcache.rs` (the cache's rules), `crates/p8-ext-standard/sr
 
 As PHP 8.6 starts it (`accel_startup`):
 
-- CLI (`php2 script.php`): only with `opcache.enable=1` **and** `opcache.enable_cli=1`.
+- CLI (`p8 script.php`): only with `opcache.enable=1` **and** `opcache.enable_cli=1`.
   The default is `enable_cli=0`, so `opcache_get_status()` is false, and
   `opcache_compile_file()` says "Zend OPcache has not been properly started, can't compile file".
-- Built-in server (`php2 -S`): with `opcache.enable=1` (the default). That server is not
+- Built-in server (`p8 -S`): with `opcache.enable=1` (the default). That server is not
   the CLI SAPI.
+- `p8 serve` does not start OPcache: its cache is the project's package and the files it
+  keeps by path and content (APS 8), so an edited file runs its new code at the next request.
 - `opcache_reset()` schedules a restart. The cache is emptied, and the counters
   start again, when the next request starts. Until then nothing new is cached, and the
   rest of the request still sees the cache as it was.
@@ -89,7 +91,7 @@ phpinfo(). They change nothing in p8:
 
 `opcache.file_cache` takes effect only when OPcache starts, as in PHP 8.6. In the CLI that
 needs `-d opcache.enable_cli=1` as well. With the default `enable_cli=0`, `-d opcache.file_cache=<dir>`
-alone does nothing. Under `php2 -S` it needs only `opcache.enable` (on by default).
+alone does nothing. Under `p8 -S` it needs only `opcache.enable` (on by default).
 Before OPcache was reported, p8's CLI used the file cache without `enable_cli`.
 
 ## Tests that cannot pass
