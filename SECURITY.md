@@ -17,25 +17,10 @@ that slot. In Zend the same mistake is a use-after-free.
 
 ## 2. The default build links no C library
 
-`cargo build` with default features compiles and links Rust only (plus the
-operating system's own libraries). `tests/pure_rust_build.rs` fails if a
-C-backed crate enters the default dependency graph.
-
-Features that need C are opt-in. These flags are on the legacy package at the repository root. The `p8` crate does not use them.
-
-| feature | C library | why it is not default |
-|---|---|---|
-| `openssl` | OpenSSL | `openssl_*` functions; a RustCrypto port is planned |
-| `pdo-sqlite` | SQLite | legacy engine only; p8's `pdo_sqlite` is Turso, in Rust |
-| `pdo-oci` | Oracle client | proprietary C client |
-| `mysql-tls` | ring (C and assembly) | TLS for MySQL; the driver itself is Rust |
-| `zip-c-codecs` | bzip2, zstd, xz | deflate, deflate64, lzma and AES stay on by default, in Rust |
-
-Tracked for replacement (listed in the test; entries may only be removed):
-
-| C library | used by | plan |
-|---|---|---|
-| PCRE2 | `preg_*` | a PCRE-compatible regex engine in Rust, measured against php-src's `ext/pcre` tests |
+p8 compiles and links Rust only (plus the operating system's own
+libraries). `crates/p8/tests/safety.rs` fails if anything the `p8` crate
+depends on builds or links C, and if a crate under `crates/` does not forbid
+`unsafe`.
 
 ## 3. Process-wide C state is not used
 

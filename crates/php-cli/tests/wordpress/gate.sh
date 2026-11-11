@@ -1,6 +1,6 @@
 #!/bin/bash
 # WordPress gate: install WordPress on MariaDB under the reference PHP (the
-# release p8-test-suite pins, tests/php-src/reference.sh: docker, with
+# release p8-test-suite pins, crates/php-test/php-src/reference.sh: docker, with
 # mysqli) and under p8, then make the same requests of each:
 # - the public pages (home, a post, the feed, the REST API root, a search,
 #   the login form) and, signed in as the admin, wp-admin's (dashboard,
@@ -70,8 +70,8 @@ if ! docker ps --format '{{.Names}}' | grep -qx p8-mariadb; then
         -e MARIADB_ROOT_PASSWORD=p8root -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11.4 >/dev/null
     until docker exec p8-mariadb mariadb -uroot -pp8root -e 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
 fi
-# shellcheck source=../../../../tests/php-src/reference.sh
-. "$repo/tests/php-src/reference.sh"
+# shellcheck source=../../../../crates/php-test/php-src/reference.sh
+. "$repo/crates/php-test/php-src/reference.sh"
 php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
 image=$(php_image p8-php-gate "$here/php.Dockerfile" "$here")
 

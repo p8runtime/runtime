@@ -1,6 +1,6 @@
 #!/bin/bash
 # An app's own test suite under the reference PHP (the release
-# p8-test-suite pins, tests/php-src/reference.sh; docker, ./Dockerfile; the
+# p8-test-suite pins, crates/php-test/php-src/reference.sh; docker, ./Dockerfile; the
 # suite checkout next to this repository, or P8_TEST_SUITE) and under p8,
 # compared test by test (./compare.php): how many of the tests PHP passes
 # p8 passes too. The app is described by ./<app>.conf (its repository and
@@ -45,8 +45,8 @@ fi
 cd src
 git checkout -q -- .
 
-# shellcheck source=../../../../tests/php-src/reference.sh
-. "$repo/tests/php-src/reference.sh"
+# shellcheck source=../../../../crates/php-test/php-src/reference.sh
+. "$repo/crates/php-test/php-src/reference.sh"
 php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
 image=$(php_image p8-php-apps "$here/Dockerfile" "$here")
 top=/$(printf '%s' "$PWD" | cut -d/ -f2)

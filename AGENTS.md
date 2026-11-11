@@ -1,33 +1,49 @@
-# Repository Guidelines
+# Repository guidelines
 
-## Project Structure & Module Organization
-- `crates/` holds **p8**, the new engine (design: the p8 APS, `p8runtime/aps`, cited as `APS N`), and its hosts:
-  - `p8`: the public embedding API; hosts use only this crate.
-  - `p8-syntax` (lexer, parser, AST; the legacy engine uses it too), `p8-compiler`, `p8-bytecode`, `p8-runtime` (values, operators, the extension ABI), `p8-interp`, `p8-ext-*` (builtins): p8's internals.
-  - `php-cli`: the `p8` command, the only one users run: php's command line (`p8 script.php`, `-r`, `-S`, ...), plus `p8 compile` and `p8 serve`.
-- `src/` is the legacy engine: VM/executor (`src/vm/`), runtime extensions (`src/runtime/`), builtins (`src/builtins/`). It is replaced by p8 at php-src parity; fixes go into p8.
-- `src/bin/` holds php-src's test runner (`php-test`), the legacy engine's CLI (`php`, which the legacy tests in `tests/` run; not a user command) and dev tools (`php-perf`, `gild-wasm`, `gild-router`, `dump_bytecode`).
-- `tests/` holds the legacy engine's integration tests; each p8 crate has its own `tests/`.
-- `crates/p8-syntax/src/tests/` and its snapshots are not compiled yet (they predate this repo's layout).
+p8 is a PHP 8.6 engine in safe Rust. Its command is `p8`. Design decisions
+live in the p8 APS (`p8runtime/aps`), cited as `APS N`.
 
-## Build, Test, and Development Commands
-- `cargo build`: compile the interpreter and binaries.
-- `cargo test`: run the full Rust test suite (unit + integration).
-- `cargo test --test array_functions`: run a single integration test file.
-- `cargo run --release -p php-cli --bin p8 -- <script.php>`: execute a PHP script with p8.
+## Layout
 
-## Coding Style & Naming Conventions
-- Follow standard Rust formatting (`cargo fmt`) with default rustfmt settings.
-- Use `snake_case` for functions/modules, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
-- Keep modules focused; prefer adding new builtins in `src/builtins/` and routing them through `src/builtins/mod.rs`.
+- `crates/p8`: the public embedding API; hosts use only this crate.
+- `crates/p8-syntax`, `p8-compiler`, `p8-bytecode`, `p8-vmgen`, `p8-runtime`,
+  `p8-interp`, `p8-pcre`, `p8-mysqlnd`, `p8-stubs`, `p8-ext-*`: the engine's
+  internals.
+- `crates/php-cli`: the `p8` binary, the only command: php's command line
+  (`p8 script.php`, `-r`, `-S`, ...), plus `p8 compile` and `p8 serve`.
+- `crates/php-test`: the `php-test` binary, which runs php-src's `.phpt`
+  tests against `p8`. `crates/php-test/php-src/` explains the target and
+  holds the scripts that build the reference PHP.
+- `packages/vite-plugin-p8`: p8 built for `wasm32-wasip1`, as a Vite plugin.
+- `docker/`: the `p8` container image.
+- `bench/alloc-experiment`: the allocator measurements behind p8's allocator.
 
-## Testing Guidelines
-- Add new integration tests under `tests/` using descriptive file names (for example, `tests/strict_types_eval.rs`).
-- There is no explicit coverage target; keep tests representative of PHP compatibility behavior.
+## Commands
 
-## Commit & Pull Request Guidelines
-- Commit history is minimal (only an init commit), so no established convention exists. Use short, imperative subjects (for example, "Add array unpack tests").
-- PRs should include: a brief description of behavior changes, tests run (`cargo test` or targeted tests), and any relevant PHP compatibility notes.
+```sh
+cargo build --release --locked -p php-cli --bin p8
+cargo build --release --locked -p php-test --bin php-test
+cargo test --release --locked -p php-cli --test scripts --test file_cache --test package --test serve --test server --test command
+cargo test --release --locked -p p8 --lib --test copies --test hash_counts --test release_counts --test slow_counts --test call_counts --test package --test api
+cargo test --release --locked -p p8-bytecode -p p8-vmgen -p p8-runtime -p p8-interp -p php-test
+cargo clippy --locked --workspace --all-targets --all-features
+```
 
-## Configuration & Dependencies Notes
-- The project depends on several extension-related crates (OpenSSL, MySQL, PDO drivers). Keep new dependencies justified and scoped to the relevant extension module.
+`php-cli`'s mysqli, pdo_mysql and pdo_pgsql tests are ignored unless a
+database server is running (each file's header says which); the app
+harnesses under `crates/php-cli/tests` (WordPress, MediaWiki, apps) need
+Docker.
+
+The php-src gate (php-src checked out at the commit p8-test-suite pins):
+
+```sh
+target/release/php-test ../php-src --suite ../p8-test-suite --php target/release/p8
+```
+
+## Rules
+
+- `#![forbid(unsafe_code)]` on every crate; nothing p8 depends on builds or
+  links C (`SECURITY.md`, checked by `crates/p8/tests/safety.rs`).
+- `cargo fmt`; `cargo clippy --workspace --all-targets` adds no warning.
+- Tests live in each crate's `tests/`.
+- Commits: short imperative subjects.

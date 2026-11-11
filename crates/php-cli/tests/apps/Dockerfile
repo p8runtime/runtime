@@ -1,4 +1,4 @@
-# The reference PHP (BASE: tests/php-src/reference.sh, the release
+# The reference PHP (BASE: crates/php-test/php-src/reference.sh, the release
 # p8-test-suite pins) for the apps' own test suites
 # (crates/php-cli/tests/apps/run.sh): that image plus the extensions those apps require (intl, gd, zip,
 # bcmath, gmp, the database drivers, sockets, pcntl, exif, calendar), and
