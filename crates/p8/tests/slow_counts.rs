@@ -125,6 +125,19 @@ fn dimension_paths_stay_in_the_loop() {
     assert_eq!(out, "3 4 7 5 18,19");
 }
 
+/// `new C(...$args)` with a PHP constructor, positions only (a list, and
+/// int keys out of order): inline.
+#[test]
+fn new_with_spread_arguments_stays_in_the_loop() {
+    let out = flat(
+        "class V { public $s; function __construct($a, $b = 0, ...$more) { $this->s = $a + $b + count($more); } }
+         $t = 0; $args = [1, 2, 3, 4]; $odd = [3 => 5, 1 => 6];
+         for ($i = 0; $i < $n; $i++) { $t += (new V(...$args))->s + (new V(...$odd))->s; }
+         echo $t / $n;",
+    );
+    assert_eq!(out, "16");
+}
+
 /// `static::f($x)` (the method, so by-reference or not, known only when
 /// it runs): the sends inline.
 #[test]
