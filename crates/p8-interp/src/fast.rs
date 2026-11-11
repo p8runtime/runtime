@@ -1566,7 +1566,7 @@ impl Context<'_> {
                     // superglobals: out of line on the arm's operands.
                     Op::ToObject => {
                         ops!(a, b, c, imm);
-                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.to_object_ops(regs, clo, base, at, ops));
+                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.object_cast_ops(regs, clo, base, at, ops));
                     }
                     // Whether `$f(..)` sends an argument by reference: a
                     // closure answers itself here; any other callable is
@@ -1626,7 +1626,7 @@ impl Context<'_> {
                     Op::FromCallable => {
                         ops!(a, b, c, imm);
                         let src = if imm & insn::SRC_K != 0 { p8_bytecode::const_operand((imm >> 8 & 0x3fff) as usize) } else { Reg::from(b) };
-                        out!((Reg::from(a), src), |cx, regs, clo, base, _, at, ops| cx.from_callable_ops(regs, clo, base, at, ops));
+                        out!((Reg::from(a), src), |cx, regs, clo, base, _, at, ops| cx.first_class_callable_ops(regs, clo, base, at, ops));
                     }
                     // `yield`: the generator's frame suspended, out of line
                     // on the arm's operands (`yield_ops`).

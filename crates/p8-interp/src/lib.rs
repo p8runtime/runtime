@@ -2238,7 +2238,7 @@ impl Context<'_> {
                             arr.insert(key, Value::reference(cell));
                         }
                     }
-                    Rare::ToObject => return self.to_object_ops(regs, clo, base, at, (a, b)),
+                    Rare::ToObject => return self.object_cast_ops(regs, clo, base, at, (a, b)),
                     // An intrinsic the loop did not run (a conversion, an
                     // object, a warning): the builtin's call, as a Call's.
                     Rare::Strlen | Rare::Count | Rare::IsNull | Rare::IsBool | Rare::IsInt | Rare::IsFloat | Rare::IsString | Rare::IsArray | Rare::IsObject | Rare::ArrayKeyExists => {
@@ -2559,7 +2559,7 @@ impl Context<'_> {
                         pc = skip as usize;
                     }
                 }
-                Instr::FromCallable { dst, src } => return self.from_callable_ops(regs, clo, base, at, (dst, src)),
+                Instr::FromCallable { dst, src } => return self.first_class_callable_ops(regs, clo, base, at, (dst, src)),
                 Instr::CallValue { dst, callee, base: args, argc, vars } => return self.call_value_ops(regs, clo, base, at, (dst, callee, args, argc, vars)),
                 Instr::Silence { saved } => {
                     reg!(saved) = Value::int(self.error_level);
@@ -3035,7 +3035,7 @@ impl Context<'_> {
     /// `step` runs it, and the loop's Yield arm, with none of `step`'s
     /// dispatch.
     #[inline(never)]
-    pub(crate) fn yield_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, value, key): (Reg, Reg, Option<Reg>)) -> Result<Next, Throw> {
+    pub(crate) fn yield_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, value, key): (Reg, Reg, Option<Reg>)) -> Result<Next, Throw> {
         let w = &regs[base..base + clo.code.nregs as usize];
         let v = self.operand(w, clo, value);
         let k = key.map(|key| self.operand(w, clo, key));
@@ -3244,7 +3244,7 @@ impl Context<'_> {
     /// `(object) $v` (the ToObject at `at`). `step` runs it, and the loop's
     /// ToObject arm, with none of `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn to_object_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+    pub(crate) fn object_cast_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
         let v = self.operand(&regs[base..base + clo.code.nregs as usize], clo, src);
         regs[base + dst as usize] = self.object_cast(v);
         Ok(Next::Go(at + 1))
@@ -3256,7 +3256,7 @@ impl Context<'_> {
     /// global scope); undefined: the warning, null. `step` runs it, and
     /// the loop's VarGet arm, with none of `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn var_get_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, name, flags): (Reg, Reg, Reg)) -> Result<Next, Throw> {
+    pub(crate) fn var_get_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, name, flags): (Reg, Reg, Reg)) -> Result<Next, Throw> {
         let in_main = base == 0;
         let nregs = clo.code.nregs as usize;
         let name = self.var_name(&regs[base..base + nregs], clo, name);
@@ -3286,7 +3286,7 @@ impl Context<'_> {
     /// `step` runs it, and the loop's AutoGlobal arm, with none of
     /// `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn auto_global_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, name): (Reg, Reg)) -> Result<Next, Throw> {
+    pub(crate) fn auto_global_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, name): (Reg, Reg)) -> Result<Next, Throw> {
         let nregs = clo.code.nregs as usize;
         // The name is a constant string: read, not converted.
         let name = self.operand(&regs[base..base + nregs], clo, name).into_str().expect("AutoGlobal names a constant string");
@@ -3332,7 +3332,7 @@ impl Context<'_> {
     /// there too. `step` runs it, and the loop's UnsetVar arm for that
     /// case, with none of `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn unset_var_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, var: Reg) -> Result<Next, Throw> {
+    pub(crate) fn unset_var_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, var: Reg) -> Result<Next, Throw> {
         if base != 0
             && self.frames.last().is_some_and(|f| f.global)
             && let Some(name) = clo.code.cv_names.get(var as usize)
@@ -3349,7 +3349,7 @@ impl Context<'_> {
     /// in `src`, the Closure to `dst`). `step` runs it, and the loop's
     /// FromCallable arm, with none of `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn from_callable_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+    pub(crate) fn first_class_callable_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
         let v = self.operand(&regs[base..base + clo.code.nregs as usize], clo, src);
         regs[base + dst as usize] = self.static_callable(&v, false)?;
         Ok(Next::Go(at + 1))
@@ -3385,7 +3385,7 @@ impl Context<'_> {
     /// arm for a path (its root alone it binds itself), with none of
     /// `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn ref_dim_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
+    pub(crate) fn ref_dim_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
         let DimRefOps { var, root, keys, n, append } = ops;
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let path = self.key_path(w, clo, keys, n)?;
@@ -3403,7 +3403,7 @@ impl Context<'_> {
     /// source's cell in it (`dim_set_ref`). `step` runs it, and the loop's
     /// DimSetRef arm, with none of `step`'s dispatch.
     #[inline(never)]
-    pub(crate) fn dim_set_ref_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
+    pub(crate) fn dim_set_ref_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
         let DimRefOps { var: src, root, keys, n, append } = ops;
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let path = self.key_path(w, clo, keys, n)?;
