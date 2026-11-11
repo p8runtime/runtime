@@ -519,8 +519,12 @@ pub struct Call {
     /// The result, for arguments that leave the builtin nothing to do,
     /// read from the arguments alone ([`Registry::quick`]): the call is
     /// then made with no checks, no lent registers and no frame for traces.
-    pub quick: Option<fn(&[Value]) -> Option<Value>>,
+    pub quick: Option<Quick>,
 }
+
+/// A builtin's result read from its arguments alone, when they leave it
+/// nothing to do (None: the call is made). See [`Call::quick`].
+pub type Quick = fn(&[Value]) -> Option<Value>;
 
 /// How many arguments a frameless call's test reads from [`Call::accepts`]
 /// (a call passing more is tested from the signature).
@@ -966,7 +970,7 @@ impl Registry {
     /// (`quick` gives it, or None): assert() of an assertion that holds is
     /// true, though the builtin may run PHP code (assert.callback) when one
     /// fails. Not for a deprecated builtin (its message is due at every call).
-    pub fn quick(&mut self, name: &str, quick: fn(&[Value]) -> Option<Value>) {
+    pub fn quick(&mut self, name: &str, quick: Quick) {
         if let Some(i) = self.lookup(name.as_bytes())
             && !self.calls[i].deprecated
         {

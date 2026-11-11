@@ -72,6 +72,25 @@ fn a_holding_assert_is_not_lent_the_registers() {
     assert_eq!(out, "AssertionError: assert($n < 0) 20");
 }
 
+/// A builtin that calls back into PHP (array_map, array_filter, usort),
+/// called again and again: its entry for traces is the last call's, used
+/// again, not a new one each call; and a trace from its callback shows it.
+#[test]
+fn a_builtin_calling_back_uses_its_trace_entry_again() {
+    let out = flat(
+        "$t = 0; $shown = '';
+         for ($i = 0; $i < $n; $i++) {
+             $t += array_sum(array_map(fn ($x) => $x * 2, [1, $i]));
+             $t += count(array_filter([0, $i, 2], fn ($x) => $x > 0));
+             $a = [3, 1, 2]; usort($a, fn ($x, $y) => $x <=> $y); $t += $a[0];
+             $shown = array_map(fn () => debug_backtrace()[1]['function'] . '/' . count(debug_backtrace()[1]['args']), [1])[0];
+         }
+         echo $t, ' ', $shown;",
+        Count::NativeEntry,
+    );
+    assert_eq!(out, "479 array_map/2");
+}
+
 /// foreach over an Iterator: `valid`, `current`, `key` and `next` are
 /// looked up by name once (then found as a call site finds them), not at
 /// every element; from a method of another class too.

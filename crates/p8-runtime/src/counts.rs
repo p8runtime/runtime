@@ -40,11 +40,15 @@ pub enum Count {
     /// PHP code (p8-interp's `call_builtin`): not done for a call
     /// `Call::quick` answers (a holding assert()).
     BuiltinLent = 9,
+    /// An entry made for a running builtin, shown in traces (p8-interp's
+    /// `push_native`): only deeper than any so far, a finished one's entry
+    /// is used again.
+    NativeEntry = 10,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 10] = const { [const { std::cell::Cell::new(0) }; 10] };
+    static COUNTS: [std::cell::Cell<u64>; 11] = const { [const { std::cell::Cell::new(0) }; 11] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

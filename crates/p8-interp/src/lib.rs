@@ -3977,7 +3977,10 @@ impl Context<'_> {
                 (n.depth, n.name, n.method, n.top) = (depth, name, method, top);
                 n.args.extend(args.iter().map(Value::deref));
             }
-            None => natives.slots.push(NativeCall { depth, name, method, args: args.iter().map(Value::deref).collect(), top }),
+            None => {
+                p8_runtime::counts::bump(p8_runtime::counts::Count::NativeEntry);
+                natives.slots.push(NativeCall { depth, name, method, args: args.iter().map(Value::deref).collect(), top });
+            }
         }
         natives.len += 1;
     }
