@@ -37,6 +37,9 @@ pub struct Config {
     /// `p8 serve`: the project served (the document root) from its
     /// package; none for `php -S`.
     pub project: Option<Project>,
+    /// `p8 serve`: how many requests run at once, each on a worker of its
+    /// own (an isolate on its own thread, APS 8). `php -S` runs one.
+    pub workers: usize,
 }
 
 /// What `p8 serve` adds to the built-in server: the project's package,
@@ -167,29 +170,31 @@ static LIMIT_SECONDS: AtomicU32 = AtomicU32::new(0);
 
 /// Stops the request that runs past max_execution_time, and leaves one
 /// that finished alone.
+/// One per isolate (each worker's own): its deadline, and whether the
+/// watchdog is to stop (its isolate is gone).
 struct Watchdog {
-    state: Arc<(Mutex<Option<Instant>>, Condvar)>,
+    state: Arc<(Mutex<(Option<Instant>, bool)>, Condvar)>,
 }
 
 impl Watchdog {
     /// Where there are no threads (WASI) nothing watches, and the limit is
     /// not kept, as in a PHP built without timers.
     fn start(handle: p8::InterruptHandle) -> Watchdog {
-        let state: Arc<(Mutex<Option<Instant>>, Condvar)> = Arc::new((Mutex::new(None), Condvar::new()));
+        let state: Arc<(Mutex<(Option<Instant>, bool)>, Condvar)> = Arc::new((Mutex::new((None, false)), Condvar::new()));
         let shared = Arc::clone(&state);
         let _ = std::thread::Builder::new().spawn(move || {
             let (lock, cv) = &*shared;
-            let mut deadline = lock.lock().unwrap_or_else(|e| e.into_inner());
-            loop {
-                match *deadline {
-                    None => deadline = cv.wait(deadline).unwrap_or_else(|e| e.into_inner()),
+            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while !state.1 {
+                match state.0 {
+                    None => state = cv.wait(state).unwrap_or_else(|e| e.into_inner()),
                     Some(at) => {
                         let now = Instant::now();
                         if now >= at {
-                            *deadline = None;
+                            state.0 = None;
                             handle.timeout(u64::from(LIMIT_SECONDS.load(Ordering::Relaxed)));
                         } else {
-                            deadline = cv.wait_timeout(deadline, at - now).unwrap_or_else(|e| e.into_inner()).0;
+                            state = cv.wait_timeout(state, at - now).unwrap_or_else(|e| e.into_inner()).0;
                         }
                     }
                 }
@@ -201,7 +206,15 @@ impl Watchdog {
     /// Stop the request in `seconds` (none: not at all) unless disarmed first.
     fn arm(&self, seconds: u64) {
         let (lock, cv) = &*self.state;
-        *lock.lock().unwrap_or_else(|e| e.into_inner()) = (seconds > 0).then(|| Instant::now() + Duration::from_secs(seconds));
+        lock.lock().unwrap_or_else(|e| e.into_inner()).0 = (seconds > 0).then(|| Instant::now() + Duration::from_secs(seconds));
+        cv.notify_all();
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.state;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
         cv.notify_all();
     }
 }
@@ -514,8 +527,27 @@ fn address_and_docroot(config: &Config) -> Option<(String, u16, String)> {
     Some((host, port, docroot))
 }
 
-/// The engine and the server's state, for `serve` to run requests with.
-fn with_server(config: &Config, host: String, port: u16, docroot: String, serve: impl FnOnce(&mut Server, &mut p8::Isolate)) {
+/// What every worker of the server shares: one engine (a file is compiled
+/// once per process, whichever worker needs it first, and every worker
+/// runs that code: APS 13 §1) and the server's settings.
+#[derive(Clone)]
+struct Settings {
+    platform: Arc<p8::Platform>,
+    host: String,
+    port: u16,
+    docroot: String,
+    router: Option<String>,
+    ini: Vec<(String, String)>,
+    limit: u64,
+    /// `p8 serve`: each request's log line says how many files it
+    /// compiled from source (none, for a project served from its package),
+    /// and no request changes the process's working directory (it is the
+    /// project's folder, for every worker; see `Server::execute`).
+    project: bool,
+}
+
+/// The engine and the server's settings, for workers to run requests with.
+fn settings(config: &Config, host: String, port: u16, docroot: String) -> Settings {
     let platform = p8::Platform::new(&crate::extensions(true))
         // Each file is compiled once, and again only when its source changes.
         .keep_compiled();
@@ -537,13 +569,17 @@ fn with_server(config: &Config, host: String, port: u16, docroot: String, serve:
             crate::opcache(platform, &ini, false)
         }
     };
-    let mut isolate = platform.new_isolate();
     let limit = ini.iter().rev().find(|(n, _)| n == "max_execution_time").and_then(|(_, v)| v.trim().parse::<u32>().ok()).unwrap_or(0);
     LIMIT_SECONDS.store(limit, Ordering::Relaxed);
+    let project = config.project.is_some();
+    Settings { platform: Arc::new(platform), host, port, docroot, router: config.router.clone(), ini, limit: u64::from(limit), project }
+}
+
+/// A worker: an isolate on this thread, its watchdog, and the settings.
+fn worker(settings: &Settings) -> (Server, p8::Isolate) {
+    let isolate = settings.platform.new_isolate();
     let watchdog = Watchdog::start(isolate.interrupt_handle());
-    let counts = config.project.is_some();
-    let mut server = Server { platform: &platform, host, port, docroot, router: config.router.clone(), ini, watchdog, limit: u64::from(limit), counts };
-    serve(&mut server, &mut isolate);
+    (Server { s: settings.clone(), watchdog }, isolate)
 }
 
 /// `php -S` for one request read from stdin, as from a connection from
@@ -572,7 +608,8 @@ pub fn run_stdio(config: Config, client: String) -> i32 {
         }
     };
     log(LOG_MESSAGE, &format!("{client} Accepted"));
-    with_server(&config, host, port, docroot, |server, isolate| server.handle(isolate, Incoming { stream: None, peer: client, request }));
+    let (mut server, mut isolate) = worker(&settings(&config, host, port, docroot));
+    server.handle(&mut isolate, Incoming { stream: None, peer: client, request });
     0
 }
 
@@ -610,19 +647,128 @@ pub fn run(config: Config) -> i32 {
         None => log(LOG_PROCESS, &format!("PHP {} Development Server (http://{shown}) started", p8::PHP_VERSION)),
     }
 
+    let settings = settings(&config, host, port, docroot);
+    // `p8 serve`: workers run requests side by side, and a process has one
+    // working directory, so it is the project's folder for every request
+    // (php -S, one request at a time, moves it to each script's folder).
+    if settings.project {
+        let _ = std::env::set_current_dir(&settings.docroot);
+    }
+    let workers = if settings.project { config.workers.max(1) } else { 1 };
     let (tx, rx) = mpsc::channel::<Incoming>();
-    std::thread::spawn(move || accept_loop(listener, tx));
-
-    with_server(&config, host, port, docroot, |server, isolate| {
-        for incoming in rx {
-            server.handle(isolate, incoming);
-        }
+    let flight = Arc::new(Flight::default());
+    let done = Arc::clone(&flight);
+    crate::pool::start(workers, rx, move || worker(&settings), move |state: &mut (Server, p8::Isolate), incoming: Incoming| {
+        // Counted out however the request ends (a panic included).
+        let _landed = Landed(&done);
+        let (server, isolate) = state;
+        server.handle(isolate, incoming);
     });
+    let (stop, stopped) = mpsc::channel::<()>();
+    // `p8 serve` stops cleanly on SIGINT or SIGTERM; php -S ends as PHP's does.
+    if config.project.is_some() {
+        stop_on_signal(stop.clone());
+    }
+    let address = listener.local_addr().ok();
+    let accepting = Arc::clone(&flight);
+    std::thread::spawn(move || accept_loop(listener, tx, accepting));
+    let _ = stopped.recv();
+    drop(stop);
+    // Stopping: no new request is taken; the ones taken finish, for as long
+    // as max_execution_time lets a request run (and a little more).
+    log(LOG_PROCESS, "p8 is stopping: the requests in progress finish first");
+    let left = flight.close(Duration::from_secs(config_limit(&config) + 5));
+    // The accept thread waits in accept(): a connection wakes it to stop.
+    if let Some(address) = address {
+        let _ = TcpStream::connect_timeout(&address, Duration::from_secs(1));
+    }
+    if left > 0 {
+        log(LOG_PROCESS, &format!("p8 stopped with {left} request(s) unfinished"));
+        return 1;
+    }
+    log(LOG_PROCESS, "p8 stopped");
     0
 }
 
+/// Send on `stop` when the process gets SIGINT or SIGTERM.
+#[cfg(not(target_os = "wasi"))]
+fn stop_on_signal(stop: mpsc::Sender<()>) {
+    if let Err(e) = ctrlc::set_handler(move || {
+        let _ = stop.send(());
+    }) {
+        log(LOG_ERROR, &format!("p8: stopping on a signal is not available ({e}); end the server by killing it"));
+    }
+}
+
+/// WASI has no signals.
+#[cfg(target_os = "wasi")]
+fn stop_on_signal(_: mpsc::Sender<()>) {}
+
+/// The max_execution_time requests run with (the server's default, else
+/// what `-d` set).
+fn config_limit(config: &Config) -> u64 {
+    let set = config.ini.iter().rev().find(|(n, _)| n == "max_execution_time").map(|(_, v)| v.as_str());
+    let default = SERVER_INI.iter().find(|(n, _)| *n == "max_execution_time").map(|(_, v)| *v);
+    set.or(default).and_then(|v| v.trim().parse().ok()).unwrap_or(0)
+}
+
+/// The requests taken and not yet answered, and whether the server is
+/// stopping (then none is taken).
+#[derive(Default)]
+struct Flight {
+    state: Mutex<(usize, bool)>,
+    changed: Condvar,
+}
+
+impl Flight {
+    /// Take one more request: false when the server is stopping.
+    fn take(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.1 {
+            return false;
+        }
+        state.0 += 1;
+        true
+    }
+
+    fn landed(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.0 = state.0.saturating_sub(1);
+        self.changed.notify_all();
+    }
+
+    fn closing(&self) -> bool {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).1
+    }
+
+    /// Take no more requests, and wait (at most `bound`) for the ones
+    /// taken; how many are left.
+    fn close(&self, bound: Duration) -> usize {
+        let until = Instant::now() + bound;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.1 = true;
+        while state.0 > 0 {
+            let now = Instant::now();
+            if now >= until {
+                break;
+            }
+            state = self.changed.wait_timeout(state, until - now).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        state.0
+    }
+}
+
+/// A request answered (or given up on), when dropped.
+struct Landed<'a>(&'a Flight);
+
+impl Drop for Landed<'_> {
+    fn drop(&mut self) {
+        self.0.landed();
+    }
+}
+
 /// Accept connections; each is read on a thread of its own.
-fn accept_loop(listener: TcpListener, tx: mpsc::Sender<Incoming>) {
+fn accept_loop(listener: TcpListener, tx: mpsc::Sender<Incoming>, flight: Arc<Flight>) {
     loop {
         let (stream, addr) = match listener.accept() {
             Ok(c) => c,
@@ -631,15 +777,18 @@ fn accept_loop(listener: TcpListener, tx: mpsc::Sender<Incoming>) {
                 continue;
             }
         };
+        if flight.closing() {
+            return;
+        }
         let peer = addr.to_string();
         log(LOG_MESSAGE, &format!("{peer} Accepted"));
-        let tx = tx.clone();
-        std::thread::spawn(move || read_request(stream, peer, tx));
+        let (tx, flight) = (tx.clone(), Arc::clone(&flight));
+        std::thread::spawn(move || read_request(stream, peer, tx, &flight));
     }
 }
 
 /// php_cli_server_client_read_request(): bytes in until a request is whole.
-fn read_request(mut stream: TcpStream, peer: String, tx: mpsc::Sender<Incoming>) {
+fn read_request(mut stream: TcpStream, peer: String, tx: mpsc::Sender<Incoming>, flight: &Flight) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 16383];
     loop {
@@ -663,7 +812,15 @@ fn read_request(mut stream: TcpStream, peer: String, tx: mpsc::Sender<Incoming>)
         buf.extend_from_slice(&chunk[..n]);
         match http::parse(&buf) {
             Parse::Complete(request) => {
-                let _ = tx.send(Incoming { stream: Some(stream), peer, request });
+                // A server that is stopping takes no new request: the
+                // connection closes unanswered.
+                if !flight.take() {
+                    close(&peer);
+                    return;
+                }
+                if tx.send(Incoming { stream: Some(stream), peer, request }).is_err() {
+                    flight.landed();
+                }
                 return;
             }
             Parse::Incomplete => {}
@@ -682,18 +839,10 @@ fn close(peer: &str) {
 }
 
 
-struct Server<'p> {
-    platform: &'p p8::Platform,
-    host: String,
-    port: u16,
-    docroot: String,
-    router: Option<String>,
-    ini: Vec<(String, String)>,
+/// One worker's server: the shared settings, and the watchdog of its isolate.
+struct Server {
+    s: Settings,
     watchdog: Watchdog,
-    limit: u64,
-    /// `p8 serve`: each request's log line says how many files it
-    /// compiled from source (none, for a project served from its package).
-    counts: bool,
 }
 
 /// How a script run ended.
@@ -711,13 +860,13 @@ enum CompileFailure {
     Read,
 }
 
-impl Server<'_> {
+impl Server {
     /// The compiled form of `path` (the platform keeps what it compiled
     /// while the source is the same).
     fn compile(&mut self, path: &Path) -> Result<Rc<p8::Script>, CompileFailure> {
         let source = std::fs::read(path).map_err(|_| CompileFailure::Read)?;
         let file = p8::canonicalize(path).map_or_else(|_| path.to_string_lossy().into_owned(), |p| p.to_string_lossy().into_owned());
-        Ok(Rc::new(self.platform.compile(&source, &file).map_err(CompileFailure::Source)?))
+        Ok(Rc::new(self.s.platform.compile(&source, &file).map_err(CompileFailure::Source)?))
     }
 
     /// $_SERVER as sapi_cli_server_register_variables() builds it.
@@ -725,7 +874,7 @@ impl Server<'_> {
         let req = &incoming.request;
         let mut server: Vec<(Vec<u8>, Vec<u8>, bool)> = Vec::new();
         let mut known = |name: &str, value: &[u8]| server.push((name.as_bytes().to_vec(), value.to_vec(), true));
-        known("DOCUMENT_ROOT", self.docroot.as_bytes());
+        known("DOCUMENT_ROOT", self.s.docroot.as_bytes());
         // addr_str is "ip:port" or "[ip]:port".
         let peer = incoming.peer.as_str();
         match peer.rfind(':') {
@@ -738,14 +887,14 @@ impl Server<'_> {
         }
         known("SERVER_SOFTWARE", format!("PHP/{} (Development Server)", p8::PHP_VERSION).as_bytes());
         known("SERVER_PROTOCOL", format!("HTTP/{}.{}", req.protocol / 100, req.protocol % 100).as_bytes());
-        known("SERVER_NAME", self.host.as_bytes());
-        known("SERVER_PORT", self.port.to_string().as_bytes());
+        known("SERVER_NAME", self.s.host.as_bytes());
+        known("SERVER_PORT", self.s.port.to_string().as_bytes());
         known("REQUEST_URI", &req.request_uri);
         known("REQUEST_METHOD", req.method.as_bytes());
         known("SCRIPT_NAME", &resolved.vpath);
         if let Some(p) = &resolved.path_translated {
             known("SCRIPT_FILENAME", p);
-        } else if let (true, Some(router)) = (router_used, &self.router) {
+        } else if let (true, Some(router)) = (router_used, &self.s.router) {
             known("SCRIPT_FILENAME", router.as_bytes());
         }
         if let Some(info) = &resolved.path_info {
@@ -776,12 +925,18 @@ impl Server<'_> {
     /// Run a PHP file as a request of its own (the router, or the target).
     fn execute(&mut self, isolate: &mut p8::Isolate, conn: &mut Conn, file: &Path, request: &p8::Request, chdir: bool, carried: Option<p8::Carried>) -> Ran {
         let script = self.compile(file);
-        if chdir && let Some(dir) = file.parent() {
+        // php -S runs a script in its folder. `p8 serve` runs requests side
+        // by side in one process, whose working directory stays the
+        // project's (see `run`).
+        if chdir
+            && !self.s.project
+            && let Some(dir) = file.parent()
+        {
             let _ = std::env::set_current_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
         }
-        self.watchdog.arm(self.limit);
+        self.watchdog.arm(self.s.limit);
         let mut context = isolate.new_context(conn);
-        for (name, value) in &self.ini {
+        for (name, value) in &self.s.ini {
             context.set_ini(name, value);
         }
         context.serve(request, carried);
@@ -825,8 +980,22 @@ impl Server<'_> {
             pending: None,
             sent: false,
         };
-        self.dispatch(isolate, &incoming, &mut conn);
+        // A request that fails inside p8 (a panic) gets PHP's error page,
+        // if nothing was sent yet; its worker is then replaced (pool.rs).
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(isolate, &incoming, &mut conn))).err();
+        if failed.is_some() && !conn.sent {
+            conn.pending = None;
+            self.error_page(&incoming, &mut conn, 500);
+        }
         conn.finish();
+        if let Some(panic) = failed {
+            close(&peer);
+            if let Some(stream) = &incoming.stream {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            log(LOG_ERROR, &format!("{peer} p8 failed running this request; its worker is replaced"));
+            std::panic::resume_unwind(panic);
+        }
         // Said before the connection closes, as PHP's server does: the
         // client may connect again as soon as it is closed, and that
         // connection's "Accepted" comes after this one's "Closing".
@@ -858,13 +1027,15 @@ impl Server<'_> {
             self.error_page(incoming, conn, 501);
             return;
         }
-        let compiled = self.platform.compiled_files();
+        // What this request compiles is counted on its worker's thread:
+        // other workers compile alongside it.
+        let compiled = p8::compiled_on_this_thread();
         let vpath = normalize_vpath(req.path.as_deref().unwrap_or_default());
-        let resolved = translate_vpath(self.docroot.as_bytes(), vpath);
+        let resolved = translate_vpath(self.s.docroot.as_bytes(), vpath);
         let ext = extension(&resolved.vpath).to_ascii_lowercase();
         let is_static = ext != b"php" || resolved.path_translated.is_none();
         let mut carried = None;
-        if let Some(router) = self.router.clone() {
+        if let Some(router) = self.s.router.clone() {
             let p8req = self.p8_request(incoming, &resolved, true);
             let ran = self.execute(isolate, conn, Path::new(&router), &p8req, false, None);
             if ran.declined.is_none() {
@@ -887,7 +1058,7 @@ impl Server<'_> {
         }
         let p8req = self.p8_request(incoming, &resolved, false);
         let ran = self.execute(isolate, conn, &to_path(&path), &p8req, true, carried);
-        let counted = self.counts.then(|| match self.platform.compiled_files() - compiled {
+        let counted = self.s.project.then(|| match p8::compiled_on_this_thread() - compiled {
             1 => "1 file compiled from source".to_string(),
             n => format!("{n} files compiled from source"),
         });
@@ -961,7 +1132,8 @@ impl Server<'_> {
             head.extend_from_slice(b"Allow: GET, HEAD, POST\r\n");
         }
         head.extend_from_slice(b"\r\n");
-        self.log_response(incoming, status, Some("No such file or directory"), None);
+        let message = (status != 500).then_some("No such file or directory");
+        self.log_response(incoming, status, message, None);
         let _ = conn.out.write_all(&head);
         let _ = conn.out.write_all(body.as_bytes());
         conn.sent = true;

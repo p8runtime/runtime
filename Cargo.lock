@@ -4422,6 +4422,7 @@ dependencies = [
 name = "php-cli"
 version = "0.1.0"
 dependencies = [
+ "ctrlc",
  "p8",
  "rusty_alloc-api",
 ]

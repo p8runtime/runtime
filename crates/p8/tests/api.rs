@@ -179,6 +179,31 @@ fn a_script_is_shared_by_isolates_on_many_threads() {
     }
 }
 
+/// A file kept compiled and wanted by isolates on many threads at once
+/// (a server's workers, each the first to need it) is compiled once: one
+/// thread compiles it, the others wait and take it (APS 13 §1).
+#[test]
+fn a_file_wanted_by_many_threads_at_once_is_compiled_once() {
+    let platform = std::sync::Arc::new(platform().keep_compiled());
+    // Big enough that compiling it takes long enough for the threads to meet.
+    let source: String = std::iter::once("<?php ".to_string()).chain((0..3000).map(|i| format!("function f{i}($a, $b) {{ return $a * {i} + $b; }}\n"))).collect();
+    let source = std::sync::Arc::new(source);
+    let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (platform, source, start) = (platform.clone(), source.clone(), start.clone());
+            std::thread::spawn(move || {
+                start.wait();
+                platform.compile(source.as_bytes(), "/shared/t.php").expect("compiles");
+                p8::compiled_on_this_thread()
+            })
+        })
+        .collect();
+    let by_thread: Vec<usize> = threads.into_iter().map(|t| t.join().expect("thread")).collect();
+    assert_eq!(platform.compiled_files(), 1, "compiled by {by_thread:?}");
+    assert_eq!(by_thread.iter().sum::<usize>(), 1, "each thread counts what it compiled itself: {by_thread:?}");
+}
+
 #[test]
 fn what_a_request_resolves_is_not_cached_for_the_next() {
     // The same compiled script, two requests: each defines C itself, so

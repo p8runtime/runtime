@@ -14,6 +14,9 @@
 //!   compiled. A file changed since `p8 compile`, a new one and `eval()`'d
 //!   code compile from source, as without a package; with no package (or
 //!   one this p8 cannot use) the whole project does, and stderr says so.
+//!   `--workers N` requests run at once, each on a worker of its own (an
+//!   isolate on its own thread, sharing every compiled file: APS 8); SIGINT
+//!   or SIGTERM stops it once the requests in progress have finished.
 //!
 //! A script named `compile` or `serve` runs as `p8 ./compile`, or after
 //! any option (`p8 -f compile`).
@@ -31,6 +34,7 @@ static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 mod http;
 mod mime_types;
+mod pool;
 mod server;
 mod status_phrases;
 
@@ -41,7 +45,7 @@ const USAGE: &str = "usage: p8 [--dump] [-l] [--repeat N] [-d name=value]... [--
        p8 -S <addr>:<port> [-t docroot] [-q] [router.php]
        p8 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)
        p8 compile [dir] [--package <file>] [--cli] [--bake <file>]   (every PHP file under dir, default the current directory, compiled into dir/.p8/package, for p8 serve; --package: written there instead; --cli: for `p8 --package <file> <script>` runs instead; --bake: also a copy of p8 that runs scripts with it, implies --cli)
-       p8 serve [dir] [--listen <addr>:<port>]   (dir, default the current directory, served over HTTP from dir/.p8/package; default 127.0.0.1:8000)";
+       p8 serve [dir] [--listen <addr>:<port>] [--workers N] [-d name=value]...   (dir, default the current directory, served over HTTP from dir/.p8/package; default 127.0.0.1:8000, two workers per core)";
 
 /// The extensions p8 loads (`server`: with what the built-in web server
 /// adds). A WASI build has no sockets, so it is a PHP built without
@@ -179,9 +183,10 @@ fn main() {
     };
     let status = match command {
         Command::Compile(compile) => write_package(&compile),
-        Command::Serve { dir, listen } => {
+        Command::Serve(Serve { dir, listen, workers, ini }) => {
             let project = server::Project { package: package_of(&dir) };
-            let config = server::Config { address: listen, docroot: Some(dir), router: None, quiet: 0, ini: Vec::new(), project: Some(project) };
+            let workers = workers.unwrap_or_else(default_workers);
+            let config = server::Config { address: listen, docroot: Some(dir), router: None, quiet: 0, ini, project: Some(project), workers };
             on_deep_stack(move || server::run(config))
         }
         Command::Php(cli) => php(cli),
@@ -199,7 +204,7 @@ fn php(cli: Cli) -> i32 {
     }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
-        let config = server::Config { address, docroot, router: path, quiet, ini, project: None };
+        let config = server::Config { address, docroot, router: path, quiet, ini, project: None, workers: 1 };
         return on_deep_stack(move || match stdio {
             Some(client) => server::run_stdio(config, client),
             None => server::run(config),
@@ -309,8 +314,34 @@ fn php(cli: Cli) -> i32 {
 #[derive(Debug, PartialEq)]
 enum Command {
     Compile(Compile),
-    Serve { dir: String, listen: String },
+    Serve(Serve),
     Php(Cli),
+}
+
+/// `p8 serve [dir] [--listen <addr>:<port>] [--workers N] [-d name=value]...`.
+#[derive(Debug, PartialEq)]
+struct Serve {
+    dir: String,
+    listen: String,
+    /// Requests run at once (default: [`default_workers`]).
+    workers: Option<usize>,
+    /// `-d name=value` settings for every request, in order.
+    ini: Vec<(String, String)>,
+}
+
+/// How many workers `p8 serve` runs unless `--workers` says: two per core.
+/// A PHP request blocks its thread while it waits (a database, a file, a
+/// remote call), so more workers than cores keep the cores busy, as
+/// php-fpm runs more children than cores (APS 8: its worker count, as
+/// threads); an idle worker's isolate holds no heap of its own.
+fn default_workers() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).saturating_mul(2).max(2)
+}
+
+/// `name=value` (a bare name is `name=1`), as php's `-d` takes it.
+fn setting(text: &str) -> (String, String) {
+    let (name, value) = text.split_once('=').unwrap_or((text, "1"));
+    (name.trim().to_string(), value.trim().trim_matches('"').to_string())
 }
 
 /// `p8 compile [dir] [--package <file>] [--cli] [--bake <file>]`.
@@ -351,15 +382,18 @@ impl Command {
             }
             Some("serve") => {
                 args.next();
-                let (mut dir, mut listen) = (None, None);
+                let (mut dir, mut listen, mut workers, mut ini) = (None, None, None, Vec::new());
                 while let Some(arg) = args.next() {
                     match arg.as_str() {
                         "--listen" if listen.is_none() => listen = Some(args.next()?),
+                        "--workers" if workers.is_none() => workers = Some(args.next()?.parse().ok().filter(|&n: &usize| n > 0)?),
+                        "-d" => ini.push(setting(&args.next()?)),
+                        other if other.starts_with("-d") && other.len() > 2 => ini.push(setting(&other[2..])),
                         _ if !arg.starts_with('-') && dir.is_none() => dir = Some(arg),
                         _ => return None,
                     }
                 }
-                Some(Command::Serve { dir: dir.unwrap_or_else(|| ".".to_string()), listen: listen.unwrap_or_else(|| LISTEN.to_string()) })
+                Some(Command::Serve(Serve { dir: dir.unwrap_or_else(|| ".".to_string()), listen: listen.unwrap_or_else(|| LISTEN.to_string()), workers, ini }))
             }
             _ => Cli::parse(args).map(Command::Php),
         }
@@ -498,7 +532,7 @@ impl p8::Host for Stdout {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, Compile, LISTEN};
+    use super::{Cli, Command, Compile, LISTEN, Serve};
 
     fn parse(args: &[&str]) -> Option<(bool, Option<String>)> {
         Cli::parse(args.iter().map(|a| a.to_string())).map(|c| (c.dump, c.path))
@@ -569,10 +603,25 @@ mod tests {
         assert_eq!(command(&["compile", "site", "--package", "out.p8"]), compile("site", Some("out.p8"), false, None));
         assert_eq!(command(&["compile", "--cli", "site"]), compile("site", None, true, None));
         assert_eq!(command(&["compile", "site", "--bake", "app"]), compile("site", None, true, Some("app")));
-        assert_eq!(command(&["serve"]), Some(Command::Serve { dir: ".".into(), listen: LISTEN.into() }));
-        assert_eq!(command(&["serve", "site", "--listen", "0.0.0.0:80"]), Some(Command::Serve { dir: "site".into(), listen: "0.0.0.0:80".into() }));
-        assert_eq!(command(&["serve", "--listen", "[::1]:9000", "site"]), Some(Command::Serve { dir: "site".into(), listen: "[::1]:9000".into() }));
-        for wrong in [&["compile", "a", "b"][..], &["compile", "--listen", "x:1"], &["compile", "--package"], &["serve", "--listen"], &["serve", "-x"], &["serve", "a", "b"]] {
+        let serve = |dir: &str, listen: &str, workers: Option<usize>, ini: &[(&str, &str)]| {
+            Some(Command::Serve(Serve { dir: dir.into(), listen: listen.into(), workers, ini: ini.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect() }))
+        };
+        assert_eq!(command(&["serve"]), serve(".", LISTEN, None, &[]));
+        assert_eq!(command(&["serve", "site", "--listen", "0.0.0.0:80"]), serve("site", "0.0.0.0:80", None, &[]));
+        assert_eq!(command(&["serve", "--listen", "[::1]:9000", "site"]), serve("site", "[::1]:9000", None, &[]));
+        assert_eq!(command(&["serve", "site", "--workers", "3", "-d", "max_execution_time=1", "-dprecision=5"]), serve("site", LISTEN, Some(3), &[("max_execution_time", "1"), ("precision", "5")]));
+        assert!(super::default_workers() >= 2);
+        for wrong in [
+            &["compile", "a", "b"][..],
+            &["compile", "--listen", "x:1"],
+            &["compile", "--package"],
+            &["serve", "--listen"],
+            &["serve", "-x"],
+            &["serve", "a", "b"],
+            &["serve", "--workers", "0"],
+            &["serve", "--workers", "x"],
+            &["serve", "-d"],
+        ] {
             assert_eq!(command(wrong), None, "{wrong:?}");
         }
         // A script named compile or serve.

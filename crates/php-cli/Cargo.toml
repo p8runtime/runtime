@@ -16,3 +16,8 @@ p8 = { path = "../p8" }
 # mimalloc (#319). Pinned exactly: an upgrade is a reviewed change, with the
 # allocator measurements rerun (bench/alloc-experiment).
 rusty_alloc-api = "=2.4.0"
+
+# `p8 serve` stops cleanly on SIGINT and SIGTERM (std has no signal API;
+# the version the workspace already locks, with SIGTERM: `termination`).
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+ctrlc = { version = "=3.5.1", features = ["termination"] }
