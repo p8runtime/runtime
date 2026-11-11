@@ -162,7 +162,7 @@ impl Driver for MysqlDriver {
     }
 
     /// pdo_mysql_handle_factory()
-    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options) -> Result<Box<dyn Connection>, ConnectError> {
+    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options, _cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError> {
         let vars = parse_data_source(dsn.as_bytes(), &["charset", "dbname", "host", "port", "unix_socket", "user", "password"]);
         let text = |i: usize| vars[i].as_ref().map(|v| String::from_utf8_lossy(v).into_owned());
         let mut flags = 0;

@@ -335,7 +335,7 @@ fn read_input(ctx: &mut dyn Ctx, func: &str, path: &[u8]) -> Result<Option<Vec<u
         return Ok(r.as_str().map(|s| s.as_bytes().to_vec()));
     }
     let p = shown.strip_prefix("file://").unwrap_or(&shown);
-    match std::fs::read(p) {
+    match std::fs::read(p8_runtime::cwd::resolve(ctx, p)) {
         Ok(d) => Ok(Some(d)),
         Err(e) => {
             ctx.warn(&format!("{func}({shown}): Failed to open stream: {}", os_error(&e)));
@@ -1357,7 +1357,7 @@ fn send(ctx: &mut dyn Ctx, func: &str, to: &Value, bytes: &[u8]) -> R {
                 return ok();
             }
             let p = shown.strip_prefix("file://").unwrap_or(&shown);
-            match std::fs::write(p, bytes) {
+            match std::fs::write(p8_runtime::cwd::resolve(ctx, p), bytes) {
                 Ok(()) => ok(),
                 Err(e) => {
                     ctx.warn(&format!("{func}({shown}): Failed to open stream: {}", os_error(&e)));

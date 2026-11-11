@@ -432,7 +432,7 @@ fn last_modified(ctx: &mut dyn Ctx) {
         _ => None,
     };
     let Some(path) = path else { return };
-    let mtime = std::fs::metadata(String::from_utf8_lossy(path.as_bytes()).as_ref()).and_then(|m| m.modified());
+    let mtime = std::fs::metadata(p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(path.as_bytes()).as_ref())).and_then(|m| m.modified());
     if let Ok(t) = mtime {
         let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         add_header(ctx, format!("Last-Modified: {}", gmt(secs)).as_bytes(), true);

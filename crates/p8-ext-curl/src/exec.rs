@@ -700,7 +700,7 @@ pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(),
         if s.jar.is_none() && (s.opts.contains_key(&c::CURLOPT_COOKIEFILE) || s.opts.contains_key(&c::CURLOPT_COOKIEJAR)) {
             let mut j = rsurl::CookieJar::new();
             if let Some(f) = opt_str(&s, c::CURLOPT_COOKIEFILE).filter(|f| !f.is_empty())
-                && let Ok(loaded) = rsurl::CookieJar::load_netscape_or_empty(&f)
+                && let Ok(loaded) = rsurl::CookieJar::load_netscape_or_empty(&p8_runtime::cwd::resolve(ctx, &f).to_string_lossy())
             {
                 j = loaded;
             }
@@ -856,7 +856,7 @@ pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(),
     if let Some(path) = opt_str(&s, c::CURLOPT_COOKIEJAR).filter(|p| !p.is_empty())
         && let Some(j) = &s.jar
     {
-        let _ = j.borrow().save_netscape(&path);
+        let _ = j.borrow().save_netscape(&p8_runtime::cwd::resolve(ctx, &path).to_string_lossy());
     }
     Ok(result)
 }

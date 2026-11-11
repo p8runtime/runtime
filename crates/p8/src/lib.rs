@@ -652,6 +652,23 @@ impl Context<'_> {
         self.inner.set_args(argv);
     }
 
+    /// Where this request starts: its working directory (getcwd(), and
+    /// what its relative paths, includes and child processes resolve
+    /// against) is `dir`, as a server sets the script's folder before the
+    /// script runs. A request otherwise starts in the process's working
+    /// directory as it was when the request began. A relative `dir` is
+    /// taken against that. Each request has its own: a script's chdir()
+    /// moves only its request's, never the process's or another
+    /// request's. Call it before [`Context::run`].
+    pub fn set_working_dir(&mut self, dir: impl AsRef<std::path::Path>) {
+        self.inner.set_working_dir(dir.as_ref());
+    }
+
+    /// The request's working directory now (what getcwd() returns).
+    pub fn working_dir(&self) -> &std::path::Path {
+        self.inner.working_dir()
+    }
+
     /// Make this request a web request: the script sees `request`'s
     /// variables ($_SERVER, $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST,
     /// php://input), and the response head it builds (header(),

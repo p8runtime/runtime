@@ -41,12 +41,13 @@ pub struct Diag {
 }
 
 /// The document's URL for xinclude: its documentURI, or (for a document
-/// loaded from a string) the working directory, as PHP's DOM sets it.
-fn doc_url(d: &Doc) -> String {
+/// loaded from a string) the request's working directory `cwd`, as PHP's
+/// DOM sets it.
+fn doc_url(d: &Doc, cwd: &std::path::Path) -> String {
     match &d.settings.url {
         Some(u) if !u.is_empty() => String::from_utf8_lossy(u).into_owned(),
         _ => {
-            let mut cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "/".into());
+            let mut cwd = if cwd.as_os_str().is_empty() { "/".to_string() } else { cwd.to_string_lossy().into_owned() };
             if !cwd.ends_with('/') {
                 cwd.push('/');
             }
@@ -57,10 +58,11 @@ fn doc_url(d: &Doc) -> String {
 
 /// Substitutes the XIncludes of `d`: the number of them done, 0 for none,
 /// -1 for an error (the document keeps what was substituted before it).
-pub fn run(d: &mut Doc, opts: i64) -> (i64, Vec<Diag>) {
-    let url = doc_url(d);
+/// A relative URL is under `cwd`, the request's working directory.
+pub fn run(d: &mut Doc, opts: i64, cwd: &std::path::Path) -> (i64, Vec<Diag>) {
+    let url = doc_url(d, cwd);
     let Some(root) = d.root() else { return (-1, Vec::new()) };
-    let mut xi = Xi { opts, diags: Vec::new(), stack: vec![url.clone()], level: 0, counted: 0 };
+    let mut xi = Xi { opts, cwd: cwd.to_path_buf(), diags: Vec::new(), stack: vec![url.clone()], level: 0, counted: 0 };
     let done = xi.process(d, &url, vec![root]);
     let result = if xi.counted > 0 { -1 } else { done as i64 };
     (result, xi.diags)
@@ -68,6 +70,8 @@ pub fn run(d: &mut Doc, opts: i64) -> (i64, Vec<Diag>) {
 
 struct Xi {
     opts: i64,
+    /// The request's working directory (a relative URL's base).
+    cwd: std::path::PathBuf,
     diags: Vec<Diag>,
     /// The URLs being included, outermost first.
     stack: Vec<String>,
@@ -243,7 +247,7 @@ impl Xi {
 
     /// parse="text": one text node, None when it could not be read.
     fn load_text(&mut self, d: &mut Doc, url: &str, inc: Id, target: &str) -> Option<Vec<Id>> {
-        let Some(raw) = read_url(target) else {
+        let Some(raw) = read_url(&self.cwd, target) else {
             self.io_error(target);
             return None;
         };
@@ -282,7 +286,7 @@ impl Xi {
             src = d.clone_tree();
             src_url = url;
         } else {
-            let Some(raw) = read_url(target) else {
+            let Some(raw) = read_url(&self.cwd, target) else {
                 self.io_error(target);
                 return None;
             };

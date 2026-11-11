@@ -282,13 +282,14 @@ fn load_blacklist(pattern: &str) -> Vec<String> {
     out
 }
 
-/// expand_filepath_ex: a relative path joined to `dir` (else the working
-/// directory), `.` and `..` folded, no link resolved.
+/// expand_filepath_ex: a relative path joined to `dir` (else the process's
+/// working directory: the blacklist is read at startup, before any
+/// request), `.` and `..` folded, no link resolved.
 fn expand(path: &str, dir: Option<&Path>) -> String {
     let joined = if Path::new(path).is_absolute() {
         path.to_string()
     } else {
-        let base = dir.map(Path::to_path_buf).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        let base = dir.map(Path::to_path_buf).unwrap_or_else(p8_runtime::cwd::process_dir);
         format!("{}/{path}", base.to_string_lossy())
     };
     let mut parts: Vec<&str> = Vec::new();

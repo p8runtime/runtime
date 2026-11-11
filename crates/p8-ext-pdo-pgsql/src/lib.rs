@@ -122,7 +122,7 @@ impl Driver for PgsqlDriver {
         Some("Pdo\\Pgsql")
     }
 
-    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options) -> Result<Box<dyn Connection>, ConnectError> {
+    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options, _cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError> {
         // libpq wants spaces between the parameters; PDO's DSNs use semicolons.
         let mut conn = dsn.replace(';', " ");
         let timeout = options.long(ATTR_TIMEOUT, 30);
@@ -877,7 +877,7 @@ fn copy_from_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func
     let dbh = conn_of(ctx, this)?;
     dbh.clear_error();
     let name = String::from_utf8_lossy(&file).into_owned();
-    let data = match std::fs::read(&name) {
+    let data = match std::fs::read(p8_runtime::cwd::resolve(ctx, &name)) {
         Ok(d) => d,
         Err(_) => {
             // php_stream_open_wrapper_ex() without REPORT_ERRORS: no warning.
@@ -911,7 +911,7 @@ fn copy_to_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value], func: 
     let dbh = conn_of(ctx, this)?;
     dbh.clear_error();
     let name = String::from_utf8_lossy(&file).into_owned();
-    let mut out = match std::fs::File::create(&name) {
+    let mut out = match std::fs::File::create(p8_runtime::cwd::resolve(ctx, &name)) {
         Ok(f) => f,
         Err(_) => {
             return fail(ctx, func, &dbh, DriverError::new("HY000", FATAL_ERROR, "Unable to open the file for writing"));

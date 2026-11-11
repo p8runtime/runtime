@@ -63,10 +63,20 @@ fn write_at_start(mut file: &File, val: &[u8]) -> std::io::Result<()> {
 pub(crate) struct Files {
     last_key: Option<Vec<u8>>,
     basedir: Vec<u8>,
+    /// The request's working directory when the handler opened: a
+    /// relative save_path is under it (shown as given in the messages).
+    cwd: PathBuf,
     dirdepth: usize,
     st_size: u64,
     filemode: u32,
     file: Option<File>,
+}
+
+impl Files {
+    /// A session path as the system is given it.
+    fn os(&self, path: &Path) -> PathBuf {
+        p8_runtime::cwd::join(&self.cwd, path)
+    }
 }
 
 /// php_session_valid_key()
@@ -149,7 +159,7 @@ pub(crate) fn open(ctx: &mut dyn Ctx, save_path: &[u8]) -> Option<Files> {
         filemode = n as u32;
     }
     let basedir = parts[parts.len() - 1].to_vec();
-    Some(Files { last_key: None, basedir, dirdepth, st_size: 0, filemode, file: None })
+    Some(Files { last_key: None, basedir, cwd: ctx.cwd().to_path_buf(), dirdepth, st_size: 0, filemode, file: None })
 }
 
 impl Files {
@@ -175,7 +185,7 @@ impl Files {
         };
         self.last_key = Some(key.to_vec());
         // O_NOFOLLOW keeps us from following evil symlinks
-        match open_nofollow(&path, self.filemode) {
+        match open_nofollow(&self.os(&path), self.filemode) {
             Ok(file) => {
                 let _ = file.lock();
                 self.file = Some(file);
@@ -231,7 +241,7 @@ impl Files {
     /// PS_UPDATE_TIMESTAMP_FUNC(files)
     pub(crate) fn update_timestamp(&mut self, ctx: &mut dyn Ctx, key: &[u8], val: &[u8]) -> bool {
         let Some(path) = path_create(self, key) else { return false };
-        let touched = OpenOptions::new().write(true).open(&path).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        let touched = OpenOptions::new().write(true).open(self.os(&path)).and_then(|f| f.set_modified(std::time::SystemTime::now()));
         if touched.is_err() {
             // New session ID: create the data file.
             return self.write(ctx, key, val);
@@ -241,7 +251,7 @@ impl Files {
 
     /// PS_DESTROY_FUNC(files)
     pub(crate) fn destroy(&mut self, key: &[u8]) -> bool {
-        let Some(path) = path_create(self, key) else { return false };
+        let Some(path) = path_create(self, key).map(|p| self.os(&p)) else { return false };
         if self.file.is_some() {
             self.close_file();
             if std::fs::remove_file(&path).is_err() {
@@ -256,7 +266,7 @@ impl Files {
 
     /// ps_files_key_exists()
     pub(crate) fn key_exists(&self, key: &[u8]) -> bool {
-        path_create(self, key).is_some_and(|p| std::fs::metadata(p).is_ok())
+        path_create(self, key).is_some_and(|p| std::fs::metadata(self.os(&p)).is_ok())
     }
 
     /// PS_GC_FUNC(files): the number of files deleted, -1 when it cannot.
@@ -270,7 +280,7 @@ impl Files {
 
     fn cleanup_dir(&self, ctx: &mut dyn Ctx, maxlifetime: i64) -> i64 {
         let dirname = String::from_utf8_lossy(&self.basedir).into_owned();
-        let entries = match std::fs::read_dir(std::ffi::OsStr::from_bytes(&self.basedir)) {
+        let entries = match std::fs::read_dir(self.os(Path::new(std::ffi::OsStr::from_bytes(&self.basedir)))) {
             Ok(e) => e,
             Err(e) => {
                 notice(ctx, &format!("ps_files_cleanup_dir: opendir({dirname}) failed: {}", errno(&e)));
