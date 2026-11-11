@@ -509,11 +509,13 @@ fn method_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
             format!("method_exists(): Argument #1 ($object_or_class) must be of type object|string, {} given", target.type_name()),
         ));
     }
-    let method = str_arg(args, 1).as_bytes().to_ascii_lowercase();
-    if method.starts_with(b"$") {
+    // Found in any case (a class's method table folds the name): no
+    // lowercase copy made.
+    let method = str_arg(args, 1);
+    if method.as_bytes().starts_with(b"$") {
         return Ok(Value::FALSE);
     }
-    Ok(Value::bool(class_loaded(ctx, &target)?.is_some_and(|c| c.method(&method).is_some())))
+    Ok(Value::bool(class_loaded(ctx, &target)?.is_some_and(|c| c.method(method.as_bytes()).is_some())))
 }
 
 /// property_exists($object_or_class, $property): declared (any

@@ -55,6 +55,7 @@ impl<V, const FOLD: bool> Names<V, FOLD> {
 
     /// The symbol a member named `name` would have, if any code named it.
     pub fn find(&self, name: &[u8]) -> Option<Sym> {
+        crate::counts::bump(crate::counts::Count::MemberLookup);
         if FOLD { self.symbols.find_lower(name) } else { self.symbols.find(name) }
     }
 
@@ -331,6 +332,10 @@ pub type Constants = crate::fast::IndexMap<Vec<u8>, Rc<Constant>>;
 /// as constants are.
 pub type Slots = crate::fast::HashMap<Vec<u8>, Vec<usize>>;
 
+/// A class with up to this many properties finds a property's slot by
+/// going through them ([`Class::slot`]) rather than through `slots`.
+const SCAN_PROPERTIES: usize = 8;
+
 /// A class constant.
 #[derive(Debug, Clone)]
 pub struct Constant {
@@ -472,6 +477,10 @@ impl Class {
     /// None outside any class) sees it: the scope's own private
     /// property first, then the visible declaration.
     pub fn slot(&self, name: &[u8], scope: Option<&[u8]>) -> Option<usize> {
+        if self.properties.len() <= SCAN_PROPERTIES {
+            return self.slot_scan(name, scope);
+        }
+        crate::counts::bump(crate::counts::Count::MemberLookup);
         let slots = self.slots.get(name)?;
         if let Some(scope) = scope
             && let Some(&i) = slots.iter().find(|&&i| {
@@ -482,6 +491,28 @@ impl Class {
             return Some(i);
         }
         slots.iter().rev().copied().find(|&i| self.properties[i].visibility != Visibility::Private).or_else(|| slots.last().copied())
+    }
+
+    /// `slot` of a class with few properties: its properties gone through
+    /// in order (a length compare each, the bytes only on an equal
+    /// length), cheaper than hashing the name. The same answer: `slots`
+    /// lists each name's slots in this order.
+    fn slot_scan(&self, name: &[u8], scope: Option<&[u8]>) -> Option<usize> {
+        let (mut visible, mut last) = (None, None);
+        for (i, p) in self.properties.iter().enumerate() {
+            if p.name.as_bytes() != name {
+                continue;
+            }
+            if p.visibility == Visibility::Private {
+                if scope.is_some_and(|s| p.declaring == s) {
+                    return Some(i);
+                }
+            } else {
+                visible = Some(i);
+            }
+            last = Some(i);
+        }
+        visible.or(last)
     }
 
     pub fn method(&self, lower: &[u8]) -> Option<&Method> {

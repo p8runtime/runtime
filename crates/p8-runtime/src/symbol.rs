@@ -42,6 +42,8 @@ const KNOWN: &[&[u8]] = &[
     b"__tostring", b"__invoke", b"__clone", b"__serialize", b"__unserialize", b"__sleep", b"__wakeup",
     b"__set_state", b"__debuginfo", b"getiterator", b"current", b"key", b"next", b"valid", b"rewind",
     b"offsetget", b"offsetset", b"offsetexists", b"offsetunset", b"count", b"jsonserialize",
+    // A native class's property handlers (methods code cannot declare).
+    b"$*::get", b"$*::set", b"$*::isset", b"$*::unset",
 ];
 
 /// The fixed symbols of the names in `KNOWN`.
@@ -58,10 +60,16 @@ pub mod known {
     pub const TO_STRING: Sym = Sym(8);
     pub const INVOKE: Sym = Sym(9);
     pub const CLONE: Sym = Sym(10);
+    pub const GET_ITERATOR: Sym = Sym(17);
     pub const CURRENT: Sym = Sym(18);
     pub const KEY: Sym = Sym(19);
     pub const NEXT: Sym = Sym(20);
     pub const VALID: Sym = Sym(21);
+    pub const REWIND: Sym = Sym(22);
+    pub const NATIVE_GET: Sym = Sym(29);
+    pub const NATIVE_SET: Sym = Sym(30);
+    pub const NATIVE_ISSET: Sym = Sym(31);
+    pub const NATIVE_UNSET: Sym = Sym(32);
 }
 
 /// The fixed symbol of a `KNOWN` name (as given: lowercase): one match,
@@ -97,6 +105,10 @@ fn known_sym(name: &[u8]) -> Option<Sym> {
         b"offsetunset" => 26,
         b"count" => 27,
         b"jsonserialize" => 28,
+        b"$*::get" => 29,
+        b"$*::set" => 30,
+        b"$*::isset" => 31,
+        b"$*::unset" => 32,
         _ => return None,
     }))
 }
@@ -432,7 +444,7 @@ mod tests {
         assert_eq!(symbols.intern_lower(b"__toString"), known::TO_STRING);
         assert_eq!(symbols.find(b"__callStatic"), None, "find is exact");
         assert!(KNOWN.iter().enumerate().all(|(i, k)| known_sym(k) == Some(Sym(i as u32))));
-        for (s, name) in [(known::CONSTRUCT, "__construct"), (known::DESTRUCT, "__destruct"), (known::CALL, "__call"), (known::CALL_STATIC, "__callstatic"), (known::GET, "__get"), (known::SET, "__set"), (known::ISSET, "__isset"), (known::UNSET, "__unset"), (known::TO_STRING, "__tostring"), (known::INVOKE, "__invoke"), (known::CLONE, "__clone")] {
+        for (s, name) in [(known::CONSTRUCT, "__construct"), (known::DESTRUCT, "__destruct"), (known::CALL, "__call"), (known::CALL_STATIC, "__callstatic"), (known::GET, "__get"), (known::SET, "__set"), (known::ISSET, "__isset"), (known::UNSET, "__unset"), (known::TO_STRING, "__tostring"), (known::INVOKE, "__invoke"), (known::CLONE, "__clone"), (known::GET_ITERATOR, "getiterator"), (known::REWIND, "rewind"), (known::NATIVE_GET, "$*::get"), (known::NATIVE_SET, "$*::set"), (known::NATIVE_ISSET, "$*::isset"), (known::NATIVE_UNSET, "$*::unset")] {
             assert_eq!(KNOWN[s.index()], name.as_bytes());
         }
     }

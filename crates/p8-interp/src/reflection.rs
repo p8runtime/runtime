@@ -13,7 +13,7 @@
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{
-    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_INTERNAL, CLASS_READONLY, CLASS_TRAIT, Class, Native, Object, Slot, Visibility,
+    CLASS_ABSTRACT, CLASS_ENUM, CLASS_FINAL, CLASS_INTERFACE, CLASS_INTERNAL, CLASS_READONLY, CLASS_TRAIT, Class, Method, Native, Object, Slot, Visibility,
 };
 use p8_runtime::reflect::{Callee, FnInfo, ParamInfo, Subject};
 use p8_runtime::string::PhpStr;
@@ -26,17 +26,46 @@ const PUBLIC: Visibility = Visibility::Public;
 // ---------------------------------------------------------------------------
 // Small helpers
 
-fn get(o: &Object, name: &str) -> Value {
-    match o.class.slot(name.as_bytes(), None) {
+fn get(o: &Object, name: &'static str) -> Value {
+    match slot_of(o, name) {
         Some(i) => o.slots()[i].cloned(),
         None => Value::NULL,
     }
 }
 
-fn set(o: &Object, name: &str, v: Value) {
-    if let Some(i) = o.class.slot(name.as_bytes(), None) {
+fn set(o: &Object, name: &'static str, v: Value) {
+    if let Some(i) = slot_of(o, name) {
         o.slots()[i].set(v);
     }
+}
+
+/// The slot of the reflection property `name` in `o`, as
+/// `Class::slot(name, None)` finds it: first where it was the last time
+/// this name was looked up in this class (PHP's reflection objects keep
+/// their state in C fields: no lookup at all). A class has at most one
+/// slot of a name that is not private (`Class::slots`: only a parent's
+/// private property shares a name), so a property of that name there,
+/// not private, is the slot; anything else is looked up again.
+fn slot_of(o: &Object, name: &'static str) -> Option<usize> {
+    const WAYS: usize = 64;
+    thread_local! {
+        static LAST: [std::cell::Cell<(usize, usize)>; WAYS] = const { [const { std::cell::Cell::new((0, 0)) }; WAYS] };
+    }
+    let key = name.as_ptr() as usize ^ (Rc::as_ptr(&o.class) as usize >> 4);
+    LAST.with(|last| {
+        let entry = &last[(key >> 3) % WAYS];
+        let (k, i) = entry.get();
+        if k == key
+            && let Some(p) = o.class.properties.get(i)
+            && p.visibility != Visibility::Private
+            && p.name.as_bytes() == name.as_bytes()
+        {
+            return Some(i);
+        }
+        let i = o.class.slot(name.as_bytes(), None)?;
+        entry.set((key, i));
+        Some(i)
+    })
 }
 
 fn s(text: &[u8]) -> Value {
@@ -97,7 +126,29 @@ struct Held {
     class: std::cell::RefCell<Option<(Value, std::rc::Weak<Class>)>>,
     /// A method's: its class and name (a function's or a closure's callee
     /// is no lookup to save).
-    method: std::cell::RefCell<Option<(Value, std::rc::Weak<Class>, PhpStr)>>,
+    method: std::cell::RefCell<Option<HeldMethod>>,
+}
+
+/// A held method callee: the value set, its class, its name, and the
+/// method the class has by that name, found when it was set (PHP's
+/// reflection_object keeps the zend_function): None when it has none. A
+/// class's method table never changes once it is linked.
+#[derive(Clone)]
+struct HeldMethod {
+    value: Value,
+    class: std::rc::Weak<Class>,
+    name: PhpStr,
+    method: Option<Rc<Method>>,
+}
+
+/// What `o` holds of a method callee, when its "\0callee" is still the
+/// value it was set with: the class, the name, the method.
+fn held(o: &Object) -> Option<(Rc<Class>, PhpStr, Option<Rc<Method>>)> {
+    let v = get(o, "\0callee");
+    let h = o.native::<Held>()?;
+    let held = h.method.borrow();
+    let held = held.as_ref().filter(|m| m.value.same_handle(&v))?;
+    Some((held.class.upgrade()?, held.name.clone(), held.method.clone()))
 }
 
 fn make_held() -> Rc<dyn std::any::Any> {
@@ -122,10 +173,19 @@ fn hold_class(o: &Object, class: &Rc<Class>) {
 
 /// Set the callee a reflection object holds.
 fn hold_callee(o: &Object, callee: &Callee) {
+    let found = match callee {
+        Callee::Method(class, name) => class.methods.get(name.as_bytes()).cloned(),
+        _ => None,
+    };
+    hold_found(o, callee, found);
+}
+
+/// `hold_callee`, a method callee's method (`found`) found already.
+fn hold_found(o: &Object, callee: &Callee, found: Option<Rc<Method>>) {
     let v = encode(callee);
     if let Some(h) = o.native::<Held>() {
         *h.method.borrow_mut() = match callee {
-            Callee::Method(class, name) => Some((v.clone(), Rc::downgrade(class), name.clone())),
+            Callee::Method(class, name) => Some(HeldMethod { value: v.clone(), class: Rc::downgrade(class), name: name.clone(), method: found }),
             _ => None,
         };
     }
@@ -177,18 +237,17 @@ fn decode(ctx: &mut dyn Ctx, v: &Value) -> Result<Callee, Throw> {
 }
 
 fn callee_of(ctx: &mut dyn Ctx, o: &Object) -> Result<Callee, Throw> {
-    let v = get(o, "\0callee");
-    if let Some(h) = o.native::<Held>()
-        && let Some((held, class, name)) = &*h.method.borrow()
-        && held.same_handle(&v)
-        && let Some(class) = class.upgrade()
-    {
-        return Ok(Callee::Method(class, name.clone()));
+    if let Some((class, name, _)) = held(o) {
+        return Ok(Callee::Method(class, name));
     }
-    decode(ctx, &v)
+    decode(ctx, &get(o, "\0callee"))
 }
 
 fn info_of(ctx: &mut dyn Ctx, o: &Object) -> Result<FnInfo, Throw> {
+    // A held method is described with no lookup by name.
+    if let Some((class, _, Some(m))) = held(o) {
+        return Ok(ctx.method_info(&class, &m));
+    }
     let c = callee_of(ctx, o)?;
     match ctx.function_info(&c) {
         Some(i) => Ok(i),
@@ -412,15 +471,16 @@ class_method!(rc_get_modifiers, |ctx, class, this, args| {
     Ok(Value::int(m))
 });
 class_method!(rc_has_method, |ctx, class, this, args| {
-    let name = text(&arg(args, 0)).to_ascii_lowercase();
+    let name = text(&arg(args, 0));
     Ok(Value::bool(!name.starts_with('$') && class.method(name.as_bytes()).is_some()))
 });
 class_method!(rc_get_method, |ctx, class, this, args| {
     let name = text(&arg(args, 0));
-    if name.starts_with('$') || class.method(name.to_ascii_lowercase().as_bytes()).is_none() {
+    let found = class.methods.get(name.as_bytes()).cloned();
+    if name.starts_with('$') || found.is_none() {
         return Err(fail(ctx, format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
     }
-    Ok(new_method(ctx, &class, name.as_bytes()))
+    Ok(new_method_found(ctx, &class, name.as_bytes(), found))
 });
 class_method!(rc_get_methods, |ctx, class, this, args| {
     // `null` (PHPUnit passes it) means no filter, like no argument.
@@ -435,7 +495,7 @@ class_method!(rc_get_methods, |ctx, class, this, args| {
         {
             continue;
         }
-        out.push(new_method(ctx, &class, m.name.as_bytes()));
+        out.push(new_method_found(ctx, &class, m.name.as_bytes(), Some(Rc::clone(m))));
     }
     Ok(list(out))
 });
@@ -687,21 +747,38 @@ fn method_modifiers(m: &p8_runtime::object::Method) -> i64 {
 // ReflectionFunction / ReflectionMethod (ReflectionFunctionAbstract)
 
 fn new_method(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8]) -> Value {
+    let found = class.methods.get(name).cloned();
+    new_method_found(ctx, class, name, found)
+}
+
+/// `new_method`, the method (`found`) found already.
+fn new_method_found(ctx: &mut dyn Ctx, class: &Rc<Class>, name: &[u8], found: Option<Rc<Method>>) -> Value {
     let o = make(ctx, b"ReflectionMethod");
-    fill_method(ctx, &o, class, name);
+    fill_method(&o, class, name, found);
     Value::object(o)
 }
 
-fn fill_method(ctx: &mut dyn Ctx, o: &Rc<Object>, class: &Rc<Class>, name: &[u8]) {
-    let m = class.method(&name.to_ascii_lowercase()).cloned();
-    let (shown, declaring) = match &m {
+/// Make `o` reflect method `name` of `class`: `found`, what the class has
+/// by that name.
+fn fill_method(o: &Rc<Object>, class: &Rc<Class>, name: &[u8], found: Option<Rc<Method>>) {
+    let (shown, declaring) = match &found {
         Some(m) => (m.name.clone(), m.declaring_name.clone()),
         None => (PhpStr::from(name), class.name.clone()),
     };
-    let _ = ctx;
     set(o, "name", Value::str(shown.clone()));
     set(o, "class", Value::str(declaring));
-    hold_callee(o, &Callee::Method(Rc::clone(class), shown));
+    hold_found(o, &Callee::Method(Rc::clone(class), shown), found);
+}
+
+/// The class that declares `m` (a method of `class`): `class` or a parent
+/// of it, as zend_function's scope points at it, else (an interface's
+/// method) the class of that name.
+fn declaring_of(ctx: &mut dyn Ctx, class: &Rc<Class>, m: &Method) -> Rc<Class> {
+    std::iter::successors(Some(class), |c| c.parent.as_ref())
+        .find(|c| *c.lower == *m.declaring)
+        .cloned()
+        .or_else(|| ctx.class(&m.declaring))
+        .unwrap_or_else(|| Rc::clone(class))
 }
 
 fn rm_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
@@ -719,10 +796,11 @@ fn rm_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         _ => (first, text(&arg(args, 1))),
     };
     let class = class_arg(ctx, &target)?;
-    if class.method(name.to_ascii_lowercase().as_bytes()).is_none() || name.starts_with('$') {
+    let found = class.methods.get(name.as_bytes()).cloned();
+    if found.is_none() || name.starts_with('$') {
         return Err(fail(ctx, format!("Method {}::{}() does not exist", String::from_utf8_lossy(class.name.as_bytes()), name)));
     }
-    fill_method(ctx, this, &class, name.as_bytes());
+    fill_method(this, &class, name.as_bytes(), found);
     Ok(Value::NULL)
 }
 
@@ -858,13 +936,17 @@ fn rf_is_anonymous(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Res
 }
 
 /// The method a ReflectionMethod holds.
-fn held_method(ctx: &mut dyn Ctx, this: &Object) -> Result<(Rc<Class>, p8_runtime::object::Method), Throw> {
-    match callee_of(ctx, this)? {
-        Callee::Method(class, name) => match class.method(&name.as_bytes().to_ascii_lowercase()).cloned() {
-            Some(m) => Ok((class, m)),
-            None => Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
+fn held_method(ctx: &mut dyn Ctx, this: &Object) -> Result<(Rc<Class>, Rc<Method>), Throw> {
+    let found = match held(this) {
+        Some((class, _, m)) => m.map(|m| (class, m)),
+        None => match callee_of(ctx, this)? {
+            Callee::Method(class, name) => class.methods.get(name.as_bytes()).cloned().map(|m| (class, m)),
+            _ => None,
         },
-        _ => Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
+    };
+    match found {
+        Some(found) => Ok(found),
+        None => Err(ctx.throw("Error", "Internal error: Failed to retrieve the reflection object".into())),
     }
 }
 
@@ -893,7 +975,7 @@ fn rm_get_modifiers(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
 
 fn rm_get_declaring_class(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
-    let declaring = ctx.class(&m.declaring).unwrap_or(class);
+    let declaring = declaring_of(ctx, &class, &m);
     Ok(new_class_reflection(ctx, &declaring))
 }
 
@@ -923,7 +1005,7 @@ fn prototype_of(ctx: &mut dyn Ctx, declaring: &Rc<Class>, lower: &[u8]) -> Optio
 
 fn rm_get_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
-    let declaring = ctx.class(&m.declaring).unwrap_or(class);
+    let declaring = declaring_of(ctx, &class, &m);
     match prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()) {
         Some((owner, name)) => Ok(new_method(ctx, &owner, name.as_bytes())),
         None => Err(fail(ctx, format!("Method {}::{} does not have a prototype", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes())))),
@@ -932,7 +1014,7 @@ fn rm_get_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Re
 
 fn rm_has_prototype(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
     let (class, m) = held_method(ctx, this)?;
-    let declaring = ctx.class(&m.declaring).unwrap_or(class);
+    let declaring = declaring_of(ctx, &class, &m);
     Ok(Value::bool(prototype_of(ctx, &declaring, &m.name.as_bytes().to_ascii_lowercase()).is_some()))
 }
 

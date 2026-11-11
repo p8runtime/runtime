@@ -346,10 +346,10 @@ impl Context<'_> {
                 return Ok(Delegate::Generator(object));
             }
             if object.class.is_a(b"iterator") {
-                self.call_named(regs, &object, b"rewind")?;
+                self.call_known(regs, &object, known::REWIND, b"rewind")?;
                 return Ok(Delegate::Iterator(object, true));
             }
-            match self.call_named(regs, &object, b"getIterator")?.into_object() {
+            match self.call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?.into_object() {
                 Ok(o) if o.class.is_a(b"traversable") => object = o,
                 _ => {
                     return Err(self.throw(
@@ -438,25 +438,13 @@ impl Context<'_> {
         }
     }
 
-    /// Call method `name` of an object with no arguments (Iterator's).
-    pub(crate) fn call_named(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, name: &[u8]) -> Result<Value, Throw> {
-        let key = self.method_key(name);
-        self.call_method_key(regs, object, key, name)
-    }
-
-    /// `call_named` of a method whose symbol is fixed ([`known`]): the
-    /// name is not looked up.
+    /// Call method `name` of an object with no arguments (Iterator's,
+    /// IteratorAggregate's), by its fixed symbol ([`known`]): the name is
+    /// not looked up (it is for the messages).
     ///
     /// [`known`]: p8_runtime::symbol::known
     pub(crate) fn call_known(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<Value, Throw> {
-        self.call_method_key(regs, object, Some(sym), name)
-    }
-
-    fn call_method_key(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, key: Option<Sym>, name: &[u8]) -> Result<Value, Throw> {
-        let m = match key {
-            Some(sym) => self.iter_method(object, sym, name)?,
-            None => self.method_frame(&Value::object(Rc::clone(object)), key, name)?,
-        };
+        let m = self.iter_method(object, sym, name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
             std::mem::swap(&mut self.isolate.regs, regs);
@@ -503,12 +491,12 @@ impl Context<'_> {
                 return Ok(valid.to_bool().then_some(Value::object(object)));
             }
             if object.class.is_a(b"iterator") {
-                self.call_named(regs, &object, b"rewind")?;
-                let valid = self.call_named(regs, &object, b"valid")?;
+                self.call_known(regs, &object, known::REWIND, b"rewind")?;
+                let valid = self.call_known(regs, &object, known::VALID, b"valid")?;
                 return Ok(valid.to_bool().then_some(Value::object(object)));
             }
             if object.class.is_a(b"iteratoraggregate") {
-                match self.call_named(regs, &object, b"getIterator")?.into_object() {
+                match self.call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?.into_object() {
                     Ok(o) if o.class.is_a(b"traversable") => {
                         object = o;
                         continue;

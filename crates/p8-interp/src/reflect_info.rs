@@ -6,7 +6,7 @@ use crate::classes::{Code, MethodFrame};
 use crate::Context;
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
-use p8_runtime::object::{Class, Object};
+use p8_runtime::object::{Class, Method, Object};
 use p8_runtime::reflect::{Callee, FnInfo, ParamInfo};
 use p8_runtime::string::PhpStr;
 use p8_runtime::types::TypeDecl;
@@ -176,6 +176,23 @@ impl Context<'_> {
             .unwrap_or_else(|| Rc::clone(class))
     }
 
+    /// The declaration of method `m` of `class`.
+    pub(crate) fn method_info_of(&self, class: &Rc<Class>, m: &Method) -> FnInfo {
+        let declaring = self.declaring_class(class, &m.declaring);
+        // A builtin interface's abstract method has no code: its stub describes it.
+        // Read from its code: describing a method makes no closure.
+        let user = m.native.is_none() && m.func != u32::MAX;
+        match user {
+            true => self.user_info(&self.codes[m.func as usize], Some(declaring)),
+            false => {
+                let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
+                let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));
+                info.is_static = m.is_static;
+                info
+            }
+        }
+    }
+
     pub(crate) fn info_of(&self, callee: &Callee) -> Option<FnInfo> {
         match callee {
             Callee::Function(name) => {
@@ -188,20 +205,8 @@ impl Context<'_> {
                 Some(self.stub_info(b.name, PhpStr::from(b.name), None))
             }
             Callee::Method(class, name) => {
-                let m = class.method(&name.as_bytes().to_ascii_lowercase())?.clone();
-                let declaring = self.declaring_class(class, &m.declaring);
-                // A builtin interface's abstract method has no code: its stub describes it.
-                // Read from its code: describing a method makes no closure.
-                let user = m.native.is_none() && m.func != u32::MAX;
-                Some(match user {
-                    true => self.user_info(&self.codes[m.func as usize], Some(declaring)),
-                    false => {
-                        let stub = format!("{}::{}", String::from_utf8_lossy(m.declaring_name.as_bytes()), String::from_utf8_lossy(m.name.as_bytes()));
-                        let mut info = self.stub_info(&stub, m.name.clone(), Some(declaring));
-                        info.is_static = m.is_static;
-                        info
-                    }
-                })
+                let m = class.methods.get(name.as_bytes())?;
+                Some(self.method_info_of(class, m))
             }
             Callee::Closure(o) => {
                 let data = closure_data(o)?;

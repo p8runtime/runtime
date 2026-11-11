@@ -13,9 +13,9 @@ pub enum Count {
     Insert = 0,
     /// A string's hash computed (`StrHead::hash` the first time).
     Hash = 1,
-    /// A function or class name, given as bytes, resolved to its symbol
-    /// while running (the interpreter's `sym_of`: a hash of the name and a
-    /// lookup).
+    /// A function, class or method name, given as bytes, resolved to its
+    /// symbol while running (the interpreter's `sym_of` and `method_key`:
+    /// a hash of the name and a lookup).
     NameLookup = 2,
     /// A string made in an allocation of its own (`PhpStr`'s handle
     /// allocated): what #412's changes stop doing per call.
@@ -44,11 +44,15 @@ pub enum Count {
     /// `push_native`): only deeper than any so far, a finished one's entry
     /// is used again.
     NativeEntry = 10,
+    /// A class's member found by a name given as bytes, through a hash of
+    /// the name: a method or constant (`Names::find`), a property's slot
+    /// (`Class::slot`'s table), a static property (by the interpreter).
+    MemberLookup = 11,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 11] = const { [const { std::cell::Cell::new(0) }; 11] };
+    static COUNTS: [std::cell::Cell<u64>; 12] = const { [const { std::cell::Cell::new(0) }; 12] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).
