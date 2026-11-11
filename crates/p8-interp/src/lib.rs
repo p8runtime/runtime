@@ -77,6 +77,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// The globals a request starts with, in the order PHP makes them.
+/// The exit status of a request that went past the hard limit: PHP's
+/// process's (`_exit(137)`, zend_mm_hard_limit_error).
+pub const HARD_LIMIT_STATUS: i32 = 137;
+
 const REQUEST_GLOBALS: &[&str] = &["_GET", "_POST", "_COOKIE", "_FILES", "argv", "argc", "_SERVER", "_ENV", "_REQUEST"];
 
 /// isset($s[k]) on a string (zend_isset_dim_slow): the character at an
@@ -758,6 +762,9 @@ impl Context<'_> {
         // for destructors (a fatal error does not).
         let clean_end = matches!(result, Err(Throw::Exit(_) | Throw::Object(_) | Throw::Error { .. } | Throw::Autoload(_)));
         let mut status = self.report_end(result);
+        if self.hard_limit.borrow().is_some() {
+            return self.end_past_hard_limit(regs);
+        }
         // Shutdown functions (when the main frame returned, they ran then).
         if !self.shutdown.is_empty() {
             self.frames.floor = 0;
@@ -766,6 +773,9 @@ impl Context<'_> {
                 let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
                 let t = self.handle_uncaught(&mut regs, t);
                 status = self.report_end(Err(t));
+            }
+            if self.hard_limit.borrow().is_some() {
+                return self.end_past_hard_limit(regs);
             }
         }
         if clean_end {
@@ -794,14 +804,38 @@ impl Context<'_> {
             status = self.report_end(Err(t));
             self.end_buffers(&mut regs);
         }
-        // The request's variables go now (the isolate keeps the capacity).
+        self.release_request(regs);
+        status
+    }
+
+    /// The request went past the hard limit (`hard_limit`): PHP's process
+    /// ends there (`_exit(137)` in zend_mm_hard_limit_error), so nothing
+    /// more of the request runs (no shutdown function, no destructor, no
+    /// request-end hook), what the output buffers hold is lost, and no
+    /// error is shown: the host shows `hard_limit_error`. The isolate
+    /// stays usable.
+    #[cold]
+    fn end_past_hard_limit(&mut self, regs: Vec<Value>) -> i32 {
+        self.out.buffers.clear();
+        self.release_request(regs);
+        HARD_LIMIT_STATUS
+    }
+
+    /// The request's variables go now (the isolate keeps the capacity),
+    /// and what reached the host is flushed.
+    fn release_request(&mut self, mut regs: Vec<Value>) {
         self.ended_globals.clear();
         regs.clear();
         self.frames.clear();
         self.isolate.regs = regs;
         self.out.flush_all();
         self.out.send_head();
-        status
+    }
+
+    /// PHP's line for a request that went past the hard limit, for the host
+    /// to show where PHP shows it (stderr): None when it did not.
+    pub fn hard_limit_error(&self) -> Option<String> {
+        self.hard_limit.borrow().clone()
     }
 
     /// The extensions' hooks for the start (`end` false) or the end of the
@@ -834,6 +868,10 @@ impl Context<'_> {
     /// The exit status for how the code ended, with PHP's message for an
     /// error nothing caught.
     fn report_end(&mut self, result: Result<(), Throw>) -> i32 {
+        // Past the hard limit nothing is shown (`end_past_hard_limit`).
+        if self.hard_limit.borrow().is_some() {
+            return HARD_LIMIT_STATUS;
+        }
         match result {
             Ok(()) => 0,
             Err(Throw::Exit(status)) => status,
@@ -898,7 +936,11 @@ impl Context<'_> {
             // Raised once: shutdown functions run after it (zend_handle_delayed_oom).
             OUT_OF_MEMORY => {
                 let _ = self.stop.compare_exchange(OUT_OF_MEMORY, NO_INTERRUPT, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed);
-                let (bytes, tried) = self.frames.limit.as_ref().map_or((0, 0), |l| (l.bytes.get(), l.tried.get()));
+                let (bytes, tried) = self.frames.limit.as_ref().map_or((0, 0), |l| {
+                    // (Its trace is made under the hard limit: `exception`.)
+                    l.raised.set(true);
+                    (l.bytes.get(), l.tried.get())
+                });
                 format!("Allowed memory size of {bytes} bytes exhausted (tried to allocate {tried} bytes)")
             }
             seconds => format!("Maximum execution time of {seconds} second{} exceeded", if seconds == 1 { "" } else { "s" }),
@@ -5367,6 +5409,17 @@ impl Ctx for Context<'_> {
             b"memory_limit" => {
                 if let Some(limit) = &self.frames.limit {
                     limit.bytes.set(limit_bytes(text.as_bytes()));
+                }
+            }
+            // OnChangeMemoryHardLimitPercent: 100 or more, or -1.
+            b"memory_hard_limit_percent" => {
+                let percent = p8_runtime::ini::quantity(text.as_bytes());
+                if percent < 100 && percent != -1 {
+                    self.warn("memory_hard_limit_percent must be >= 100, or -1".to_string());
+                    return None;
+                }
+                if let Some(limit) = &self.frames.limit {
+                    limit.percent.set(percent);
                 }
             }
             _ => {}

@@ -101,9 +101,10 @@ pub fn run(args: Vec<String>, native: Embedded) -> i32 {
             context.set_ini(name, value);
         }
         context.set_args(argv);
-        match platform.compile(&source, &file) {
+        let status = match platform.compile(&source, &file) {
             Ok(script) => context.run(&script),
             Err(error) => context.fail(&error),
-        }
+        };
+        crate::ended(&context, status)
     })
 }

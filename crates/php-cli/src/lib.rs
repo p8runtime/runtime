@@ -60,6 +60,16 @@ pub fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
     f()
 }
 
+/// A script's run ended: a request that went past the hard limit shows
+/// PHP's line on stderr (zend_mm_hard_limit_error), its status 137 (the
+/// run's: `p8::HARD_LIMIT_STATUS`). Returns `status`.
+pub fn ended(context: &p8::Context, status: i32) -> i32 {
+    if let Some(line) = context.hard_limit_error() {
+        eprintln!("{line}");
+    }
+    status
+}
+
 /// The terminal: a request's output goes to stdout, written through on
 /// every write as PHP's CLI does (sapi_cli_ub_write writes each piece to
 /// fd 1; implicit_flush is on). Nothing waits in a buffer, so output stays

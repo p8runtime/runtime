@@ -627,6 +627,23 @@ impl Value {
         }
     }
 
+    /// The bytes this value's own allocation takes, when it has one: a
+    /// string's (its head and bytes; none for one in program memory), an
+    /// array's (the array and its table; the values in it are their own).
+    /// Shared or not: it is what making the value allocated.
+    pub fn alloc_bytes(&self) -> usize {
+        // (An Rc's two counts.)
+        const RC: usize = 2 * std::mem::size_of::<usize>();
+        match &self.0 {
+            Repr::Str(s) => RC + std::mem::size_of::<StrHead>() + s.heap_bytes(),
+            Repr::Array(_) => {
+                let a = self.as_array().expect("an array");
+                RC + std::mem::size_of::<PhpArray>() + a.table_bytes()
+            }
+            _ => 0,
+        }
+    }
+
     /// The array, for reading. To write, `array_mut`.
     #[inline(always)]
     pub fn as_array(&self) -> Option<&PhpArray> {

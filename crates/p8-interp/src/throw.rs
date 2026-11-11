@@ -39,6 +39,46 @@ fn new_entry() -> PhpArray {
     PhpArray::hashed(8)
 }
 
+/// What a trace may still take, in bytes (an out-of-memory error's: see
+/// `Context::oom_trace`).
+struct Charge {
+    left: usize,
+}
+
+impl Charge {
+    /// One that takes no count.
+    fn none() -> Charge {
+        Charge { left: usize::MAX }
+    }
+
+    /// `bytes` more, or that size when they do not fit.
+    fn take(&mut self, bytes: usize) -> Result<(), usize> {
+        if self.left == usize::MAX {
+            return Ok(());
+        }
+        if bytes > self.left {
+            return Err(bytes);
+        }
+        self.left -= bytes;
+        Ok(())
+    }
+
+    /// `entry` added to `trace`: the entry, the strings and argument list
+    /// it holds, and the trace's own growth.
+    fn push(&mut self, trace: &mut PhpArray, entry: PhpArray) -> Result<(), usize> {
+        let entry = Value::array(entry);
+        if self.left == usize::MAX {
+            let _ = trace.push(entry);
+            return Ok(());
+        }
+        let held: usize = entry.as_array().map_or(0, |e| e.values().map(Value::alloc_bytes).sum());
+        self.take(entry.alloc_bytes() + held)?;
+        let before = trace.table_bytes();
+        let _ = trace.push(entry);
+        self.take(trace.table_bytes() - before)
+    }
+}
+
 impl Context<'_> {
     /// The calls that led to the running code, innermost first, as
     /// debug_backtrace() gives them: where each was called from, the
@@ -52,6 +92,13 @@ impl Context<'_> {
     /// all): the walk stops there, as zend_fetch_debug_backtrace's does,
     /// so the frames under them cost nothing.
     pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool, limit: usize) -> PhpArray {
+        // (Nothing charged: it cannot run out.)
+        self.trace_charged(regs, objects, limit, &mut Charge::none()).unwrap_or_default()
+    }
+
+    /// trace_with(), what it makes charged to `charge` entry by entry: the
+    /// size of the allocation that did not fit when it runs out.
+    fn trace_charged(&self, regs: &dyn Fn(usize) -> Value, objects: bool, limit: usize, charge: &mut Charge) -> Result<PhpArray, usize> {
         let mut trace = PhpArray::new();
         let full = |trace: &PhpArray| limit != 0 && trace.len() >= limit;
         // The running task's frames over those of the tasks waiting under
@@ -77,7 +124,7 @@ impl Context<'_> {
             entry.insert_absent(key(LINE), Value::int(i64::from(line)));
             entry.insert_absent(key(FUNCTION), Value::str(n.name));
             entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(n.args.clone())));
-            let _ = trace.push(Value::array(entry));
+            charge.push(&mut trace, entry)?;
         }
         // A builtin's entry: called from `caller`, at `line`.
         let native_entry = |n: &NativeCall, caller: &Frame, line: u32| {
@@ -124,7 +171,7 @@ impl Context<'_> {
                             entry
                         }
                     };
-                    let _ = trace.push(Value::array(entry));
+                    charge.push(&mut trace, entry)?;
                 }
                 continue;
             }
@@ -161,7 +208,7 @@ impl Context<'_> {
                     entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(&*code.file))])));
                 }
                 entry.insert_absent(key(FUNCTION), Value::str(function));
-                let _ = trace.push(Value::array(entry));
+                charge.push(&mut trace, entry)?;
                 continue;
             }
             entry.insert_absent(key(FUNCTION), Value::str(PhpStr::from(code.name.as_bytes())));
@@ -187,12 +234,12 @@ impl Context<'_> {
                 let _ = args.push(v.deref());
             }
             entry.insert_absent(key(ARGS), Value::array(args));
-            let _ = trace.push(Value::array(entry));
+            charge.push(&mut trace, entry)?;
             if let Some(n) = native {
-                let _ = trace.push(Value::array(native_entry(n, caller, line)));
+                charge.push(&mut trace, native_entry(n, caller, line))?;
             }
         }
-        trace
+        Ok(trace)
     }
 
     /// The frame of a call that failed before it ran (a builtin, or a
@@ -217,9 +264,20 @@ impl Context<'_> {
         let Throw::Error { class, message, file, line, props } = t else {
             // A fatal error, where it was raised: its trace, for showing with
             // it (fatal_error_backtraces; zend_error_impl fetches it then).
-            if matches!(t, Throw::Fatal { .. }) && self.fatal_trace.borrow().is_none() && self.fatal_error_backtraces() {
-                let trace = p8_runtime::trace::trace_string(&Value::array(self.raised_trace(regs)));
-                *self.fatal_trace.borrow_mut() = Some(trace);
+            if let Throw::Fatal { file, line, .. } = &t {
+                // The out-of-memory error's trace is made past memory_limit,
+                // up to the hard limit (zend_handle_delayed_oom).
+                let oom = self.frames.limit.as_ref().is_some_and(|l| l.raised.replace(false));
+                if self.fatal_trace.borrow().is_none() && self.fatal_error_backtraces() {
+                    let trace = if oom { self.oom_trace(regs) } else { Ok(p8_runtime::trace::trace_string(&Value::array(self.raised_trace(regs)))) };
+                    match trace {
+                        Ok(trace) => *self.fatal_trace.borrow_mut() = Some(trace),
+                        Err(tried) => {
+                            let hard = self.frames.limit.as_ref().map_or(0, |l| l.hard());
+                            *self.hard_limit.borrow_mut() = Some(format!("Hard memory limit of {hard} bytes exhausted (tried to allocate {tried} bytes) in {file} on line {line}"));
+                        }
+                    }
+                }
             }
             return t;
         };
@@ -231,6 +289,25 @@ impl Context<'_> {
     fn fatal_error_backtraces(&self) -> bool {
         use p8_runtime::ext::Ctx;
         Ctx::ini_get(self, b"fatal_error_backtraces").is_none_or(|v| crate::ini_on(&v))
+    }
+
+    /// The out-of-memory error's trace, as text: what it takes (its
+    /// entries, their arguments, the text and the message's copy of it)
+    /// charged against what the hard limit leaves above the call stack.
+    /// Past it, the size of the allocation that did not fit
+    /// (zend_mm_hard_limit_error's "tried to allocate").
+    fn oom_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> Result<String, usize> {
+        let stack = self.frames.reg_bytes + self.frames.slots.capacity() * std::mem::size_of::<Frame>();
+        let hard = self.frames.limit.as_ref().map_or(usize::MAX, |l| l.hard());
+        let mut charge = Charge { left: hard.saturating_sub(stack) };
+        // (It is raised at an interrupt: no builtin's call is on top.)
+        self.failed_call = None;
+        let trace = self.trace_charged(regs, false, 0, &mut charge)?;
+        let text = p8_runtime::trace::trace_string_within(&Value::array(trace), charge.left)?;
+        charge.left -= text.capacity();
+        // The message the request ends with copies it.
+        charge.take(text.len())?;
+        Ok(text)
     }
 
     /// The trace of where an error is being raised: the calls that led

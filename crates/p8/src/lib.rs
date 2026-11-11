@@ -50,7 +50,7 @@ pub mod native {
     pub use p8_interp::native::{Exit, Help, HelpOp, NativeCode, NativeFrame};
 }
 
-pub use p8_interp::{Host, InterruptHandle};
+pub use p8_interp::{HARD_LIMIT_STATUS, Host, InterruptHandle};
 pub use p8_ext_standard::{P8_VERSION, PHP_VERSION, powered_by};
 pub use p8_runtime::ext::Response;
 pub use p8_runtime::ext::Extension;
@@ -797,6 +797,17 @@ impl Context<'_> {
         }
         self.inner.declare_classes(&script.program.classes);
         self.inner.run_main(Arc::clone(&script.program.main))
+    }
+
+    /// When the request went past the hard limit (memory_hard_limit_percent
+    /// of memory_limit, while its out-of-memory error was being reported):
+    /// PHP's line for it, `Hard memory limit of N bytes exhausted (tried to
+    /// allocate M bytes) in F on line L`. The request ended there, with
+    /// [`HARD_LIMIT_STATUS`] and nothing shown: PHP writes this line to
+    /// stderr and ends its process; what a host does with it is the host's
+    /// (the isolate stays usable).
+    pub fn hard_limit_error(&self) -> Option<String> {
+        self.inner.hard_limit_error()
     }
 
     /// Report a file that did not compile, as PHP does; returns the exit status.

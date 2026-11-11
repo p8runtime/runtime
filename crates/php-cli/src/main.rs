@@ -256,6 +256,7 @@ fn php(cli: Cli) -> i32 {
                 Ok(script) => context.run(&script),
                 Err(error) => context.fail(&error),
             };
+            status = php_cli::ended(&context, status);
             drop(context);
             if repeat > 1 {
                 eprintln!("request {request}: {:.3} ms", started.elapsed().as_secs_f64() * 1e3);

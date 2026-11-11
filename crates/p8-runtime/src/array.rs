@@ -805,6 +805,15 @@ impl PhpArray {
         }
     }
 
+    /// The bytes its table takes: its slots or buckets, room included
+    /// (not the values' own allocations, nor the array itself).
+    pub fn table_bytes(&self) -> usize {
+        match &self.storage {
+            Storage::Packed(p) => p.slots.capacity() * std::mem::size_of::<Value>(),
+            Storage::Hashed(h) => h.buckets.capacity() * std::mem::size_of::<Bucket>(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
