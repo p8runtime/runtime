@@ -76,14 +76,34 @@ fn memory_limit_stops_a_recursion_that_never_ends() {
 
 /// The same with its stack trace (fatal_error_backtraces, on by default):
 /// every call, under the limit's smaller.
+/// (The trace takes more than the stack: the hard limit is raised for it,
+/// see the next test.)
 #[test]
 fn memory_limit_fatal_error_shows_the_calls() {
-    let (got, status) = run_bounded("forever.php", "512K", &[]);
+    let (got, status) = run_bounded("forever.php", "512K", &["-d", "memory_hard_limit_percent=10000"]);
     let (message, rest) = fatal(&got, 512 << 10);
     assert!(rest.starts_with(" in %s on line 2\nStack trace:\n#0 %s(2): forever("), "{}", head(rest));
     let end = format!("): forever(1)\n#{n} %s(4): forever(0)\n#{m} {{main}}\n\nshutdown: {message}\n", n = rest.matches('\n').count() - 6, m = rest.matches('\n').count() - 5);
     assert!(rest.ends_with(&end), "want the end {end:?}, got {:?}", &rest[rest.len().saturating_sub(300)..]);
     assert_eq!(status, Some(255));
+}
+
+/// With only the limit (#445): the out-of-memory error's trace of some
+/// 130,000 calls takes more than the hard limit lets it (twice
+/// memory_limit, memory_hard_limit_percent's default), and the request
+/// ends as PHP's process does there (zend_mm_hard_limit_error): its line
+/// on stderr, status 137, no fatal error shown, no shutdown function run.
+#[test]
+fn memory_limit_trace_past_the_hard_limit_ends_the_run() {
+    let (out, err, status) = run_bounded_all("forever.php", "16M", &[]);
+    assert_eq!(out, "", "nothing on stdout: no fatal error, no shutdown function");
+    let prefix = "Hard memory limit of 33554432 bytes exhausted (tried to allocate ";
+    assert!(err.starts_with(prefix), "{}", head(&err));
+    let after = &err[prefix.len()..];
+    let tried = &after[..after.find(' ').expect("the size")];
+    assert!(tried.parse::<u64>().is_ok_and(|n| n > 0), "{err}");
+    assert_eq!(&after[tried.len()..], " bytes) in %s on line 2\n");
+    assert_eq!(status, Some(137));
 }
 
 /// A recursion that fits in the limit still runs (#444's million calls).
@@ -112,6 +132,12 @@ fn fatal(got: &str, limit: usize) -> (String, &str) {
 /// not take the machine's memory): its output (the script's path as %s)
 /// and exit status.
 fn run_bounded(name: &str, limit: &str, options: &[&str]) -> (String, Option<i32>) {
+    let (out, _, status) = run_bounded_all(name, limit, options);
+    (out, status)
+}
+
+/// The same, with what it wrote to stderr (the path as %s too).
+fn run_bounded_all(name: &str, limit: &str, options: &[&str]) -> (String, String, Option<i32>) {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
     // (One at a time, and not beside the corpus: without the limit each
@@ -123,15 +149,18 @@ fn run_bounded(name: &str, limit: &str, options: &[&str]) -> (String, Option<i32
         .args(options)
         .arg(&script)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("run p8");
     // The output is read as it comes (a full pipe would stop the child).
-    let mut stdout = child.stdout.take().expect("its stdout");
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut stdout, &mut out).map(|_| out)
-    });
+    fn read_all(mut from: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            from.read_to_end(&mut out).map(|_| out)
+        })
+    }
+    let reader = read_all(child.stdout.take().expect("its stdout"));
+    let err_reader = read_all(child.stderr.take().expect("its stderr"));
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
         if let Some(status) = child.try_wait().expect("wait for p8") {
@@ -145,8 +174,10 @@ fn run_bounded(name: &str, limit: &str, options: &[&str]) -> (String, Option<i32
         std::thread::sleep(Duration::from_millis(20));
     };
     let out = reader.join().expect("the reader").expect("p8's output");
+    let err = err_reader.join().expect("the reader").expect("p8's stderr");
     let shown = std::fs::canonicalize(&script).expect("canonical path");
-    (String::from_utf8_lossy(&out).replace(&*shown.to_string_lossy(), "%s"), status.code())
+    let shown = |bytes: &[u8]| String::from_utf8_lossy(bytes).replace(&*shown.to_string_lossy(), "%s");
+    (shown(&out), shown(&err), status.code())
 }
 
 /// The start of `text`, for a failure's message.
