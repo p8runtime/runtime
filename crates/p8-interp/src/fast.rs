@@ -531,7 +531,10 @@ impl Context<'_> {
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
                         let (class, scope) = (Rc::as_ptr(&o.class) as usize, top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
                         let by_ref = clo.methods[method].borrow().as_ref().and_then(|s| match &s.code {
-                            MethodCode::User(code) if s.class == class && s.scope == scope => code.upgrade().map(|c| c.code.param_by_ref(n)),
+                            // (Not counted when the next frame slot runs it.)
+                            MethodCode::User(code) if s.class == class && s.scope == scope => {
+                                self.frames.site_code(code).map(|t| self.frames.next_code(t.as_ref()).code.param_by_ref(n))
+                            }
                             _ => None,
                         });
                         match by_ref {

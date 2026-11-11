@@ -369,6 +369,7 @@ impl Isolate {
             named_extra: None,
             class_defaults: HashMap::default(),
             new_infos: HashMap::default(),
+            iter_sites: HashMap::default(),
             last_new: None,
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
@@ -523,6 +524,11 @@ pub struct Context<'i> {
     /// How to make each class's objects, by the class's address
     /// (instances.rs): worked out at its first `new`.
     pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
+    /// foreach over an Iterator: the method each of `next`, `valid`,
+    /// `current` and `key` (`call_known`) called last, by the class's
+    /// address and the method's symbol, as a call site's cache keeps it
+    /// (PHP keeps the four in the class: `zend_class_iterator_funcs`).
+    pub(crate) iter_sites: HashMap<(usize, Sym), RefCell<Option<MethodSite>>>,
     /// The NewInfo the last `new` used: the Construct that follows finds
     /// its constructor there (unless a `new` in the arguments came between).
     pub(crate) last_new: Option<Rc<instances::NewInfo>>,
