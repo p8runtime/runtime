@@ -178,3 +178,19 @@ fn static_property_writes_use_the_cache() {
     );
     assert_eq!(out, "19! 230 21");
 }
+
+/// The same from an instance method on a subclass instance, where the
+/// called class (`static`) is `$this`'s class.
+#[test]
+fn static_property_writes_from_an_instance_method_use_the_cache() {
+    let out = flat(
+        "class S { public static $x = 0; protected static $y = 1;
+             function bump($i) { static::$y += $i; static::$x = $i; static::$x .= '!'; return static::$y; } }
+         class T extends S {}
+         $t = new T; $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s += $t->bump(1); }
+         echo S::$x, ' ', $s, ' ', (new ReflectionProperty('T', 'y'))->getValue();",
+        Count::MemberLookup,
+    );
+    assert_eq!(out, "1! 230 21");
+}

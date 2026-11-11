@@ -365,7 +365,9 @@ impl Context<'_> {
         {
             let key = match clo.code.classes[class as usize] {
                 p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => Some(class as usize + 1),
-                p8_bytecode::ClassRef::Static => frame.called.as_ref().map(|c| Rc::as_ptr(c) as usize),
+                // As `class_key` (through `class_at` and `scope`): the called
+                // class, `$this`'s class in a method entered with one.
+                p8_bytecode::ClassRef::Static => frame.called_class().map(|c| Rc::as_ptr(c) as usize),
                 p8_bytecode::ClassRef::Scope => frame.scope.as_ref().map(|c| Rc::as_ptr(c) as usize),
                 p8_bytecode::ClassRef::ParentScope | p8_bytecode::ClassRef::Dynamic(_) => None,
             };
