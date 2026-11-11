@@ -495,8 +495,15 @@ impl Context<'_> {
                     }
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
+                    // (A variable bound by reference: its value, `quick_ref`.)
                     Op::VerifyReturn => match &clo.code.ret_type {
-                        Some(ty) if clo.code.is_generator || !ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)]) => slow!(),
+                        Some(ty)
+                            if clo.code.is_generator
+                                || !(ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)])
+                                    || w[rx!(insn.a)].as_reference().is_some_and(|c| quick_ref(clo.type_memo.last(), ty, c))) =>
+                        {
+                            slow!()
+                        }
                         _ => pc += 1,
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
@@ -1205,6 +1212,9 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        // (A class or scope the entry has not seen: filled
+                        // again for this one, `refill_if_missed`.)
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         // (Its own handle: the window is written while it is used.)
                         let o = Rc::clone(o);
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
@@ -1321,6 +1331,7 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let Some(v) = prop_inc_dec(o, site.get(), scope, imm) else { slow!() };
                         done!(put(&mut w[rx!(b)], v));
@@ -1361,6 +1372,7 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let Some(o) = w[rx!(b)].as_object() else { slow!() };
                         let Some(site) = clo.props.get(imm as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[imm as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let Some(cell) = prop_ref_cached(o, site.get(), scope) else { slow!() };
                         done!(put(&mut w[rx!(a)], Value::reference(cell)));
@@ -1527,6 +1539,7 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let y = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
                         let Some(v) = prop_op(o, site.get(), scope, insn::binop(imm >> 16), y) else { slow!() };
@@ -1630,8 +1643,9 @@ impl Context<'_> {
                     }
                     // `$o->$name` (`$this->$name`): a declared, visible,
                     // hookless, set property, by the entry made for this
-                    // access (`dyn_entry`), read as a cached one is. Anything
-                    // else (dynamic properties, magic, the warning): `step`.
+                    // access (`dyn_entry`), read as a cached one is; a
+                    // dynamic property of a class without magic. Anything
+                    // else (magic, the warning, an unset one): `step`.
                     Op::FetchPropDyn => {
                         ops!(a, b, c, imm);
                         let o = if imm & insn::PROP_PATH_THIS != 0 {
@@ -1641,9 +1655,13 @@ impl Context<'_> {
                             let Some(o) = w[rx!(b)].as_object() else { slow!() };
                             o
                         };
-                        let Some(entry) = dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) else { slow!() };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let Some(v) = cached_prop(entry, o, scope) else { slow!() };
+                        let found = match dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) {
+                            Some(entry) => cached_prop(entry, o, scope),
+                            // (A dynamic property: `dynamic_prop`.)
+                            None => dynamic_prop(o, &w[rx!(c)]),
+                        };
+                        let Some(v) = found else { slow!() };
                         done!(put(&mut w[rx!(a)], v));
                     }
                     // `$o->$name = $v`: the same entry, written as a cached
@@ -1726,7 +1744,11 @@ impl Context<'_> {
                                 Some(v) => v,
                                 None => general!(),
                             },
-                            None => general!(),
+                            // A dynamic property that is set (`dynamic_prop`).
+                            None => match dynamic_prop(o, &clo.consts[imm as usize]) {
+                                Some(v) => v,
+                                None => general!(),
+                            },
                         };
                         done!(put(&mut w[rx!(a)], Value::bool(!v.is_null())));
                     }
@@ -2024,7 +2046,9 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Optio
     };
     let key = key(last);
     match arr.get_mut(&key) {
-        Some(e) if e.is_reference() => None,
+        // An element bound by reference: the value goes into its cell (as
+        // an assignment to a reference writes the referenced value).
+        Some(e) if e.is_reference() => Some(write_ref(e.as_reference()?, v)),
         Some(e) => Some(put(e, v)),
         None => {
             arr.insert(key, v);
@@ -2751,12 +2775,15 @@ pub(crate) fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
 /// holds none), unless the element is a reference (false).
 #[inline(always)]
 pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value) -> bool {
-    match slot.as_array() {
-        Some(a) if !a.get_int(k).is_some_and(Value::is_reference) => {}
-        _ => return false,
+    if !slot.is_array() {
+        return false;
     }
     let a = slot.array_mut().expect("checked above");
     match a.get_int_mut(k) {
+        // An element bound by reference: the value goes into its cell.
+        Some(e) if e.is_reference() => {
+            let _ = write_ref(e.as_reference().expect("a reference"), v.clone());
+        }
         Some(e) => *e = v.clone(),
         None => a.insert(Key::Int(k), v.clone()),
     }

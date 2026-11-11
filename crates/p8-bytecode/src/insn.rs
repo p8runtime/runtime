@@ -1143,6 +1143,44 @@ mod tests {
     }
 
     #[test]
+    fn the_seventh_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // A name in a register: the dynamic forms.
+            Instr::FetchProp { dst: 6, obj: THIS, name: 3, quiet: false },
+            Instr::AssignProp { obj: 5, name: 3, val: c(8), dst: 6, take: false },
+            Instr::IssetProp { dst: 6, obj: 5, name: 3 },
+            Instr::IssetProp { dst: 6, obj: 5, name: c(7) },
+            Instr::IssetDim { dst: 6, var: 5, keys: 10, n: 3 },
+            Instr::BindRef { var: 4, src: 5 },
+            Instr::RefDim { var: 4, root: 5, keys: c(7), n: 1, append: false },
+            Instr::DimSetRef { root: 5, keys: 10, n: 2, append: true, src: 4 },
+            Instr::rare(Rare::StaticRef, 6, 3, 0, 2),
+            Instr::AssignStaticPropOp { op: BinOp::Add, class: 2, name: c(7), val: 3, dst: 6 },
+            Instr::Yield { dst: 6, value: 3, key: c(7), has_key: true },
+            Instr::Include { dst: 6, src: 3, kind: crate::IncludeKind::RequireOnce },
+            Instr::UnsetVar { var: 4 },
+            Instr::DeclareClass { class: 9 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_in(&code, pc, &consts, 2, &[], &[]);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::FetchPropDyn, a: 6, b: 0, c: 3, imm: PROP_PATH_THIS });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::AssignPropDyn, a: 5, b: 8, c: 3, imm: PROP_OP_K | 6 << 8 });
+        assert_eq!(at(2).unwrap(), Insn { op: Op::IssetProp, a: 6, b: 5, c: 3, imm: ISSET_PROP_DYN });
+        assert_eq!(at(3).unwrap(), Insn { op: Op::IssetProp, a: 6, b: 5, c: 0, imm: 7 });
+        assert_eq!(at(4).unwrap(), Insn { op: Op::IssetDimPath, a: 6, b: 5, c: 10, imm: 3 });
+        assert_eq!(at(5).unwrap(), Insn { op: Op::BindRef, a: 4, b: 5, c: 0, imm: 0 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::RefDim, a: 4, b: 5, c: 0, imm: 1 | REF_KEY_K | 7 << 10 });
+        assert_eq!(at(7).unwrap(), Insn { op: Op::DimSetRef, a: 4, b: 5, c: 10, imm: 2 | REF_APPEND });
+        assert_eq!(at(8).unwrap(), Insn { op: Op::StaticRef, a: 6, b: 3, c: 0, imm: 2 });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::AssignStaticPropOp, a: 6, b: 3, c: 2, imm: 7 });
+        assert_eq!(at(10).unwrap(), Insn { op: Op::Yield, a: 6, b: 3, c: 0, imm: 7 << 14 | YIELD_KEY_K | YIELD_HAS_KEY });
+        assert_eq!(at(11).unwrap(), Insn { op: Op::Include, a: 6, b: 3, c: 0, imm: 3 });
+        assert_eq!(at(12).unwrap(), Insn { op: Op::UnsetVar, a: 4, b: 0, c: 0, imm: 0 });
+        assert_eq!(at(13).unwrap(), Insn { op: Op::DeclareClass, a: 0, b: 0, c: 0, imm: 9 });
+    }
+
+    #[test]
     fn every_generated_opcode_is_listed() {
         // SPECS and the enum agree, in order, after the hand opcodes.
         let first = SPECS[0].0 as usize;

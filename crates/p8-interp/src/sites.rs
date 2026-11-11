@@ -354,6 +354,34 @@ pub(crate) fn dyn_entry(o: &p8_runtime::object::Object, name: &Value, scope: Opt
     prop_entry(o, name.as_bytes(), slot, prop, scope.map_or(0, |c| Rc::as_ptr(c) as usize))
 }
 
+/// A read of property `name` that is no declared one of `o`'s class: the
+/// object's dynamic property of that name (a stdClass's, one added at run
+/// time), when the class has no __get and its kin and the object is not
+/// lazy. None for the rest (unset: the warning; magic: the full path).
+#[cold]
+#[inline(never)]
+pub(crate) fn dynamic_prop(o: &p8_runtime::object::Object, name: &Value) -> Option<Value> {
+    if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0 || o.lazy.get() != 0 {
+        return None;
+    }
+    let name = name.as_str()?;
+    if o.class.properties.iter().any(|p| p.name.as_bytes() == name.as_bytes()) {
+        return None;
+    }
+    let v = o.dynamic().get_str(name)?.deref();
+    (!v.is_undef()).then_some(v)
+}
+
+/// `refill_prop` when the entry does not answer for `o`'s class and this
+/// scope, for the hand arms that go on to their own path test.
+#[inline(always)]
+pub(crate) fn refill_if_missed(site: &Cell<PropSite>, o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) {
+    let e = site.get();
+    if e.class != Rc::as_ptr(&o.class) as usize || (e.scope != 0 && e.scope != scope.map_or(0, |c| Rc::as_ptr(c) as usize)) {
+        let _ = refill_prop(site, o, name, scope);
+    }
+}
+
 /// A property access's cache entry `site` that does not answer for `o`'s
 /// class or this scope (a method of a base class running on objects of
 /// several subclasses): filled again for this class, from the class

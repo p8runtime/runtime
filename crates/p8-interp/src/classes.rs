@@ -1482,7 +1482,7 @@ impl Context<'_> {
     /// that class: its key (`ConstSite::key`) and the class it keeps. A
     /// class the code names (always the same one; `self`/`parent` in a
     /// class too), the called class, a trait's class; and `::class` or a
-    /// constant that is not an enum case. The second value is the scope
+    /// constant (an enum case too). The second value is the scope
     /// the entry holds for (`ConstSite::scope`): 0 for `::class` and a
     /// public constant, the running scope's address for a private or
     /// protected one (its access depends on the scope, which a closure's
@@ -1493,7 +1493,8 @@ impl Context<'_> {
         if name.as_bytes().eq_ignore_ascii_case(b"class") {
             return Some((key, 0));
         }
-        let k = c.constants.get(name.as_bytes()).filter(|k| !k.is_case)?;
+        // (An enum case too: its value is the case's one object.)
+        let k = c.constants.get(name.as_bytes())?;
         let scope = if k.visibility == Visibility::Public { 0 } else { self.scope_addr() };
         Some((key, scope))
     }

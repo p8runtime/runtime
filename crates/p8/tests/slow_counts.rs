@@ -472,15 +472,19 @@ fn property_misses_class_constants_and_isset_stay_in_the_loop() {
 /// A generator gone through (its call, `yield`, `yield from`, its return),
 /// `new $class`, `new Exception`, a native static method, `f(...)`,
 /// references to an element, from an element, to a static property and
-/// to a variable, `S::$n += 1`, `unset($x)`, and an include that fails:
+/// to a variable, `S::$n += 1`, `unset($x)`, an include that fails, a
+/// string key written through a variable bound by reference and a string
+/// written at an int key:
 /// in the loop's arms (out of line on their operands), not the detour.
 #[test]
 fn generators_references_static_ops_and_includes_stay_in_the_loop() {
     let out = flat(
         "class S { public static $n = 0; }
          function gen($k) { yield $k; yield from [$k + 1, $k + 2]; }
-         $cls = 'stdClass'; $t = 0; $a = ['k' => 0]; $x = 1; $m = 0;
+         $cls = 'stdClass'; $t = 0; $a = ['k' => 0]; $x = 1; $m = 0; $bb = []; $b = &$bb; $ints = [0, 0];
          for ($i = 0; $i < $n; $i++) {
+             $b['s'] = $i;
+             $ints[1] = 'str';
              foreach (gen($i) as $v) { $t += $v; }
              $o = new $cls;
              $e = new Exception('e');
@@ -498,6 +502,35 @@ fn generators_references_static_ops_and_includes_stay_in_the_loop() {
          echo $t, ' ', $a['k'], ' ', S::$n, ' ', $m, ' ', get_class($o), ' ', var_export($inc, true);",
     );
     assert_eq!(out, "730 20 40 20 stdClass false");
+}
+
+/// `$this->list[k] = v` from a base class's method on two subclasses, a
+/// stdClass's dynamic property read (by name and `$o->$name`) and asked
+/// by isset, isset of an element of null and of a string's offsets, an
+/// enum case, a returned array bound by reference, and writes to elements
+/// bound by reference (an int key, a string key, a path): inline.
+#[test]
+fn dynamic_properties_references_and_cases_stay_in_the_loop() {
+    let out = flat(
+        "enum E { case A; case B; }
+         class P0 { public $list = []; function put($k) { $this->list[$k] = $k; return count($this->list); } }
+         class P1 extends P0 {} class P2 extends P0 {}
+         function addm(array &$m) { $m[] = 1; }
+         function rr(): array { $m = []; addm($m); return $m; }
+         $ps = [new P1, new P2]; $std = new stdClass; $std->dyn = 2; $dn = 'dyn'; $nul = null; $str = 'abc';
+         $re = [0]; $rx = &$re[0]; $rs = ['k' => 0]; $ry = &$rs['k']; $rp = ['a' => [0]]; $rz = &$rp['a'][0];
+         $t = 0; $e = null;
+         for ($i = 0; $i < $n; $i++) {
+             $t += $ps[$i % 2]->put($i % 4);
+             $t += $std->dyn + $std->$dn + (isset($std->dyn) ? 1 : 0);
+             $t += (isset($nul['k']) ? 1 : 0) + (isset($str[1]) ? 1 : 0) + (isset($str[5]) ? 1 : 0);
+             $e = E::B;
+             $t += count(rr());
+             $re[0] = $i; $rs['k'] = $i; $rp['a'][0] = $i;
+         }
+         echo $t, ' ', $rx + $ry + $rz, ' ', $e->name;",
+    );
+    assert_eq!(out, "178 57 B");
 }
 
 /// A class and a function declared where the code runs, then used: no

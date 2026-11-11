@@ -18,8 +18,8 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, put, put_var, read_ref, set_int_elem, test, truth};
-use crate::sites::{Plain, cached_prop, plain_slot, refill_prop};
+use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, put, put_var, read_ref, set_int_elem, test, truth, write_ref};
+use crate::sites::{Plain, cached_prop, dynamic_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -331,10 +331,31 @@ pub(crate) fn isset_dim<S: spec::IssetDim>(hx: Hx, args::IssetDim { dst, var, ke
     } else {
         match isset_elem(&hx.w[..], var as Reg, hx.src::<S::Key>(key)) {
             Some(set) => set,
-            None => return Ctl::Cold,
+            None => match isset_scalar(&hx.w[r(var)], kv) {
+                Some(set) => set,
+                None => return Ctl::Cold,
+            },
         }
     };
     Ctl::Next(put(&mut hx.w[r(dst)], Value::bool(set)))
+}
+
+/// `isset($c[k])` of a container that is not an array (through a
+/// reference too): null, undefined, a bool or a number has no element
+/// (no warning: isset is quiet); a string has the byte at an int offset
+/// inside it (counted from the end when negative). None (cold) for the
+/// rest: an object (ArrayAccess), a string's string key.
+#[cold]
+#[inline(never)]
+fn isset_scalar(c: &Value, key: &Value) -> Option<bool> {
+    let c = c.deref();
+    if c.is_null_or_undef() || c.is_bool() || c.is_int() || c.is_float() {
+        return Some(false);
+    }
+    let s = c.as_str()?;
+    let i = key.as_int()?;
+    let len = s.len() as i64;
+    Some(if i < 0 { -i <= len } else { i < len })
 }
 
 /// `$a[k] = v`, `$a` an array (or, for an int key, a reference to one): a
@@ -369,7 +390,10 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         // (A KSTR literal is never a canonical integer: lowering's promise.)
         let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
         match found {
-            Some(e) if e.is_reference() => return Ctl::Cold,
+            // An element bound by reference: the value goes into its cell.
+            Some(e) if e.is_reference() => {
+                let _ = write_ref(e.as_reference().expect("a reference"), stored);
+            }
             // (The old element's release: tested below, as for any write.)
             Some(e) => *e = stored,
             None => {
@@ -506,7 +530,11 @@ pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj,
             Some(v) => v,
             None => return Ctl::Cold,
         },
-        None => return Ctl::Cold,
+        // A dynamic property (`dynamic_prop`, out of line).
+        None => match dynamic_prop(o, &hx.clo.consts[site as usize]) {
+            Some(v) => v,
+            None => return Ctl::Cold,
+        },
     };
     Ctl::Next(put(&mut hx.w[r(dst)], v))
 }
