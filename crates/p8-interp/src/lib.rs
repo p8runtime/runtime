@@ -3102,25 +3102,7 @@ impl Context<'_> {
                     let target = self.lazy_forward(&target, &name).unwrap_or(target);
                     self.unset_prop(&target, &name)?;
                 }
-                Instr::MethodCall { dst, obj, method, base: args, argc } => {
-                    let target = self.operand(w, clo, obj);
-                    // A temporary (`(new A)->f()`) is released as it is
-                    // used: the call's `$this` holds the object.
-                    if is_temp(func, obj) {
-                        clear(&mut reg!(obj));
-                    }
-                    if let Some(o) = target.as_object()
-                        && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
-                    {
-                        return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
-                    }
-                    let site = &func.sites[method as usize];
-                    let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
-                    if let Some(o) = target.as_object() {
-                        self.remember_method(&clo.methods[method as usize], o, &m);
-                    }
-                    return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
-                }
+                Instr::MethodCall { .. } => return self.method_call(regs, clo, base, argc, at),
                 Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
                     let site = &func.sites[method as usize];
                     // `parent::$prop::get()` on a parent whose property has
@@ -3367,6 +3349,36 @@ impl Context<'_> {
     /// `Instr` run whole, every case (warnings, references, objects, magic
     /// and hooked properties), with none of `step`'s dispatch; `step` runs
     /// them here too (a function with registers past the window).
+    /// `$obj->m(args)` (the MethodCall at `at`), every case: the method the
+    /// site's cache has for this class and scope, else looked up by name
+    /// (and remembered); a native method's call; the error. `step` runs it,
+    /// and the loop runs it directly for what its own arm does not take (a
+    /// native method, a class the site has not seen), with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    fn method_call(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
+        let Instr::MethodCall { dst, obj, method, base: args, argc } = clo.code.code[at] else { unreachable!("a MethodCall") };
+        let pc = at + 1;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let target = self.operand(w, clo, obj);
+        // A temporary (`(new A)->f()`) is released as it is used: the
+        // call's `$this` holds the object.
+        if is_temp(&clo.code, obj) {
+            clear(&mut w[obj as usize]);
+        }
+        if let Some(o) = target.as_object()
+            && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
+        {
+            return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+        }
+        let site = &clo.code.sites[method as usize];
+        let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
+        if let Some(o) = target.as_object() {
+            self.remember_method(&clo.methods[method as usize], o, &m);
+        }
+        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
     #[cold]
     #[inline(never)]
     fn cold_run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {

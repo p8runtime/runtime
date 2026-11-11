@@ -877,7 +877,8 @@ impl Context<'_> {
                     }
                     // A user method the call site's cache names for this class
                     // and scope, on an object, with its required arguments, and
-                    // no interrupt pending: anything else is `step`'s.
+                    // no interrupt pending: anything else is `method_call`'s
+                    // (out of line) or `step`'s.
                     Op::MethodCall => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
@@ -895,7 +896,10 @@ impl Context<'_> {
                                 _ => None,
                             }
                         };
-                        let Some((target, declaring)) = found else { slow!() };
+                        // A native method, a class the site has not seen:
+                        // the instruction whole (`method_call`), with none
+                        // of `step`'s dispatch.
+                        let Some((target, declaring)) = found else { cold!(method_call) };
                         let code = &self.frames.next_code(target.as_ref()).code;
                         if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             slow!();
