@@ -76,12 +76,13 @@ fn a_cut_or_damaged_package_is_not_used() {
     std::fs::write(&cut, &bytes[..bytes.len() - 10]).expect("cut");
     let run = php2(exe, &["--package", cut.to_str().expect("utf-8"), "--package-check", "trust", main.to_str().expect("utf-8")]);
     assert_eq!(text(&run), ("one hello p8 42 -\n".to_string(), format!("php2: not using the package {}: the package is damaged\n", cut.display())));
-    // A changed byte in the last file's code (trust: else it would be
-    // used): that file is compiled from its source.
+    // A changed byte in the last file's code, just before the index (whose
+    // start the header gives at byte 40) (trust: else it would be used):
+    // that file is compiled from its source.
     std::fs::write(dir.join("plugins/one.php"), "<?php echo 'uno ';").expect("edit one.php");
     let mut changed = bytes.clone();
-    let last = changed.len() - 2;
-    changed[last] ^= 1;
+    let index_at = u64::from_le_bytes(changed[40..48].try_into().expect("8 bytes")) as usize;
+    changed[index_at - 2] ^= 1;
     let damaged = dir.join("damaged");
     std::fs::write(&damaged, &changed).expect("damage");
     let run = php2(exe, &["--package", damaged.to_str().expect("utf-8"), "--package-check", "trust", main.to_str().expect("utf-8")]);

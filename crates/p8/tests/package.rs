@@ -125,8 +125,10 @@ fn a_damaged_or_cut_package_is_not_opened() {
     let cut = dir.join("cut");
     std::fs::write(&cut, &bytes[..bytes.len() - 1]).expect("cut");
     assert!(matches!(platform().open_package(&cut, PackageCheck::Hash), Err(p8::PackageError::Damaged)));
+    // A byte of the index (it ends the package): refused whole.
     let mut changed = bytes.clone();
-    changed[70] ^= 1;
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
     let damaged = dir.join("damaged");
     std::fs::write(&damaged, &changed).expect("damage");
     assert!(matches!(platform().open_package(&damaged, PackageCheck::Hash), Err(p8::PackageError::Damaged)));

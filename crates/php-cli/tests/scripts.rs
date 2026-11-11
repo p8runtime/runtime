@@ -7,8 +7,13 @@
 use std::path::Path;
 use std::process::Command;
 
+/// The scripts write fixed temporary files (zlib.php: p8zlib.gz), so the
+/// two runs of them take turns.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn scripts_match_php_8_4() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     check(&[]);
 }
 
@@ -16,6 +21,7 @@ fn scripts_match_php_8_4() {
 /// (`php2 --compile`, #381): the output is the same, byte for byte.
 #[test]
 fn scripts_match_php_8_4_from_a_package() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
     let package = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scripts.package");
     let out = Command::new(env!("CARGO_BIN_EXE_php2")).arg("--compile").arg(&dir).arg("--package").arg(&package).output().expect("run php2 --compile");
