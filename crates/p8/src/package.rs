@@ -512,6 +512,17 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_is_its_build_and_its_extensions() {
+        // build.rs: a hash of the engine's source (ops.def, the compiler,
+        // the serial layout...), so any rebuild from changed source, such
+        // as one adding opcodes, is another engine.
+        let build = env!("P8_ENGINE_BUILD");
+        assert!(build.len() == 32 && build.bytes().all(|c| c.is_ascii_hexdigit()), "{build}");
+        assert_ne!(engine(&["standard"]), engine(&["standard", "xml"]));
+        assert_eq!(engine(&["standard"]), engine(&["standard"]));
+    }
+
+    #[test]
     fn another_engines_package_is_not_used() {
         let (bytes, _) = sample(&[7; 16]);
         assert!(matches!(Package::in_memory(bytes, &[8; 16], PackageCheck::Hash), Err(PackageError::OtherEngine)));
