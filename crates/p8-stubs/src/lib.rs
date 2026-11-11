@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
 //! PHP 8.6's signatures for its builtin functions and methods, generated
-//! from php-src's `*.stub.php` files (`examples/gen_signatures.rs`): the
+//! from php-src's `*.stub.php` files (`examples/gen_signatures.rs` in this crate): the
 //! parameters' names, types, defaults and by-reference flags that PHP's
 //! argument checks and error messages come from. Shared by both engines.
 //!
