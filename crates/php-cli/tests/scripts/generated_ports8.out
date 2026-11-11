@@ -1,0 +1,96 @@
+-- writes through a by-reference variable
+22345 {"x":"ex","3":"three","9":"nine","new":[1],"7":"seven"}
+via-k via-2 used used
+integer 1
+'v' string v
+integer 2
+string str
+integer 1
+integer 1
+22345 {"x":"ex","3":"three","9":"nine","new":[1],"7":"seven"}
+via-k via-2 used used
+integer 1
+'v' string v
+integer 2
+string str
+integer 1
+integer 1
+-- path writes of a literal value
+{"seen":{"p":true,"q":true,"5":true},"n":{"p":["lit","lit"],"q":["lit"],"5":["lit"]},"z":{"p":null,"q":null,"5":null}}
+{"a":{"b":false,"c":2.5},"x":{"y":"z"}}
+{"a":{"b":1}}
+TypeError: Cannot access offset of type string on string
+Text
+{"seen":{"p":true,"q":true,"5":true},"n":{"p":["lit","lit"],"q":["lit"],"5":["lit"]},"z":{"p":null,"q":null,"5":null}}
+{"a":{"b":false,"c":2.5},"x":{"y":"z"}}
+{"a":{"b":1}}
+TypeError: Cannot access offset of type string on string
+Text
+-- a property bound by reference, its path written
+ab1 ab1 121 {"1":{"2":12,"3":13},"2":{"1":21}}
+string
+ab1 ab1 121 {"1":{"2":12,"3":13},"2":{"1":21}}
+string
+-- ::class of a class name
+made 1
+made 2
+Error: Class "Nope" not found
+Error: Class name must be a valid object or a string
+made 5
+ArrayObject
+made 1
+made 2
+Error: Class "Nope" not found
+Error: Class name must be a valid object or a string
+made 5
+ArrayObject
+-- reads through a reference
+hoo
+
+Warning: Uninitialized string offset 10 in %s on line 82
+|
+false1true0true'dflt'true'dflt'false5
+true'dflt'true'dflt'false'b'true'dflt'
+5
+hoo
+
+Warning: Uninitialized string offset 10 in %s on line 82
+|
+false1true0true'dflt'true'dflt'false5
+true'dflt'true'dflt'false'b'true'dflt'
+5
+-- casts of objects
+
+Deprecated: Creation of dynamic property Kid::$dyn is deprecated in %s on line 99
+true 6 ["a","0*0b","0Props0c","u","0Kid0c","dyn"]
+true0
+1 closure
+[1,2,3,null,"kid","d"] true
+
+Deprecated: Creation of dynamic property Kid::$dyn is deprecated in %s on line 99
+true 6 ["a","0*0b","0Props0c","u","0Kid0c","dyn"]
+true0
+1 closure
+[1,2,3,null,"kid","d"] true
+-- global out of line
+main 1 NULL
+main 2 'set'
+2
+-- variables sent to a function not resolved yet
+vz v-y
+
+Warning: Undefined variable $undefined_var in %s on line 124
+z -y
+vz v-y
+
+Warning: Undefined variable $undefined_var in %s on line 124
+z -y
+-- a property read of an object a reference holds
+decl magic undeclared magic hidden
+plain
+Error: Cannot access private property Plain::$priv
+none
+decl magic undeclared magic hidden
+plain
+Error: Cannot access private property Plain::$priv
+none
