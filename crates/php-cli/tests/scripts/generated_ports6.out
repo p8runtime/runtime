@@ -1,0 +1,181 @@
+-- method calls
+K1 K2 K3 __call v(1) K1 131
+2 a 1 b
+Vis true 2
+st K1 priv+prot 1,2
+destruct tmp
+hi tmp
+K2
+Error: Call to private method Vis::priv() from global scope
+Error: Call to protected method Vis::prot() from global scope
+Error: Call to undefined method Vis::nope()
+Error: Call to a member function v() on null
+Error: Call to a member function v() on int
+Error: Call to a member function v() on string
+ArgumentCountError: Too few arguments to function Vis::need(), 1 passed in %s on line 65 and exactly 2 expected
+K1 K2 K3 __call v(1) K1 131
+2 a 1 b
+Vis true 2
+st K1 priv+prot 1,2
+destruct tmp
+hi tmp
+K2
+Error: Call to private method Vis::priv() from global scope
+Error: Call to protected method Vis::prot() from global scope
+Error: Call to undefined method Vis::nope()
+Error: Call to a member function v() on null
+Error: Call to a member function v() on int
+Error: Call to a member function v() on string
+ArgumentCountError: Too few arguments to function Vis::need(), 1 passed in %s on line 65 and exactly 2 expected
+-- sends on a miss
+x1/y1 x/y x3/y3 x/y x/y
+x1/y1 x/y x3/y3 x/y x/y
+-- foreach over objects
+rewind
+k0=10
+k1=20
+rewind
+rewind
+x
+y
+rewind
+1
+rewind
+1
+RuntimeException: valid at 1
+Exception: Objects returned by BadAgg::getIterator() must be traversable or implement interface Iterator
+p=1
+q=2
+3
+
+Deprecated: Creation of dynamic property Props::$dyn is deprecated in %s on line 127
+a=1 dyn=4 | a=1,b=2,c=3,dyn=4
+m=1 n=2 
+rewind
+k0=10
+k1=20
+rewind
+rewind
+x
+y
+rewind
+1
+rewind
+1
+RuntimeException: valid at 1
+Exception: Objects returned by BadAgg::getIterator() must be traversable or implement interface Iterator
+p=1
+q=2
+3
+
+Deprecated: Creation of dynamic property Props::$dyn is deprecated in %s on line 127
+a=1 dyn=4 | a=1,b=2,c=3,dyn=4
+m=1 n=2 
+-- native constructors
+3 3
+z
+need Vis
+ReflectionException: Class "NoSuchClass" does not exist
+ArgumentCountError: Too few arguments to function NeedsTwo::__construct(), 1 passed in %s on line 150 and exactly 2 expected
+NeedsTwo 1 2
+destruct arg
+NoCtor
+3 3
+z
+need Vis
+ReflectionException: Class "NoSuchClass" does not exist
+ArgumentCountError: Too few arguments to function NeedsTwo::__construct(), 1 passed in %s on line 150 and exactly 2 expected
+NeedsTwo 1 2
+destruct arg
+NoCtor
+-- calls of values
+11 2 5 5 30 no this bound
+destruct bound
+V m v s v s v invoked v v! 
+w?
+1,2
+ArgumentCountError: Too few arguments to function {closure:%s:164}(), 0 passed in %s on line 185 and exactly 1 expected
+Error: Call to undefined function no_such_function()
+Error: Value of type int is not callable
+Error: Call to undefined method Inv::nope()
+
+Warning: Undefined variable $undefined in %s on line 197
+Error: Value of type null is not callable
+11 2 5 5 30 no this bound
+destruct bound
+V m v s v s v invoked v v! 
+w?
+1,2
+ArgumentCountError: Too few arguments to function {closure:%s:164}(), 0 passed in %s on line 185 and exactly 1 expected
+Error: Call to undefined function no_such_function()
+Error: Value of type int is not callable
+Error: Call to undefined method Inv::nope()
+
+Warning: Undefined variable $undefined in %s on line 197
+Error: Value of type null is not callable
+-- list()
+1 2 3 X Y kept 4 5 6 one
+
+Warning: Undefined array key 1 in %s on line 217
+NULL
+NULL
+NULL
+
+Warning: Cannot use string as array in %s on line 221
+NULL
+aa[0] aa[1]
+8 9
+10 11
+1:a 2:b 
+1 2 3 X Y kept 4 5 6 one
+
+Warning: Undefined array key 1 in %s on line 217
+NULL
+NULL
+NULL
+
+Warning: Cannot use string as array in %s on line 221
+NULL
+aa[0] aa[1]
+8 9
+10 11
+1:a 2:b 
+-- foreach by reference
+a1,b2,c3
+10,20,30,40
+2,3,4
+101 102
+[[-1],[-2]]
+x 2
+a1,b2,c3
+10,20,30,40
+2,3,4
+101 102
+[[-1],[-2]]
+x 2
+-- by-reference arguments of functions
+{"k":2,"new":1,"deep":{"er":1}}
+2
+'default'
+1,2,3 3
+5,6
+{"k":2,"new":1,"deep":{"er":1}}
+2
+'default'
+1,2,3 3
+5,6
+
+Warning: Undefined array key "missing" in %s on line 288
+NULL
+-- static variables
+calls
+1
+120
+1 2 3
+12
+calls
+2
+120
+4 5 6
+12
+done
