@@ -2015,15 +2015,26 @@ fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usi
     let written = match &cell {
         Some(cell) => {
             let mut root = std::mem::take(&mut *cell.borrow_mut());
-            let written = write_path(&mut root, &w[path], p.append, v.clone());
-            *cell.borrow_mut() = root;
-            written
+            match write_path(&mut root, &w[path], p.append, v.clone(), Some(&**cell)) {
+                // The element bound to this variable's own cell (`$a['p'][0]
+                // = &$a`): the value goes into the cell, the array goes (as
+                // PHP's assignment through that reference replaces `$a`).
+                Some(Wrote::Owner) => {
+                    *cell.borrow_mut() = v.clone();
+                    drop(root);
+                    Some(true)
+                }
+                written => {
+                    *cell.borrow_mut() = root;
+                    written.map(|x| matches!(x, Wrote::Done(true)))
+                }
+            }
         }
         None => {
             let mut root = std::mem::take(&mut w[var]);
-            let written = write_path(&mut root, &w[path], p.append, v.clone());
+            let written = write_path(&mut root, &w[path], p.append, v.clone(), None);
             w[var] = root;
-            written
+            written.map(|x| matches!(x, Wrote::Done(true)))
         }
     };
     let released = written?;
@@ -2055,7 +2066,7 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
     let v = copied(&w[val])?;
     let cell = &o.slots()[slot];
     let mut root = cell.replace(Value::UNDEF);
-    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone()) } else { None };
+    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone(), None).map(|x| matches!(x, Wrote::Done(true))) } else { None };
     p8_runtime::object::put_slot(cell, root);
     let released = written?;
     Some(match dst {
@@ -2066,7 +2077,11 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
 
 /// `assign_path`'s walk below the root: every key a level when `append`
 /// (the value pushed onto the last), else all but the last.
-fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Option<bool> {
+/// `owner`: the cell the root was taken out of, when it was. The last
+/// element bound to that cell (`$a['p'][0] = &$a`) is not written here:
+/// `Some(Owner)`, and the caller puts the value in the cell in place of
+/// the root, as PHP's assignment through that reference replaces `$a`.
+fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
     let key = |k: &Value| match k.as_int() {
         Some(i) => Key::Int(i),
         None => Key::from_string(k.cloned_str().expect("a string key")),
@@ -2086,19 +2101,27 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Optio
     let Some(last) = last else {
         // (A taken next key: the error, `step`'s.)
         arr.push(v).ok()?;
-        return Some(false);
+        return Some(Wrote::Done(false));
     };
     let key = key(last);
     match arr.get_mut(&key) {
+        Some(e) if is_owner(e, owner) => Some(Wrote::Owner),
         // An element bound by reference: the value goes into its cell (as
         // an assignment to a reference writes the referenced value).
-        Some(e) if e.is_reference() => Some(write_ref(e.as_reference()?, v)),
-        Some(e) => Some(put(e, v)),
+        Some(e) if e.is_reference() => Some(Wrote::Done(write_ref(e.as_reference()?, v))),
+        Some(e) => Some(Wrote::Done(put(e, v))),
         None => {
             arr.insert(key, v);
-            Some(false)
+            Some(Wrote::Done(false))
         }
     }
+}
+
+/// What `write_path` did: written (whether the write released memory), or
+/// nothing, the last element being bound to the root's own cell.
+pub(crate) enum Wrote {
+    Done(bool),
+    Owner,
 }
 
 /// An int or string key (`assign_path`'s, `unset_dim`'s) as the array
@@ -2818,15 +2841,18 @@ pub(crate) fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
     }
 }
 
-/// `$a[k] = v` for a plain `v` into the array `slot` holds (false when it
-/// holds none), unless the element is a reference (false).
+/// `$a[k] = v` into the array `slot` holds (false when it holds none). An
+/// element bound by reference gets the value in its cell, unless that cell
+/// is `owner`, the cell `slot` is borrowed from (`$a[k] = &$a`): false,
+/// the instruction's cold path.
 #[inline(always)]
-pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value) -> bool {
+pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&RefCell<Value>>) -> bool {
     if !slot.is_array() {
         return false;
     }
     let a = slot.array_mut().expect("checked above");
     match a.get_int_mut(k) {
+        Some(e) if is_owner(e, owner) => return false,
         // An element bound by reference: the value goes into its cell.
         Some(e) if e.is_reference() => {
             let _ = write_ref(e.as_reference().expect("a reference"), v.clone());
@@ -2835,6 +2861,47 @@ pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value) -> bool {
         None => a.insert(Key::Int(k), v.clone()),
     }
     true
+}
+
+/// Whether element `e` is a reference to `owner`, the cell its array is
+/// held in (borrowed, or taken out of, while the element is written): an
+/// array bound into itself, `$a[k] = &$a`. Writing through it would borrow
+/// that cell again (or be lost when the array is put back), so the
+/// writers above leave it to the instruction's cold path.
+#[inline]
+pub(crate) fn is_owner(e: &Value, owner: Option<&RefCell<Value>>) -> bool {
+    match (e.as_reference(), owner) {
+        (Some(cell), Some(owner)) => std::ptr::eq(&**cell, owner),
+        _ => false,
+    }
+}
+
+/// `$a[k] = v` where `$a` is bound by reference to `cell` and its element
+/// at `k` (an int or string key) is bound to that same cell (`$a[k] =
+/// &$a`): as PHP's assignment through that reference, the cell gets the
+/// value in place of the array. True when it was so (the old array
+/// released); false, nothing done, for any other element.
+#[cold]
+#[inline(never)]
+pub(crate) fn owner_write(cell: &Rc<RefCell<Value>>, key: &Value, v: &Value) -> bool {
+    let hit = {
+        let held = cell.borrow();
+        let Some(a) = held.as_array() else { return false };
+        let e = if let Some(i) = key.as_int() {
+            a.get_int(i)
+        } else if let Some(s) = key.as_str() {
+            a.get_str(s)
+        } else {
+            None
+        };
+        e.is_some_and(|e| is_owner(e, Some(&**cell)))
+    };
+    if hit {
+        // (The array goes after the borrow: its element holds this cell.)
+        let old = cell.replace(v.clone());
+        drop(old);
+    }
+    hit
 }
 
 /// A copy of a register's value, as `step` makes one (strings and arrays
@@ -2850,7 +2917,6 @@ pub(crate) fn copied(v: &Value) -> Option<Value> {
         None => Some(v.clone()),
     }
 }
-
 
 /// `x cmp y` for two numbers, when that is a plain numeric comparison
 /// (not NAN, and not === between an int and a float).

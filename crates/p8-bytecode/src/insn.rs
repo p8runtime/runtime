@@ -736,7 +736,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let op = if matches!(code[pc], Instr::RefDim { .. }) { Op::RefDim } else { Op::DimSetRef };
             let flags = u32::from(n) | if append { REF_APPEND } else { 0 };
             match k(keys) {
-                Some(kk) if n == 1 => i(op, var, root, 0, flags | REF_KEY_K | kk << 10),
+                Some(kk) if n == 1 && kk < 1 << 14 => i(op, var, root, 0, flags | REF_KEY_K | kk << 10),
                 Some(_) => None,
                 None => {
                     block(keys, n)?;

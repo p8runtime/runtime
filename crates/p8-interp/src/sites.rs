@@ -307,10 +307,6 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     })
 }
 
-/// The declared slot a property write the cache answers goes to: as for
-/// a read; an unset slot only in a class without __set and its kin (writing
-/// one there may be theirs).
-#[inline]
 /// The cache entry for property `name` of `o`'s class at `slot` (`prop`,
 /// found visible from code in `scope`, its address): none for a hooked
 /// one. Any scope may use a public property's entry, unless a parent's
@@ -412,6 +408,10 @@ pub(crate) fn refill_prop(site: &Cell<PropSite>, o: &p8_runtime::object::Object,
     }
 }
 
+/// The declared slot a property write the cache answers goes to: as for
+/// a read; an unset slot only in a class without __set and its kin (writing
+/// one there may be theirs).
+#[inline]
 pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<usize> {
     if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;

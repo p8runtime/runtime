@@ -18,7 +18,7 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{Src, WINDOW, clear, copied, elem, is_set, isset_elem, put, put_var, read_ref, set_int_elem, test, truth, write_ref};
+use crate::fast::{Src, WINDOW, clear, copied, elem, is_owner, is_set, isset_elem, owner_write, put, put_var, read_ref, set_int_elem, test, truth, write_ref};
 use crate::sites::{Plain, cached_prop, dynamic_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
@@ -365,6 +365,21 @@ fn isset_scalar(c: &Value, key: &Value) -> Option<bool> {
 /// nothing there, and the Free after is skipped.
 #[inline(always)]
 pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key, val, dst }: args::AssignDim) -> Ctl {
+    // A variable bound by reference whose element there is bound to the
+    // variable's own cell (`$a[k] = &$a`): the value replaces the array, as
+    // PHP's assignment through that reference does (`owner_write`).
+    if let Some(cell) = hx.w[r(var)].as_reference().map(Rc::clone)
+        && let Some(v) = copied(hx.v::<S::Val>(val))
+        && owner_write(&cell, &hx.v::<S::Key>(key).clone(), &v)
+    {
+        return if S::Res::ID == USED {
+            let _ = put(&mut hx.w[r(dst)], v);
+            Ctl::Next(true)
+        } else {
+            let _ = clear(&mut hx.w[r(dst)]);
+            Ctl::Skip(true)
+        };
+    }
     let kv = hx.v::<S::Key>(key);
     let v = if S::Key::ID == KSTR || (S::Key::ID == REG && kv.is_str()) {
         // The key's value copied out of the frame (a literal or a count: no
@@ -390,6 +405,9 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         // (A KSTR literal is never a canonical integer: lowering's promise.)
         let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
         match found {
+            // An element bound to the cell the array is borrowed from
+            // (`$a['k'] = &$a`): the cold path (`is_owner`).
+            Some(e) if is_owner(e, cell.as_deref()) => return Ctl::Cold,
             // An element bound by reference: the value goes into its cell.
             Some(e) if e.is_reference() => {
                 let _ = write_ref(e.as_reference().expect("a reference"), stored);
@@ -408,9 +426,9 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         let (Some(k), Some(v)) = (kv.as_int(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         let slot = &mut hx.w[r(var)];
         let done = if slot.is_array() {
-            set_int_elem(slot, k, &v)
+            set_int_elem(slot, k, &v, None)
         } else if let Some(cell) = slot.as_reference() {
-            set_int_elem(&mut cell.borrow_mut(), k, &v)
+            set_int_elem(&mut cell.borrow_mut(), k, &v, Some(&**cell))
         } else {
             false
         };

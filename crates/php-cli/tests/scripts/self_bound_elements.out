@@ -1,0 +1,11 @@
+integer 1
+string 'one'
+integer 1
+array 6 true
+integer 1 | string 'one' | integer 1 | array 6 true
+integer 1 | string 'one' | integer 1 | array 6 true
+integer 1 | string 'one' | integer 1 | array 6 true
+integer string integer 0 s0 0
+integer string integer 1 s1 1
+integer string integer 2 s2 2
+done
