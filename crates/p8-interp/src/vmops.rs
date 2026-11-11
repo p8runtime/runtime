@@ -229,8 +229,14 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
         };
         match e {
             Some(v) if !v.is_reference() => v.clone(),
+            // (An element bound by reference: read through it, as a read
+            // derefs; out of line.)
+            Some(v) => match ref_elem(v) {
+                Some(v) => v,
+                None => return Ctl::Cold,
+            },
             None if S::Mode::ID == IS => Value::NULL,
-            _ => return Ctl::Cold,
+            None => return Ctl::Cold,
         }
     } else {
         // (Out of line: the array case is the arm's straight path.)
@@ -241,6 +247,14 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
     };
     let _ = put(&mut hx.w[r(dst)], v);
     Ctl::Next(true)
+}
+
+/// An array element that is a reference, read through it (`read_ref`:
+/// None when it holds nothing).
+#[cold]
+#[inline(never)]
+fn ref_elem(v: &Value) -> Option<Value> {
+    read_ref(v.as_reference()?)
 }
 
 /// `$c[k]` of anything but an array: a string's offset, an int key, is its
@@ -366,9 +380,9 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
     }
 }
 
-/// `$a[] = v`, `$a` an array (separated if shared): appended at its next
-/// key; an occupied next key (the error), anything but an array, an
-/// undefined value is cold.
+/// `$a[] = v`, `$a` an array (separated if shared; through a reference,
+/// out of line: `push_ref`): appended at its next key; an occupied next
+/// key (the error), anything but an array, an undefined value is cold.
 #[inline(always)]
 pub(crate) fn append_dim<S: spec::AppendDim>(hx: Hx, args::AppendDim { var, val, dst }: args::AppendDim) -> Ctl {
     let v = if is_k(S::Val::ID) {
@@ -379,19 +393,44 @@ pub(crate) fn append_dim<S: spec::AppendDim>(hx: Hx, args::AppendDim { var, val,
             None => return Ctl::Cold,
         }
     };
-    let Some(a) = hx.w[r(var)].array_mut() else { return Ctl::Cold };
-    if a.next_key().is_none() {
-        return Ctl::Cold;
+    let kept = if S::Res::ID == USED { Some(v.clone()) } else { None };
+    match hx.w[r(var)].array_mut() {
+        Some(a) => {
+            if a.next_key().is_none() {
+                return Ctl::Cold;
+            }
+            let _ = a.push(v);
+        }
+        None => {
+            if !push_ref(&hx.w[r(var)], v) {
+                return Ctl::Cold;
+            }
+        }
     }
-    if S::Res::ID == USED {
-        let _ = a.push(v.clone());
-        let _ = put(&mut hx.w[r(dst)], v);
-        Ctl::Next(true)
-    } else {
-        let _ = a.push(v);
+    match kept {
+        Some(v) => {
+            let _ = put(&mut hx.w[r(dst)], v);
+            Ctl::Next(true)
+        }
         // (What the skipped Free does: a stale value there goes now.)
-        Ctl::Skip(clear(&mut hx.w[r(dst)]))
+        None => Ctl::Skip(clear(&mut hx.w[r(dst)])),
     }
+}
+
+/// `$a[] = v` on a variable bound by reference (`global $list; $list[] =
+/// $x`): pushed onto the array its cell holds, at its next key; false
+/// (cold) for anything else.
+#[cold]
+#[inline(never)]
+fn push_ref(var: &Value, v: Value) -> bool {
+    let Some(cell) = var.as_reference() else { return false };
+    let mut held = cell.borrow_mut();
+    let Some(a) = held.array_mut() else { return false };
+    if a.next_key().is_none() {
+        return false;
+    }
+    let _ = a.push(v);
+    true
 }
 
 /// A property read the name's cache entry answers (anything else is

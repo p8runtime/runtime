@@ -306,3 +306,136 @@ fn static_property_writes_and_static_arguments_stay_in_the_loop() {
     );
     assert_eq!(out, "20 2 5 2");
 }
+
+/// Native methods (ArrayIterator, ReflectionClass), one call site seeing
+/// three classes in turn (a megamorphic site: the lookup by name on each
+/// miss), and its sends and by-reference tests on a miss: in the loop's
+/// arms (MethodCall's out-of-line part on the arm's operands), not the
+/// detour.
+#[test]
+fn native_methods_and_megamorphic_sites_stay_in_the_loop() {
+    let out = flat(
+        "class A { function v(&$x) { $x++; return 1; } function w($x) { return $x; } }
+         class B { function v($x) { return 2; } function w($x) { return $x + 1; } }
+         class C { function v(&$x) { $x += 2; return 3; } function w($x) { return $x + 2; } }
+         $objs = [new A, new B, new C]; $it = new ArrayIterator([1, 2, 3]); $rc = new ReflectionClass('A');
+         $t = 0; $c = 0; $names = ''; $arr = ['k' => 0];
+         for ($i = 0; $i < $n; $i++) {
+             $o = $objs[$i % 3];
+             $t += $o->v($c) + $it->count() + $o->w($arr['k']);
+             $names = $rc->getName();
+         }
+         echo $t, ' ', $c, ' ', $names;",
+    );
+    // A 7 times, B 7, C 6: (7 + 14 + 18) + 20 * 3 + (7 + 12); $c 7 + 2 * 6.
+    assert_eq!(out, "118 19 A");
+}
+
+/// `foreach` over an Iterator, an IteratorAggregate and a plain object's
+/// properties: in the loop's arms (their methods called
+/// out of line on the arm's operands), not the detour.
+#[test]
+fn foreach_over_objects_stays_in_the_loop() {
+    let out = flat(
+        "class It implements Iterator {
+             private $i = 0;
+             function __construct(private array $a) {}
+             function rewind(): void { $this->i = 0; }
+             function valid(): bool { return $this->i < count($this->a); }
+             function current(): mixed { return $this->a[$this->i]; }
+             function key(): mixed { return $this->i; }
+             function next(): void { $this->i++; }
+         }
+         class Agg implements IteratorAggregate { function getIterator(): Iterator { return new ArrayIterator([4, 5]); } }
+         class Pt { public $x = 1; public $y = 2; }
+         $it = new It([1, 2, 3]); $agg = new Agg; $pt = new Pt; $t = 0; $keys = '';
+         for ($i = 0; $i < $n; $i++) {
+             foreach ($it as $k => $v) { $t += $k + $v; }
+             foreach ($agg as $v) { $t += $v; }
+             foreach ($pt as $k => $v) { $t += $v; $keys = $k; }
+         }
+         echo $t / $n, ' ', $keys;",
+    );
+    // (0+1 + 1+2 + 2+3) + (4+5) + (1+2). (A generator's are its own
+    // instructions, Yield's and its return's: `step`'s.)
+    assert_eq!(out, "21 y");
+}
+
+/// `new` of a class with a native constructor (ArrayObject), closures
+/// called through a variable (`$f($x)`, one with `use` values, an arrow
+/// function), a builtin's name called through a variable: in the loop's
+/// arms (a closure's frame pushed there; the rest out of line on the
+/// arm's operands), not the detour.
+#[test]
+fn native_constructors_and_calls_of_values_stay_in_the_loop() {
+    let out = flat(
+        "$k = 10; $add = function ($x) use ($k) { return $x + $k; }; $inc = fn ($x) => $x + 1; $len = 'strlen';
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) {
+             $ao = new ArrayObject([1, 2]);
+             $t += count($ao) + $add(1) + $inc(2) + $len('abc');
+         }
+         echo $t / $n;",
+    );
+    // 2 + 11 + 3 + 3.
+    assert_eq!(out, "19");
+}
+
+/// `$list[] = v` and `$a['k'][] = v` on variables bound by reference
+/// (`global`, `&`), `@expr`, `-$x`, a closure's `use ($x)` and `use
+/// (&$x)`, `new static`, `f(...$args)`, and `$this->s .= 'x'`, `$o->n
+/// -= 1` on declared properties: in the loop's arms (the spread call out
+/// of line on the arm's operands), not the detour.
+#[test]
+fn appends_through_references_silence_negation_captures_and_spreads_stay_in_the_loop() {
+    let out = flat(
+        "$GLOBALS['list'] = [];
+         function add($x) { global $list; $list[] = $x; }
+         class M { static function make() { return new static; } }
+         class N extends M {}
+         function sum3($a, $b, $c) { return $a + $b + $c; }
+         class Acc { public $s = ''; public int $n = 0; function add() { $this->s .= 'x'; $this->n += 2; } }
+         $b = ['k' => []]; $a = &$b; $t = 0; $f = 1.5; $args = [1, 2, 3]; $k = 2; $acc = new Acc;
+         for ($i = 0; $i < $n; $i++) {
+             $acc->add();
+             $acc->n -= 1;
+             add($i);
+             $a['k'][] = $i;
+             $t += @strlen('ab') + (-$i) + (-$f);
+             $g = function ($x) use ($k, &$t) { return $x * $k; };
+             $t += $g(1);
+             $o = N::make();
+             $t += sum3(...$args);
+         }
+         echo count($GLOBALS['list']), ' ', count($b['k']), ' ', $t, ' ', get_class($o), ' ', strlen($acc->s), ' ', $acc->n;",
+    );
+    // $t: the sum of 2 - $i - 1.5 + 2 + 6.
+    assert_eq!(out, "20 20 -20 N 20 20");
+}
+
+/// `[$a, $b] = ..` and `$a[1]` (of elements bound by reference too, of
+/// an array and of an array held through a reference), `['k' => $v] =
+/// ..`, a function's and a method's `static $x` (stepped through the
+/// reference), `foreach ($a as $k => &$v)` over an array, and `f($a['k'])`
+/// of a function declared at run time asking whether it takes it by
+/// reference: inline. (Making
+/// `$a['k']` a reference for one that does, and `unset($v)`, are other
+/// instructions, `step`'s.)
+#[test]
+fn lists_static_variables_and_by_reference_foreach_stay_in_the_loop() {
+    let out = flat(
+        "function counter() { static $c = 0; return ++$c; }
+         class S { function m() { static $m = 100; return $m++; } }
+         if (true) { function plain($x) { return $x; } }
+         $s = new S; $arr = [1, 2, 3]; $map = ['k' => 5, 'j' => 6]; $d = ['k' => 4]; $t = 0; $one = 1; $bound = [&$one, 2];
+         for ($i = 0; $i < $n; $i++) {
+             [$a, $b] = $arr;
+             ['k' => $v, 'j' => $w] = $map;
+             $t += $a + $b + $v + $w + counter() + $s->m();
+             foreach ($arr as $key => &$e) { $e += $key; }
+             $t += plain($d['k']) + $arr[1] + $bound[0] - 1;
+         }
+         echo $t, ' ', implode(',', $arr), ' ', $d['k'];",
+    );
+    assert_eq!(out, "3200 1,22,43 4");
+}
