@@ -3910,6 +3910,24 @@ impl Context<'_> {
                     reg!(dst) = self.append(a, v)?;
                     return Ok(Next::Go(pc));
                 }
+                // A variable bound by reference whose element there is bound
+                // to the variable's own cell (`$a[k] = &$a`): the value
+                // replaces the array (`owner_write`), as the loop's arm does
+                // (`vmops::assign_dim`). Native code runs this instruction
+                // here, so this path must give what the arm gives.
+                if n == 1
+                    && !append
+                    && let Some(cell) = reg!(var).as_reference().map(Rc::clone)
+                {
+                    let key = match const_index(keys) {
+                        Some(k) => clo.consts[k].clone(),
+                        None => w[keys as usize].deref(),
+                    };
+                    if fast::owner_write(&cell, &key, &v.deref()) {
+                        reg!(dst) = v.deref();
+                        return Ok(Next::Go(pc));
+                    }
+                }
                 // The result is what was stored: a string offset's one byte.
                 reg!(dst) = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
                     Written::Done(r) => r,
