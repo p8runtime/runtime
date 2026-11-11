@@ -235,6 +235,52 @@ hand CallValue
 /// a->(property site imm & 0xffff) (op imm >> 16 & 15) = b (constant b
 /// with PROP_OP_K), the result into c; PROP_PATH_THIS (`$this`, not a)
 hand AssignPropOp
+/// `$a = &$b`
+hand BindRef
+/// `unset($a)`
+hand UnsetVar
+/// a = (object) b
+hand ToObject
+/// a = whether the callable in b takes argument imm by reference
+/// (u16::MAX: the named one whose name is in c)
+hand CallableArgByRef
+/// a = $$b (imm: bit 0 quiet, bit 1 a global's)
+hand VarGet
+/// a = a reference to the superglobal named b
+hand AutoGlobal
+/// `[&$b]`: a reference to b appended to the array literal in a
+hand ArrayPushRef
+/// a = `C::$name op= b` (class reference c, the name constant imm & 0x3fff,
+/// the operator imm >> 14 & 15, constant b with STATIC_OP_K)
+hand AssignStaticPropOp
+/// declaration imm of the running code declared (a class)
+hand DeclareClass
+/// lambda imm of the running code declared (a function)
+hand DeclareFunction
+/// a = `include` b (or constant imm >> 8 with SRC_K; the kind in imm & 3)
+hand Include
+/// a = b(...) (or a constant, as Include's)
+hand FromCallable
+/// a = `yield` b (or a constant), with key c (imm: YIELD_*)
+hand Yield
+/// a = `yield from` b (or a constant)
+hand YieldFrom
+/// `$a = &$b[c]..` (imm: the key count, REF_APPEND, REF_KEY_K), an
+/// element passed by reference too
+hand RefDim
+/// `$b[c].. = &$a` (imm as RefDim's)
+hand DimSetRef
+/// `$a = &C::$name` (class reference imm, the name in register b)
+hand StaticRef
+/// a = b->{c} (`$this` with PROP_PATH_THIS): the name in a register
+hand FetchPropDyn
+/// a->{c} = b (`$this` with PROP_PATH_THIS; TAKE; constant b with
+/// PROP_OP_K), the value into register imm >> 8
+hand AssignPropDyn
+/// a = isset(b->(property site imm)), or isset(b->{c}) with ISSET_PROP_DYN
+hand IssetProp
+/// a = isset(b[c][c + 1]..), imm keys (two or more: ISSET_DIM is one)
+hand IssetDimPath
 /// a = b(...c): the call with the array's values as its arguments
 hand CallSpread
 /// `@`: a = the error level, then the level narrowed to the fatal kinds
