@@ -20,7 +20,7 @@
 //! temporary, a variable, a literal of a type, a flag it knows) and the
 //! instruction's encoder (`enc`) picks the exact opcode and packs it.
 
-use crate::{Cmp, Function, Instr, Rare, Reg, THIS, const_index};
+use crate::{ClassRef, Cmp, Function, Instr, Rare, Reg, THIS, const_index};
 use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
 
@@ -208,7 +208,21 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_at(code, pc, &func.consts, func.ncv).unwrap_or(SLOW)).collect()
+    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes).unwrap_or(SLOW)).collect()
+}
+
+/// A class reference as the flag of an instruction that names a class:
+/// NAMED for a class the code names (a name, once declared, is always the
+/// same class, `self`/`parent` in a class included), STATIC for the called
+/// class, SCOPE for the class a trait's code runs in; None for the rest
+/// (a trait's `parent`, a class in a register).
+fn class_flag(classes: &[ClassRef], class: u16) -> Option<Opnd> {
+    Some(Opnd::Flag(match classes.get(usize::from(class))? {
+        ClassRef::Named(..) | ClassRef::Forward(..) => kinds::NAMED,
+        ClassRef::Static => kinds::STATIC,
+        ClassRef::Scope => kinds::SCOPE,
+        ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
+    }))
 }
 
 /// The property cache entry of a name operand: its constant's index.
@@ -266,7 +280,13 @@ fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
     Opnd::Flag(if matches!(code.get(pc + 1), Some(&Instr::Free { reg }) if reg == dst) { kinds::UNUSED } else { kinds::USED })
 }
 
+/// `lower_in` of code that names no class (the unit tests').
+#[cfg(test)]
 fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<Insn> {
+    lower_in(code, pc, consts, ncv, &[])
+}
+
+fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef]) -> Option<Insn> {
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     let o = |reg: Reg| opnd(reg, consts, ncv);
@@ -338,6 +358,18 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
         Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
+        Instr::Return { src } => enc::ret(enc::Ret { src: o(src)? }),
+        Instr::InstanceOf { dst, src, class } => {
+            enc::instance_of(enc::InstanceOf { cls: class_flag(classes, class)?, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
+        }
+        Instr::ClassConst { dst, class, name } => {
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+        }
+        Instr::FetchStaticProp { dst, class, name } => {
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::fetch_static_prop(enc::FetchStaticProp { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+        }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is a read here: its misses are cold.)
@@ -430,19 +462,11 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
             i(Op::IterInit, src, iter, 0, end)
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
-        Instr::ClassConst { dst, class, name } => {
-            let site = prop_site(name, nconsts).filter(|&s| s <= 0xffff)?;
-            i(Op::ClassConst, dst, 0, 0, site | u32::from(class) << 16)
-        }
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
         Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
-        Instr::Return { src } => match k(src) {
-            Some(kk) => i(Op::ReturnC, 0, 0, 0, kk),
-            None => i(Op::Return, src, 0, 0, 0),
-        },
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }
@@ -573,7 +597,7 @@ mod tests {
         assert_eq!(at(8), Insn { op: Op::CallRegs, a: 7, b: 1, c: 12, imm: 4 | 10 << 16 | ARG_CONST });
         assert_eq!(at(10), Insn { op: Op::P8_ASSIGN_K, a: 1, b: 0, c: 0, imm: 2 });
         assert_eq!(at(11), Insn { op: Op::IncJumpLtC, a: 1, b: 2, c: 1, imm: 0 });
-        assert_eq!(at(12), Insn { op: Op::ReturnC, a: 0, b: 0, c: 0, imm: 2 });
+        assert_eq!(at(12), Insn { op: Op::P8_RETURN_K, a: 0, b: 0, c: 0, imm: 2 });
         assert!(lower_at(&code, 13, &consts, 0).is_none());
         // A constant past the table is no form either.
         assert!(lower_at(&code, 0, &consts[..3], 0).is_none());

@@ -35,14 +35,50 @@ pub struct Closure {
     /// one per parameter, then the return type's; empty when no type
     /// names a class.
     pub(crate) type_memo: Box<[ClassMemo]>,
-    /// `C::NAME` of a named class, a public constant (or `C::class`):
-    /// its value, once read, by the name's constant (one entry per
-    /// constant, as `props`), with the class reference it was read
-    /// through (another class with the same name reads past it). A
-    /// class's constants never change, and a name is always the same
-    /// class (`class_refs`): PHP's runtime cache slot of FETCH_CLASS_CONSTANT.
-    pub(crate) class_consts: Box<[OnceCell<(u16, Value)>]>,
+    /// `C::NAME`, a public constant that is not an enum case (or
+    /// `C::class`): its value, as last read, by the name's constant (one
+    /// entry per constant, as `props`), with the class it was read for
+    /// (`ConstSite::key`; another class reads past it, and its read
+    /// replaces the entry). A class's constants never change, and a name
+    /// is always the same class (`class_refs`): PHP's runtime cache slot of
+    /// FETCH_CLASS_CONSTANT, polymorphic as PHP's is for `static::`.
+    pub(crate) class_consts: Box<[RefCell<ConstSite>]>,
+    /// `C::$name`: the property's cell, as last read, by the name's
+    /// constant (as `class_consts`), with the class and the scope it was
+    /// read for (its visibility was checked from that scope): PHP's
+    /// runtime cache slot of FETCH_STATIC_PROP. A class's static
+    /// properties are its cells for good (a reference bound into one is a
+    /// value in its cell).
+    pub(crate) statics: Box<[RefCell<StaticSite>]>,
 }
+
+/// A static property's cache entry (`Closure::statics`).
+#[derive(Default)]
+pub(crate) struct StaticSite {
+    /// The class, as `ConstSite::key` (0: empty), and the scope's address.
+    pub(crate) key: usize,
+    pub(crate) scope: usize,
+    /// (Held, never read: see `ConstSite::_keep`.)
+    pub(crate) _keep: std::rc::Weak<Class>,
+    pub(crate) cell: Option<Rc<RefCell<Value>>>,
+}
+
+/// A class constant's cache entry (`Closure::class_consts`).
+#[derive(Default)]
+pub(crate) struct ConstSite {
+    /// The class it was read for: a named class reference, its index + 1;
+    /// the called class (`static::`) or a trait's class, its address,
+    /// which `_keep` keeps from being reused by another class. 0: empty.
+    pub(crate) key: usize,
+    /// (Held, never read: a weak handle keeps the class's allocation, so
+    /// its address, from being reused while the entry names it.)
+    pub(crate) _keep: std::rc::Weak<Class>,
+    pub(crate) value: Value,
+}
+
+/// A class as a cache entry keys it (`ConstSite::key`), with the handle
+/// that keeps the key's address its own.
+pub(crate) type ClassKey = (usize, std::rc::Weak<Class>);
 
 /// A class a declared type accepted (`Closure::type_memo`): its address,
 /// compared; and a weak handle, which keeps the address from being reused
@@ -114,8 +150,9 @@ impl Closure {
         } else {
             Box::default()
         };
-        let class_consts = code.consts.iter().map(|_| OnceCell::new()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts })
+        let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
+        let statics = code.consts.iter().map(|_| RefCell::default()).collect();
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics })
     }
 
     /// The stand-in for a declared function or method whose closure has not

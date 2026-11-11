@@ -1,0 +1,30 @@
+-- named
+[true,true,true,true,false,false][false,true,true,true,false,false][false,false,false,false,true,false]
+[true,true,true,true,false,false][false,true,true,true,false,false]
+[false,false,false,false,false,false][false,false,false,false,false,false][false,false,false,false,false,false][false,false,false,false,false,false]
+bool(true)
+bool(false)
+
+Warning: Undefined variable $undef in %s on line 31
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+-- self, static, parent
+[true,true][true,false][true,true]
+bool(true)
+bool(false)
+[true,true][true,false][false,false]
+bool(true)
+bool(false)
+bool(true)
+Error: Cannot access "static" when no class scope is active
+bool(true)
+bool(false)

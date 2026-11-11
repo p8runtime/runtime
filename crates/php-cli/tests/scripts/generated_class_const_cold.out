@@ -1,0 +1,40 @@
+-- named
+["A","B","iface","iface","A-8","A","B"]
+["A","B","iface","iface","A-8","A","B"]
+[[1,2,3],[1,2]][[1,2,3],[1,2]]
+-- self, static, parent
+["A","A","A","A"]["A","B","B","A"]["A","C2","C2","A"]["A","A","iface"]
+["A","A","A","A"]["A","B","B","A"]["A","C2","C2","A"]["A","A","iface"]
+a-secret a-secret a-prot b-prot b-prot
+Error: Cannot access private constant A::SECRET
+Error: Cannot access protected constant B::PROT
+-- traits
+["trait-const","trait-const","UT","UT"]["trait-const","ut2","UT","UT2"]["trait-const","trait-const","UT3","UT3"]
+["trait-const","trait-const","UT","UT"]["trait-const","ut2","UT","UT2"]["trait-const","trait-const","UT3","UT3"]
+Error: Cannot access trait constant T::TC directly
+-- enums
+array(3) {
+  [0]=>
+  enum(Suit::Hearts)
+  [1]=>
+  bool(true)
+  [2]=>
+  string(6) "Spades"
+}
+bool(true)
+array(3) {
+  [0]=>
+  enum(Suit::Hearts)
+  [1]=>
+  string(1) "S"
+  [2]=>
+  enum(Suit::Spades)
+}
+-- errors
+Error: Undefined constant A::NOPE
+Error: Undefined constant A::NOPE
+DivisionByZeroError: Modulo by zero
+DivisionByZeroError: Modulo by zero
+Error: Cannot access "static" when no class scope is active
+ABA
+B C2 C2

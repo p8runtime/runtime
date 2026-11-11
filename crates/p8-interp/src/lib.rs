@@ -3183,10 +3183,9 @@ impl Context<'_> {
                     }
                     let v = self.class_constant(func, class, &name, w)?;
                     if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
-                        && site.get().is_none()
-                        && self.class_const_cacheable(clo, class, &name, w)
+                        && let Some((key, keep)) = self.class_const_key(clo, class, &name, w)
                     {
-                        let _ = site.set((class, v.clone()));
+                        *site.borrow_mut() = ConstSite { key, _keep: keep, value: v.clone() };
                     }
                     reg!(dst) = v;
                 }
@@ -3195,8 +3194,15 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
+                    let name_reg = name;
                     let name = name!(name).clone();
                     let cell = self.static_cell(func, class, &name, w)?;
+                    // For the loop's handler: the cell, for this class and scope.
+                    if let Some(site) = const_index(name_reg).and_then(|i| clo.statics.get(i))
+                        && let Some((_, (key, keep))) = self.class_key(clo, class, w)
+                    {
+                        *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), _keep: keep, cell: Some(Rc::clone(&cell)) };
+                    }
                     let v = cell.borrow().deref();
                     reg!(dst) = if v.is_undef() { Value::NULL } else { v };
                 }
@@ -3228,7 +3234,22 @@ impl Context<'_> {
                 }
                 Instr::InstanceOf { dst, src, class } => {
                     let v = self.operand(w, clo, src);
+                    // PHP fetches `static`/`self`/`parent` for an object
+                    // only: with no class scope, the error.
+                    if v.deref().as_object().is_some()
+                        && matches!(func.classes[class as usize], p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope)
+                    {
+                        self.class_of(func, class, w)?;
+                    }
                     reg!(dst) = Value::bool(self.instance_of(func, &v, class, w));
+                    // The class a name the code names resolved to, declared
+                    // (never autoloaded), for the loop's handler.
+                    if let p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name) = &func.classes[class as usize]
+                        && let Some(c) = self.classes.get(&name.sym)
+                        && clo.class_refs[class as usize].borrow().strong_count() == 0
+                    {
+                        *clo.class_refs[class as usize].borrow_mut() = Rc::downgrade(c);
+                    }
                 }
                 Instr::Clone { dst, src } => {
                     let v = self.operand(w, clo, src);
