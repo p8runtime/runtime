@@ -94,7 +94,7 @@ static BUILTINS: &[Builtin] = &[
 ];
 
 /// The standard extension: its functions and PHP 8.4's constants (the
-/// table examples/gen_defaults.php generates from real PHP).
+/// table examples/gen_defaults.php (in this crate) generates from real PHP).
 pub const EXTENSION: Extension = Extension { name: "standard", register };
 
 /// The PHP release p8 reports (PHP_VERSION) and the numbers derived from

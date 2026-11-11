@@ -1,7 +1,7 @@
 #!/bin/bash
 # MediaWiki's own PHPUnit unit tests (the core:unit suite, as MediaWiki's CI
 # runs it: `composer phpunit:unit`) under the reference PHP
-# (tests/php-src/reference.sh: docker, with the
+# (crates/php-test/php-src/reference.sh: docker, with the
 # extensions MediaWiki requires) and under p8, compared test by test
 # (../apps/compare.php): how many of the tests PHP passes p8 passes too.
 # Writes the run as a p8-test-suite "suite" line to
@@ -47,8 +47,8 @@ if [ "$(cat vendor/.p8-lock 2>/dev/null || true)" != "$lock" ]; then
 fi
 git checkout -q -- .
 
-# shellcheck source=../../../../tests/php-src/reference.sh
-. "$repo/tests/php-src/reference.sh"
+# shellcheck source=../../../../crates/php-test/php-src/reference.sh
+. "$repo/crates/php-test/php-src/reference.sh"
 php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
 image=$(php_image p8-php-mwtests "$here/suite/Dockerfile" "$here/suite")
 top=/$(printf '%s' "$PWD" | cut -d/ -f2)
