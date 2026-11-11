@@ -20,7 +20,7 @@
 //! temporary, a variable, a literal of a type, a flag it knows) and the
 //! instruction's encoder (`enc`) picks the exact opcode and packs it.
 
-use crate::{ClassRef, Cmp, Function, Instr, Rare, Reg, THIS, const_index};
+use crate::{CastKind, ClassRef, Cmp, Function, Instr, Rare, Reg, THIS, const_index};
 use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
 
@@ -84,6 +84,22 @@ pub const TAKE: u32 = 1 << 31;
 /// IncDec's `imm`: increment (else decrement), and post (the old value).
 pub const INC: u32 = 1;
 pub const POST: u32 = 2;
+
+/// DimIncDec's `imm` bits (above the key count): INC and POST.
+pub const DIM_INC: u32 = INC << 8;
+pub const DIM_POST: u32 = POST << 8;
+
+/// PropIncDec's `imm` bits (above the property site): INC and POST; and
+/// PROP_PATH_THIS (the object is `$this`).
+pub const PROP_INC: u32 = INC << 16;
+pub const PROP_POST: u32 = POST << 16;
+
+/// Cast's `imm`: the kind (the scalar ones; `(array)` and `(unset)` are
+/// `Op::Slow`).
+pub const CAST_INT: u32 = 0;
+pub const CAST_FLOAT: u32 = 1;
+pub const CAST_STRING: u32 = 2;
+pub const CAST_BOOL: u32 = 3;
 
 /// BinaryC's `imm` bit: the constant is the left operand (`K op b`), not
 /// the right (`b op K`).
@@ -538,6 +554,34 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             block(keys, n)?;
             i(Op::AssignDimPath, var, keys, val, u32::from(n) | u32::from(r(dst)?) << 8 | path_flags(code, pc, dst, append))
         }
+        // `unset($a[k0]..)` and `$a[k0]..++`: the keys a block of
+        // registers in the window.
+        Instr::UnsetDim { var, keys, n: n @ 1..=PATH_KEYS } if const_index(keys).is_none() => {
+            block(keys, n)?;
+            i(Op::UnsetDim, var, keys, 0, u32::from(n))
+        }
+        Instr::DimIncDec { var, keys, n: n @ 1..=PATH_KEYS, dst, inc, post } if const_index(keys).is_none() => {
+            block(keys, n)?;
+            i(Op::DimIncDec, var, keys, dst, u32::from(n) | if inc { DIM_INC } else { 0 } | if post { DIM_POST } else { 0 })
+        }
+        Instr::Cast { kind, dst, src } => {
+            let kind = match kind {
+                CastKind::Int => CAST_INT,
+                CastKind::Float => CAST_FLOAT,
+                CastKind::String => CAST_STRING,
+                CastKind::Bool => CAST_BOOL,
+                CastKind::Array | CastKind::Unset => return None,
+            };
+            i(Op::Cast, dst, src, 0, kind)
+        }
+        // `$o->p++`, `$this->p++` (the name a constant: its cache entry).
+        Instr::PropIncDec { obj, name, dst, inc, post } => {
+            let site = prop_site(name, nconsts).filter(|&s| s < 1 << 16)?;
+            let this = obj == THIS;
+            let flags = if inc { PROP_INC } else { 0 } | if post { PROP_POST } else { 0 } | if this { PROP_PATH_THIS } else { 0 };
+            i(Op::PropIncDec, if this { 0 } else { obj }, dst, 0, site | flags)
+        }
+        Instr::MethodArgByRef { dst, obj, method, n } => i(Op::MethodArgByRef, dst, obj, Reg::from(n), u32::from(method)),
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }
@@ -792,6 +836,36 @@ mod tests {
         assert_eq!(at(10).unwrap(), Insn { op: Op::SendVarStatic, a: 11, b: 1, c: 1, imm: 5 | 2 << 16 });
         assert_eq!(at(11).unwrap(), Insn { op: Op::AssignPropDim, a: 0, b: 22, c: 3, imm: 4 | 6 << 16 | PROP_PATH_THIS | PATH_APPEND });
         assert!(at(12).is_none());
+    }
+
+    #[test]
+    fn the_fourth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            Instr::UnsetDim { var: 1, keys: 10, n: 2 },
+            Instr::UnsetDim { var: 1, keys: 10, n: 5 },
+            Instr::DimIncDec { var: 1, keys: 10, n: 1, dst: 6, inc: true, post: true },
+            Instr::DimIncDec { var: 1, keys: 10, n: 2, dst: 6, inc: false, post: false },
+            Instr::Cast { kind: CastKind::String, dst: 6, src: 1 },
+            Instr::Cast { kind: CastKind::Array, dst: 6, src: 1 },
+            Instr::PropIncDec { obj: THIS, name: c(4), dst: 6, inc: true, post: false },
+            Instr::PropIncDec { obj: 20, name: c(4), dst: 6, inc: false, post: true },
+            // A name that is no constant: not inline.
+            Instr::PropIncDec { obj: 20, name: 3, dst: 6, inc: true, post: true },
+            Instr::MethodArgByRef { dst: 6, obj: 20, method: 5, n: 2 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 2);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::UnsetDim, a: 1, b: 10, c: 0, imm: 2 });
+        assert!(at(1).is_none());
+        assert_eq!(at(2).unwrap(), Insn { op: Op::DimIncDec, a: 1, b: 10, c: 6, imm: 1 | DIM_INC | DIM_POST });
+        assert_eq!(at(3).unwrap(), Insn { op: Op::DimIncDec, a: 1, b: 10, c: 6, imm: 2 });
+        assert_eq!(at(4).unwrap(), Insn { op: Op::Cast, a: 6, b: 1, c: 0, imm: CAST_STRING });
+        assert!(at(5).is_none());
+        assert_eq!(at(6).unwrap(), Insn { op: Op::PropIncDec, a: 0, b: 6, c: 0, imm: 4 | PROP_INC | PROP_PATH_THIS });
+        assert_eq!(at(7).unwrap(), Insn { op: Op::PropIncDec, a: 20, b: 6, c: 0, imm: 4 | PROP_POST });
+        assert!(at(8).is_none());
+        assert_eq!(at(9).unwrap(), Insn { op: Op::MethodArgByRef, a: 6, b: 20, c: 2, imm: 5 });
     }
 
     #[test]

@@ -1157,6 +1157,53 @@ impl Context<'_> {
                             done!(released);
                         }
                     }
+                    // `unset($a[k0]..)` through arrays (`unset_dim`);
+                    // anything else on the way is `step`'s.
+                    Op::UnsetDim => {
+                        ops!(a, b, c, imm);
+                        let Some(released) = unset_dim(&mut w[..], rx!(a), rx!(b), imm as usize) else { slow!() };
+                        done!(released);
+                    }
+                    // `$a[k0]..++` on an int through arrays (`dim_inc_dec`);
+                    // anything else is `step`'s.
+                    Op::DimIncDec => {
+                        ops!(a, b, c, imm);
+                        let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else { slow!() };
+                        done!(put(&mut w[rx!(c)], v));
+                    }
+                    // `(int)`, `(float)`, `(string)`, `(bool)` of a value
+                    // that converts with nothing to report (`cast`).
+                    Op::Cast => {
+                        ops!(a, b, c, imm);
+                        let Some(v) = cast(&w[rx!(b)], imm) else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `$o->p++` on an int in the declared slot the name's
+                    // cache entry answers (`prop_inc_dec`); anything else is
+                    // `step`'s.
+                    Op::PropIncDec => {
+                        ops!(a, b, c, imm);
+                        let o = if imm & insn::PROP_PATH_THIS != 0 {
+                            let Some(o) = &top.this else { slow!() };
+                            o
+                        } else {
+                            let Some(o) = w[rx!(a)].as_object() else { slow!() };
+                            o
+                        };
+                        let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let Some(v) = prop_inc_dec(o, site.get(), scope, imm) else { slow!() };
+                        done!(put(&mut w[rx!(b)], v));
+                    }
+                    // Whether `$o->m(..)` takes argument c by reference, when
+                    // the call site's cache knows the method for this class
+                    // and scope (`cached_takes_ref`); else `step`'s lookup.
+                    Op::MethodArgByRef => {
+                        ops!(a, b, c, imm);
+                        let Some(o) = w[rx!(b)].as_object() else { slow!() };
+                        let Some(by_ref) = self.cached_takes_ref(&clo.methods[imm as usize], &o.class, usize::from(c)) else { slow!() };
+                        done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).
                     Op::ReturnNull => {
@@ -1380,6 +1427,158 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Optio
             Some(false)
         }
     }
+}
+
+/// An int or string key (`assign_path`'s, `unset_dim`'s) as the array
+/// keys it.
+fn path_key(k: &Value) -> Key {
+    match k.as_int() {
+        Some(i) => Key::Int(i),
+        None => Key::from_string(k.cloned_str().expect("a string key")),
+    }
+}
+
+/// The root of a path through arrays (`unset_dim`, `dim_inc_dec`): the
+/// array in register `var` or in the reference it holds, given to `f`
+/// with the keys, the `n` registers from `keys`, each an int or a string
+/// (not `var` itself). None when the root is not an array or a key is of
+/// another type.
+#[inline(always)]
+fn on_path<R>(w: &mut [Value], var: usize, keys: usize, n: usize, f: impl FnOnce(&mut Value, &[Value]) -> Option<R>) -> Option<R> {
+    let path = keys..keys + n;
+    if path.contains(&var) || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
+        return None;
+    }
+    if let Some(cell) = w[var].as_reference() {
+        // (The keys are no references: the cell is not theirs.)
+        let cell = Rc::clone(cell);
+        let mut root = cell.borrow_mut();
+        return if root.is_array() { f(&mut root, &w[path]) } else { None };
+    }
+    if !w[var].is_array() {
+        return None;
+    }
+    // The root out of its register while it changes, then back.
+    let mut root = std::mem::take(&mut w[var]);
+    let r = f(&mut root, &w[path]);
+    w[var] = root;
+    r
+}
+
+/// `unset($var[k0]..[kn-1])` (`Op::UnsetDim`), `$var` an array (or a
+/// reference to one), each key an int or a string: as `unset_path` walks
+/// it, each level that has the key separated (copy-on-write) and gone
+/// into, the element at the last key removed; a missing key anywhere is
+/// nothing to do. None, with nothing removed, when a key is of another
+/// type or a level on the way is anything but an array (a reference,
+/// null, an object, a string): `step`'s, which may find the levels before
+/// it separated. Else whether an element was removed (its value let go).
+#[inline(never)]
+fn unset_dim(w: &mut [Value], var: usize, keys: usize, n: usize) -> Option<bool> {
+    on_path(w, var, keys, n, |root, keys| {
+        let (last, levels) = keys.split_last()?;
+        let mut cur = root;
+        for k in levels {
+            let k = path_key(k);
+            if !cur.as_array()?.contains_key(&k) {
+                return Some(false);
+            }
+            cur = cur.array_mut()?.get_mut(&k)?;
+            if !cur.is_array() {
+                return None;
+            }
+        }
+        let k = path_key(last);
+        if !cur.as_array()?.contains_key(&k) {
+            return Some(false);
+        }
+        Some(cur.array_mut()?.remove(&k).is_some())
+    })
+}
+
+/// `$var[k0]..[kn-1]++` (and `--`, `++$var[..]`: `Op::DimIncDec`, imm's
+/// DIM_INC and DIM_POST), `$var` an array (or a reference to one), each
+/// key an int or a string: each level an array that has the key,
+/// separated (copy-on-write), as `incdec_path` walks it, the element at
+/// the last an int stepped in place with no overflow. The value of the
+/// expression (the old one for a post step). None for anything else (a
+/// missing key: the warning; a reference, a float, a string, null:
+/// `step`'s, which may find the levels before it separated).
+#[inline(never)]
+fn dim_inc_dec(w: &mut [Value], var: usize, keys: usize, imm: u32) -> Option<Value> {
+    on_path(w, var, keys, (imm & 0xff) as usize, |root, keys| {
+        let mut cur = root;
+        for k in keys {
+            cur = cur.array_mut()?.get_mut(&path_key(k))?;
+        }
+        let slot = cur.as_int_mut()?;
+        let old = *slot;
+        let new = if imm & insn::DIM_INC != 0 { old.checked_add(1) } else { old.checked_sub(1) }?;
+        *slot = new;
+        Some(Value::int(if imm & insn::DIM_POST != 0 { old } else { new }))
+    })
+}
+
+/// `(int)`, `(float)`, `(string)`, `(bool)` (`Op::Cast`, imm the kind) of
+/// `v` (a reference's value): null, a bool, an int, a float, a string,
+/// and an array but to a string, converted as `step` converts them, when
+/// that reports nothing. None for anything else: an undefined variable,
+/// an object (its cast handler, `__toString`, the warning), a float out
+/// of an int's range, NAN to a bool, an array to a string.
+#[inline(never)]
+fn cast(v: &Value, kind: u32) -> Option<Value> {
+    if let Some(cell) = v.as_reference() {
+        return cast(&cell.borrow(), kind);
+    }
+    if !(v.is_null() || v.as_bool().is_some() || v.is_int() || v.is_float() || v.is_str() || v.is_array()) {
+        return None;
+    }
+    match kind {
+        insn::CAST_INT => {
+            if let Some(f) = v.as_float()
+                && ops::float_to_int_cast_diag(f).is_some()
+            {
+                return None;
+            }
+            Some(Value::int(v.to_int()))
+        }
+        insn::CAST_FLOAT => Some(Value::float(v.to_float())),
+        insn::CAST_BOOL => (!v.is_nan()).then(|| Value::bool(v.to_bool())),
+        _ => {
+            if v.is_str() {
+                return Some(v.clone());
+            }
+            let mut diags = ops::Diags::new();
+            let s = ops::to_string_lossy(v, &mut diags);
+            diags.is_empty().then(|| Value::str(s))
+        }
+    }
+}
+
+/// `$o->p++` (and `--`, `++$o->p`: `Op::PropIncDec`, imm's PROP_INC and
+/// PROP_POST): the declared slot the name's cache entry `site` holds for
+/// this class and `scope` (`cached_slot`: visible, the object not lazy),
+/// of a class with no hooked property, the property neither readonly nor
+/// of a narrower set visibility, holding an int (not a reference) that
+/// steps with no overflow to a value of its type: written in place. The
+/// value of the expression. None for anything else (`step`'s: magic,
+/// hooks, a float, null, a string, the errors).
+#[inline(never)]
+fn prop_inc_dec(o: &Rc<Object>, site: PropSite, scope: usize, imm: u32) -> Option<Value> {
+    let slot = cached_slot(site, o, scope)?;
+    let p = &o.class.properties[slot];
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
+        return None;
+    }
+    let cell = &o.slots()[slot];
+    let old = cell.peek(Value::as_int)?;
+    let new = if imm & insn::PROP_INC != 0 { old.checked_add(1) } else { old.checked_sub(1) }?;
+    let new = Value::int(new);
+    if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+        return None;
+    }
+    cell.assign(new.clone());
+    Some(if imm & insn::PROP_POST != 0 { Value::int(old) } else { new })
 }
 
 /// A typed variadic's list (`CollectVariadic`'s), each element plainly of
