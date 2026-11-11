@@ -599,6 +599,7 @@ impl FnBuilder<'_> {
             partials: self.partials,
             compile_diags: Vec::new(),
             insns: Vec::new(),
+            native: None,
         }
         .lowered()
     }

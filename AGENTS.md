@@ -9,6 +9,9 @@ live in the p8 APS (`p8runtime/aps`), cited as `APS N`.
 - `crates/p8-syntax`, `p8-compiler`, `p8-bytecode`, `p8-vmgen`, `p8-runtime`,
   `p8-interp`, `p8-pcre`, `p8-mysqlnd`, `p8-stubs`, `p8-ext-*`: the engine's
   internals.
+- `crates/p8-native`, `p8-native-gen`, `p8-native-abi`: native executables
+  (`p8 compile --native`). `p8-native` is the one crate allowed `unsafe`
+  (SECURITY.md).
 - `crates/php-cli`: the `p8` binary, the only command: php's command line
   (`p8 script.php`, `-r`, `-S`, ...), plus `p8 compile` and `p8 serve`.
 - `crates/php-test`: the `php-test` binary, which runs php-src's `.phpt`
@@ -23,9 +26,11 @@ live in the p8 APS (`p8runtime/aps`), cited as `APS N`.
 ```sh
 cargo build --release --locked -p php-cli --bin p8
 cargo build --release --locked -p php-test --bin php-test
-cargo test --release --locked -p php-cli --test scripts --test file_cache --test package --test serve --test server --test command
-cargo test --release --locked -p p8 --lib --test copies --test hash_counts --test release_counts --test slow_counts --test call_counts --test package --test api
-cargo test --release --locked -p p8-bytecode -p p8-vmgen -p p8-runtime -p p8-interp -p php-test
+cargo build --release --locked -p p8-native   # the native tests need libp8_native.a beside p8
+cargo test --release --locked -p php-cli --test scripts --test file_cache --test package --test serve --test server --test command --test native
+cargo test --release --locked -p php-cli --bin p8
+cargo test --release --locked -p p8 --lib --test copies --test hash_counts --test release_counts --test slow_counts --test call_counts --test package --test api --test safety
+cargo test --release --locked -p p8-bytecode -p p8-vmgen -p p8-runtime -p p8-interp -p p8-native-gen -p p8-native -p p8-native-abi -p php-test
 cargo clippy --locked --workspace --all-targets --all-features
 ```
 

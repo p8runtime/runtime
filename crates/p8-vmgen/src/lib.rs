@@ -23,6 +23,10 @@
 //! reordering operands in `ops.def` changes the layout and nothing else,
 //! and renaming one fails to compile until the handler agrees.
 //!
+//! - for `p8-native-gen` (`native`): the native backend's dispatch, one
+//!   arm per opcode that has a template, calling it with the operands
+//!   decoded as the handler's arm decodes them.
+//!
 //! The model (`Def`, `Spec`, `Slot`) is public so that a second generator
 //! (the AOT backend's templates) reads the same definitions and layouts:
 //! a specialisation's handler is an ordinary function of its decoded
@@ -34,16 +38,18 @@
 //! next entry.
 //!
 //! ```text
-//! hand <Name>
-//! op <NAME> <handler> cold=<method> <operand>=<KIND>|<KIND>...
+//! hand <Name> [native=<template>]
+//! op <NAME> <handler> cold=<method> [native=<template>] <operand>=<KIND>|<KIND>...
 //! drop <operand>=<KIND> <operand>=<KIND>...
 //! ```
 //!
 //! `hand` is an opcode whose arm is written by hand in the loop. `op` is a
 //! generated one: `handler` is the function in `p8-interp`'s `vmops`,
 //! `cold` the `Context` method its rare cases run (the instruction whole,
-//! out of line). A `drop` line removes the combinations of the `op` above
-//! it that have all the kinds it lists. The kinds:
+//! out of line). `native` names the native backend's template for the
+//! opcode (`p8-native-gen`'s `tpl`, see [`native`]); an opcode without
+//! one is never native code. A `drop` line removes the combinations of
+//! the `op` above it that have all the kinds it lists. The kinds:
 //!
 //! | kind | operand | field |
 //! |---|---|---|
@@ -115,6 +121,8 @@ pub struct Def {
     pub name: String,
     pub handler: String,
     pub cold: String,
+    /// The native backend's template (`native=`), if it has one.
+    pub native: Option<String>,
     pub doc: Vec<String>,
     pub operands: Vec<Operand>,
     /// Combinations not generated: each a list of (operand index, kind).
@@ -126,6 +134,8 @@ pub struct Def {
 pub struct Hand {
     pub name: String,
     pub doc: Vec<String>,
+    /// The native backend's template (`native=`), if it has one.
+    pub native: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -176,20 +186,33 @@ pub fn parse(text: &str) -> Result<Defs, String> {
         match words.next() {
             Some("hand") => {
                 let name = words.next().ok_or_else(|| err("hand: no name"))?.to_string();
-                defs.hands.push(Hand { name, doc: std::mem::take(&mut doc) });
+                let mut native = None;
+                for w in words {
+                    match w.split_once('=') {
+                        Some(("native", v)) if is_fn_name(v) => native = Some(v.to_string()),
+                        _ => return Err(err("hand: only native=<template> follows the name")),
+                    }
+                }
+                defs.hands.push(Hand { name, doc: std::mem::take(&mut doc), native });
             }
             Some("op") => {
                 let name = words.next().ok_or_else(|| err("op: no name"))?.to_string();
                 let handler = words.next().ok_or_else(|| err("op: no handler"))?.to_string();
                 let mut cold = None;
+                let mut native = None;
                 let mut operands = Vec::new();
                 for w in words {
                     let (k, v) = w.split_once('=').ok_or_else(|| err("expected name=KINDS"))?;
                     if k == "cold" {
-                        if !v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+                        if !is_fn_name(v) {
                             return Err(err("cold= names a method"));
                         }
                         cold = Some(v.to_string());
+                    } else if k == "native" {
+                        if !is_fn_name(v) {
+                            return Err(err("native= names a template"));
+                        }
+                        native = Some(v.to_string());
                     } else {
                         let kinds: Vec<String> = v.split('|').map(str::to_string).collect();
                         if kinds.iter().any(|k| k.is_empty() || !k.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')) {
@@ -206,7 +229,7 @@ pub fn parse(text: &str) -> Result<Defs, String> {
                     }
                 }
                 let cold = cold.ok_or_else(|| err("op: no cold="))?;
-                defs.ops.push(Def { name, handler, cold, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
+                defs.ops.push(Def { name, handler, cold, native, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
             }
             Some("drop") => {
                 let def = defs.ops.last_mut().ok_or_else(|| err("drop before any op"))?;
@@ -232,6 +255,11 @@ pub fn parse(text: &str) -> Result<Defs, String> {
         }
     }
     Ok(defs)
+}
+
+/// A `cold=` method's or a `native=` template's name: a Rust function's.
+fn is_fn_name(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Lay one combination's operands out (empty when they do not fit).
@@ -473,24 +501,55 @@ pub fn dispatch(defs: &Defs) -> String {
         "// Generated by p8-vmgen from ops.def: do not edit.\nmacro_rules! dispatch {\n    ($op:expr, $insn:expr, { $($hand:tt)* }) => {{\n        // (The generated arms' `insn`: a local of the caller's is not\n        // in scope in a macro's own text.)\n        let insn: &Insn = $insn;\n        match $op {\n            $($hand)*\n",
     );
     for d in &defs.ops {
-        let varies = d.operands.iter().any(|o| o.kinds.len() > 1);
         for sp in specs(d) {
-            let generics = if varies { format!("::<p8_bytecode::insn::spec::{}>", sp.name()) } else { String::new() };
-            // Every operand but a flag is a field (`$this` a 0), so all
-            // of a handler's specialisations take the same ones.
-            let fields: Vec<String> = d.operands.iter().zip(&sp.slots).filter(|(o, _)| !o.is_flag()).map(|(o, sl)| format!("{}: {}", o.name, decode(*sl))).collect();
-            let _ = writeln!(
-                s,
-                "            Op::{} => gen_arm!({}, vmops::{}{generics}(hx!(), p8_bytecode::insn::args::{} {{ {} }})),",
-                sp.name(),
-                d.cold,
-                d.handler,
-                camel(&d.handler),
-                fields.join(", ")
-            );
+            let _ = writeln!(s, "            Op::{} => gen_arm!({}, vmops::{}),", sp.name(), d.cold, call(&sp, &d.handler, "hx!()"));
         }
     }
     s.push_str("        }\n    }};\n}\n");
+    s
+}
+
+/// A specialisation's call of `func` (its handler, or its native
+/// template) with `first` and its operands decoded from `insn`:
+/// `f::<spec::P8_..>(first, args::F { .. })`. One function for both, so
+/// the interpreter and the native backend read an instruction the same way.
+fn call(sp: &Spec, func: &str, first: &str) -> String {
+    let d = sp.def;
+    let varies = d.operands.iter().any(|o| o.kinds.len() > 1);
+    let generics = if varies { format!("::<p8_bytecode::insn::spec::{}>", sp.name()) } else { String::new() };
+    // Every operand but a flag is a field (`$this` a 0), so all of a
+    // handler's specialisations take the same ones.
+    let fields: Vec<String> = d.operands.iter().zip(&sp.slots).filter(|(o, _)| !o.is_flag()).map(|(o, sl)| format!("{}: {}", o.name, decode(*sl))).collect();
+    format!("{func}{generics}({first}, p8_bytecode::insn::args::{} {{ {} }})", camel(&d.handler), fields.join(", "))
+}
+
+/// The native backend's dispatch (#385): a `native_dispatch!(e, insn)`
+/// macro whose one `match` calls, for each opcode with a `native=`
+/// template, `tpl::<template>`, and `tpl::none(e, insn)` for every other.
+/// A generated instruction's template takes its operands decoded as the
+/// interpreter's handler takes them, and the specialisation's kinds as
+/// its type (the same `call`); a hand-written one takes the `Insn`, whose
+/// layout its loop arm reads by hand. The templates are the native forms
+/// of the handlers' inline cases; what a template does not take, the
+/// interpreter runs (the native code hands the frame back at that pc), so
+/// the semantics of every other case stay one copy, the interpreter's.
+pub fn native(defs: &Defs) -> String {
+    let mut s = String::from(
+        "// Generated by p8-vmgen from ops.def: do not edit.\nmacro_rules! native_dispatch {\n    ($e:expr, $insn:expr) => {{\n        let insn: &Insn = $insn;\n        match insn.op {\n",
+    );
+    for h in &defs.hands {
+        if let Some(t) = &h.native {
+            let _ = writeln!(s, "            Op::{} => tpl::{t}($e, insn),", h.name);
+        }
+    }
+    for d in &defs.ops {
+        if let Some(t) = &d.native {
+            for sp in specs(d) {
+                let _ = writeln!(s, "            Op::{} => tpl::{},", sp.name(), call(&sp, t, "$e"));
+            }
+        }
+    }
+    s.push_str("            _ => tpl::none($e, insn),\n        }\n    }};\n}\n");
     s
 }
 
@@ -556,5 +615,23 @@ mod tests {
         // One match for both: no wildcard arm leading to a second one.
         assert_eq!(i.matches("match ").count(), 1);
         assert!(!i.contains("_ =>"));
+    }
+
+    /// The native backend reads the same definitions: a template per
+    /// opcode that names one, its operands decoded as the handler's.
+    #[test]
+    fn native_templates_come_from_the_same_definitions() {
+        let d = parse("hand Slow\nhand Jump native=jump\nop MOVE mov cold=x native=mov dst=REG src=REG|K\nop FREE free cold=x reg=REG").unwrap();
+        assert_eq!(d.hands[1].native.as_deref(), Some("jump"));
+        let n = native(&d);
+        assert!(n.contains("Op::Jump => tpl::jump($e, insn),"));
+        assert!(n.contains("Op::P8_MOVE_K => tpl::mov::<p8_bytecode::insn::spec::P8_MOVE_K>($e, p8_bytecode::insn::args::Mov { dst: u32::from(insn.a), src: insn.imm & 0xffff }),"));
+        // The interpreter's arm decodes the same operands the same way.
+        assert!(dispatch(&d).contains("vmops::mov::<p8_bytecode::insn::spec::P8_MOVE_K>(hx!(), p8_bytecode::insn::args::Mov { dst: u32::from(insn.a), src: insn.imm & 0xffff })"));
+        // Without a template: none, the interpreter's.
+        assert!(!n.contains("Op::Slow") && !n.contains("Op::P8_FREE"));
+        assert!(n.contains("_ => tpl::none($e, insn),"));
+        assert!(parse("hand Jump native=Jump").is_err());
+        assert!(parse("hand Jump cold=x").is_err());
     }
 }

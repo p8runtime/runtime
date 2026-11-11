@@ -5,6 +5,12 @@ edition = "2024"
 license = "MIT"
 description = "p8, the command: runs PHP as php does, and compiles and serves a project"
 
+# What p8 shares with the native executables it builds (p8-native's
+# runtime library runs scripts through it).
+[lib]
+name = "php_cli"
+path = "src/lib.rs"
+
 # The one command this workspace builds for users.
 [[bin]]
 name = "p8"
@@ -16,3 +22,13 @@ p8 = { path = "../p8" }
 # mimalloc (#319). Pinned exactly: an upgrade is a reviewed change, with the
 # allocator measurements rerun (bench/alloc-experiment).
 rusty_alloc-api = "=2.4.0"
+
+# The native backend (Cranelift), for `p8 compile --native` only: nothing
+# of it runs unless that option is given. Not in a wasm build (it makes
+# executables for the machine it runs on).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+p8-native-gen = { path = "../p8-native-gen", optional = true }
+
+[features]
+default = ["native"]
+native = ["dep:p8-native-gen"]
