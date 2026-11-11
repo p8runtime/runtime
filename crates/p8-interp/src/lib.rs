@@ -6512,6 +6512,10 @@ fn silent_str(v: &Value) -> bool {
 #[inline(never)]
 fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
     let (x, y) = (&w[a as usize], src(w, b));
+    if x.is_reference() || y.is_reference() {
+        let (x, y) = (x.deref(), y.deref());
+        return concat_refs(w, dst, x, y);
+    }
     if !silent_str(x) || !silent_str(y) || w[dst as usize].is_reference() {
         return false;
     }
@@ -6540,6 +6544,10 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
 #[inline(never)]
 fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     let y = &w[b as usize];
+    if y.is_reference() {
+        let y = y.deref();
+        return concat_refs(w, dst, x.clone(), y);
+    }
     if !silent_str(x) || !silent_str(y) || w[dst as usize].is_reference() {
         return false;
     }
@@ -6551,6 +6559,23 @@ fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     let mut bytes = PhpStr::scratch(ops::string_len_hint(x) + ops::string_len_hint(y));
     ops::push_string(&mut bytes, x, &mut diags);
     ops::push_string(&mut bytes, y, &mut diags);
+    w[dst as usize] = Value::str(PhpStr::from_scratch(bytes));
+    true
+}
+
+/// `concat` of operands one of which a reference held (a variable of an
+/// included file's global scope, a by-reference parameter): their values,
+/// read out of the cells, joined as `concat` joins two values.
+#[cold]
+#[inline(never)]
+fn concat_refs(w: &mut [Value], dst: Reg, x: Value, y: Value) -> bool {
+    if !silent_str(&x) || !silent_str(&y) || w[dst as usize].is_reference() {
+        return false;
+    }
+    let mut diags = Vec::new();
+    let mut bytes = PhpStr::scratch(ops::string_len_hint(&x) + ops::string_len_hint(&y));
+    ops::push_string(&mut bytes, &x, &mut diags);
+    ops::push_string(&mut bytes, &y, &mut diags);
     w[dst as usize] = Value::str(PhpStr::from_scratch(bytes));
     true
 }

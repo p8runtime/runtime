@@ -1024,7 +1024,8 @@ mod tests {
             // A path of two keys (registers 10, 11), its result freed next.
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: 3, dst: 6 },
             Instr::Free { reg: 6 },
-            // Five keys, a literal value: not inline. Keys then `[]`: inline.
+            // Five keys: not inline. A literal value (PATH_VAL_K, since
+            // #375's eighth batch), keys then `[]`: inline.
             Instr::AssignDim { var: 1, keys: 10, n: 5, append: false, val: 3, dst: 6 },
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: c(3), dst: 6 },
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: true, val: 3, dst: 6 },
@@ -1044,7 +1045,7 @@ mod tests {
         assert_eq!(at(0).unwrap(), Insn { op: Op::BindGlobal, a: 1, b: 0, c: 0, imm: 7 });
         assert_eq!(at(1).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_UNUSED });
         assert!(at(3).is_none());
-        assert!(at(4).is_none());
+        assert_eq!(at(4).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_VAL_K });
         assert_eq!(at(5).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_APPEND });
         assert_eq!(at(6).unwrap(), Insn { op: Op::AssignPropDim, a: 0, b: 22, c: 3, imm: 4 | 6 << 16 | 1 << 24 | PROP_PATH_THIS });
         assert_eq!(at(7).unwrap(), Insn { op: Op::AssignPropDim, a: 20, b: 22, c: 3, imm: 4 | 6 << 16 | 2 << 24 | PATH_UNUSED });

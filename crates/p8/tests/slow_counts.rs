@@ -599,7 +599,8 @@ fn a_first_call_sends_its_variable_in_the_loop() {
 /// class with `__get`), `$a['x'][$k] = true` through a by-reference
 /// parameter (a literal value), a string's offset through a reference and
 /// `empty()` of a reference's missing element, `(bool)` and `(array)` of
-/// an object, `global` in the main script, a variable sent undefined:
+/// an object, `global` in the main script, a variable sent undefined, `.`
+/// of a string a reference holds (an included file's globals):
 /// inline, or out of line on the arms' operands, not the detour.
 #[test]
 fn reference_paths_class_names_casts_and_globals_stay_in_the_loop() {
@@ -621,8 +622,10 @@ fn reference_paths_class_names_casts_and_globals_stay_in_the_loop() {
          function setk(array &$a, $k) { $a['x'][$k] = true; }
          function first(&$s) { return $s[0]; }
          function quiet(array &$r) { return empty($r['missing']) ? 1 : 0; }
-         function byval($x) { return $x === null ? 1 : 0; }
-         $gm = new M; $h = new H; $ho = new Holder; $arr = []; $str = 'hello'; $t = 0; $o = new M;
+         // (Declared where the code runs: its calls send their variables
+         // by SendVar, the callee not known when compiled.)
+         if ($n > 0) { function byval($x) { return $x === null ? 1 : 0; } }
+         $gm = new M; $h = new H; $ho = new Holder; $arr = []; $str = 'hello'; $t = 0; $o = new M; $gs = 'ab'; $rv = &$gs;
          for ($i = 0; $i < $n; $i++) {
              global $mainvar;
              $t += $h->apply(0) + g() + $ho->call('make', 1);
@@ -630,8 +633,9 @@ fn reference_paths_class_names_casts_and_globals_stay_in_the_loop() {
              $t += ord(first($str)) - 100 + quiet($arr);
              $t += ((bool) $o ? 1 : 0) + count((array) $o);
              $t += @byval($undefined);
+             $t += strlen($rv . '/x') + strlen('p/' . $rv) + strlen($rv . $rv);
          }
          echo $t, ' ', count($arr['x']), ' ', var_export($mainvar, true);",
     );
-    assert_eq!(out, "320 3 NULL");
+    assert_eq!(out, "560 3 NULL");
 }

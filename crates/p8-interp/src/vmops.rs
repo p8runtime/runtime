@@ -431,7 +431,10 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         let done = if slot.is_array() {
             set_int_elem(slot, k, &v, None)
         } else if let Some(cell) = slot.as_reference() {
-            match set_int_elem(&mut cell.borrow_mut(), k, &v, Some(&**cell)) {
+            // (The borrow ends with this statement: a match on it would
+            // hold it through the arms.)
+            let wrote = set_int_elem(&mut cell.borrow_mut(), k, &v, Some(&**cell));
+            match wrote {
                 // The element bound to the variable's own cell: written
                 // now that the borrow is over.
                 Some(Wrote::Owner) => {

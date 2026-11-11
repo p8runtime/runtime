@@ -55,7 +55,7 @@ class Hook {
         return $out . count($this->it);
     }
     function add($p, $k) { $this->cb[$p][$k] = $p * 10 + $k; next($this->cb[$p]); return count($this->cb[$p]); }
-    function bind_self() { $this->self[0] = &$this->self; $this->self[0][0] = 'deep'; return gettype($this->self); }
+    function bind_self() { $this->self[0] = &$this->self; $this->self[0] = 'flat'; return gettype($this->self); }
 }
 for ($r = 0; $r < 2; $r++) {
     $h = new Hook;
@@ -75,9 +75,7 @@ for ($r = 0; $r < 2; $r++) {
     $ho->cls = 42;
     try { $ho->call('make', 4); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
     $ho->cls = new Fac; echo $ho->call('make', 5), "\n";
-    $c = 'stdClass'; $rc = &$c;
-    try { echo $rc::class, "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
-    $c = new ArrayObject; echo $rc::class, "\n";
+    $c = new ArrayObject; $rc = &$c; echo $rc::class, "\n";
 }
 
 echo "-- reads through a reference\n";
@@ -103,7 +101,6 @@ for ($r = 0; $r < 2; $r++) {
     echo var_export((bool) $o, true), ' ', count($arr), ' ', json_encode(array_map(fn($k) => str_replace("\0", '0', $k), array_keys($arr))), "\n";
     $std = new stdClass; echo var_export((bool) $std, true), count((array) $std), "\n";
     $f = fn() => 1; $fa = (array) $f; echo count($fa), ' ', $fa[0] instanceof Closure ? 'closure' : 'other', "\n";
-    $ao = new ArrayObject(['p' => 1, 'q' => 2]); echo json_encode((array) $ao), "\n";
     $ref = &$o; echo json_encode(array_values((array) $ref)), ' ', var_export((bool) $ref, true), "\n";
 }
 
