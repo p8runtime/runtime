@@ -217,11 +217,35 @@ pub(crate) struct StackLimit {
     pub(crate) tried: Cell<usize>,
     /// The isolate's interrupt flag.
     pub(crate) stop: Arc<AtomicU64>,
+    /// memory_hard_limit_percent (-1: PHP's default, see `hard`).
+    pub(crate) percent: Cell<i64>,
+    /// The out-of-memory error was raised and its trace is still to be
+    /// made: that trace is charged against the hard limit (`hard`).
+    pub(crate) raised: Cell<bool>,
 }
 
 impl StackLimit {
-    pub(crate) fn new(stop: Arc<AtomicU64>, text: Option<&[u8]>) -> Self {
-        StackLimit { bytes: Cell::new(text.map_or(usize::MAX, limit_bytes)), tried: Cell::new(0), stop }
+    pub(crate) fn new(stop: Arc<AtomicU64>, text: Option<&[u8]>, percent: Option<&[u8]>) -> Self {
+        let percent = percent.map_or(-1, p8_runtime::ini::quantity);
+        StackLimit { bytes: Cell::new(text.map_or(usize::MAX, limit_bytes)), tried: Cell::new(0), stop, percent: Cell::new(percent), raised: Cell::new(false) }
+    }
+
+    /// The hard limit: what the request may take while it reports going
+    /// past memory_limit (the out-of-memory error's trace). PHP's
+    /// zend_mm_update_hard_limit: memory_hard_limit_percent of the limit,
+    /// by default (-1) twice it, or the limit and 1 GiB above 1 GiB.
+    pub(crate) fn hard(&self) -> usize {
+        const GIB: usize = 1 << 30;
+        let limit = self.bytes.get();
+        if limit == usize::MAX {
+            return usize::MAX;
+        }
+        let percent = match self.percent.get() {
+            -1 if limit > GIB => return limit.saturating_add(GIB),
+            -1 => 200,
+            p => p,
+        };
+        usize::try_from(limit as u128 * percent.max(0) as u128 / 100).unwrap_or(usize::MAX)
     }
 }
 

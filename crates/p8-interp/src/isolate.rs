@@ -326,7 +326,8 @@ impl Isolate {
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
-        let limit = StackLimit::new(Arc::clone(&stop), self.registry.ini_default(b"memory_limit").flatten());
+        let default = |name: &[u8]| self.registry.ini_default(name).flatten();
+        let limit = StackLimit::new(Arc::clone(&stop), default(b"memory_limit"), default(b"memory_hard_limit_percent"));
         let frames = Frames { limit: Some(Rc::new(limit)), ..Frames::default() };
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
@@ -392,6 +393,7 @@ impl Isolate {
             deprecated_made: Default::default(),
             pending_errors: Vec::new(),
             fatal_trace: Default::default(),
+            hard_limit: Default::default(),
             last_error: None,
             in_handler: false,
             arg_buf: Vec::new(),
@@ -572,6 +574,11 @@ pub struct Context<'i> {
     /// the request. Set where the Throw::Fatal is made, while its frames
     /// are still there.
     pub(crate) fatal_trace: std::cell::RefCell<Option<String>>,
+    /// The request went past the hard limit (`StackLimit::hard`): PHP's
+    /// line for it. PHP ends the process there (zend_mm_hard_limit_error,
+    /// `_exit(137)`); here the request ends at once and the host is told
+    /// (`Context::hard_limit_error`).
+    pub(crate) hard_limit: std::cell::RefCell<Option<String>>,
     /// error_get_last(): the last error that reached the default handler.
     pub(crate) last_error: Option<(i64, String, String, u32)>,
     /// Where output first reached the host (headers_sent()).

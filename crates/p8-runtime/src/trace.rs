@@ -18,6 +18,13 @@ fn text(v: &Value) -> String {
 
 /// getTraceAsString: one line per frame, then {main}.
 pub fn trace_string(trace: &Value) -> String {
+    trace_string_within(trace, usize::MAX).unwrap_or_default()
+}
+
+/// trace_string(), in at most `room` bytes of text: past them, the size
+/// the text grew to (an out-of-memory error's trace, made under the hard
+/// limit).
+pub fn trace_string_within(trace: &Value, room: usize) -> Result<String, usize> {
     let mut out = String::new();
     let mut n = 0;
     if let Some(frames) = trace.as_array() {
@@ -42,10 +49,16 @@ pub fn trace_string(trace: &Value) -> String {
             }
             out.push_str(")\n");
             n += 1;
+            if out.capacity() > room {
+                return Err(out.capacity());
+            }
         }
     }
     out.push_str(&format!("#{n} {{main}}"));
-    out
+    if out.capacity() > room {
+        return Err(out.capacity());
+    }
+    Ok(out)
 }
 
 /// An argument as a trace shows it (_build_trace_args): strings cut at
