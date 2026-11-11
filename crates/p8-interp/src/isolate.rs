@@ -251,11 +251,22 @@ pub(crate) struct Known {
     pub(crate) fiber: Sym,
 }
 
+/// The registers a new isolate's register file has room for.
+pub(crate) const FIRST_REGS: usize = 1024;
+
+/// The most registers a request leaves allocated for the next one: one
+/// page of PHP's VM stack (ZEND_VM_STACK_PAGE_SLOTS, Zend/zend_execute.c:183),
+/// which is what PHP starts every request with (zend_vm_stack_init,
+/// zend_execute.c:191, from init_executor, zend_execute_API.c:151) after
+/// freeing the last request's whole stack (zend_vm_stack_destroy,
+/// zend_execute.c:217, from shutdown_executor, zend_execute_API.c:500).
+pub(crate) const KEPT_REGS: usize = 16 * 1024;
+
 impl Isolate {
     pub fn new(registry: Arc<Registry>) -> Isolate {
         let names = Rc::new(p8_runtime::symbol::SymbolCache::new(registry.symbols()));
         Isolate {
-            regs: Vec::with_capacity(1024),
+            regs: Vec::with_capacity(FIRST_REGS),
             interrupt: Arc::new(AtomicU64::new(NO_INTERRUPT)),
             builtin_classes: builtin_classes::build(&names),
             on_demand: builtin_classes::on_demand(&registry),
@@ -328,9 +339,9 @@ impl Isolate {
         let stop = Arc::clone(&self.interrupt);
         let default = |name: &[u8]| self.registry.ini_default(name).flatten();
         let limit = StackLimit::new(Arc::clone(&stop), default(b"memory_limit"), default(b"memory_hard_limit_percent"));
-        // The register file an earlier request grew stays allocated: it is
-        // this request's storage from the start, charged as such (a warm
-        // isolate, a server's worker, must not count it as nothing).
+        // The register file an earlier request left (at most one VM stack
+        // page: `release_request`) is this request's storage from the
+        // start, charged as such.
         let reg_bytes = self.regs.capacity() * std::mem::size_of::<Value>();
         let frames = Frames { limit: Some(Rc::new(limit)), reg_bytes, ..Frames::default() };
         let classes = self.builtin_classes.clone();

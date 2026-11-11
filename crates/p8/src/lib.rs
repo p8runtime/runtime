@@ -372,6 +372,22 @@ impl Source {
     }
 }
 
+/// `Compiler::loading`'s entry for a file, taken out when its loader is done.
+struct Leave<'a> {
+    loading: &'a Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    file: &'a str,
+    gate: &'a Arc<Mutex<()>>,
+}
+
+impl Drop for Leave<'_> {
+    fn drop(&mut self) {
+        let mut loading = self.loading.lock().unwrap_or_else(|e| e.into_inner());
+        if loading.get(self.file).is_some_and(|g| Arc::ptr_eq(g, self.gate)) {
+            loading.remove(self.file);
+        }
+    }
+}
+
 impl Compiler {
     fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
         let Some(cache) = &self.cache else { return self.load(source, file).map(|(program, _)| program) };
@@ -382,14 +398,15 @@ impl Compiler {
         // it, the others wait for it and take what it kept (APS 13 §1:
         // built once per file version), while other files load alongside.
         let gate = Arc::clone(self.loading.lock().unwrap_or_else(|e| e.into_inner()).entry(file.to_string()).or_default());
-        let held = gate.lock().unwrap_or_else(|e| e.into_inner());
-        let loaded = match self.kept(cache, source, file) {
+        // The gate leaves the table when this call ends, a panic included,
+        // and only if it is still this call's (a later call may have put a
+        // new one there for a changed file).
+        let _leave = Leave { loading: &self.loading, file, gate: &gate };
+        let _held = gate.lock().unwrap_or_else(|e| e.into_inner());
+        match self.kept(cache, source, file) {
             Some(program) => Ok(program),
             None => self.load_and_keep(cache, source, file),
-        };
-        drop(held);
-        self.loading.lock().unwrap_or_else(|e| e.into_inner()).remove(file);
-        loaded
+        }
     }
 
     /// What `cache` keeps of `file` for this source, if it is still valid.

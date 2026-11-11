@@ -204,24 +204,34 @@ fn a_file_wanted_by_many_threads_at_once_is_compiled_once() {
     assert_eq!(by_thread.iter().sum::<usize>(), 1, "each thread counts what it compiled itself: {by_thread:?}");
 }
 
-/// A warm isolate (a server's worker) keeps the register file an earlier
-/// request grew; the next request holds that storage from its start, so
-/// memory_limit counts it (#452): the same small script that runs on a
-/// fresh isolate is past a 2M limit on one that kept megabytes.
+/// A small request with a call, under a 2M memory_limit.
+const SMALL: &str = "<?php ini_set('memory_limit', '2M'); function g($n) { return $n ? g($n - 1) + 1 : 0; } echo g(100);";
+
+/// After a deep request, the next one on the same isolate (a server's
+/// worker) starts as on a fresh one: the register file the deep request
+/// grew is let go at its end, as PHP frees a request's VM stack and starts
+/// the next with one page, so a small request under a small limit runs.
 #[test]
-fn a_warm_isolates_kept_registers_count_against_memory_limit() {
+fn a_deep_request_leaves_its_isolate_as_a_fresh_one() {
     let platform = platform();
-    let deep = "<?php ini_set('memory_limit', '-1'); function f($n) { return $n ? f($n - 1) + 1 : 0; } echo f(200000);";
-    // (The hard limit far above: the kept megabytes are past its default,
-    // twice 2M, as well, and the soft limit's error is the one read here.)
-    let small = "<?php ini_set('memory_hard_limit_percent', '100000'); ini_set('memory_limit', '2M'); function g($n) { return $n ? g($n - 1) + 1 : 0; } echo g(100);";
     let mut fresh = platform.new_isolate();
-    assert_eq!(request(&platform, &mut fresh, small), (0, "100".to_string()));
+    assert_eq!(request(&platform, &mut fresh, SMALL), (0, "100".to_string()));
     let mut warm = platform.new_isolate();
+    let deep = "<?php ini_set('memory_limit', '-1'); function f($n) { return $n ? f($n - 1) + 1 : 0; } echo f(200000);";
     assert_eq!(request(&platform, &mut warm, deep), (0, "200000".to_string()));
-    let (status, out) = request(&platform, &mut warm, small);
-    assert_eq!(status, 255, "{out}");
-    assert!(out.contains("Allowed memory size of 2097152 bytes exhausted"), "{out}");
+    assert_eq!(request(&platform, &mut warm, SMALL), (0, "100".to_string()));
+}
+
+/// A recursion that never ends, stopped by memory_limit (at the default,
+/// 128M), leaves its isolate able to run the next request.
+#[test]
+fn a_recursion_stopped_by_memory_limit_leaves_its_isolate_usable() {
+    let platform = platform();
+    let mut isolate = platform.new_isolate();
+    let forever = "<?php function forever($n) { return forever($n + 1) + 1; } echo forever(0);";
+    let (status, out) = request(&platform, &mut isolate, forever);
+    assert_ne!(status, 0, "{out}");
+    assert_eq!(request(&platform, &mut isolate, SMALL), (0, "100".to_string()));
 }
 
 #[test]
