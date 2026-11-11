@@ -181,6 +181,21 @@ hand AssignDimPath
 /// (bits 16..24), n (bits 24..28), PROP_PATH_THIS (`$this`, not a),
 /// PATH_APPEND, PATH_UNUSED
 hand AssignPropDim
+/// unset(a[k0]..[kn-1]), the n keys the registers from b (1 to PATH_KEYS)
+hand UnsetDim
+/// a[k0]..[kn-1]++ (and --, ++a[..]), the n keys the registers from b (1
+/// to PATH_KEYS), the value of the expression into c; imm: n, INC, POST
+/// (bits 8 and 9)
+hand DimIncDec
+/// a = (cast imm, `CastKind` as a number) b
+hand Cast
+/// a->(property site imm & 0xffff)++ (and --), the value of the expression
+/// into b; imm: INC and POST (bits 16 and 17), PROP_PATH_THIS (`$this`,
+/// not a)
+hand PropIncDec
+/// a = whether argument c of method site imm on the object in b is passed
+/// by reference
+hand MethodArgByRef
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

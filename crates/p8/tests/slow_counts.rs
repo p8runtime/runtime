@@ -158,3 +158,79 @@ fn static_call_sends_stay_in_the_loop() {
     // n = 20: 2 * (1 + .. + 20).
     assert_eq!(out, "420");
 }
+
+/// `unset($a[k1][k2])` and `$a[k]++` / `--$a[k1][k2]` through arrays, on
+/// a variable and through a reference (missing keys unset too): inline.
+#[test]
+fn unset_and_steps_of_dimensions_stay_in_the_loop() {
+    let out = flat(
+        "$a = ['x' => ['y' => 0]]; $c = [0, 0, 0, 0]; $g = ['k' => ['j' => 5]]; $r = &$g;
+         for ($i = 0; $i < $n; $i++) {
+             $a['x']['y']++;
+             $k = 'z' . ($i % 3);
+             $a['x'][$k] = $i;
+             unset($a['x'][$k]);
+             $c[$i % 4]++;
+             --$c[$i % 4];
+             $c[$i % 4]++;
+             $b = [1, 2, 3];
+             unset($b[1]);
+             unset($b[7]);
+             $r['k']['j']--;
+             unset($r['k']['gone']);
+         }
+         echo $a['x']['y'], ' ', count($a['x']), ' ', implode(',', $c), ' ', implode(',', array_keys($b)), ' ', $g['k']['j'];",
+    );
+    assert_eq!(out, "20 1 5,5,5,5 0,2 -15");
+}
+
+/// `(int)`, `(string)`, `(bool)`, `(float)`, `(array)` of strings, ints,
+/// floats, bools, null, arrays and a reference: inline.
+#[test]
+fn scalar_casts_stay_in_the_loop() {
+    let out = flat(
+        "$t = 0; $s = ''; $f = 0.0; $ref = 7; $rr = &$ref; $yes = true; $nul = null; $half = '0.5'; $list = [5, 6];
+         for ($i = 0; $i < $n; $i++) {
+             $t += (int) ('1' . ($i % 10)) + (int) ($i * 0.5) + (int) (bool) $i + (int) $rr;
+             $s = (string) $i . (string) ($i * 0.25) . (string) $yes . (string) $nul;
+             $f += (float) $i + (float) $half;
+             $u = (array) $i;
+             $e = (array) $nul;
+             $l = (array) $list;
+         }
+         echo $t, ' ', $s, ' ', $f, ' ', implode(',', $u), count($e), implode(',', $l);",
+    );
+    assert_eq!(out, "539 194.751 200 1905,6");
+}
+
+/// `$o->p++`, `--$o->p`, `$this->p++` on declared properties (untyped,
+/// typed int, private): inline once the name's cache entry is filled.
+#[test]
+fn steps_of_properties_stay_in_the_loop() {
+    let out = flat(
+        "class K {
+             public $n = 0; public int $t = 0; private $p = 0;
+             function bump() { $this->p++; ++$this->t; return $this->p; }
+         }
+         $o = new K;
+         for ($i = 0; $i < $n; $i++) { $o->n++; $o->bump(); --$o->n; $o->n++; }
+         echo $o->n, ' ', $o->t, ' ', $o->bump();",
+    );
+    assert_eq!(out, "20 20 21");
+}
+
+/// `$o->m($a['k'])` and `$o->m($o->p)` (whether the argument goes by
+/// reference asked as the call runs; by value here: a by-reference one's
+/// element or property reference is `step`'s): inline once the call
+/// site's cache knows the method.
+#[test]
+fn method_arguments_asked_by_reference_stay_in_the_loop() {
+    let out = flat(
+        "class M { function v($x) { return $x; } }
+         class P { public $p = 3; }
+         $m = new M; $a = ['k' => 2]; $o = new P; $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += $m->v($a['k']) + $m->v($o->p); }
+         echo $t;",
+    );
+    assert_eq!(out, "100");
+}

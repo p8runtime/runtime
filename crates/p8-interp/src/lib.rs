@@ -1885,6 +1885,7 @@ impl Context<'_> {
                     let derefed: Vec<Value> = w[key_range].iter().map(Value::deref).collect();
                     self.unset_path(&mut reg!(var), &derefed)?;
                 }
+                Instr::IterInit { src, .. } if Self::val(w, clo, src).is_object() => return self.iter_init_object(regs, clo, base, argc, at),
                 Instr::IterInit { src, iter, end } => {
                     let v = self.operand(w, clo, src);
                     if let Some(a) = v.as_array() {
@@ -1917,22 +1918,7 @@ impl Context<'_> {
                         }
                     }
                 }
-                Instr::IterNext { iter, val, key, has_key, end } if reg!(iter).is_object() => {
-                    let object = reg!(iter).cloned_object().expect("an object");
-                    let first = reg!(iter + 1).as_int() == Some(0);
-                    let next = self.iter_object_next(regs, &object, first)?;
-                    let w = &mut regs[base..base + func.nregs as usize];
-                    w[iter as usize + 1] = Value::int(1);
-                    match next {
-                        Some((v, k)) => {
-                            assign(w, val, v);
-                            if has_key {
-                                assign(w, key, k);
-                            }
-                        }
-                        None => pc = end as usize,
-                    }
-                }
+                Instr::IterNext { iter, .. } if reg!(iter).is_object() => return self.iter_next_object(regs, clo, base, argc, at),
                 Instr::IterNext { iter, val, key, has_key, end } => {
                     if !iter_next(w, iter, val, key, has_key) {
                         pc = end as usize;
@@ -3375,6 +3361,54 @@ impl Context<'_> {
             self.remember_method(&clo.methods[method as usize], o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `foreach` of an object (the IterInit at `at`, its source register
+    /// holding one): its iterator (`iter_object`: a generator or Iterator
+    /// rewound, an IteratorAggregate's, the visible properties) and
+    /// position 0, or past the loop when there is nothing to go through.
+    /// `step` runs it, and the loop runs it directly, with none of
+    /// `step`'s dispatch.
+    #[inline(never)]
+    fn iter_init_object(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
+        let Instr::IterInit { src, iter, end } = clo.code.code[at] else { unreachable!("an IterInit") };
+        let object = regs[base + src as usize].cloned_object().expect("an object");
+        let it = self.iter_object(regs, object)?;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        Ok(Next::Go(match it {
+            Some(v) => {
+                w[iter as usize] = v;
+                w[iter as usize + 1] = Value::int(0);
+                at + 1
+            }
+            None => end as usize,
+        }))
+    }
+
+    /// A `foreach` step over an object (the IterNext at `at`, its iterator
+    /// register holding a generator or an Iterator): moved on (after the
+    /// first) and asked (`iter_object_next`), the value (and key) assigned,
+    /// or past the loop at the end. `step` runs it, and the loop runs it
+    /// directly, with none of `step`'s dispatch.
+    #[inline(never)]
+    fn iter_next_object(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
+        let Instr::IterNext { iter, val, key, has_key, end } = clo.code.code[at] else { unreachable!("an IterNext") };
+        let (iter, nregs) = (iter as usize, clo.code.nregs as usize);
+        let object = regs[base + iter].cloned_object().expect("an object");
+        let first = regs[base + iter + 1].as_int() == Some(0);
+        let next = self.iter_object_next(regs, &object, first)?;
+        let w = &mut regs[base..base + nregs];
+        w[iter + 1] = Value::int(1);
+        Ok(Next::Go(match next {
+            Some((v, k)) => {
+                assign(w, val, v);
+                if has_key {
+                    assign(w, key, k);
+                }
+                at + 1
+            }
+            None => end as usize,
+        }))
     }
 
     #[cold]
