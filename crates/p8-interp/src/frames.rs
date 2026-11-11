@@ -227,13 +227,8 @@ impl Frames {
         self.slots[..self.len].first()
     }
 
-    /// The running frame, where there must be one (the loop's): one
-    /// bounds check, where `last()` slices and tests for none.
-    #[inline(always)]
-    pub(crate) fn top(&self) -> &Frame {
-        &self.slots[self.len - 1]
-    }
-
+    /// The running frame, where there must be one (a call's caller): one
+    /// bounds check, where `last_mut()` slices and tests for none.
     #[inline(always)]
     pub(crate) fn top_mut(&mut self) -> &mut Frame {
         let n = self.len - 1;

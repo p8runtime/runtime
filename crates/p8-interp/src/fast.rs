@@ -36,7 +36,7 @@ impl Context<'_> {
         // window are read once); the inner loop goes back here whenever
         // the frame changes or `slow` ran (it may have moved the registers).
         'frame: loop {
-            let mut top = self.frames.top();
+            let mut top = self.frames.last().expect("a frame");
             let mut clo = &*top.func;
             let base = top.base as usize;
             let mut code = &clo.code.insns[..];
@@ -290,7 +290,7 @@ impl Context<'_> {
                             if self.ids.has_pending() {
                                 pending_at!(pc, at);
                             }
-                            top = self.frames.top();
+                            top = self.frames.last().expect("a frame");
                             clo = &*top.func;
                             code = &clo.code.insns[..];
                         }
@@ -326,7 +326,7 @@ impl Context<'_> {
                         return Ok(());
                     }
                     leave(&mut self.frames, regs, value);
-                    pc = self.frames.top().pc as usize;
+                    pc = self.frames.last().expect("the caller's frame").pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
                     }
@@ -840,7 +840,7 @@ impl Context<'_> {
                                             if self.ids.has_pending() {
                                                 pending_at!(pc, pc - 1);
                                             }
-                                            top = self.frames.top();
+                                            top = self.frames.last().expect("a frame");
                                             clo = &*top.func;
                                             code = &clo.code.insns[..];
                                         }
@@ -996,7 +996,7 @@ impl Context<'_> {
                         let object = self.make_closure(&lambda, imm >> 16 != 0);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after a frameless call.)
-                        top = self.frames.top();
+                        top = self.frames.last().expect("a frame");
                         clo = &*top.func;
                         code = &clo.code.insns[..];
                         done!(put(&mut w[rx!(a)], Value::object(object)));
@@ -1238,9 +1238,12 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     let n = frames.len - 1;
     // A frame with an Extra (arguments past its parameters, variables
-    // named at run time, an included file's shared scope): out of line.
+    // named at run time, an included file's shared scope): one test.
     if frames.slots[n].extra.is_some() {
-        leave_extra(frames, regs);
+        give_back_shared(frames, regs);
+        if let Some(extra) = frames.slots[n].extra.take() {
+            crate::frames::recycle_extra(&mut frames.spare, extra);
+        }
     }
     frames.len = n;
     let frame = &mut frames.slots[n];
@@ -1269,19 +1272,6 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     if frame.ret != NO_RET {
         // (The Return arm tests pending after `leave`.)
         let _ = put(&mut regs[frame.ret as usize], value);
-    }
-}
-
-/// `leave`'s part for the top frame's Extra: its variable bindings back
-/// to the scope that included it, then the Extra kept for the next frame
-/// that needs one.
-#[cold]
-#[inline(never)]
-fn leave_extra(frames: &mut Frames, regs: &mut [Value]) {
-    give_back_shared(frames, regs);
-    let n = frames.len - 1;
-    if let Some(extra) = frames.slots[n].extra.take() {
-        crate::frames::recycle_extra(&mut frames.spare, extra);
     }
 }
 
