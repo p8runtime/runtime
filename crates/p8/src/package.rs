@@ -165,13 +165,15 @@ pub struct Package {
     index: Vec<u8>,
     check: PackageCheck,
     /// The native functions of the executable carrying the package, by
-    /// file (its record's number): each (function's index in the file's
-    /// `Program::functions`, native id). Empty without native code.
-    native: HashMap<u32, Vec<(u32, u32)>>,
+    /// file (its record's number) and function (its number in the file,
+    /// `serial::decode_functions`'s order): the native id. Empty without
+    /// native code.
+    native: HashMap<(u32, u32), u32>,
 }
 
 /// A function of a package, as the native backend compiles it: which
-/// file (its record's number) and which of the file's functions.
+/// file (its record's number) and which of the file's functions (its
+/// number in the file: functions, methods, closures alike).
 pub struct PackagedFunction {
     pub file: u32,
     pub index: u32,
@@ -250,24 +252,31 @@ impl Package {
     /// Give the functions `keys` names (by id: file, function) their
     /// native ids as each file is read (`program`).
     pub(crate) fn with_native(mut self, keys: &[(u32, u32)]) -> Package {
-        self.native.clear();
-        for (id, &(file, index)) in keys.iter().enumerate() {
-            self.native.entry(file).or_default().push((index, id as u32));
-        }
+        self.native = keys.iter().enumerate().map(|(id, &key)| (key, id as u32)).collect();
         self
     }
 
-    /// Every function of every file, read and checked (a file whose
-    /// program is damaged has none).
+    /// Every function of every file but the files' main code, read and
+    /// checked (a file whose program is damaged has none).
     pub(crate) fn functions(&self, symbols: &Symbols) -> Vec<PackagedFunction> {
         let mut out = Vec::new();
         for i in 0..self.count {
-            let Some(program) = self.record(i).and_then(|r| self.program(&r, symbols)) else { continue };
-            for (index, function) in program.functions.into_iter().enumerate() {
-                out.push(PackagedFunction { file: i as u32, index: index as u32, function });
+            let Some(r) = self.record(i) else { continue };
+            let Some(bytes) = self.checked(&r) else { continue };
+            let Some((program, all)) = p8_bytecode::serial::decode_functions(&bytes, symbols) else { continue };
+            for (index, function) in all.into_iter().enumerate() {
+                if !Arc::ptr_eq(&function, &program.main) {
+                    out.push(PackagedFunction { file: i as u32, index: index as u32, function });
+                }
             }
         }
         out
+    }
+
+    /// A file's program bytes, read and checked against their sum.
+    fn checked(&self, r: &Record) -> Option<Vec<u8>> {
+        let bytes = self.bytes.read(r.at, usize::try_from(r.len).ok()?)?;
+        (xxh3_128(&bytes).to_le_bytes() == r.sum).then_some(bytes)
     }
 
     /// How many files it holds.
@@ -317,19 +326,14 @@ impl Package {
 
     /// A file's program, read and checked.
     fn program(&self, r: &Record, symbols: &Symbols) -> Option<Program> {
-        let bytes = self.bytes.read(r.at, usize::try_from(r.len).ok()?)?;
-        if xxh3_128(&bytes).to_le_bytes() != r.sum {
-            return None;
+        let bytes = self.checked(r)?;
+        if self.native.is_empty() {
+            return p8_bytecode::serial::decode(&bytes, symbols);
         }
-        let mut program = p8_bytecode::serial::decode(&bytes, symbols)?;
-        // Native ids, given before the code is shared (APS 5: none of it
-        // changes after); a function already shared keeps none.
-        for &(index, id) in self.native.get(&r.number).map_or(&[][..], Vec::as_slice) {
-            if let Some(f) = program.functions.get_mut(index as usize).and_then(Arc::get_mut) {
-                f.native = Some(id);
-            }
-        }
-        Some(program)
+        // Native ids, given to each function as it is read, before anything
+        // shares it (APS 5: none of it changes after).
+        let file = r.number;
+        p8_bytecode::serial::decode_native(&bytes, symbols, &|n| self.native.get(&(file, n as u32)).copied())
     }
 
     /// The program packaged for `file`, and its source's hash, when

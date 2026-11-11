@@ -90,7 +90,7 @@ op CLASS_NAME class_name cold=step dst=REG src=REG
 hand Slow
 hand VerifyArgs native=verify_args
 /// a: the value returned
-hand VerifyReturn
+hand VerifyReturn native=verify_return
 /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
 hand Intrinsic
 /// pass b's variable c as argument imm >> 16 of method site imm & 0xffff on the object in a

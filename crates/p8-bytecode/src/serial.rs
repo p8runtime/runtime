@@ -64,7 +64,25 @@ pub fn encode_parts(program: &Program, symbols: &Symbols) -> (Vec<u8>, Vec<u8>) 
 /// The program `bytes` hold, its names interned in `symbols`; None when
 /// they are not exactly what [`encode`] writes.
 pub fn decode(bytes: &[u8], symbols: &Symbols) -> Option<Program> {
-    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), spans: Vec::new(), texts: Vec::new(), syms: Vec::new(), files: Vec::new(), depth: 0 };
+    decode_with(bytes, symbols, &|_| None).map(|(program, _)| program)
+}
+
+/// [`decode`], each function given the native id `native` has for its
+/// number in the file (#402): the native code of the executable the
+/// program was packaged into.
+pub fn decode_native(bytes: &[u8], symbols: &Symbols, native: &dyn Fn(usize) -> Option<u32>) -> Option<Program> {
+    decode_with(bytes, symbols, native).map(|(program, _)| program)
+}
+
+/// [`decode`], and every function of the program (its functions, methods,
+/// closures, the main code), each once, numbered as [`decode_native`]
+/// numbers them: what the native backend compiles.
+pub fn decode_functions(bytes: &[u8], symbols: &Symbols) -> Option<(Program, Vec<Arc<Function>>)> {
+    decode_with(bytes, symbols, &|_| None)
+}
+
+fn decode_with(bytes: &[u8], symbols: &Symbols, native: &dyn Fn(usize) -> Option<u32>) -> Option<(Program, Vec<Arc<Function>>)> {
+    let mut r = Reader { bytes, at: 0, symbols, functions: Vec::new(), classes: Vec::new(), spans: Vec::new(), texts: Vec::new(), syms: Vec::new(), files: Vec::new(), depth: 0, native };
     let n = r.count().ok()?;
     r.spans.reserve(n);
     for _ in 0..n {
@@ -76,7 +94,7 @@ pub fn decode(bytes: &[u8], symbols: &Symbols) -> Option<Program> {
     r.syms = vec![None; n];
     r.files = vec![None; n];
     let program = Program::get(&mut r).ok()?;
-    (r.at == bytes.len()).then_some(program)
+    (r.at == bytes.len()).then_some((program, r.functions))
 }
 
 /// The bytes did not hold what was expected.
@@ -139,6 +157,8 @@ struct Reader<'a> {
     syms: Vec<Option<Sym>>,
     files: Vec<Option<Arc<str>>>,
     depth: u32,
+    /// The native id of each function, by its number (`decode_native`).
+    native: &'a dyn Fn(usize) -> Option<u32>,
 }
 
 impl<'a> Reader<'a> {
@@ -450,7 +470,7 @@ impl Code for ClassRef {
 /// (tag 0), a later one its number (tag 1). Numbers are given when one is
 /// finished, so what it holds is numbered first, the same on both sides.
 macro_rules! shared {
-    ($t:ty, $table:ident) => {
+    ($t:ty, $table:ident, $made:expr) => {
         impl Code for Arc<$t> {
             fn put(&self, w: &mut Writer) {
                 let key = Arc::as_ptr(self) as usize;
@@ -467,7 +487,10 @@ macro_rules! shared {
             fn get(r: &mut Reader) -> Got<Self> {
                 match r.byte()? {
                     0 => {
-                        let x = Arc::new(r.nested(|r| <$t>::get(r))?);
+                        let mut x = r.nested(|r| <$t>::get(r))?;
+                        let made: fn(&Reader, &mut $t) = $made;
+                        made(r, &mut x);
+                        let x = Arc::new(x);
                         r.$table.push(Arc::clone(&x));
                         Ok(x)
                     }
@@ -481,8 +504,11 @@ macro_rules! shared {
         }
     };
 }
-shared!(Function, functions);
-shared!(ClassDef, classes);
+// A function is given its native id (`Function::native`) as it is read,
+// by its number in the file (the order `decode_functions` lists them in),
+// before anything shares it.
+shared!(Function, functions, |r, f| f.native = (r.native)(r.functions.len()));
+shared!(ClassDef, classes, |_, _| {});
 
 /// A struct as its fields in order. Reading names every field, so a field
 /// added to the struct and not here does not compile.

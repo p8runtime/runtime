@@ -25,9 +25,13 @@ pub fn write(platform: &p8::Platform, package: &Path, host: Option<&str>, exe: &
     let functions = platform.packaged_functions(package).map_err(|e| e.to_string())?;
     let bytes = std::fs::read(package).map_err(|e| e.to_string())?;
     let inputs: Vec<p8_native_gen::Input> = functions.iter().map(|f| p8_native_gen::Input { file: f.file, index: f.index, function: &f.function }).collect();
-    let built = p8_native_gen::build(&inputs, &bytes)?;
+    let built = p8_native_gen::build(&inputs, &bytes, platform.engine_key())?;
     p8_native_gen::link(&built.object, &host, Path::new(exe))?;
-    Ok(format!("{exe}: the package, with {} of its {} functions as machine code ({})", built.native.len(), functions.len(), built.names.join(", ")))
+    let mut names = built.names.iter().take(12).map(String::as_str).collect::<Vec<_>>().join(", ");
+    if built.names.len() > 12 {
+        names.push_str(", ...");
+    }
+    Ok(format!("{exe}: the package, with {} of its {} functions as machine code ({names})", built.native.len(), functions.len()))
 }
 
 /// Without the native backend (built with `--no-default-features`, or
@@ -43,6 +47,8 @@ pub struct Embedded {
     pub code: &'static dyn p8::native::NativeCode,
     pub keys: Vec<(u32, u32)>,
     pub package: Vec<u8>,
+    /// The build of p8 that made the machine code (its engine key).
+    pub engine: [u8; 16],
 }
 
 /// Run a native executable's script: `[-d name=value]... <file>
@@ -68,6 +74,12 @@ pub fn run(args: Vec<String>, native: Embedded) -> i32 {
         }
     };
     let platform = p8::Platform::new(&crate::extensions(false)).keep_compiled();
+    // Machine code from another build of p8 (another runtime library named
+    // by --native-host) is not run: its layouts and templates may differ.
+    if native.engine != platform.engine_key() {
+        eprintln!("this executable's machine code was made by another build of p8 than its runtime library");
+        return 70;
+    }
     let package = match platform.package_from_bytes(native.package, p8::PackageCheck::Hash) {
         Ok(p) => p,
         Err(e) => {

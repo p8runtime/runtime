@@ -47,7 +47,7 @@ mod request;
 /// ([`Platform::packaged_functions`]).
 pub mod native {
     pub use crate::package::PackagedFunction;
-    pub use p8_interp::native::{CallDone, Exit, NativeCode, NativeFrame};
+    pub use p8_interp::native::{Exit, Help, HelpOp, NativeCode, NativeFrame};
 }
 
 pub use p8_interp::{Host, InterruptHandle};
@@ -135,6 +135,14 @@ impl Platform {
     /// Platform: this engine with these extensions.
     fn engine(&self) -> [u8; 16] {
         package::engine(self.compiler.registry.modules())
+    }
+
+    /// This build of p8 with these extensions, as 16 bytes (what its
+    /// packages carry): a native executable's image is stamped with the
+    /// key of the p8 that made it, and its runtime library runs it only
+    /// when that is its own (#402).
+    pub fn engine_key(&self) -> [u8; 16] {
+        self.engine()
     }
 
     /// The package in the file at `path`, if this engine wrote it and it is

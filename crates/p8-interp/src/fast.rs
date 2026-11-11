@@ -35,7 +35,27 @@ impl Context<'_> {
         // Each round of this loop is one frame's run (the frame's code and
         // window are read once); the inner loop goes back here whenever
         // the frame changes or `slow` ran (it may have moved the registers).
+        // How deep the frame native code just handed back is (native.rs):
+        // the next round of the frame loop runs that frame here, even at
+        // pc 0 (another frame, a callee it left pushed, is entered).
+        let mut handed_back = 0;
         'frame: loop {
+            // A frame starting at its first instruction whose code the
+            // executable has machine code for (native.rs) runs that, until
+            // it hands the frame back: every call path comes here.
+            if pc == 0
+                && handed_back != self.frames.len()
+                && let Some(id) = self.frames.last().expect("a frame").func.code.native
+            {
+                let depth = self.frames.len();
+                match self.native_entry(regs, id)? {
+                    Flow::Go(next) => pc = next,
+                    Flow::Done => return Ok(()),
+                }
+                handed_back = depth;
+                continue 'frame;
+            }
+            handed_back = 0;
             let mut top = self.frames.last().expect("a frame");
             let mut clo = &*top.func;
             let base = top.base as usize;
@@ -851,16 +871,9 @@ impl Context<'_> {
                                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     slow!();
                                 }
-                                // Code the executable has machine code for
-                                // (native.rs) runs that first; it hands the
-                                // frame back at a pc.
-                                let native = target.code.native;
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
-                                if let Some(id) = native {
-                                    pc = self.native_entry(regs, id)?;
-                                }
                                 continue 'frame;
                             }
                             Some(&Callee::Builtin(i)) => {

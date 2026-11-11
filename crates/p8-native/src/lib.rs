@@ -9,11 +9,27 @@
 //! `p8 compile [dir] --native <exe>` links it with an object file
 //! Cranelift wrote (`p8-native-gen`), which holds the native functions,
 //! the image (`p8_native_abi::image`: their table, which package function
-//! each is, the package's bytes) and a C `main` that calls [`p8_native_main`]
-//! with the image. Everything else runs in safe Rust: the CLI's run of the
-//! script (`php_cli::native::run`), and the interpreter, which enters a
-//! native function through [`Code`] (`p8::native::NativeCode`) and runs
+//! each is, the package's bytes, the build of p8 that made it) and a C
+//! `main` that calls [`p8_native_main`] with the image. Everything else
+//! runs in safe Rust: the CLI's run of the script (`php_cli::native::run`,
+//! which refuses an image another build of p8 made), and the interpreter,
+//! which enters a native function through [`Code`] (`p8::native::NativeCode`),
+//! runs the instructions the native code asks it to ([`p8n_help`]) and
 //! whatever the native code hands back (`p8-interp`'s `native.rs`).
+//!
+//! # The exported functions: two
+//!
+//! - [`p8_native_main`], the entry, called once by the generated `main`.
+//! - [`p8n_help`], the one helper native code calls: it has the
+//!   interpreter run the instruction at a pc of the frame the native code
+//!   runs on (an operation code: a call, or any instruction as the loop
+//!   runs one out of line), and says where the frame goes on. It takes the
+//!   ctx and two numbers, never a pointer to a value, and gives back two
+//!   numbers. It is `extern "C"`: a panic under it aborts the process and
+//!   never unwinds through generated frames. A call it makes may enter
+//!   native code again, nested, only below the stack limit nested runs
+//!   keep to (#444) and outside a fiber; else the callee's frame is left
+//!   to the interpreter's own loop, and the native frame with it.
 //!
 //! # The `unsafe`, all of it, and who guarantees what it assumes
 //!
@@ -30,22 +46,22 @@
 //!    u64`, the address from the image's table, by an id the interpreter
 //!    got from the same image's keys (an id at or past the table's end is
 //!    refused before the call). It assumes what the code generator
-//!    guarantees: the function reads `Ctx` at the `CTX_*` offsets only,
-//!    and touches only the frame's window (registers 0..256 from
-//!    `ctx.regs`, which `NativeFrame::window` gave it whole), and only
-//!    plain values (tags below `tag::FIRST_HEAP`: it never copies, drops
-//!    or writes over a value holding memory: such a value fails its
-//!    guards and the frame is handed back), and calls nothing but
-//!    [`p8n_call`]. The words it writes are a valid `Value` of the tag it
+//!    guarantees: the function reads `Ctx` at the `CTX_*` offsets only;
+//!    touches only the frame's window (registers 0..256 from `ctx.regs`,
+//!    which `NativeFrame::window` gave it whole), and only plain values
+//!    (tags below `tag::FIRST_HEAP`: it never copies, drops or writes over
+//!    a value holding memory, nor reads one's memory: the interpreter does
+//!    all of that, through the helper); reads `ctx.regs` again after every
+//!    helper call (it holds no pointer across one); and calls nothing but
+//!    [`p8n_help`]. The words it writes are a valid `Value` of the tag it
 //!    writes: checked for every tag by [`check_layout`] at startup.
-//! 4. [`p8n_call`] turns the `*mut Ctx` back into `&mut Ctx`: the pointer
+//! 4. [`p8n_help`] turns the `*mut Ctx` back into `&mut Ctx`: the pointer
 //!    `run` passed, which the native code passes on unchanged, while `run`
 //!    is still on the stack below it (so it is live and nothing else
 //!    holds it), and `Ctx::frame` back into the `NativeFrame` `run` was
-//!    given. After the call it stores the window's address again (the
-//!    call may have moved the register file), which the native code
-//!    reloads after every call: so no pointer it holds outlives a change
-//!    by Rust to what it points at.
+//!    given. After the interpreter ran, it stores the window's address
+//!    again (what ran may have moved the register file): so no pointer the
+//!    native code holds outlives a change by Rust to what it points at.
 //! 5. [`check_layout`] reads and builds values as their two words, for
 //!    the plain tags only, to confirm the layout `p8_native_abi` and the
 //!    code generator assume is the one this build of Rust gave `Value`.
@@ -65,8 +81,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
-use p8::native::{CallDone, Exit, NativeCode, NativeFrame};
-use p8_native_abi::{self as abi, call, exit, image, tag};
+use p8::native::{Exit, Help, HelpOp, NativeCode, NativeFrame};
+use p8_native_abi::{self as abi, exit, help, image, op, tag};
 use p8_runtime::value::Value;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::{self, offset_of};
@@ -77,7 +93,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 /// What native code is passed: the frame's window, the interrupt word,
-/// and (opaque to it) the frame, for [`p8n_call`].
+/// and (opaque to it) the frame, for [`p8n_help`].
 #[repr(C)]
 pub struct Ctx {
     regs: *mut Value,
@@ -105,6 +121,7 @@ pub struct Image {
     keys: *const [u32; 2],
     package: *const u8,
     package_len: u64,
+    engine: [u8; 16],
 }
 
 const _: () = {
@@ -115,6 +132,7 @@ const _: () = {
     assert!(offset_of!(Image, keys) == image::KEYS as usize);
     assert!(offset_of!(Image, package) == image::PACKAGE as usize);
     assert!(offset_of!(Image, package_len) == image::PACKAGE_LEN as usize);
+    assert!(offset_of!(Image, engine) == image::ENGINE as usize);
     assert!(mem::size_of::<Image>() == image::SIZE);
     assert!(mem::size_of::<NativeFn>() == 8);
 };
@@ -126,9 +144,15 @@ pub struct Code {
     entries: AtomicU64,
     /// Frames handed back at a return.
     returns: AtomicU64,
-    /// Frames handed back at an instruction the code did not take (a
-    /// guard: the interpreter ran it, and the rest of the frame).
+    /// Frames handed back at an instruction (a pc past the code, which
+    /// the generated code never gives: 0 in every run).
     guards: AtomicU64,
+    /// Instructions the interpreter ran for the native code (helps).
+    helps: AtomicU64,
+    /// Frames left to the interpreter by an instruction it ran (an
+    /// exception out of them, the end of the run, a fiber suspended, a
+    /// callee not run nested past the stack limit or in a fiber).
+    lefts: AtomicU64,
 }
 
 impl NativeCode for Code {
@@ -147,19 +171,14 @@ impl NativeCode for Code {
         // SAFETY: (3): `f` is the image's function `id` (checked in range
         // above), of the declared signature; `ctx` lives across the call.
         let r = unsafe { f(&mut ctx) };
-        let pc = r as u32;
-        match r >> 32 {
-            exit::RETURN => {
-                self.returns.fetch_add(1, Ordering::Relaxed);
-                Exit::At(pc)
-            }
-            exit::PENDING => Exit::Pending(pc),
-            exit::THREW => Exit::Threw(pc),
-            _ => {
-                self.guards.fetch_add(1, Ordering::Relaxed);
-                Exit::At(pc)
-            }
-        }
+        let (reason, pc) = (r >> 32, r as u32);
+        let counter = match reason {
+            exit::RETURN => &self.returns,
+            exit::LEFT => &self.lefts,
+            _ => &self.guards,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        if reason == exit::LEFT { Exit::Left } else { Exit::At(pc) }
     }
 }
 
@@ -174,28 +193,40 @@ unsafe fn frame_of<'c>(ctx: &'c mut Ctx) -> &'c mut NativeFrame<'c, 'c> {
     unsafe { &mut *ctx.frame.cast::<NativeFrame<'c, 'c>>() }
 }
 
-/// The call helper (`p8_native_abi::CALL`): the `Op::Call` at `pc` of
-/// the frame `ctx` runs on, run whole by the interpreter.
+/// The helper (`p8_native_abi::HELP`): the interpreter runs the
+/// instruction at `pc` of the frame `ctx` runs on (`what`, one of
+/// `p8_native_abi::op`); returns `status << 32 | next` (`p8_native_abi::help`).
 ///
 /// # Safety
 /// `ctx` is the pointer [`Code::run`] passed the native function (4).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn p8n_call(ctx: *mut Ctx, pc: u32) -> u32 {
+pub unsafe extern "C" fn p8n_help(ctx: *mut Ctx, what: u32, pc: u32) -> u64 {
     // SAFETY: (4): the native code passes on the `ctx` `run` gave it,
     // while `run` is on the stack below.
     let ctx = unsafe { &mut *ctx };
     // SAFETY: (4): `ctx.frame` is `run`'s frame.
     let frame = unsafe { frame_of(ctx) };
-    let done = frame.call(pc);
-    let regs = frame.window().as_mut_ptr();
-    ctx.regs = regs;
-    match done {
-        CallDone::Done => call::DONE,
-        CallDone::NotTaken => call::NOT_TAKEN,
-        CallDone::Pending => call::PENDING,
-        CallDone::Threw => call::THREW,
+    let what = if what == op::CALL { HelpOp::Call } else { HelpOp::Step };
+    let helped = frame.help(what, pc);
+    // The register file may have moved: the native code reads this again
+    // (only where it goes on in the frame: a frame it left may be gone,
+    // a fiber's frames switched away).
+    if helped != Help::Left {
+        let regs = frame.window().as_mut_ptr();
+        ctx.regs = regs;
     }
+    let code = match helped {
+        Help::Next(next) => help::NEXT << 32 | u64::from(next),
+        Help::Left => help::LEFT << 32,
+    };
+    if let Some(code) = CODE.get() {
+        code.helps.fetch_add(1, Ordering::Relaxed);
+    }
+    code
 }
+
+/// The process's native code, for the helper's count.
+static CODE: std::sync::OnceLock<&'static Code> = std::sync::OnceLock::new();
 
 /// A value's two words, as native code reads them.
 fn words(v: &Value) -> [u64; 2] {
@@ -266,16 +297,21 @@ pub unsafe extern "C" fn p8_native_main(argc: c_int, argv: *const *const c_char,
     if counts {
         args.remove(0);
     }
-    let code: &'static Code = Box::leak(Box::new(Code { functions, entries: AtomicU64::new(0), returns: AtomicU64::new(0), guards: AtomicU64::new(0) }));
-    let native = php_cli::native::Embedded { code, keys: keys.iter().map(|k| (k[0], k[1])).collect(), package: package.to_vec() };
+    let zero = || AtomicU64::new(0);
+    let code: &'static Code = Box::leak(Box::new(Code { functions, entries: zero(), returns: zero(), guards: zero(), helps: zero(), lefts: zero() }));
+    let _ = CODE.set(code);
+    let native = php_cli::native::Embedded { code, keys: keys.iter().map(|k| (k[0], k[1])).collect(), package: package.to_vec(), engine: image.engine };
     let status = php_cli::native::run(args, native);
     if counts {
+        let n = |c: &AtomicU64| c.load(Ordering::Relaxed);
         eprintln!(
-            "p8 native: {} functions, {} entries, {} returns, {} handed back at a guard",
+            "p8 native: {} functions, {} entries, {} returns, {} handed back at a guard, {} left, {} instructions run by the interpreter",
             functions.len(),
-            code.entries.load(Ordering::Relaxed),
-            code.returns.load(Ordering::Relaxed),
-            code.guards.load(Ordering::Relaxed)
+            n(&code.entries),
+            n(&code.returns),
+            n(&code.guards),
+            n(&code.lefts),
+            n(&code.helps)
         );
     }
     status
