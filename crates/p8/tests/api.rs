@@ -204,6 +204,24 @@ fn a_file_wanted_by_many_threads_at_once_is_compiled_once() {
     assert_eq!(by_thread.iter().sum::<usize>(), 1, "each thread counts what it compiled itself: {by_thread:?}");
 }
 
+/// A warm isolate (a server's worker) keeps the register file an earlier
+/// request grew; the next request holds that storage from its start, so
+/// memory_limit counts it (#452): the same small script that runs on a
+/// fresh isolate is past a 2M limit on one that kept megabytes.
+#[test]
+fn a_warm_isolates_kept_registers_count_against_memory_limit() {
+    let platform = platform();
+    let deep = "<?php ini_set('memory_limit', '-1'); function f($n) { return $n ? f($n - 1) + 1 : 0; } echo f(200000);";
+    let small = "<?php ini_set('memory_limit', '2M'); function g($n) { return $n ? g($n - 1) + 1 : 0; } echo g(100);";
+    let mut fresh = platform.new_isolate();
+    assert_eq!(request(&platform, &mut fresh, small), (0, "100".to_string()));
+    let mut warm = platform.new_isolate();
+    assert_eq!(request(&platform, &mut warm, deep), (0, "200000".to_string()));
+    let (status, out) = request(&platform, &mut warm, small);
+    assert_eq!(status, 255, "{out}");
+    assert!(out.contains("Allowed memory size of 2097152 bytes exhausted"), "{out}");
+}
+
 #[test]
 fn what_a_request_resolves_is_not_cached_for_the_next() {
     // The same compiled script, two requests: each defines C itself, so

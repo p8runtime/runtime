@@ -327,7 +327,11 @@ impl Isolate {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
         let limit = StackLimit::new(Arc::clone(&stop), self.registry.ini_default(b"memory_limit").flatten());
-        let frames = Frames { limit: Some(Rc::new(limit)), ..Frames::default() };
+        // The register file an earlier request grew stays allocated: it is
+        // this request's storage from the start, charged as such (a warm
+        // isolate, a server's worker, must not count it as nothing).
+        let reg_bytes = self.regs.capacity() * std::mem::size_of::<Value>();
+        let frames = Frames { limit: Some(Rc::new(limit)), reg_bytes, ..Frames::default() };
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
         let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
