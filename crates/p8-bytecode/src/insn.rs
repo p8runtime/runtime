@@ -174,6 +174,9 @@ pub const PATH_KEYS: u8 = 4;
 /// (none is written, and that Free is skipped).
 pub const PATH_UNUSED: u32 = 1 << 31;
 
+/// AssignDimPath's `imm` bit: the value is constant c (else register c).
+pub const PATH_VAL_K: u32 = 1 << 16;
+
 /// AssignPropDim's `imm` bit: the object is the frame's `$this`.
 pub const PROP_PATH_THIS: u32 = 1 << 29;
 
@@ -487,7 +490,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         }
         Instr::ClassConst { dst, class, name } => match dynamic_class_name(classes, class, name, consts) {
             // `$obj::class`.
-            Some(src) => enc::class_name(enc::ClassName { dst: o(dst)?, src: o(src)? }),
+            Some(src) => i(Op::ClassName, dst, src, 0, u32::from(class)),
             None => {
                 let site = Opnd::Imm(prop_site(name, nconsts)?);
                 enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
@@ -627,11 +630,17 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::SendVarStatic { class, method, n, arg, var } => i(Op::SendVarStatic, arg, var, Reg::from(n), u32::from(method) | u32::from(class) << 16),
         Instr::BindGlobal { var, name } if usize::from(name) < nconsts => i(Op::BindGlobal, var, 0, 0, u32::from(name)),
         // Two keys or more, or one and a `[]` after it (`ASSIGN_DIM` and
-        // `APPEND_DIM` are the others). (Keys and value registers: the
-        // keys a block in the window.)
-        Instr::AssignDim { var, keys, n: n @ 1..=PATH_KEYS, append, val, dst } if (n >= 2 || append) && const_index(keys).is_none() && const_index(val).is_none() => {
+        // `APPEND_DIM` are the others). (Keys registers, a block in the
+        // window; the value a register, or a constant of the first 256:
+        // PATH_VAL_K.)
+        Instr::AssignDim { var, keys, n: n @ 1..=PATH_KEYS, append, val, dst } if (n >= 2 || append) && const_index(keys).is_none() => {
             block(keys, n)?;
-            i(Op::AssignDimPath, var, keys, val, u32::from(n) | u32::from(r(dst)?) << 8 | path_flags(code, pc, dst, append))
+            let flags = u32::from(n) | u32::from(r(dst)?) << 8 | path_flags(code, pc, dst, append);
+            if const_index(val).is_none() {
+                return i(Op::AssignDimPath, var, keys, val, flags);
+            }
+            let kk = k(val).filter(|&kk| kk < 1 << 8)?;
+            i(Op::AssignDimPath, var, keys, kk as Reg, flags | PATH_VAL_K)
         }
         // `unset($a[k0]..)` and `$a[k0]..++`: the keys a block of
         // registers in the window.
@@ -998,7 +1007,7 @@ mod tests {
         let arg_vars = [vec![(0, 1)], vec![(0, 300)]];
         let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &arg_vars);
         assert_eq!(at(0).unwrap().op, Op::P8_FETCH_DIM_IS_KSTR);
-        assert_eq!(at(1).unwrap(), Insn { op: Op::P8_CLASS_NAME, a: 5, b: 3, c: 0, imm: 0 });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::ClassName, a: 5, b: 3, c: 0, imm: 0 });
         assert!(at(2).is_none());
         assert_eq!(at(3).unwrap(), Insn { op: Op::MakeClosure, a: 5, b: 0, c: 0, imm: 2 | 1 << 16 });
         assert_eq!(at(4).unwrap().op, Op::CollectVariadic);
@@ -1186,6 +1195,28 @@ mod tests {
         assert_eq!(at(11).unwrap(), Insn { op: Op::Include, a: 6, b: 3, c: 0, imm: 3 });
         assert_eq!(at(12).unwrap(), Insn { op: Op::UnsetVar, a: 4, b: 0, c: 0, imm: 0 });
         assert_eq!(at(13).unwrap(), Insn { op: Op::DeclareClass, a: 0, b: 0, c: 0, imm: 9 });
+    }
+
+    #[test]
+    fn the_eighth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // A path write of a literal value (one of the first 256
+            // constants), and of one past them.
+            Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: c(8), dst: 6 },
+            Instr::AssignDim { var: 1, keys: 10, n: 1, append: true, val: c(7), dst: 6 },
+            Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: c(300), dst: 6 },
+            // `$x::class`, class reference 1 a class in register 3.
+            Instr::ClassConst { dst: 5, class: 1, name: c(11) },
+        ];
+        let mut consts = consts();
+        consts[11] = Frozen::Str("class".into());
+        let classes = [ClassRef::Static, ClassRef::Dynamic(3)];
+        let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &[]);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 8, imm: 2 | 6 << 8 | PATH_VAL_K });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 7, imm: 1 | 6 << 8 | PATH_VAL_K | PATH_APPEND });
+        assert!(at(2).is_none());
+        assert_eq!(at(3).unwrap(), Insn { op: Op::ClassName, a: 5, b: 3, c: 0, imm: 1 });
     }
 
     #[test]

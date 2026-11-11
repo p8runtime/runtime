@@ -18,7 +18,7 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{Src, WINDOW, clear, copied, elem, is_owner, is_set, isset_elem, owner_write, put, put_var, read_ref, set_int_elem, test, truth, write_ref};
+use crate::fast::{Src, WINDOW, Wrote, clear, copied, is_owner, is_set, isset_elem, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
 use crate::sites::{Plain, cached_prop, dynamic_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
@@ -261,13 +261,41 @@ fn ref_elem(v: &Value) -> Option<Value> {
 /// byte (one of the shared one-byte strings), counted from the end when
 /// negative (out of range: null when `quiet`, else None, the warning); a
 /// quiet read (`??`, `empty`) of null, an undefined variable or a scalar
-/// is null, silently, as ZEND_FETCH_DIM_IS gives; an array through a
-/// reference is `elem`'s. None (cold) for the rest: a string's string key
+/// is null, silently, as ZEND_FETCH_DIM_IS gives. Through a reference the
+/// same of what its cell holds, and an array's element (a missing one
+/// null when `quiet`). None (cold) for the rest: a string's string key
 /// (`kstr`: a literal one), an object, a warning.
 #[cold]
 #[inline(never)]
 fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Value> {
     let c = &w[usize::from(arr)];
+    let Some(cell) = c.as_reference() else { return dim_in(c, w, key, kstr, quiet) };
+    let held = cell.borrow();
+    if let Some(a) = held.as_array() {
+        let k = crate::fast::src(w, key);
+        let e = if let Some(i) = k.as_int() {
+            a.get_int(i)
+        } else if let Some(s) = k.as_str() {
+            a.get_str(s)
+        } else {
+            return None;
+        };
+        return match e {
+            // (An element bound by reference, to this cell too: read, a
+            // second shared borrow.)
+            Some(v) => match v.as_reference() {
+                Some(e) => read_ref(e),
+                None => Some(v.clone()),
+            },
+            None if quiet => Some(Value::NULL),
+            None => None,
+        };
+    }
+    dim_in(&held, w, key, kstr, quiet)
+}
+
+/// `dim_of` of a value that is not a reference.
+fn dim_in(c: &Value, w: &[Value], key: Src, kstr: bool, quiet: bool) -> Option<Value> {
     if let Some(s) = c.as_str() {
         let i = if kstr { None } else { crate::fast::src(w, key).as_int() }?;
         let at = if i < 0 { i.wrapping_add(s.len() as i64) } else { i };
@@ -280,31 +308,7 @@ fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Va
     if quiet && (c.is_null_or_undef() || c.is_bool() || c.is_int() || c.is_float()) {
         return Some(Value::NULL);
     }
-    elem(w, arr, key)
-}
-
-/// `$x::class` of an object (through a reference too: out of line): its
-/// class's name (shared, as PHP's interned name). A string naming a
-/// class, anything else: cold.
-#[inline(always)]
-pub(crate) fn class_name(hx: Hx, args::ClassName { dst, src }: args::ClassName) -> Ctl {
-    let name = match hx.w[r(src)].as_object() {
-        Some(o) => Value::str(o.class.name.clone()),
-        None => match ref_class_name(&hx.w[r(src)]) {
-            Some(name) => name,
-            None => return Ctl::Cold,
-        },
-    };
-    Ctl::Next(put(&mut hx.w[r(dst)], name))
-}
-
-/// `$x::class` of an object a reference holds (`global $o; $o::class`).
-#[cold]
-#[inline(never)]
-fn ref_class_name(v: &Value) -> Option<Value> {
-    let cell = v.as_reference()?;
-    let held = cell.borrow();
-    Some(Value::str(held.as_object()?.class.name.clone()))
+    None
 }
 
 /// `isset($a[k])` on an array (or a reference to one), k an int or a
@@ -358,28 +362,16 @@ fn isset_scalar(c: &Value, key: &Value) -> Option<bool> {
     Some(if i < 0 { -i <= len } else { i < len })
 }
 
-/// `$a[k] = v`, `$a` an array (or, for an int key, a reference to one): a
-/// string key with any defined, non-reference value; an int key with a
-/// plain value. The element replaced may have been an object's last
-/// holder: tested as for any write. USED: the value to `dst` too; UNUSED:
-/// nothing there, and the Free after is skipped.
+/// `$a[k] = v`, `$a` an array or a reference to one, the key an int or a
+/// string, the value any defined one: one lookup of the key. An element
+/// bound by reference gets the value in its cell; one bound to `$a`'s own
+/// cell (`$a[k] = &$a`) makes the cell the value, as PHP's assignment
+/// through that reference does, after the array's borrow is over. The
+/// element replaced may have been an object's last holder: tested as for
+/// any write. USED: the value to `dst` too; UNUSED: nothing there, and the
+/// Free after is skipped.
 #[inline(always)]
 pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key, val, dst }: args::AssignDim) -> Ctl {
-    // A variable bound by reference whose element there is bound to the
-    // variable's own cell (`$a[k] = &$a`): the value replaces the array, as
-    // PHP's assignment through that reference does (`owner_write`).
-    if let Some(cell) = hx.w[r(var)].as_reference().map(Rc::clone)
-        && let Some(v) = copied(hx.v::<S::Val>(val))
-        && owner_write(&cell, &hx.v::<S::Key>(key).clone(), &v)
-    {
-        return if S::Res::ID == USED {
-            let _ = put(&mut hx.w[r(dst)], v);
-            Ctl::Next(true)
-        } else {
-            let _ = clear(&mut hx.w[r(dst)]);
-            Ctl::Skip(true)
-        };
-    }
     let kv = hx.v::<S::Key>(key);
     let v = if S::Key::ID == KSTR || (S::Key::ID == REG && kv.is_str()) {
         // The key's value copied out of the frame (a literal or a count: no
@@ -392,32 +384,43 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         // reference: the array its cell holds.
         let slot = &mut hx.w[r(var)];
         let cell = slot.as_reference().map(Rc::clone);
-        let mut held;
-        let root: &mut Value = match &cell {
-            Some(cell) => {
-                held = cell.borrow_mut();
-                &mut held
-            }
-            None => slot,
-        };
-        let Some(a) = root.array_mut() else { return Ctl::Cold };
         let (stored, result) = if S::Res::ID == USED { (v.clone(), Some(v)) } else { (v, None) };
-        // (A KSTR literal is never a canonical integer: lowering's promise.)
-        let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
-        match found {
-            // An element bound to the cell the array is borrowed from
-            // (`$a['k'] = &$a`): the cold path (`is_owner`).
-            Some(e) if is_owner(e, cell.as_deref()) => return Ctl::Cold,
-            // An element bound by reference: the value goes into its cell.
-            Some(e) if e.is_reference() => {
-                let _ = write_ref(e.as_reference().expect("a reference"), stored);
+        // The value back when the element found is bound to the cell the
+        // array is borrowed from (`$a['k'] = &$a`, `is_owner`): written
+        // below, once that borrow is over.
+        let owned = {
+            let mut held;
+            let root: &mut Value = match &cell {
+                Some(cell) => {
+                    held = cell.borrow_mut();
+                    &mut held
+                }
+                None => slot,
+            };
+            let Some(a) = root.array_mut() else { return Ctl::Cold };
+            // (A KSTR literal is never a canonical integer: lowering's promise.)
+            let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
+            match found {
+                Some(e) if is_owner(e, cell.as_deref()) => Some(stored),
+                // An element bound by reference: the value goes into its cell.
+                Some(e) if e.is_reference() => {
+                    let _ = write_ref(e.as_reference().expect("a reference"), stored);
+                    None
+                }
+                // (The old element's release: tested below, as for any write.)
+                Some(e) => {
+                    *e = stored;
+                    None
+                }
+                None => {
+                    let s = key.cloned_str().expect("a string");
+                    a.insert_absent(if S::Key::ID == KSTR { Key::Str(s) } else { Key::from_string(s) }, stored);
+                    None
+                }
             }
-            // (The old element's release: tested below, as for any write.)
-            Some(e) => *e = stored,
-            None => {
-                let s = key.cloned_str().expect("a string");
-                a.insert_absent(if S::Key::ID == KSTR { Key::Str(s) } else { Key::from_string(s) }, stored)
-            }
+        };
+        if let (Some(v), Some(cell)) = (owned, &cell) {
+            owner_write(cell, v);
         }
         result
     } else {
@@ -428,11 +431,19 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
         let done = if slot.is_array() {
             set_int_elem(slot, k, &v, None)
         } else if let Some(cell) = slot.as_reference() {
-            set_int_elem(&mut cell.borrow_mut(), k, &v, Some(&**cell))
+            match set_int_elem(&mut cell.borrow_mut(), k, &v, Some(&**cell)) {
+                // The element bound to the variable's own cell: written
+                // now that the borrow is over.
+                Some(Wrote::Owner) => {
+                    owner_write(cell, v.clone());
+                    Some(Wrote::Done(true))
+                }
+                done => done,
+            }
         } else {
-            false
+            None
         };
-        if !done {
+        if done.is_none() {
             return Ctl::Cold;
         }
         (S::Res::ID == USED).then_some(v)
@@ -528,17 +539,26 @@ pub(crate) fn write_slot(o: &p8_runtime::object::Object, slot: usize, plain: Pla
     }
 }
 
-/// A property read the name's cache entry answers (anything else is
-/// cold: a miss, an unset slot, a reference operand).
+/// A property read the name's cache entry answers, of an object or of
+/// one a reference holds (`global $wpdb; $wpdb->posts`); anything else is
+/// cold: a miss, an unset slot.
 #[inline(always)]
 pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj, site }: args::FetchProp) -> Ctl {
     let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
+    let held;
     let o = if S::Obj::ID == THIS {
         let Some(o) = &hx.top.this else { return Ctl::Cold };
         o
     } else {
-        let Some(o) = hx.w[r(obj)].as_object() else { return Ctl::Cold };
-        o
+        match hx.w[r(obj)].as_object() {
+            Some(o) => o,
+            // (Its own handle, out of line: the reference's borrow ends.)
+            None => {
+                held = ref_object(&hx.w[r(obj)]);
+                let Some(o) = &held else { return Ctl::Cold };
+                o
+            }
+        }
     };
     let v = match cached_prop(entry.get(), o, hx.scope()) {
         Some(v) => v,

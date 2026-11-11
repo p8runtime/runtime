@@ -2127,6 +2127,17 @@ fn declared_private(class: &Class, name: &[u8]) -> bool {
     }
 }
 
+/// `(array) $o` of an object that is not an uninitialized lazy one (its
+/// initialization runs first, `step`'s): a Closure in a list, as a scalar
+/// is (ZEND_CAST); a proxy's instance's properties; else its own.
+pub(crate) fn cast_object_to_array(o: &Rc<Object>) -> Value {
+    if crate::callable::closure_data(o).is_some() {
+        Value::array(p8_runtime::array::PhpArray::from_list(vec![Value::object(Rc::clone(o))]))
+    } else {
+        Value::array(object_to_array(&o.proxy_instance().unwrap_or_else(|| Rc::clone(o))))
+    }
+}
+
 pub(crate) fn object_to_array(o: &Object) -> p8_runtime::array::PhpArray {
     if let Some(props) = o.class.get_properties {
         return props(o);
