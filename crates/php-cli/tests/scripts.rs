@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// The scripts write fixed temporary files (zlib.php: p8zlib.gz), so the
-/// two runs of them take turns.
+/// runs of them take turns (and the memory_limit runs with them).
 static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
@@ -114,6 +114,9 @@ fn fatal(got: &str, limit: usize) -> (String, &str) {
 fn run_bounded(name: &str, limit: &str, options: &[&str]) -> (String, Option<i32>) {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
+    // (One at a time, and not beside the corpus: without the limit each
+    // run takes memory as fast as it can.)
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/memory_limit").join(name);
     let mut child = Command::new(env!("CARGO_BIN_EXE_p8"))
         .args(["-d", &format!("memory_limit={limit}")])
