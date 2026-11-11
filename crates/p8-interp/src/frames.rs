@@ -106,6 +106,14 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
 }
 
 impl Frame {
+    /// The class `static::` names: the one the frame was called on. A
+    /// method frame with `$this` may leave `called` empty, as PHP takes it
+    /// from `$this` (`Z_OBJCE(This)`): it is `$this`'s class.
+    #[inline(always)]
+    pub(crate) fn called_class(&self) -> Option<&Rc<Class>> {
+        self.called.as_ref().or_else(|| self.this.as_ref().map(|t| &t.class))
+    }
+
     /// The Generator this frame runs, taken (its code returns): none in a
     /// frame that is not a generator's (its owner is a Closure, if any).
     pub(crate) fn take_generator(&mut self) -> Option<Rc<Object>> {
@@ -219,31 +227,93 @@ impl Frames {
         self.slots[..self.len].first()
     }
 
+    /// The running frame, where there must be one (the loop's): one
+    /// bounds check, where `last()` slices and tests for none.
+    #[inline(always)]
+    pub(crate) fn top(&self) -> &Frame {
+        &self.slots[self.len - 1]
+    }
+
+    #[inline(always)]
+    pub(crate) fn top_mut(&mut self) -> &mut Frame {
+        let n = self.len - 1;
+        &mut self.slots[n]
+    }
+
     /// Push a frame running `func`, its window at `base`.
     #[inline(always)]
-    pub(crate) fn push(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) {
-        match self.slots.get_mut(self.len) {
-            Some(slot) => {
-                if !Rc::ptr_eq(&slot.func, func) {
-                    slot.func = Rc::clone(func);
-                }
-                (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
-            }
-            None => self.slots.push(Frame {
-                func: Rc::clone(func),
-                pc: 0,
-                base: base as u32,
-                ret,
-                argc: argc as u32,
-                extra: None,
-                this: None,
-                scope: None,
-                called: None,
-                owner: None,
-                global: false,
-            }),
+    pub(crate) fn push(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        self.push_code(Some(func), base, argc, ret)
+    }
+
+    /// A call's frame above the running one, which goes on at `resume`
+    /// when it returns: `func` as `site_code` gave it (None: the slot the
+    /// push reuses runs it already). The frame pushed.
+    #[inline(always)]
+    pub(crate) fn call(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        self.top_mut().pc = resume as u32;
+        self.push_code(func, base, argc, ret)
+    }
+
+    /// The code a call site's cache keeps (a `Weak`, so that no closure
+    /// keeps itself) for the frame a call pushes next: `Some(None)` when
+    /// the slot that push reuses already runs it (no count is taken, as
+    /// `push` takes none for the same function called again from the
+    /// same depth), `Some(code)` otherwise, None when the code is gone.
+    #[inline(always)]
+    pub(crate) fn site_code(&self, code: &std::rc::Weak<Closure>) -> Option<Option<Rc<Closure>>> {
+        match self.slots.get(self.len) {
+            Some(slot) if std::ptr::eq(Rc::as_ptr(&slot.func), code.as_ptr()) => Some(None),
+            _ => code.upgrade().map(Some),
         }
-        self.len += 1;
+    }
+
+    /// The function `site_code` gave (`func`), for the checks before the
+    /// push: that one, or the next slot's.
+    #[inline(always)]
+    pub(crate) fn next_code<'a>(&'a self, func: Option<&'a Rc<Closure>>) -> &'a Closure {
+        match func {
+            Some(f) => f,
+            None => &self.slots[self.len].func,
+        }
+    }
+
+    /// `push`, of `func` (None: the next slot's, as `site_code` found it).
+    #[inline(always)]
+    fn push_code(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        let n = self.len;
+        self.len = n + 1;
+        if n >= self.slots.len() {
+            return self.grow(func.expect("a new slot's function"), base, argc, ret);
+        }
+        let slot = &mut self.slots[n];
+        if let Some(func) = func
+            && !Rc::ptr_eq(&slot.func, func)
+        {
+            slot.func = Rc::clone(func);
+        }
+        (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
+        slot
+    }
+
+    /// A frame deeper than any so far: a new slot.
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        self.slots.push(Frame {
+            func: Rc::clone(func),
+            pc: 0,
+            base: base as u32,
+            ret,
+            argc: argc as u32,
+            extra: None,
+            this: None,
+            scope: None,
+            called: None,
+            owner: None,
+            global: false,
+        });
+        self.slots.last_mut().expect("the slot just pushed")
     }
 
     /// Pop the top frame; its slot stays for the next push.

@@ -109,7 +109,7 @@ impl Context<'_> {
             }
         };
         let (this, scope, called) = match self.frames.last() {
-            Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called.clone()),
+            Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called_class().cloned()),
             None => (None, None, None),
         };
         let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None, fake: false };

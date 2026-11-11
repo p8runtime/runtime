@@ -3806,7 +3806,7 @@ impl Context<'_> {
             });
         }
         let (this, scope, called) = match self.frames.last() {
-            Some(f) => (f.this.clone(), f.scope.clone(), f.called.clone()),
+            Some(f) => (f.this.clone(), f.scope.clone(), f.called_class().cloned()),
             None => (None, None, None),
         };
         if let Some(caller) = self.frames.last_mut() {
