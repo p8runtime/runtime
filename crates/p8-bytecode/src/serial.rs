@@ -195,12 +195,13 @@ trait Code: Sized {
     fn put(&self, w: &mut Writer);
     fn get(r: &mut Reader) -> Got<Self>;
 
-    /// For a number: its size, so a list of them is read in one piece.
+    /// For a number (or an executed instruction): its size, so a list of
+    /// them is read in one piece.
     const SIZE: usize = 0;
 
-    /// For a number: the value of `SIZE` bytes.
+    /// For a number (or an executed instruction): the value of `SIZE` bytes.
     fn of(_bytes: &[u8]) -> Self {
-        unreachable!("only numbers are read in one piece")
+        unreachable!("only fixed-size values are read in one piece")
     }
 }
 
@@ -523,17 +524,25 @@ fn one_insn_per_instruction(f: &Function) -> bool {
 }
 
 /// An executed instruction: its opcode's number, the three register
-/// operands and the immediate (8 bytes). An opcode number this engine
-/// does not have is not read.
+/// operands and the immediate (8 bytes), read as a run of them in one
+/// piece. An opcode number this engine does not have reads as `Slow`
+/// (what lowering gives any instruction the loop does not run itself:
+/// `step` runs the `Instr` at the same pc).
 impl Code for Insn {
     fn put(&self, w: &mut Writer) {
         w.out.extend_from_slice(&[self.op as u8, self.a, self.b, self.c]);
         w.out.extend_from_slice(&self.imm.to_le_bytes());
     }
     fn get(r: &mut Reader) -> Got<Self> {
-        let b = r.take(8)?;
-        let op = *Op::ALL.get(usize::from(b[0])).ok_or(Bad)?;
-        Ok(Insn { op, a: b[1], b: b[2], c: b[3], imm: u32::from_le_bytes([b[4], b[5], b[6], b[7]]) })
+        Ok(Insn::of(r.take(8)?))
+    }
+    const SIZE: usize = 8;
+    #[inline]
+    fn of(b: &[u8]) -> Self {
+        match Op::ALL.get(usize::from(b[0])) {
+            Some(&op) => Insn { op, a: b[1], b: b[2], c: b[3], imm: u32::from_le_bytes([b[4], b[5], b[6], b[7]]) },
+            None => Insn { op: Op::Slow, a: 0, b: 0, c: 0, imm: 0 },
+        }
     }
 }
 record!(CompileDiag { level, message, line });

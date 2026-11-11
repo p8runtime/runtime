@@ -130,9 +130,10 @@ impl Bytes {
             Bytes::File { file, base } => {
                 let mut file = file.lock().unwrap_or_else(|e| e.into_inner());
                 file.seek(SeekFrom::Start(base.checked_add(at)?)).ok()?;
-                let mut bytes = vec![0; len];
-                file.read_exact(&mut bytes).ok()?;
-                Some(bytes)
+                // Read into the spare capacity: the buffer is not zeroed first.
+                let mut bytes = Vec::with_capacity(len);
+                (&mut *file).take(len as u64).read_to_end(&mut bytes).ok()?;
+                (bytes.len() == len).then_some(bytes)
             }
             Bytes::Memory(all) => {
                 let at = usize::try_from(at).ok()?;
