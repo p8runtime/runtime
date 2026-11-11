@@ -70,6 +70,10 @@ op CLASS_CONST class_const cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 
 /// code's scope, C as INSTANCEOF's; a miss is cold (`step`, which fills
 /// the entry).
 op FETCH_STATIC_PROP fetch_static_prop cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
+/// `dst = $src::class` (`ClassConst` of a class in a register, the name
+/// `class`): the object's class name; anything else (a string naming a
+/// class, the error of another value) is cold (`step`).
+op CLASS_NAME class_name cold=step dst=REG src=REG
 
 # ---- written by hand ---------------------------------------------------
 
@@ -149,7 +153,16 @@ hand Construct
 /// a = class reference imm >> 16's method (site imm & 0xffff) with
 /// the c arguments at b; sends no variables itself (`vars` is NO_VARS)
 hand StaticCall
+/// StaticCall with variables it sends itself (`vars`, read from the
+/// `Instr` at this pc): the same operands
+hand StaticCallVars
 hand ReturnNull
+/// a = a closure of lambda imm & 0xffff (imm >> 16: static)
+hand MakeClosure
+/// variadic parameter a = its argument (if passed) and the extra ones
+hand CollectVariadic
+/// the array in a gets b's elements (`[...$b]`)
+hand ArrayUnpack
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

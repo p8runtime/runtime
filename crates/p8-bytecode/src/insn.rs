@@ -208,7 +208,7 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes).unwrap_or(SLOW)).collect()
+    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect()
 }
 
 /// A class reference as the flag of an instruction that names a class:
@@ -223,6 +223,16 @@ fn class_flag(classes: &[ClassRef], class: u16) -> Option<Opnd> {
         ClassRef::Scope => kinds::SCOPE,
         ClassRef::ParentScope | ClassRef::Dynamic(_) => return None,
     }))
+}
+
+/// `$x::class`: the register of class reference `class` when it is a
+/// class in a register (`Dynamic`) and `name` is the literal `class`.
+fn dynamic_class_name(classes: &[ClassRef], class: u16, name: Reg, consts: &[Frozen]) -> Option<Reg> {
+    let ClassRef::Dynamic(src) = *classes.get(usize::from(class))? else { return None };
+    match consts.get(const_index(name)?)? {
+        Frozen::Str(s) if s.as_bytes().eq_ignore_ascii_case(b"class") => Some(src),
+        _ => None,
+    }
 }
 
 /// The property cache entry of a name operand: its constant's index.
@@ -283,10 +293,12 @@ fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
 /// `lower_in` of code that names no class (the unit tests').
 #[cfg(test)]
 fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<Insn> {
-    lower_in(code, pc, consts, ncv, &[])
+    lower_in(code, pc, consts, ncv, &[], &[])
 }
 
-fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef]) -> Option<Insn> {
+/// The instruction at `pc` lowered; `classes` and `arg_vars` are the
+/// function's (`Function::classes`, `Function::arg_vars`).
+fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef], arg_vars: &[Vec<(u8, Reg)>]) -> Option<Insn> {
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     let o = |reg: Reg| opnd(reg, consts, ncv);
@@ -362,19 +374,25 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::InstanceOf { dst, src, class } => {
             enc::instance_of(enc::InstanceOf { cls: class_flag(classes, class)?, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
         }
-        Instr::ClassConst { dst, class, name } => {
-            let site = Opnd::Imm(prop_site(name, nconsts)?);
-            enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
-        }
+        Instr::ClassConst { dst, class, name } => match dynamic_class_name(classes, class, name, consts) {
+            // `$obj::class`.
+            Some(src) => enc::class_name(enc::ClassName { dst: o(dst)?, src: o(src)? }),
+            None => {
+                let site = Opnd::Imm(prop_site(name, nconsts)?);
+                enc::class_const(enc::ClassConst { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+            }
+        },
         Instr::FetchStaticProp { dst, class, name } => {
             let site = Opnd::Imm(prop_site(name, nconsts)?);
             enc::fetch_static_prop(enc::FetchStaticProp { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
         }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
-        // (empty()'s last dimension is a read here: its misses are cold.)
-        Instr::FetchDim { dst, arr, key, quiet, empty } => {
-            let mode = Opnd::Flag(if quiet && !empty { kinds::IS } else { kinds::R });
+        // (empty()'s last dimension is IS too: on an array, null, a string's
+        // int offset, a miss is null as for `??`; an ArrayAccess object,
+        // where the two differ, is cold either way.)
+        Instr::FetchDim { dst, arr, key, quiet, .. } => {
+            let mode = Opnd::Flag(if quiet { kinds::IS } else { kinds::R });
             enc::fetch_dim(enc::FetchDim { mode, dst: o(dst)?, arr: o(arr)?, key: ko(key)? })
         }
         Instr::AssignDim { var, n: 0, append: true, val, dst, .. } => {
@@ -467,6 +485,16 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
         Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
+        // (The variables it sends are in the window too.)
+        Instr::StaticCall { dst, class, method, base, argc, vars } => {
+            for &(_, var) in arg_vars.get(usize::from(vars))? {
+                r(var)?;
+            }
+            i(Op::StaticCallVars, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16)
+        }
+        Instr::MakeClosure { dst, func, is_static } => i(Op::MakeClosure, dst, 0, 0, u32::from(func) | u32::from(is_static) << 16),
+        Instr::CollectVariadic { var } => i(Op::CollectVariadic, var, 0, 0, 0),
+        Instr::ArrayUnpack { arr, src } => i(Op::ArrayUnpack, arr, src, 0, 0),
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }
@@ -651,6 +679,38 @@ mod tests {
         assert_eq!(at(15).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_REG_K_COPY_USED, a: 1, b: 6, c: 0, imm: 7 | 4 << 16 });
         assert!(at(16).is_none());
         assert_eq!(at(17).unwrap(), Insn { op: Op::P8_MOVE_K, a: 5, b: 0, c: 0, imm: 8 });
+    }
+
+    #[test]
+    fn the_second_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // `empty($a['k'])`: IS, as `??`.
+            Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: true, empty: true },
+            // `$o::class` (class 0 is Dynamic(3)); `$o::K` is not CLASS_NAME.
+            Instr::ClassConst { dst: 5, class: 0, name: c(11) },
+            Instr::ClassConst { dst: 5, class: 0, name: c(7) },
+            Instr::MakeClosure { dst: 5, func: 2, is_static: true },
+            Instr::CollectVariadic { var: 1 },
+            Instr::ArrayUnpack { arr: 5, src: 1 },
+            // A static call sending variable 1 (entry 0 of arg_vars), and
+            // one whose variable is past the window.
+            Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 0 },
+            Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 1 },
+        ];
+        let mut consts = consts();
+        consts[11] = Frozen::Str("CLASS".into());
+        let classes = [ClassRef::Dynamic(3), ClassRef::Static];
+        let arg_vars = [vec![(0, 1)], vec![(0, 300)]];
+        let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &arg_vars);
+        assert_eq!(at(0).unwrap().op, Op::P8_FETCH_DIM_IS_KSTR);
+        assert_eq!(at(1).unwrap(), Insn { op: Op::P8_CLASS_NAME, a: 5, b: 3, c: 0, imm: 0 });
+        assert!(at(2).is_none());
+        assert_eq!(at(3).unwrap(), Insn { op: Op::MakeClosure, a: 5, b: 0, c: 0, imm: 2 | 1 << 16 });
+        assert_eq!(at(4).unwrap().op, Op::CollectVariadic);
+        assert_eq!(at(5).unwrap(), Insn { op: Op::ArrayUnpack, a: 5, b: 1, c: 0, imm: 0 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::StaticCallVars, a: 5, b: 10, c: 1, imm: 3 | 1 << 16 });
+        assert!(at(7).is_none());
     }
 
     #[test]

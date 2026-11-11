@@ -233,13 +233,49 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
             _ => return Ctl::Cold,
         }
     } else {
-        match elem(&hx.w[..], arr as Reg, hx.src::<S::Key>(key)) {
+        // (Out of line: the array case is the arm's straight path.)
+        match dim_of(&hx.w[..], arr as Reg, hx.src::<S::Key>(key), S::Key::ID == KSTR, S::Mode::ID == IS) {
             Some(v) => v,
             None => return Ctl::Cold,
         }
     };
     let _ = put(&mut hx.w[r(dst)], v);
     Ctl::Next(true)
+}
+
+/// `$c[k]` of anything but an array: a string's offset, an int key, is its
+/// byte (one of the shared one-byte strings), counted from the end when
+/// negative (out of range: null when `quiet`, else None, the warning); a
+/// quiet read (`??`, `empty`) of null, an undefined variable or a scalar
+/// is null, silently, as ZEND_FETCH_DIM_IS gives; an array through a
+/// reference is `elem`'s. None (cold) for the rest: a string's string key
+/// (`kstr`: a literal one), an object, a warning.
+#[cold]
+#[inline(never)]
+fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Value> {
+    let c = &w[usize::from(arr)];
+    if let Some(s) = c.as_str() {
+        let i = if kstr { None } else { crate::fast::src(w, key).as_int() }?;
+        let at = if i < 0 { i.wrapping_add(s.len() as i64) } else { i };
+        return match usize::try_from(at).ok().and_then(|at| s.as_bytes().get(at)) {
+            Some(&b) => Some(Value::str(PhpStr::byte(b))),
+            None if quiet => Some(Value::NULL),
+            None => None,
+        };
+    }
+    if quiet && (c.is_null_or_undef() || c.is_bool() || c.is_int() || c.is_float()) {
+        return Some(Value::NULL);
+    }
+    elem(w, arr, key)
+}
+
+/// `$x::class` of an object: its class's name (shared, as PHP's interned
+/// name). A reference, a string naming a class, anything else: cold.
+#[inline(always)]
+pub(crate) fn class_name(hx: Hx, args::ClassName { dst, src }: args::ClassName) -> Ctl {
+    let Some(o) = hx.w[r(src)].as_object() else { return Ctl::Cold };
+    let name = Value::str(o.class.name.clone());
+    Ctl::Next(put(&mut hx.w[r(dst)], name))
 }
 
 /// `isset($a[k])` on an array (or a reference to one), k an int or a

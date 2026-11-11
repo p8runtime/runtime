@@ -26,15 +26,19 @@ pub enum Count {
     /// A compiled text made (`frozen::Text`: a name or literal in
     /// compiled code, an allocation of its own).
     TextMade = 5,
+    /// An instruction the interpreter's loop did not run inline: run out
+    /// of line, by `step` or by a generated instruction's cold method
+    /// (p8-interp's `detour`).
+    Slow = 6,
     /// A class's member found by a name given as bytes, through a hash of
     /// the name: a method or constant (`Names::find`), a property's slot
     /// (`Class::slot`'s table), a static property (by the interpreter).
-    MemberLookup = 6,
+    MemberLookup = 7,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 7] = const { [const { std::cell::Cell::new(0) }; 7] };
+    static COUNTS: [std::cell::Cell<u64>; 8] = const { [const { std::cell::Cell::new(0) }; 8] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

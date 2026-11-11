@@ -380,6 +380,78 @@ impl Context<'_> {
                         let ($a, $b, $c, $imm) = (insn.a, insn.b, insn.c, insn.imm);
                     };
                 }
+                // `C::f()` the site's cache has for this class and scope: a
+                // PHP method's frame pushed here, after the variables
+                // `$vars` names (`Function::arg_vars`) are sent (`send_vars`).
+                // Anything else (a property hook's `parent::$p::get()`, a
+                // native method, __callStatic (`remember_static` caches no
+                // trampoline), the first call) is `step`'s.
+                macro_rules! static_call {
+                    ($vars:expr) => {{
+                        ops!(a, b, c, imm);
+                        let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
+                        let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
+                        let classes::Code::User(target) = &m.func else { slow!() };
+                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            slow!();
+                        }
+                        let vars: Option<u16> = $vars;
+                        if let Some(vars) = vars {
+                            // (A destructor the sends made due: `step` sends
+                            // them again, the same values, and runs it.)
+                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), &target.code) {
+                                Some(released) if !(released && self.ids.has_pending()) => {}
+                                _ => slow!(),
+                            }
+                        }
+                        let target = Rc::clone(target);
+                        if let Some(caller) = self.frames.last_mut() {
+                            caller.pc = (pc + 1) as u32;
+                        }
+                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.last_mut().expect("the frame just pushed");
+                        frame.this = m.this;
+                        frame.scope = m.scope;
+                        frame.called = m.called;
+                        frame.owner = m.closure;
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }};
+                }
+                // A foreach step over an array (`$key`: the key too). An
+                // object (a generator, an Iterator) is `step`'s. (One arm
+                // per opcode, so that no arm reads the opcode again: kept
+                // for that, it would hold a register through every arm.)
+                macro_rules! iter_next {
+                    ($key:expr) => {{
+                        ops!(a, b, c, imm);
+                        if !w[rx!(a)].is_array() {
+                            slow!();
+                        }
+                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize };
+                        if self.ids.has_pending() {
+                            pending_at!(next, pc);
+                        }
+                        pc = next;
+                    }};
+                }
+                // `!x` (`$not`) and a condition made a value, as `truth`
+                // decides (NAN and an undefined variable warn: `step`).
+                macro_rules! truth {
+                    ($not:expr) => {{
+                        ops!(a, b, c, imm);
+                        let v = &w[rx!(b)];
+                        let t = match v.as_bool() {
+                            Some(b) => b,
+                            None => match truth(v) {
+                                Some(t) => t,
+                                None => slow!(),
+                            },
+                        };
+                        done!(put(&mut w[rx!(a)], Value::bool(t != $not)));
+                    }};
+                }
                 // `dispatch!`: one match of these hand arms and the generated
                 // instructions' (ops.def, vmops.rs), so that every opcode is
                 // one jump table away.
@@ -451,25 +523,32 @@ impl Context<'_> {
                         released |= put(&mut w[rx!(dst)], r);
                         done!(released);
                     }
-                    // `$o->m($v)`: an argument the method the call site's cache
-                    // names for this class and scope takes by value is copied
-                    // (by reference, a miss, or an undefined or reference
-                    // variable: `step`, which looks the method up by name).
+                    // `$o->m($v)`: an argument of the user method the call
+                    // site's cache names for this class and scope, copied
+                    // when it takes it by value, the variable made a
+                    // reference when it takes it by reference (a miss, an
+                    // undefined variable: `step`, which looks the method up
+                    // by name).
                     Op::SendVarMethod => {
                         ops!(a, b, c, imm);
                         let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
                         let Some(o) = w[rx!(obj)].as_object() else { slow!() };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let by_value = clo.methods[method].borrow().as_ref().is_some_and(|s| {
-                            s.class == Rc::as_ptr(&o.class) as usize
-                                && s.scope == scope
-                                && matches!(&s.code, MethodCode::User(code) if code.upgrade().is_some_and(|c| !c.code.param_by_ref(n)))
+                        let (class, scope) = (Rc::as_ptr(&o.class) as usize, top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
+                        let by_ref = clo.methods[method].borrow().as_ref().and_then(|s| match &s.code {
+                            MethodCode::User(code) if s.class == class && s.scope == scope => code.upgrade().map(|c| c.code.param_by_ref(n)),
+                            _ => None,
                         });
-                        if !by_value {
-                            slow!();
+                        match by_ref {
+                            Some(false) => {
+                                let Some(v) = copied(&w[rx!(var)]) else { slow!() };
+                                done!(put(&mut w[rx!(arg)], v));
+                            }
+                            Some(true) => {
+                                let cell = make_ref(&mut w[..], Reg::from(var));
+                                done!(put(&mut w[rx!(arg)], Value::reference(cell)));
+                            }
+                            None => slow!(),
                         }
-                        let Some(v) = copied(&w[rx!(var)]) else { slow!() };
-                        done!(put(&mut w[rx!(arg)], v));
                     }
                     Op::Jump => {
                         let imm = insn.imm;
@@ -572,18 +651,8 @@ impl Context<'_> {
                     // The loop variable's old value may have been an object's
                     // last holder: a destructor due runs before the body, at
                     // this instruction.
-                    Op::IterNext | Op::IterNextKey => {
-                        ops!(a, b, c, imm);
-                        // An object (a generator, an Iterator) is `step`'s.
-                        if !w[rx!(a)].is_array() {
-                            slow!();
-                        }
-                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), op == Op::IterNextKey) { pc + 1 } else { imm as usize };
-                        if self.ids.has_pending() {
-                            pending_at!(next, pc);
-                        }
-                        pc = next;
-                    }
+                    Op::IterNext => iter_next!(false),
+                    Op::IterNextKey => iter_next!(true),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
@@ -607,20 +676,8 @@ impl Context<'_> {
                     Op::LoadNull => {
                         done!(put(&mut w[rx!(insn.a)], Value::NULL));
                     }
-                    // `!x` and a condition made a value: as `truth` decides
-                    // (NAN and an undefined variable warn: `step`).
-                    Op::Not | Op::ToBool => {
-                        ops!(a, b, c, imm);
-                        let v = &w[rx!(b)];
-                        let t = match v.as_bool() {
-                            Some(b) => b,
-                            None => match truth(v) {
-                                Some(t) => t,
-                                None => slow!(),
-                            },
-                        };
-                        done!(put(&mut w[rx!(a)], Value::bool(t != (op == Op::Not))));
-                    }
+                    Op::Not => truth!(true),
+                    Op::ToBool => truth!(false),
                     Op::IssetVar => {
                         ops!(a, b, c, imm);
                         let set = is_set(&w[rx!(b)]);
@@ -929,27 +986,51 @@ impl Context<'_> {
                     // property hook's `parent::$p::get()`, a native method,
                     // __callStatic (`remember_static` caches no trampoline),
                     // the first call) is `step`'s.
-                    Op::StaticCall => {
+                    Op::StaticCall => static_call!(None),
+                    // The same, with the variables the call sends itself
+                    // (`C::f($x)`: the method decides by-reference, so the
+                    // compiler sends none): each made a reference where the
+                    // method takes one so, else copied (an undefined one,
+                    // the warning: `step`).
+                    Op::StaticCallVars => {
+                        let Instr::StaticCall { vars, .. } = clo.code.code[pc] else { slow!() };
+                        static_call!(Some(vars))
+                    }
+                    // A closure (`function () {..}`, `fn () =>`) of this
+                    // code's lambda, bound as `make_closure` binds it; its
+                    // captures follow.
+                    Op::MakeClosure => {
                         ops!(a, b, c, imm);
-                        let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
-                        let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
-                        let classes::Code::User(target) = &m.func else { slow!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        let lambda = Arc::clone(&clo.code.lambdas[(imm & 0xffff) as usize]);
+                        let object = self.make_closure(&lambda, imm >> 16 != 0);
+                        // (The context was borrowed whole: the frame's view
+                        // is read again, as after a frameless call.)
+                        top = self.frames.last().expect("a frame");
+                        clo = &*top.func;
+                        code = &clo.code.insns[..];
+                        done!(put(&mut w[rx!(a)], Value::object(object)));
+                    }
+                    // `...$rest`: its own argument (if passed) and those
+                    // past the parameters, as a list (named arguments no
+                    // parameter takes: `step`).
+                    Op::CollectVariadic => {
+                        if self.named_extra.is_some() {
                             slow!();
                         }
-                        let target = Rc::clone(target);
-                        if let Some(caller) = self.frames.last_mut() {
-                            caller.pc = (pc + 1) as u32;
+                        let var = rx!(insn.a);
+                        let list = collect_variadic(&mut w[var], top.argc as usize > var, top.args());
+                        done!(put(&mut w[var], Value::array(list)));
+                    }
+                    // `[...$src]` of an array (`unpack_array`; a Traversable,
+                    // a reference among the elements: `step`).
+                    Op::ArrayUnpack => {
+                        ops!(a, b, c, imm);
+                        let from = w[rx!(b)].clone();
+                        let Some(list) = from.as_array() else { slow!() };
+                        if !unpack_array(&mut w[rx!(a)], list) {
+                            slow!();
                         }
-                        self.frames.push(&target, base + args as usize, n, (base + dst as usize) as u32);
-                        let frame = self.frames.last_mut().expect("the frame just pushed");
-                        frame.this = m.this;
-                        frame.scope = m.scope;
-                        frame.called = m.called;
-                        frame.owner = m.closure;
-                        enter(&mut self.frames, regs);
-                        pc = 0;
-                        continue 'frame;
+                        pc += 1;
                     }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).
@@ -982,15 +1063,98 @@ pub(crate) enum Flow {
 /// Whether the first `argc` registers of `w` are each plainly of their
 /// parameter's declared type (`TypeDecl::quick`, an object's class test
 /// through the closure's memo), so `verify_args` has nothing to check or
-/// convert. A typed variadic is left to it.
+/// convert. A reference is tested by its value (`verify_args` checks
+/// that); a typed variadic by each element of its list (CollectVariadic
+/// made it), as ZEND_RECV_VARIADIC checks them.
 #[inline]
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
     clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
-        Some(_) if p.variadic => false,
+        Some(ty) if p.variadic => variadic_plain(ty, v),
         Some(_) if i >= argc || v.is_undef() => true,
-        Some(ty) => ClassMemo::quick(clo.type_memo.get(i), ty, v),
+        Some(ty) => plain_arg(clo.type_memo.get(i), ty, v),
     })
+}
+
+/// The variables a call sends itself (`vars`, its `Function::arg_vars`
+/// entry) into its argument registers from `args`, for `target`: a
+/// variable is made a reference where it takes the parameter by
+/// reference, else copied (`send_vars`). None, with nothing sent, when a
+/// copied one is undefined (the warning: `step`); else whether a write
+/// released memory.
+#[inline(never)]
+fn send_vars(w: &mut [Value], vars: &[(u8, Reg)], args: usize, target: &Function) -> Option<bool> {
+    let defined = |v: &Value| !v.is_undef() && v.as_reference().is_none_or(|c| !c.borrow().is_undef());
+    if vars.iter().any(|&(n, var)| !target.param_by_ref(usize::from(n)) && !defined(&w[usize::from(var)])) {
+        return None;
+    }
+    let mut released = false;
+    for &(n, var) in vars {
+        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)]).expect("defined") };
+        released |= put(&mut w[(args + usize::from(n)) & (WINDOW - 1)], v);
+    }
+    Some(released)
+}
+
+/// A variadic parameter's list (`CollectVariadic`): its own argument
+/// (moved out of `own`, when `passed`), then the arguments past the
+/// parameters, copied; made once, at its size.
+#[inline(never)]
+fn collect_variadic(own: &mut Value, passed: bool, extra: &[Value]) -> PhpArray {
+    let mut list = p8_runtime::array::values_buffer(usize::from(passed) + extra.len());
+    if passed {
+        list.push(std::mem::replace(own, Value::UNDEF));
+    }
+    list.extend(extra.iter().cloned());
+    PhpArray::from_list(list)
+}
+
+/// `[...$from]` into the array `to` (`unpack_into`): string keys kept,
+/// int keys appended. False, with nothing done, when `to` is no array, an
+/// element is a reference (whether it stays one is `step`'s: a reference
+/// held elsewhere too does) or the appends could run out of keys (the
+/// error).
+#[inline(never)]
+fn unpack_array(to: &mut Value, from: &PhpArray) -> bool {
+    if !to.is_array() || from.values().any(Value::is_reference) {
+        return false;
+    }
+    let to = to.array_mut().expect("an array");
+    if to.next_key().and_then(|k| k.checked_add(from.len() as i64)).is_none() {
+        return false;
+    }
+    to.reserve(from.len());
+    for (k, v) in from.iter() {
+        match k {
+            Key::Str(s) => to.insert(Key::Str(s), v.clone()),
+            Key::Int(_) => to.push(v.clone()).expect("room checked above"),
+        }
+    }
+    true
+}
+
+/// A typed variadic's list (`CollectVariadic`'s), each element plainly of
+/// the type (out of line: not on a plain call's path).
+#[cold]
+#[inline(never)]
+fn variadic_plain(ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+    v.as_array().is_none_or(|list| list.values().all(|v| plain_arg(None, ty, v)))
+}
+
+/// One argument plainly of its type (`ClassMemo::quick`), a reference's
+/// value tested in its place.
+#[inline(always)]
+fn plain_arg(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+    match v.as_reference() {
+        Some(cell) => quick_ref(memo, ty, cell),
+        None => ClassMemo::quick(memo, ty, v),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &RefCell<Value>) -> bool {
+    ClassMemo::quick(memo, ty, &cell.borrow())
 }
 
 /// Set up the registers of the frame just pushed: its window starts at

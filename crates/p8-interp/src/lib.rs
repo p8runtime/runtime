@@ -1349,6 +1349,7 @@ impl Context<'_> {
     /// raised (`slow`'s doc).
     #[inline(always)]
     fn detour(&mut self, regs: &mut Vec<Value>, mut pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
+        p8_runtime::counts::bump(p8_runtime::counts::Count::Slow);
         let frame = self.frames.last().expect("a frame");
         let func = Rc::clone(&frame.func);
         let (base, argc) = (frame.base as usize, frame.argc as usize);
@@ -2765,7 +2766,7 @@ impl Context<'_> {
                         let w = &mut regs[base..base + func.nregs as usize];
                         return self.unpack_into(w, arr, items).map(|()| Next::Go(pc));
                     } else {
-                        return Err(self.throw("Error", "Only arrays and Traversables can be unpacked"));
+                        return Err(self.throw("Error", format!("Only arrays and Traversables can be unpacked, {} given", v.type_name())));
                     };
                     self.unpack_into(w, arr, items)?;
                 }
