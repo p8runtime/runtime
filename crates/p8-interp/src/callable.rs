@@ -469,7 +469,9 @@ impl Context<'_> {
                 ),
             ));
         }
-        let scope = self.class_named(&method.declaring).cloned().unwrap_or_else(|| Rc::clone(&target));
+        // Among the class and its parents first, as zend_function's scope
+        // points at it: no lookup by name.
+        let scope = self.declaring(&target, &method.declaring);
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
         self.method_deprecated(&method);

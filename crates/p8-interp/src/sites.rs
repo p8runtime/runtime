@@ -351,6 +351,41 @@ fn guarded_write(prop: &p8_runtime::object::Property, scope: Option<&Class>, rei
 }
 
 impl Context<'_> {
+    /// The cell of static property `C::$name` for an instruction whose
+    /// name is the constant `name_reg` names: the cell that constant's
+    /// cache entry (`Closure::statics`, FETCH_STATIC_PROP's) holds for this
+    /// class and scope, as PHP's runtime cache slot of
+    /// ASSIGN_STATIC_PROP and FETCH_STATIC_PROP_W is; else `static_cell`'s,
+    /// kept there. The class is not resolved for a hit: a named class
+    /// reference is its index, `static` and `self` the frame's classes.
+    pub(crate) fn static_cell_at(&mut self, clo: &Closure, class: u16, name_reg: Reg, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
+        let site = const_index(name_reg).and_then(|i| clo.statics.get(i));
+        if let Some(site) = site
+            && let Some(frame) = self.frames.last()
+        {
+            let key = match clo.code.classes[class as usize] {
+                p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => Some(class as usize + 1),
+                p8_bytecode::ClassRef::Static => frame.called.as_ref().map(|c| Rc::as_ptr(c) as usize),
+                p8_bytecode::ClassRef::Scope => frame.scope.as_ref().map(|c| Rc::as_ptr(c) as usize),
+                p8_bytecode::ClassRef::ParentScope | p8_bytecode::ClassRef::Dynamic(_) => None,
+            };
+            let s = site.borrow();
+            if let Some(cell) = &s.cell
+                && key == Some(s.key)
+                && s.scope == self.scope_addr()
+            {
+                return Ok(Rc::clone(cell));
+            }
+        }
+        let cell = self.static_cell(&clo.code, class, name, w)?;
+        if let Some(site) = site
+            && let Some((_, (key, keep))) = self.class_key(clo, class, w)
+        {
+            *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), _keep: keep, cell: Some(Rc::clone(&cell)) };
+        }
+        Ok(cell)
+    }
+
     /// `class_of` through the closure's cache: a named class reference
     /// is looked up by name once.
     #[inline]

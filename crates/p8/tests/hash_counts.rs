@@ -99,3 +99,82 @@ fn reflection_holds_its_class() {
     );
     assert_eq!(out, "6 C b C 2");
 }
+
+/// foreach and `yield from` over an Iterator or an IteratorAggregate
+/// call rewind(), valid() and getIterator() by their fixed symbols, as
+/// PHP's zend_user_it_* call them through the class's iterator
+/// functions: no method name looked up per loop.
+#[test]
+fn iterating_an_object_looks_up_no_method_name() {
+    let out = flat(
+        "class Agg implements IteratorAggregate { function getIterator(): Iterator { return new ArrayIterator([1, 2]); } }
+         class It implements Iterator { private $i = 0;
+             function current(): mixed { return $this->i; } function key(): mixed { return $this->i; }
+             function next(): void { $this->i++; } function rewind(): void { $this->i = 0; } function valid(): bool { return $this->i < 3; } }
+         function g($agg) { yield from $agg; }
+         $agg = new Agg; $it = new It; $s = 0;
+         for ($i = 0; $i < $n; $i++) {
+             foreach ($agg as $v) { $s += $v; }
+             foreach ($it as $k => $v) { $s += $k; }
+             foreach (g($agg) as $v) { $s += $v; }
+         }
+         echo $s / $n;",
+        Count::NameLookup,
+    );
+    assert_eq!(out, "9");
+}
+
+/// A ReflectionMethod (and a parameter it made) holds the method it was
+/// made for, as PHP's reflection_object holds the zend_function, and its
+/// hidden properties are found in its few slots without hashing their
+/// names: asking it again finds no member by name.
+#[test]
+fn reflection_holds_its_method() {
+    let out = flat(
+        "class P { function m(int $a, $b = 2) {} }
+         class C extends P {}
+         $rm = new ReflectionMethod('C', 'm'); $rp = $rm->getParameters()[1];
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) {
+             $s += ($rm->isPublic() ? 1 : 0) + $rm->getNumberOfParameters() + strlen($rm->getDeclaringClass()->getName())
+                 + $rp->getPosition() + strlen($rm->getName()) + strlen($rm->class);
+         }
+         echo $s / $n, ' ', $rm->class, ' ', $rp->getName(), ' ', $rp->getDeclaringFunction()->getName();",
+        Count::MemberLookup,
+    );
+    assert_eq!(out, "7 P b m");
+}
+
+/// A property named at run time (`$o->$name`) on a class with few
+/// properties is found by going through them, visibility as before:
+/// no name hashed.
+#[test]
+fn few_properties_are_found_without_hashing() {
+    let out = flat(
+        "class B { private $c = 30; function getB($p) { return $this->$p; } }
+         class D extends B { public $a = 1; protected $b = 2; private $c = 3; function get($p) { return $this->$p; } }
+         $d = new D; $s = 0;
+         for ($i = 0; $i < $n; $i++) { foreach (['a', 'b', 'c'] as $p) { $s += $d->get($p); } $s += $d->getB('c'); $p = 'a'; $s += $d->$p; }
+         echo $s / $n, ' ', isset($d->c) ? 'y' : 'n';",
+        Count::MemberLookup,
+    );
+    assert_eq!(out, "37 n");
+}
+
+/// Writing a static property (`C::$x = …`, `C::$x .= …`, through `self`
+/// and `static` too) uses the instruction's cache entry for the class and
+/// scope, as PHP's runtime cache slot of ASSIGN_STATIC_PROP does: the
+/// property is found by name once, not per write.
+#[test]
+fn static_property_writes_use_the_cache() {
+    let out = flat(
+        "class S { public static $x = 0; protected static $y = 1;
+             static function bump($i) { static::$y += $i; self::$x = $i; return static::$y; } }
+         class T extends S {}
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s += T::bump(1); S::$x = $i; S::$x .= '!'; }
+         echo S::$x, ' ', $s, ' ', (new ReflectionProperty('T', 'y'))->getValue();",
+        Count::MemberLookup,
+    );
+    assert_eq!(out, "19! 230 21");
+}

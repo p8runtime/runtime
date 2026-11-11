@@ -602,7 +602,12 @@ impl Context<'_> {
             || parent.as_ref().is_some_and(|p| p.flags & CLASS_LAZY != 0);
         let destructor = destructor | if lazy { CLASS_LAZY } else { 0 };
         let destructor = destructor | if properties.iter().any(|p| p.hooks != 0) { p8_runtime::object::CLASS_HOOKS } else { 0 };
-        let destructor = destructor | if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| methods.contains_key(m)) { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
+        // Magic property methods, or a native parent's handlers (`$*::get`
+        // and the like), by their fixed symbols: no name looked up.
+        let magic = [known::GET, known::SET, known::ISSET, known::UNSET, known::NATIVE_GET, known::NATIVE_SET, known::NATIVE_ISSET, known::NATIVE_UNSET]
+            .iter()
+            .any(|&m| methods.get_sym(m).is_some());
+        let destructor = destructor | if magic { p8_runtime::object::CLASS_MAGIC_PROPS } else { 0 };
         let destructor = destructor | parent.as_ref().map_or(0, |p| p.flags & (p8_runtime::object::CLASS_UNCLONEABLE | p8_runtime::object::CLASS_ALLOW_DYNAMIC));
         let make_data = parent.as_ref().and_then(|p| p.make_data);
         let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
@@ -783,7 +788,7 @@ impl Context<'_> {
     /// The destructor call of an object (if its class has one).
     pub(crate) fn destructor(&mut self, object: &Rc<Object>) -> Option<MethodFrame> {
         let class = Rc::clone(&object.class);
-        let dtor = class.method(b"__destruct")?;
+        let dtor = class.method_sym(known::DESTRUCT)?;
         let declaring = self.declaring(&class, &dtor.declaring);
         Some(MethodFrame::method(self.code_of(dtor), Some(Rc::clone(object)), declaring, class))
     }
@@ -1571,7 +1576,8 @@ impl Context<'_> {
         }
         // A native class's handler (`$*::get`: hidden, as PHP's internal
         // read_property is no method), else the class's __get.
-        let m = o.class.method(kind.native()).or_else(|| o.class.method(kind.method()))?;
+        let (method, native) = kind.syms();
+        let m = o.class.method_sym(native).or_else(|| o.class.method_sym(method))?;
         let name = name.to_php_string()?;
         let key = (Rc::as_ptr(o) as usize, name.clone(), kind);
         if self.magic_guard.contains(&key) {
@@ -1893,6 +1899,7 @@ impl Context<'_> {
     pub(crate) fn static_cell(&mut self, func: &Function, class: u16, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
         let class = self.class_of(func, class, w)?;
         let name = name_view(name);
+        p8_runtime::counts::bump(p8_runtime::counts::Count::MemberLookup);
         match class.statics.get(name.as_bytes()) {
             Some((cell, visibility, declaring)) => {
                 let declaring = self.declaring(&class, declaring);
@@ -2222,22 +2229,14 @@ pub(crate) enum Magic {
 }
 
 impl Magic {
-    fn method(self) -> &'static [u8] {
+    /// The fixed symbols of its magic method (`__get`) and of a native
+    /// class's handler method for it (`$*::get`).
+    fn syms(self) -> (Sym, Sym) {
         match self {
-            Magic::Get => b"__get",
-            Magic::Set => b"__set",
-            Magic::Isset => b"__isset",
-            Magic::Unset => b"__unset",
-        }
-    }
-
-    /// A native class's handler method for it.
-    pub(crate) fn native(self) -> &'static [u8] {
-        match self {
-            Magic::Get => b"$*::get",
-            Magic::Set => b"$*::set",
-            Magic::Isset => b"$*::isset",
-            Magic::Unset => b"$*::unset",
+            Magic::Get => (known::GET, known::NATIVE_GET),
+            Magic::Set => (known::SET, known::NATIVE_SET),
+            Magic::Isset => (known::ISSET, known::NATIVE_ISSET),
+            Magic::Unset => (known::UNSET, known::NATIVE_UNSET),
         }
     }
 }

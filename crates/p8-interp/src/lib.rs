@@ -204,6 +204,7 @@ impl Context<'_> {
     /// The symbol of a method name (any case): None when no code ever
     /// named it (so no class has such a method). Allocates nothing.
     pub(crate) fn method_key(&self, name: &[u8]) -> Option<Sym> {
+        p8_runtime::counts::bump(p8_runtime::counts::Count::NameLookup);
         self.isolate.names.find_lower(name)
     }
 
@@ -2462,7 +2463,7 @@ impl Context<'_> {
                         // back into PHP needs the registers, so they are
                         // taken afresh after it).
                         while o.class.is_a(b"iteratoraggregate") && !o.class.is_a(b"arrayobject") {
-                            match self.call_named(regs, &o, b"getIterator")?.into_object() {
+                            match self.call_known(regs, &o, p8_runtime::symbol::known::GET_ITERATOR, b"getIterator")?.into_object() {
                                 Ok(it) if it.class.is_a(b"traversable") => o = it,
                                 _ => return Err(self.throw("Error", "An iterator cannot be used with foreach by reference")),
                             }
@@ -3196,13 +3197,8 @@ impl Context<'_> {
                     }
                     let name_reg = name;
                     let name = name!(name).clone();
-                    let cell = self.static_cell(func, class, &name, w)?;
-                    // For the loop's handler: the cell, for this class and scope.
-                    if let Some(site) = const_index(name_reg).and_then(|i| clo.statics.get(i))
-                        && let Some((_, (key, keep))) = self.class_key(clo, class, w)
-                    {
-                        *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), _keep: keep, cell: Some(Rc::clone(&cell)) };
-                    }
+                    // Kept for the loop's handler too: the cell, for this class and scope.
+                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
                     let v = cell.borrow().deref();
                     reg!(dst) = if v.is_undef() { Value::NULL } else { v };
                 }
@@ -3211,8 +3207,9 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
+                    let name_reg = name;
                     let name = name!(name).clone();
-                    let cell = self.static_cell(func, class, &name, w)?;
+                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
                     let v = self.operand(w, clo, val);
                     store(&cell, v.clone());
                     reg!(dst) = v;
@@ -3222,8 +3219,9 @@ impl Context<'_> {
                         self.resolve_class(regs, &c)?;
                         return Ok(Next::Go(at));
                     }
+                    let name_reg = name;
                     let name = name!(name).clone();
-                    let cell = self.static_cell(func, class, &name, w)?;
+                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
                     let y = self.operand(w, clo, val);
                     let x = cell.borrow().deref();
                     let r = ops::binary(op, &x, &y, &mut self.diags);
@@ -5363,6 +5361,10 @@ impl Ctx for Context<'_> {
 
     fn function_info(&mut self, callee: &p8_runtime::reflect::Callee) -> Option<p8_runtime::reflect::FnInfo> {
         self.info_of(callee)
+    }
+
+    fn method_info(&mut self, class: &Rc<Class>, m: &p8_runtime::object::Method) -> p8_runtime::reflect::FnInfo {
+        self.method_info_of(class, m)
     }
 
     fn static_variables(&mut self, callee: &p8_runtime::reflect::Callee) -> PhpArray {
