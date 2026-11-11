@@ -1,6 +1,5 @@
 //! p8's safety rules, checked so they cannot erode silently: every p8 crate
-//! forbids `unsafe`, and nothing p8 depends on builds or links C (stricter
-//! than the legacy engine, which still links pcre2).
+//! forbids `unsafe`, and nothing p8 depends on builds or links C.
 
 use std::path::Path;
 use std::process::Command;

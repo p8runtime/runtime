@@ -1,2 +1,0 @@
-<?php
-vprintf('%s', ['gild']);
