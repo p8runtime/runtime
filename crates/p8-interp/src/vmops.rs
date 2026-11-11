@@ -577,3 +577,30 @@ pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(hx: Hx, args::FetchSta
     };
     Ctl::Next(put(&mut hx.w[r(dst)], v))
 }
+
+/// `C::$name = val`: the cell `fetch_static_prop`'s entry holds for this
+/// class and scope gets the value (through a reference it holds, as
+/// `store` writes it), and `dst` the value too. A miss, no called class or
+/// scope, an undefined value (the warning) are cold.
+#[inline(always)]
+pub(crate) fn assign_static_prop<S: spec::AssignStaticProp>(hx: Hx, args::AssignStaticProp { val, dst, class, site }: args::AssignStaticProp) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.statics.get(site as usize) else { return Ctl::Cold };
+    let v = if is_k(S::Val::ID) {
+        hx.v::<S::Val>(val).clone()
+    } else {
+        match copied(&hx.w[r(val)]) {
+            Some(v) => v,
+            None => return Ctl::Cold,
+        }
+    };
+    let released = {
+        let e = entry.borrow();
+        let Some(cell) = &e.cell else { return Ctl::Cold };
+        if e.key != key || e.scope != hx.scope() {
+            return Ctl::Cold;
+        }
+        put_var(&mut cell.borrow_mut(), v.clone())
+    };
+    Ctl::Next(put(&mut hx.w[r(dst)], v) | released)
+}

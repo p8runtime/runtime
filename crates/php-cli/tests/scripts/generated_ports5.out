@@ -1,0 +1,217 @@
+-- method calls
+files+dirs+files left base+prot Left Left:left
+NULL
+string(5) "right"
+right Right:right
+Left Right Base
+left Left:left
+right Right:right
+base Base:base
+left Left:left
+right Right:right
+base+prot Left priv Left
+real
+__call fake(1,2)
+__call missing(0) __callStatic nothing(0)
+__call name()
+left
+3 a 1
+ArrayObject 1
+ArrayIterator 2
+ArrayObject 3
+6 104 105
+Error: Call to a member function name() on null
+Error: Call to private method Base::priv() from global scope
+Error: Call to protected method Base::prot() from global scope
+Error: Call to undefined method Left::nope()
+Error: Call to a member function name() on int
+files+dirs+files left base+prot Left Left:left
+NULL
+string(5) "right"
+right Right:right
+Left Right Base
+left Left:left
+right Right:right
+base Base:base
+left Left:left
+right Right:right
+base+prot Left priv Left
+real
+__call fake(1,2)
+__call missing(1) __callStatic nothing(1)
+__call name()
+left
+3 a 1
+ArrayObject 1
+ArrayIterator 2
+ArrayObject 3
+6 104 105
+Error: Call to a member function name() on null
+Error: Call to private method Base::priv() from global scope
+Error: Call to protected method Base::prot() from global scope
+Error: Call to undefined method Left::nope()
+Error: Call to a member function name() on int
+-- sends by reference
+1 10 100
+int(1)
+int(10)
+int(100)
+2 1 12 100
+2 12 112
+1 11
+array(3) {
+  ["k"]=>
+  int(12)
+  ["new"]=>
+  int(1)
+  ["deep"]=>
+  array(1) {
+    ["er"]=>
+    int(100)
+  }
+}
+int(112)
+object(stdClass)#8 (1) {
+  ["dyn"]=>
+  int(11)
+}
+2 3 3
+1,2,3 b 1
+
+Warning: Array to string conversion in %s on line 127
+Array
+1 10 100
+int(1)
+int(10)
+int(100)
+2 1 12 100
+2 12 112
+1 11
+array(3) {
+  ["k"]=>
+  int(12)
+  ["new"]=>
+  int(1)
+  ["deep"]=>
+  array(1) {
+    ["er"]=>
+    int(100)
+  }
+}
+int(112)
+object(stdClass)#13 (1) {
+  ["dyn"]=>
+  int(11)
+}
+2 3 3
+1,2,3 b 1
+
+Warning: Array to string conversion in %s on line 127
+Array
+-- parameter defaults
+k 6 made H 3,k NULL
+A 6 made H 3,k NULL
+A 1 v S  0
+k 6 named H 3,k 'F'
+   H  NULL
+5
+Error: Undefined constant "UNDEFINED_CONST"
+k 6 made H 3,k NULL
+A 6 made H 3,k NULL
+A 1 v S  0
+k 6 named H 3,k 'F'
+   H  NULL
+5
+Error: Undefined constant "UNDEFINED_CONST"
+-- static property writes
+chained chained
+set 11 set 12 set 13 13
+via other base child set
+a b
+through
+back
+destruct first 0
+after the write
+destruct second 0
+after null
+Error: Cannot access private property Stat::$secret
+Error: Cannot access protected property Stat::$prot
+Error: Access to undeclared static property Stat::$undeclared
+Error: Class "NoSuchClass" not found
+
+Warning: Undefined variable $undefined_var in %s on line 199
+NULL
+chained chained
+set 11 set 12 set 13 13
+via other base child set
+a b
+through
+back
+destruct first 1
+after the write
+destruct second 1
+after null
+Error: Cannot access private property Stat::$secret
+Error: Cannot access protected property Stat::$prot
+Error: Access to undeclared static property Stat::$undeclared
+Error: Class "NoSuchClass" not found
+
+Warning: Undefined variable $undefined_var in %s on line 199
+NULL
+-- static calls asked by reference
+a! b 1! !
+a!! a!! b! a!!? a!!? b!!
+array(3) {
+  ["k"]=>
+  string(4) "a!!?"
+  ["j"]=>
+  string(3) "b!!"
+  ["new"]=>
+  string(1) "!"
+}
+string(2) "1!"
+Error: Call to undefined method StaticRef::nope()
+a! b 1! !
+a!! a!! b! a!!? a!!? b!!
+array(3) {
+  ["k"]=>
+  string(4) "a!!?"
+  ["j"]=>
+  string(3) "b!!"
+  ["new"]=>
+  string(1) "!"
+}
+string(2) "1!"
+Error: Call to undefined method StaticRef::nope()
+-- references to properties
+changed
+20
+10,20
+4
+object(stdClass)#19 (1) {
+  ["made"]=>
+  &string(4) "made"
+}
+
+Deprecated: Creation of dynamic property Props::$dynamic is deprecated in %s on line 251
+dyn
+Error: Cannot indirectly modify readonly property Props::$ro
+Error: Cannot indirectly modify private(set) property Props::$narrow from global scope
+Error: Indirect modification of Props::$hooked is not allowed
+Error: Attempt to modify property "p" on null
+changed
+20
+10,20
+4
+object(stdClass)#16 (1) {
+  ["made"]=>
+  &string(4) "made"
+}
+
+Deprecated: Creation of dynamic property Props::$dynamic is deprecated in %s on line 251
+dyn
+Error: Cannot indirectly modify readonly property Props::$ro
+Error: Cannot indirectly modify private(set) property Props::$narrow from global scope
+Error: Indirect modification of Props::$hooked is not allowed
+Error: Attempt to modify property "p" on null
+done

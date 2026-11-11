@@ -533,7 +533,18 @@ impl Context<'_> {
                     Op::SendVarMethod => {
                         ops!(a, b, c, imm);
                         let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
-                        let Some(o) = w[rx!(obj)].as_object() else { slow!() };
+                        // (An object through a reference, as MethodCall's.)
+                        let held;
+                        let o = match w[rx!(obj)].as_object() {
+                            Some(o) => o,
+                            None => {
+                                held = ref_object(&w[rx!(obj)]);
+                                match &held {
+                                    Some(o) => o,
+                                    None => slow!(),
+                                }
+                            }
+                        };
                         let (class, scope) = (Rc::as_ptr(&o.class) as usize, top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
                         let by_ref = clo.methods[method].borrow().as_ref().and_then(|s| match &s.code {
                             // (Not counted when the next frame slot runs it.)
@@ -769,23 +780,28 @@ impl Context<'_> {
                             done!(released);
                         }
                     }
-                    // An argument a user function or builtin the call site
-                    // resolved to takes by value: a copy (by reference, an
-                    // unresolved site, an undefined variable: `step`).
+                    // An argument of the user function or builtin the call
+                    // site resolved to: a copy when it takes it by value,
+                    // the variable made a reference (an undefined one null,
+                    // with no warning, as `step` makes it) when it takes it
+                    // by reference (an unresolved site, an undefined
+                    // variable sent by value: `step`).
                     Op::SendVar => {
                         ops!(a, b, c, imm);
                         let n = (imm >> 16) as usize;
-                        let by_value = match clo.sites[(imm & 0xffff) as usize].get() {
-                            Some(&Callee::User(f)) => !self.codes[f as usize].param_by_ref(n),
-                            Some(&Callee::Builtin(i)) => !self.isolate.registry.by_ref(i, n),
-                            Some(Callee::Constant(_)) => true,
-                            None => false,
+                        let by_ref = match clo.sites[(imm & 0xffff) as usize].get() {
+                            Some(&Callee::User(f)) => self.codes[f as usize].param_by_ref(n),
+                            Some(&Callee::Builtin(i)) => self.isolate.registry.by_ref(i, n),
+                            Some(Callee::Constant(_)) => false,
+                            None => slow!(),
                         };
-                        if !by_value {
-                            slow!();
+                        if by_ref {
+                            let cell = make_ref(&mut w[..], Reg::from(b));
+                            done!(put(&mut w[rx!(a)], Value::reference(cell)));
+                        } else {
+                            let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                            done!(put(&mut w[rx!(a)], v));
                         }
-                        let Some(v) = copied(&w[rx!(b)]) else { slow!() };
-                        done!(put(&mut w[rx!(a)], v));
                     }
                     // A call of a user function the call site resolved, with
                     // its required arguments, and no interrupt pending: its
@@ -897,7 +913,18 @@ impl Context<'_> {
                     Op::MethodCall => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
-                        let Some(o) = w[rx!(obj)].as_object() else { slow!() };
+                        // (An object through a reference: `global $o; $o->m()`.)
+                        let held;
+                        let o = match w[rx!(obj)].as_object() {
+                            Some(o) => o,
+                            None => {
+                                held = ref_object(&w[rx!(obj)]);
+                                match &held {
+                                    Some(o) => o,
+                                    None => slow!(),
+                                }
+                            }
+                        };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let found = {
                             let site = clo.methods[method].borrow();
@@ -1219,6 +1246,32 @@ impl Context<'_> {
                         let Some(o) = w[rx!(b)].as_object() else { slow!() };
                         let Some(by_ref) = self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, usize::from(c)) else { slow!() };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
+                    // `&$o->p`: the declared slot the name's cache entry has
+                    // for this class and scope, made a reference
+                    // (`prop_ref_cached`); anything else is `step`'s.
+                    Op::PropRef => {
+                        ops!(a, b, c, imm);
+                        let Some(o) = w[rx!(b)].as_object() else { slow!() };
+                        let Some(site) = clo.props.get(imm as usize) else { slow!() };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let Some(cell) = prop_ref_cached(o, site.get(), scope) else { slow!() };
+                        done!(put(&mut w[rx!(a)], Value::reference(cell)));
+                    }
+                    // The same for `C::m(..)` (`static_takes_ref_out`: the
+                    // class known without a lookup, the method the site's
+                    // cache has); else `step`'s lookup.
+                    Op::StaticArgByRef => {
+                        ops!(a, b, c, imm);
+                        let Some(by_ref) = self.static_takes_ref_out(clo, (imm >> 16) as u16, (imm & 0xffff) as usize, usize::from(c)) else { slow!() };
+                        done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
+                    // Parameter a passed (and not a hole a named argument
+                    // left): past its default's code (a forward jump); else
+                    // into it.
+                    Op::ArgDefault => {
+                        ops!(a, b, c, imm);
+                        pc = if usize::from(a) < top.argc as usize && !w[rx!(a)].is_undef() { imm as usize } else { pc + 1 };
                     }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).
@@ -1605,6 +1658,34 @@ fn prop_inc_dec(o: &Rc<Object>, site: PropSite, scope: usize, imm: u32) -> Optio
     }
     cell.assign(new.clone());
     Some(if imm & insn::PROP_POST != 0 { Value::int(old) } else { new })
+}
+
+/// The object a reference holds (a method call's receiver bound by
+/// `global` or `&`); None for anything else.
+#[cold]
+#[inline(never)]
+fn ref_object(v: &Value) -> Option<Rc<Object>> {
+    v.as_reference()?.borrow().cloned_object()
+}
+
+/// `&$o->p` (`Op::PropRef`): the declared slot the name's cache entry
+/// `site` holds for this class and `scope` (`cached_slot`: visible, the
+/// object not lazy), of a class with no hooked property, the property
+/// neither readonly nor of a narrower set visibility, and set: made a
+/// reference, as `prop_ref` makes it. None for anything else (`step`'s:
+/// magic, hooks, the errors, an unset slot).
+#[inline(never)]
+fn prop_ref_cached(o: &Rc<Object>, site: PropSite, scope: usize) -> Option<Rc<RefCell<Value>>> {
+    let slot = cached_slot(site, o, scope)?;
+    let p = &o.class.properties[slot];
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
+        return None;
+    }
+    let cell = &o.slots()[slot];
+    if cell.peek(Value::is_undef) {
+        return None;
+    }
+    Some(cell.modify(crate::refs::make_ref))
 }
 
 /// A typed variadic's list (`CollectVariadic`'s), each element plainly of

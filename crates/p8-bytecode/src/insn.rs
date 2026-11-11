@@ -422,6 +422,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let site = Opnd::Imm(prop_site(name, nconsts)?);
             enc::fetch_static_prop(enc::FetchStaticProp { cls: class_flag(classes, class)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
         }
+        Instr::AssignStaticProp { class, name, val, dst } => {
+            let site = Opnd::Imm(prop_site(name, nconsts)?);
+            enc::assign_static_prop(enc::AssignStaticProp { cls: class_flag(classes, class)?, val: o(val)?, dst: o(dst)?, class: Opnd::Imm(u32::from(class)), site })
+        }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
         // (empty()'s last dimension is IS too: on an array, null, a string's
@@ -583,6 +587,11 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::PropIncDec, if this { 0 } else { obj }, dst, 0, site | flags)
         }
         Instr::MethodArgByRef { dst, obj, method, n } => i(Op::MethodArgByRef, dst, obj, Reg::from(n), u32::from(method)),
+        // `&$o->p` (the name a constant: its cache entry).
+        Instr::Rare { op: Rare::PropRef, a, b, c, .. } => i(Op::PropRef, a, b, 0, prop_site(c, nconsts)?),
+        Instr::StaticArgByRef { dst, class, method, n } => i(Op::StaticArgByRef, dst, 0, Reg::from(n), u32::from(method) | u32::from(class) << 16),
+        // (Parameter n is register n.)
+        Instr::ArgDefault { n, target } => i(Op::ArgDefault, Reg::from(n), 0, 0, target),
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }
@@ -867,6 +876,36 @@ mod tests {
         assert_eq!(at(7).unwrap(), Insn { op: Op::PropIncDec, a: 20, b: 6, c: 0, imm: 4 | PROP_POST });
         assert!(at(8).is_none());
         assert_eq!(at(9).unwrap(), Insn { op: Op::MethodArgByRef, a: 6, b: 20, c: 2, imm: 5 });
+    }
+
+    #[test]
+    fn the_fifth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            Instr::ArgDefault { n: 2, target: 9 },
+            Instr::StaticArgByRef { dst: 6, class: 1, method: 5, n: 2 },
+            // `&$o->p`, the name a constant; a name in a register is not inline.
+            Instr::rare(Rare::PropRef, 6, 20, c(4), 0),
+            Instr::rare(Rare::PropRef, 6, 20, 3, 0),
+            // `self::$x = $v` in a trait (class 0), `static::$x = 5`; a
+            // class in a register (class 2) or a name in a register: not
+            // inline.
+            Instr::AssignStaticProp { class: 0, name: c(7), val: 3, dst: 6 },
+            Instr::AssignStaticProp { class: 1, name: c(7), val: c(5), dst: 6 },
+            Instr::AssignStaticProp { class: 2, name: c(7), val: 3, dst: 6 },
+            Instr::AssignStaticProp { class: 0, name: 4, val: 3, dst: 6 },
+        ];
+        let consts = consts();
+        let classes = [ClassRef::Scope, ClassRef::Static, ClassRef::Dynamic(3)];
+        let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &[]);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::ArgDefault, a: 2, b: 0, c: 0, imm: 9 });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::StaticArgByRef, a: 6, b: 0, c: 2, imm: 5 | 1 << 16 });
+        assert_eq!(at(2).unwrap(), Insn { op: Op::PropRef, a: 6, b: 20, c: 0, imm: 4 });
+        assert!(at(3).is_none());
+        assert_eq!(at(4).unwrap().op, Op::P8_ASSIGN_STATIC_PROP_SCOPE_REG);
+        assert_eq!(at(5).unwrap().op, Op::P8_ASSIGN_STATIC_PROP_STATIC_K);
+        assert!(at(6).is_none());
+        assert!(at(7).is_none());
     }
 
     #[test]
