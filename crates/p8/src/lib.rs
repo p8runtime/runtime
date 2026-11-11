@@ -133,21 +133,26 @@ impl Platform {
     /// it, and reports its error, as without a package).
     pub fn write_package(&self, root: &std::path::Path, out: &std::path::Path) -> std::io::Result<Packed> {
         let symbols = self.compiler.registry.symbols();
-        let mut built = Vec::new();
         let mut failed = Vec::new();
-        for path in package::sources(root) {
-            let Ok(real) = canonicalize(&path) else { continue };
-            let file = real.to_string_lossy().into_owned();
-            let (Ok(source), Ok(meta)) = (std::fs::read(&real), std::fs::metadata(&real)) else { continue };
-            match compile(&self.compiler.registry, &source, &file, false) {
-                Ok(program) => built.push(package::Built::new(file, &source, &meta, p8_bytecode::serial::encode(&program, symbols))),
-                Err(e) => failed.push(e),
+        let (files, bytes) = package::replace(out, None, |file| {
+            let mut writer = package::Writer::new(std::io::BufWriter::new(file))?;
+            let mut seen = std::collections::HashSet::new();
+            for path in package::sources(root) {
+                let Ok(real) = canonicalize(&path) else { continue };
+                let file = real.to_string_lossy().into_owned();
+                let (Ok(source), Ok(meta)) = (std::fs::read(&real), std::fs::metadata(&real)) else { continue };
+                if !seen.insert(file.clone()) {
+                    continue;
+                }
+                match compile(&self.compiler.registry, &source, &file, false) {
+                    Ok(program) => writer.add(file, package::modified(&meta).unwrap_or((0, 0)), &source, &p8_bytecode::serial::encode(&program, symbols))?,
+                    Err(e) => failed.push(e),
+                }
             }
-        }
-        let files = built.len();
-        let bytes = package::bytes(built, &self.engine());
-        package::write_file(out, &[&bytes], None)?;
-        Ok(Packed { files, failed, bytes: bytes.len() as u64 })
+            let (out, files, bytes) = writer.finish(&self.engine())?;
+            Ok((out.into_inner().map_err(|e| e.into_error())?, (files, bytes)))
+        })?;
+        Ok(Packed { files, failed, bytes })
     }
 
     /// Write to `out` a copy of the running executable with the package at
@@ -161,7 +166,14 @@ impl Platform {
         let exe = std::env::current_exe().map_err(PackageError::Io)?;
         let mut program = std::fs::read(&exe).map_err(PackageError::Io)?;
         program.truncate(package::executable_len(&program));
-        package::write_file(out, &[&program, &bytes, &package::tail(&bytes)], Some(&exe)).map_err(PackageError::Io)
+        package::replace(out, Some(&exe), |mut file| {
+            use std::io::Write;
+            for piece in [&program[..], &bytes, &package::tail(&bytes)] {
+                file.write_all(piece)?;
+            }
+            Ok((file, ()))
+        })
+        .map_err(PackageError::Io)
     }
 
     /// Report the cache this Platform keeps (keep_compiled, file_cache) as

@@ -802,5 +802,10 @@ mod tests {
             assert_eq!(*op as usize, first + n);
         }
         assert!(SPECS.len() > 40);
+        // ALL lists every opcode at its number, the generated ones last.
+        for (n, op) in Op::ALL.iter().enumerate() {
+            assert_eq!(*op as usize, n);
+        }
+        assert_eq!(Op::ALL.len(), first + SPECS.len());
     }
 }

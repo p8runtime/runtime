@@ -15,16 +15,16 @@
 //!
 //! - header (`HEADER` bytes): `MAGIC`; the engine (16 bytes, see
 //!   [`engine`]); the number of files (u32); 0 (u32); the package's length
-//!   (u64); the index's length (u64); a checksum (XXH3-128) of the header
-//!   before it and of the index.
+//!   (u64); where the index starts (u64; it runs to the end); a checksum
+//!   (XXH3-128) of the header before it and of the index.
+//! - the programs: each file's as the file cache stores it
+//!   ([`p8_bytecode::serial`]), written as they are compiled.
 //! - index: one `RECORD` per file, sorted by path: where its path is in
 //!   the path list (u32 offset, u32 length), its source's length (u64),
 //!   modification time (i64 seconds, u32 nanoseconds), 0 (u32), source hash
 //!   (XXH3-128), where its program is (u64 offset from the package's start,
 //!   u64 length) and the program's checksum (XXH3-128); then the paths,
 //!   back to back.
-//! - the programs: each file's as the file cache stores it
-//!   ([`p8_bytecode::serial`]).
 //!
 //! Opening a package reads its header and index only; a file's program
 //! is read, checked and decoded when the file is first included, so what
@@ -47,8 +47,8 @@ const MAGIC: &[u8; 8] = b"p8pack\0\0";
 /// The last bytes of an executable with a package appended: the
 /// package's length (u64), then these.
 const TAIL: &[u8; 8] = b"p8pkgend";
-/// MAGIC, the engine, the count and a zero, the length, the index's
-/// length, the checksum.
+/// MAGIC, the engine, the count and a zero, the length, where the index
+/// starts, the checksum.
 const HEADER: usize = 8 + 16 + 8 + 8 + 8 + 16;
 /// What the checksum covers of the header: all before it.
 const SUMMED: usize = HEADER - 16;
@@ -171,7 +171,7 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 }
 
 /// A file's modification time, as the index keeps it.
-fn modified(meta: &std::fs::Metadata) -> Option<(i64, u32)> {
+pub(crate) fn modified(meta: &std::fs::Metadata) -> Option<(i64, u32)> {
     let t = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some((i64::try_from(t.as_secs()).ok()?, t.subsec_nanos()))
 }
@@ -213,11 +213,12 @@ impl Package {
         }
         let count = u32_at(&header, 24).ok_or(PackageError::Damaged)? as usize;
         let total = u64_at(&header, 32).ok_or(PackageError::Damaged)?;
-        let index_len = u64_at(&header, 40).ok_or(PackageError::Damaged)?;
-        if total != len || index_len > len.saturating_sub(HEADER as u64) || (index_len as usize) < count.checked_mul(RECORD).ok_or(PackageError::Damaged)? {
+        let index_at = u64_at(&header, 40).ok_or(PackageError::Damaged)?;
+        let index_len = usize::try_from(len.checked_sub(index_at).ok_or(PackageError::Damaged)?).map_err(|_| PackageError::Damaged)?;
+        if total != len || index_at < HEADER as u64 || index_len < count.checked_mul(RECORD).ok_or(PackageError::Damaged)? {
             return Err(PackageError::Damaged);
         }
-        let index = bytes.read(HEADER as u64, index_len as usize).ok_or(PackageError::Damaged)?;
+        let index = bytes.read(index_at, index_len).ok_or(PackageError::Damaged)?;
         let mut sum = Xxh3::new();
         sum.update(&header[..SUMMED]);
         sum.update(&index);
@@ -316,85 +317,115 @@ impl Package {
     }
 }
 
-/// A file compiled for a package.
-pub(crate) struct Built {
-    pub path: String,
-    pub size: u64,
-    pub modified: (i64, u32),
-    pub hash: [u8; 16],
-    /// Its program (the file cache's bytes).
-    pub program: Vec<u8>,
+/// A packaged file, as the writer keeps it until the index is written.
+struct Entry {
+    path: String,
+    size: u64,
+    modified: (i64, u32),
+    hash: [u8; 16],
+    at: u64,
+    len: u64,
+    sum: [u8; 16],
 }
 
-impl Built {
-    pub(crate) fn new(path: String, source: &[u8], meta: &std::fs::Metadata, program: Vec<u8>) -> Built {
-        Built { path, size: source.len() as u64, modified: modified(meta).unwrap_or((0, 0)), hash: xxh3_128(source).to_le_bytes(), program }
+/// Writes a package: each program as it is compiled (so a project's
+/// programs are never all in memory at once), then the index, then the
+/// header.
+pub(crate) struct Writer<W: Write + Seek> {
+    out: W,
+    at: u64,
+    entries: Vec<Entry>,
+}
+
+impl<W: Write + Seek> Writer<W> {
+    pub(crate) fn new(mut out: W) -> std::io::Result<Writer<W>> {
+        out.write_all(&[0; HEADER])?;
+        Ok(Writer { out, at: HEADER as u64, entries: Vec::new() })
+    }
+
+    /// The file at `path` (resolved), modified at `modified` (see
+    /// [`modified`]), compiled from `source` to `program` (its serial
+    /// bytes).
+    pub(crate) fn add(&mut self, path: String, modified: (i64, u32), source: &[u8], program: &[u8]) -> std::io::Result<()> {
+        self.out.write_all(program)?;
+        let len = program.len() as u64;
+        let entry = Entry {
+            path,
+            size: source.len() as u64,
+            modified,
+            hash: xxh3_128(source).to_le_bytes(),
+            at: self.at,
+            len,
+            sum: xxh3_128(program).to_le_bytes(),
+        };
+        self.entries.push(entry);
+        self.at += len;
+        Ok(())
+    }
+
+    /// The index and the header written for `engine`; how many files
+    /// and bytes the package has.
+    pub(crate) fn finish(mut self, engine: &[u8; 16]) -> std::io::Result<(W, usize, u64)> {
+        let mut entries = std::mem::take(&mut self.entries);
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        entries.dedup_by(|a, b| a.path == b.path);
+        let paths: usize = entries.iter().map(|e| e.path.len()).sum();
+        let mut index = Vec::with_capacity(entries.len() * RECORD + paths);
+        let too_long = || std::io::Error::other("a package's paths are under 4 GiB");
+        let mut path_at = 0u32;
+        for e in &entries {
+            let len = u32::try_from(e.path.len()).map_err(|_| too_long())?;
+            index.extend_from_slice(&path_at.to_le_bytes());
+            index.extend_from_slice(&len.to_le_bytes());
+            index.extend_from_slice(&e.size.to_le_bytes());
+            index.extend_from_slice(&e.modified.0.to_le_bytes());
+            index.extend_from_slice(&e.modified.1.to_le_bytes());
+            index.extend_from_slice(&0u32.to_le_bytes());
+            index.extend_from_slice(&e.hash);
+            index.extend_from_slice(&e.at.to_le_bytes());
+            index.extend_from_slice(&e.len.to_le_bytes());
+            index.extend_from_slice(&e.sum);
+            path_at = path_at.checked_add(len).ok_or_else(too_long)?;
+        }
+        for e in &entries {
+            index.extend_from_slice(e.path.as_bytes());
+        }
+        let count = u32::try_from(entries.len()).map_err(|_| std::io::Error::other("a package holds under 2^32 files"))?;
+        let total = self.at + index.len() as u64;
+        let mut header = Vec::with_capacity(HEADER);
+        header.extend_from_slice(MAGIC);
+        header.extend_from_slice(engine);
+        header.extend_from_slice(&count.to_le_bytes());
+        header.extend_from_slice(&0u32.to_le_bytes());
+        header.extend_from_slice(&total.to_le_bytes());
+        header.extend_from_slice(&self.at.to_le_bytes());
+        let mut sum = Xxh3::new();
+        sum.update(&header);
+        sum.update(&index);
+        header.extend_from_slice(&sum.digest128().to_le_bytes());
+        self.out.write_all(&index)?;
+        self.out.seek(SeekFrom::Start(0))?;
+        self.out.write_all(&header)?;
+        Ok((self.out, entries.len(), total))
     }
 }
 
-/// A package of `files` (by `engine`), as bytes.
-pub(crate) fn bytes(mut files: Vec<Built>, engine: &[u8; 16]) -> Vec<u8> {
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    files.dedup_by(|a, b| a.path == b.path);
-    let paths: usize = files.iter().map(|f| f.path.len()).sum();
-    let index_len = files.len() * RECORD + paths;
-    let programs: usize = files.iter().map(|f| f.program.len()).sum();
-    let total = HEADER + index_len + programs;
-    let mut index = Vec::with_capacity(index_len);
-    let (mut path_at, mut program_at) = (0u32, (HEADER + index_len) as u64);
-    for f in &files {
-        index.extend_from_slice(&path_at.to_le_bytes());
-        index.extend_from_slice(&(f.path.len() as u32).to_le_bytes());
-        index.extend_from_slice(&f.size.to_le_bytes());
-        index.extend_from_slice(&f.modified.0.to_le_bytes());
-        index.extend_from_slice(&f.modified.1.to_le_bytes());
-        index.extend_from_slice(&0u32.to_le_bytes());
-        index.extend_from_slice(&f.hash);
-        index.extend_from_slice(&program_at.to_le_bytes());
-        index.extend_from_slice(&(f.program.len() as u64).to_le_bytes());
-        index.extend_from_slice(&xxh3_128(&f.program).to_le_bytes());
-        path_at += f.path.len() as u32;
-        program_at += f.program.len() as u64;
-    }
-    for f in &files {
-        index.extend_from_slice(f.path.as_bytes());
-    }
-    let mut out = Vec::with_capacity(total);
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(engine);
-    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&(total as u64).to_le_bytes());
-    out.extend_from_slice(&(index_len as u64).to_le_bytes());
-    let mut sum = Xxh3::new();
-    sum.update(&out);
-    sum.update(&index);
-    out.extend_from_slice(&sum.digest128().to_le_bytes());
-    out.extend_from_slice(&index);
-    for f in &files {
-        out.extend_from_slice(&f.program);
-    }
-    out
-}
-
-/// Write `pieces` to `target` whole or not at all: into a temporary file
-/// beside it, renamed into place (a run reading the old package keeps
-/// reading the old one). `like` gives the new file its permissions.
-pub(crate) fn write_file(target: &Path, pieces: &[&[u8]], like: Option<&Path>) -> std::io::Result<()> {
+/// Write `target` whole or not at all: `write` fills a temporary file
+/// beside it, which is then renamed into place (a run reading the old
+/// file keeps reading the old one). `like` gives it its permissions.
+pub(crate) fn replace<T>(target: &Path, like: Option<&Path>, write: impl FnOnce(std::fs::File) -> std::io::Result<(std::fs::File, T)>) -> std::io::Result<T> {
     let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
     let name = target.file_name().map_or_else(|| "package".into(), |n| n.to_string_lossy().into_owned());
     let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = (|| {
-        let mut f = std::fs::File::create(&temp)?;
-        for piece in pieces {
-            f.write_all(piece)?;
-        }
-        f.sync_all()?;
+        let (file, made) = write(std::fs::File::create(&temp)?)?;
+        file.sync_all()?;
         if let Some(like) = like {
             std::fs::set_permissions(&temp, std::fs::metadata(like)?.permissions())?;
         }
-        std::fs::rename(&temp, target)
+        std::fs::rename(&temp, target)?;
+        Ok(made)
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
@@ -446,16 +477,18 @@ pub(crate) fn sources(root: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
-    fn built(path: &str, source: &str, registry: &p8_runtime::ext::Registry) -> Built {
-        let program = crate::compile(registry, source.as_bytes(), path, false).expect("compiles");
-        let bytes = p8_bytecode::serial::encode(&program, registry.symbols());
-        Built { path: path.into(), size: source.len() as u64, modified: (1, 2), hash: xxh3_128(source.as_bytes()).to_le_bytes(), program: bytes }
-    }
-
+    /// A package of /p/a.php and /p/b.php (added out of order), by `engine`.
     fn sample(engine: &[u8; 16]) -> (Vec<u8>, p8_runtime::ext::Registry) {
         let registry = p8_runtime::ext::Registry::new(&[crate::extensions::STANDARD]);
-        let files = vec![built("/p/b.php", "<?php function b() { return 2; }", &registry), built("/p/a.php", "<?php echo 1;", &registry)];
-        (bytes(files, engine), registry)
+        let mut w = Writer::new(std::io::Cursor::new(Vec::new())).expect("writer");
+        for (path, source) in [("/p/b.php", "<?php function b() { return 2; }"), ("/p/a.php", "<?php echo 1;")] {
+            let program = crate::compile(&registry, source.as_bytes(), path, false).expect("compiles");
+            w.add(path.into(), (1, 2), source.as_bytes(), &p8_bytecode::serial::encode(&program, registry.symbols())).expect("add");
+        }
+        let (out, count, total) = w.finish(engine).expect("finish");
+        let bytes = out.into_inner();
+        assert_eq!((count, total), (2, bytes.len() as u64));
+        (bytes, registry)
     }
 
     #[test]
@@ -488,17 +521,17 @@ mod tests {
         let (bytes, registry) = sample(&[7; 16]);
         let symbols = registry.symbols();
         let open = |b: Vec<u8>| Package::in_memory(b, &[7; 16], PackageCheck::Hash);
-        let index_end = HEADER + u64_at(&bytes, 40).expect("index length") as usize;
+        let programs = HEADER..u64_at(&bytes, 40).expect("where the index is") as usize;
         for n in 0..bytes.len() {
             assert!(open(bytes[..n].to_vec()).is_err(), "cut at {n}");
             let mut changed = bytes.clone();
             changed[n] ^= 0x20;
             match open(changed) {
                 // A byte of the header or the index: the package is refused.
-                Err(_) => assert!(n < index_end, "byte {n} of a program refused the package"),
+                Err(_) => assert!(!programs.contains(&n), "byte {n} of a program refused the package"),
                 // A byte of a program: that file is not taken from it.
                 Ok(p) => {
-                    assert!(n >= index_end, "byte {n} of the index went unnoticed");
+                    assert!(programs.contains(&n), "byte {n} of the header or index went unnoticed");
                     let a = p.load(b"<?php echo 1;", "/p/a.php", symbols).is_some();
                     let b = p.load(b"<?php function b() { return 2; }", "/p/b.php", symbols).is_some();
                     assert!(!(a && b), "byte {n} changed and both files were used");
