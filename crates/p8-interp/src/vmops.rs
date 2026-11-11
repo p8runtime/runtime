@@ -229,8 +229,14 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
         };
         match e {
             Some(v) if !v.is_reference() => v.clone(),
+            // (An element bound by reference: read through it, as a read
+            // derefs; out of line.)
+            Some(v) => match ref_elem(v) {
+                Some(v) => v,
+                None => return Ctl::Cold,
+            },
             None if S::Mode::ID == IS => Value::NULL,
-            _ => return Ctl::Cold,
+            None => return Ctl::Cold,
         }
     } else {
         // (Out of line: the array case is the arm's straight path.)
@@ -241,6 +247,14 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
     };
     let _ = put(&mut hx.w[r(dst)], v);
     Ctl::Next(true)
+}
+
+/// An array element that is a reference, read through it (`read_ref`:
+/// None when it holds nothing).
+#[cold]
+#[inline(never)]
+fn ref_elem(v: &Value) -> Option<Value> {
+    read_ref(v.as_reference()?)
 }
 
 /// `$c[k]` of anything but an array: a string's offset, an int key, is its

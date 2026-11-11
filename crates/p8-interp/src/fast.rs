@@ -497,30 +497,37 @@ impl Context<'_> {
                     Op::Intrinsic => {
                         ops!(a, b, c, imm);
                         let (dst, args, argc) = (a, rx!(b), c);
-                        if !matches!(clo.sites[(imm & 0xffff) as usize].get(), Some(Callee::Builtin(_))) {
-                            slow!();
+                        let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() else { slow!() };
+                        // The rest (`count()` of a Countable, a string
+                        // converted, a warning): the builtin's call, out of
+                        // line as the Call arm's (`builtin_call`).
+                        macro_rules! call {
+                            () => {{
+                                pc = self.builtin_call(regs, pc, base, i, (Reg::from(b), c, Reg::from(a)))?;
+                                continue 'frame;
+                            }};
                         }
                         let x = &w[args];
                         let r = match imm >> 16 {
                             0 => match x.as_str() {
                                 Some(s) => Value::int(s.len() as i64),
-                                None => slow!(),
+                                None => call!(),
                             },
                             1 => match x.as_array() {
                                 Some(arr) => Value::int(arr.len() as i64),
-                                None => slow!(),
+                                None => call!(),
                             },
                             9 => {
-                                let Some(arr) = w[rk!(args + 1)].as_array() else { slow!() };
+                                let Some(arr) = w[rk!(args + 1)].as_array() else { call!() };
                                 if let Some(k) = x.as_int() {
                                     Value::bool(arr.contains_key(&Key::Int(k)))
                                 } else if let Some(s) = x.as_str() {
                                     Value::bool(arr.get_str(s).is_some())
                                 } else {
-                                    slow!()
+                                    call!()
                                 }
                             }
-                            _ if x.is_undef() || x.is_reference() => slow!(),
+                            _ if x.is_undef() || x.is_reference() => call!(),
                             2 => Value::bool(x.is_null()),
                             3 => Value::bool(x.is_bool()),
                             4 => Value::bool(x.is_int()),
@@ -528,7 +535,7 @@ impl Context<'_> {
                             6 => Value::bool(x.is_str()),
                             7 => Value::bool(x.is_array()),
                             8 => Value::bool(x.as_object().is_some_and(|o| o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
-                            _ => slow!(),
+                            _ => call!(),
                         };
                         // The arguments consumed may have been an object's last
                         // holder (`count([new D])`): a destructor due runs here.
@@ -701,12 +708,22 @@ impl Context<'_> {
                         assign_op!(insn::binop(imm), a, cst_src!(imm >> 8));
                     }
                     // $i++ / ++$i (and --) whose value is used, on an int
+                    // (through a reference too: a static or global variable)
                     Op::IncDec => {
                         ops!(a, b, c, imm);
-                        let Some(slot) = w[rx!(a)].as_int_mut() else { slow!() };
-                        let i = *slot;
-                        let Some(n) = (if imm & insn::INC != 0 { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
-                        *slot = n;
+                        let inc = imm & insn::INC != 0;
+                        let (i, n) = if let Some(slot) = w[rx!(a)].as_int_mut() {
+                            let i = *slot;
+                            let Some(n) = (if inc { i.checked_add(1) } else { i.checked_sub(1) }) else { slow!() };
+                            *slot = n;
+                            (i, n)
+                        } else if let Some(cell) = w[rx!(a)].as_reference()
+                            && let Some(n) = step_ref(cell, if inc { i64::checked_add } else { i64::checked_sub })
+                        {
+                            (if inc { n - 1 } else { n + 1 }, n)
+                        } else {
+                            slow!()
+                        };
                         done!(put(&mut w[rx!(b)], Value::int(if imm & insn::POST != 0 { i } else { n })));
                     }
                     Op::LoadNull => {
@@ -1340,6 +1357,27 @@ impl Context<'_> {
                             None => slow!(),
                         };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
+                    // `foreach ($a as &$v)` of an array (through a reference
+                    // too): the variable made a reference, the iterator its
+                    // position 0 and the reference (as `step` makes them);
+                    // an empty one jumps past the loop. An object, anything
+                    // that warns: `step`.
+                    Op::IterInitRef => {
+                        ops!(a, b, c, imm);
+                        let empty = match w[rx!(a)].as_reference() {
+                            Some(cell) => cell.borrow().as_array().map(PhpArray::is_empty),
+                            None => w[rx!(a)].as_array().map(PhpArray::is_empty),
+                        };
+                        let Some(empty) = empty else { slow!() };
+                        let cell = make_ref(&mut w[..], Reg::from(a));
+                        if empty {
+                            pc = imm as usize;
+                        } else {
+                            let it = rx!(b);
+                            let released = put(&mut w[it], Value::int(0)) | put(&mut w[rk!(it + 1)], Value::reference(cell));
+                            done!(released);
+                        }
                     }
                     // A `foreach (.. as &$v)` step over an array (the state a
                     // reference to it): its next element made a reference
@@ -2266,8 +2304,9 @@ pub(crate) fn truth(v: &Value) -> Option<bool> {
 }
 
 /// `$a[k]` beyond an array and an int key: a string key, an array held
-/// through a reference; None (`step`: a warning, an object, a string's
-/// offset) otherwise. The element must not be a reference.
+/// through a reference; an element that is a reference read through it
+/// (as a read of it derefs, ZVAL_COPY_DEREF); None (`step`: a warning,
+/// an object, a string's offset) otherwise.
 #[cold]
 #[inline(never)]
 pub(crate) fn elem(w: &[Value], arr: Reg, key: Src) -> Option<Value> {
@@ -2289,7 +2328,11 @@ pub(crate) fn elem(w: &[Value], arr: Reg, key: Src) -> Option<Value> {
     } else {
         None
     };
-    v.filter(|v| !v.is_reference())
+    let v = v?;
+    match v.as_reference() {
+        Some(cell) => read_ref(cell),
+        None => Some(v),
+    }
 }
 
 /// isset($a[k]) beyond an array and an int key: a string key, an array

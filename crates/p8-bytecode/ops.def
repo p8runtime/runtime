@@ -215,6 +215,9 @@ hand FuncArgByRef
 /// `static $a`: a = a reference to static variable b | c << 8 of the
 /// running code; pc = imm (past its initializer) when it was made before
 hand StaticVar
+/// `foreach ($a as &$v)` of the array in a (made a reference): iterator b
+/// (its position 0, the reference at b + 1), or pc = imm when it is empty
+hand IterInitRef
 /// A `foreach (.. as &$v)` step (iterator a, its position; the state at
 /// a + 1): b = a reference to the next element, c = its key when imm has
 /// ITER_KEY, else pc = imm & !ITER_KEY (past the loop)

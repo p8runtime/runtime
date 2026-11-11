@@ -258,6 +258,17 @@ for ($r = 0; $r < 2; $r++) {
     echo json_encode($nested), "\n";
     $empty = [];
     foreach ($empty as &$v) { echo "never\n"; }
+    $nothing = null;
+    foreach ($nothing as &$v) { echo "never\n"; }
+    $bound = [1, 'k' => 2];
+    $first = &$bound[0];
+    $kref = &$bound['k'];
+    $first = 10;
+    echo $bound[0], ' ', $bound['k'], ' ', $bound['no'] ?? 'none', "\n";
+    $held = &$bound;
+    $kk = 'k';
+    echo $held[$kk], ' ', $held[0], "\n";
+    unset($first, $kref, $held);
     $keep = ['x' => 1];
     $alias = 'old';
     $k2 = &$alias;

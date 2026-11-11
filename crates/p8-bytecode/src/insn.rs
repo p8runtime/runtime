@@ -611,6 +611,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             None => i(Op::FetchList, dst, arr, key, LIST_KEY_REG),
         },
         // (The iterator and its state: a block in the window.)
+        Instr::IterInitRef { src, iter, end } => {
+            block(iter, 2)?;
+            i(Op::IterInitRef, src, iter, 0, end)
+        }
         Instr::IterNextRef { iter, val, key, has_key, end } if end < ITER_KEY => {
             block(iter, 2)?;
             i(Op::IterNextRef, iter, val, if has_key { key } else { 0 }, end | if has_key { ITER_KEY } else { 0 })
