@@ -39,6 +39,30 @@ pub(crate) struct MethodCallOps {
     pub(crate) method: u16,
 }
 
+/// A StaticCall's operands (`Instr::StaticCall`'s, as the loop's arms
+/// decode them from their `Insn`; `vars`, NO_VARS for a plain StaticCall,
+/// from the variables StaticCallVars names).
+#[derive(Clone, Copy)]
+pub(crate) struct StaticCallOps {
+    pub(crate) dst: Reg,
+    pub(crate) class: u16,
+    pub(crate) method: u16,
+    pub(crate) args: Reg,
+    pub(crate) argc: u8,
+    pub(crate) vars: u16,
+}
+
+/// A RefDim's or DimSetRef's operands (`var`: the variable bound, or
+/// DimSetRef's source), as the loop's arms decode them from their `Insn`.
+#[derive(Clone, Copy)]
+pub(crate) struct DimRefOps {
+    pub(crate) var: Reg,
+    pub(crate) root: Reg,
+    pub(crate) keys: Reg,
+    pub(crate) n: u8,
+    pub(crate) append: bool,
+}
+
 /// An IterNext's operands (`Instr::IterNext`'s, as the loop's arm decodes
 /// them from its `Insn`).
 #[derive(Clone, Copy)]
@@ -1927,18 +1951,7 @@ impl Context<'_> {
                     };
                     reg!(dst) = Value::bool(set);
                 }
-                Instr::UnsetVar { var } => {
-                    // In a file included at global scope the variable is the
-                    // global itself: unset removes it there too.
-                    if !in_main
-                        && self.frames.last().is_some_and(|f| f.global)
-                        && let Some(name) = func.cv_names.get(var as usize)
-                    {
-                        let name = name.as_bytes().to_vec();
-                        self.with_main(below, |cx, main| cx.global_clear(main, &name));
-                    }
-                    reg!(var) = Value::UNDEF;
-                }
+                Instr::UnsetVar { var } => return self.unset_var_ops(regs, clo, base, at, var),
                 Instr::UnsetDim { var, keys, n } => {
                     let key_range = keys as usize..keys as usize + n as usize;
                     if arrayaccess::path_has_object(&reg!(var), &w[key_range.clone()], false) {
@@ -2186,16 +2199,8 @@ impl Context<'_> {
                     };
                     return Err(Throw::Exit(status));
                 }
-                Instr::DeclareClass { class } => {
-                    let def = Arc::clone(&func.decls[class as usize]);
-                    self.declare_class(&def)?;
-                }
-                Instr::DeclareFunction { func: i } => {
-                    let declared = Arc::clone(&func.lambdas[i as usize]);
-                    if let Err(message) = self.declare(Arc::clone(&declared)) {
-                        return Err(Throw::Fatal { message, file: Rc::from(&*declared.file), line: declared.line });
-                    }
-                }
+                Instr::DeclareClass { class } => return self.declare_class_ops(clo, at, class),
+                Instr::DeclareFunction { func: i } => return self.declare_function_ops(clo, at, i),
                 Instr::MakeClosure { dst, func: i, is_static } => {
                     let object = self.make_closure(&func.lambdas[i as usize], is_static);
                     reg!(dst) = Value::object(object);
@@ -2243,27 +2248,7 @@ impl Context<'_> {
                         let target = self.lazy_forward(&target, &name).unwrap_or(target);
                         self.prop_bind(&target, &name, cell)?;
                     }
-                    Rare::StaticRef => {
-                            let (dst, name) = (a, b);
-                        if let Some(c) = self.lazy_class(func, class, w)? {
-                            self.resolve_class(regs, &c)?;
-                            return Ok(Next::Go(at));
-                        }
-                        let name = name!(name).clone();
-                        let cell = self.static_cell(func, class, &name, w)?;
-                        let inner = cell.borrow().cloned_reference();
-                        let r = match inner {
-                            Some(r) => r,
-                            None => {
-                                let v = std::mem::take(&mut *cell.borrow_mut());
-                                let v = if v.is_undef() { Value::NULL } else { v };
-                                let r = Rc::new(RefCell::new(v));
-                                *cell.borrow_mut() = Value::reference(Rc::clone(&r));
-                                r
-                            }
-                        };
-                        reg!(dst) = Value::reference(r);
-                    }
+                    Rare::StaticRef => return self.static_ref_ops(regs, clo, base, at, (a, b, class)),
                     Rare::AssignStaticRef => {
                             let (name, src) = (a, b);
                         if let Some(c) = self.lazy_class(func, class, w)? {
@@ -2301,10 +2286,7 @@ impl Context<'_> {
                             arr.insert(key, Value::reference(cell));
                         }
                     }
-                    Rare::ToObject => {
-                        let v = self.operand(w, clo, b);
-                        reg!(a) = self.object_cast(v);
-                    }
+                    Rare::ToObject => return self.object_cast_ops(regs, clo, base, at, (a, b)),
                     // An intrinsic the loop did not run (a conversion, an
                     // object, a warning): the builtin's call, as a Call's.
                     Rare::Strlen | Rare::Count | Rare::IsNull | Rare::IsBool | Rare::IsInt | Rare::IsFloat | Rare::IsString | Rare::IsArray | Rare::IsObject | Rare::ArrayKeyExists => {
@@ -2337,22 +2319,7 @@ impl Context<'_> {
                         let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::reference(cell);
                     }
-                    Rare::VarGet => {
-                        let name = self.var_name(w, clo, b);
-                        let global = c & 2 != 0;
-                        let scope = global || self.frames.last().is_some_and(|f| f.global);
-                        let v = if scope && !in_main { self.with_main(below, |cx, main| cx.global_value(main, &name)) } else { self.var_value(w, in_main, &name) };
-                        match v {
-                            Some(v) => reg!(a) = v,
-                            None => {
-                                if c & 1 == 0 {
-                                    let what = if global { "global variable" } else { "variable" };
-                                    self.warn(format!("Undefined {what} ${}", String::from_utf8_lossy(&name)));
-                                }
-                                reg!(a) = Value::NULL;
-                            }
-                        }
-                    }
+                    Rare::VarGet => return self.var_get_ops(regs, clo, base, at, (a, b, c)),
                     Rare::VarUnset => {
                         let name = self.var_name(w, clo, a);
                         let at_global = self.frames.last().is_some_and(|f| f.global);
@@ -2422,12 +2389,7 @@ impl Context<'_> {
                             return Err(self.throw("Error", format!("{name}(): Argument #1{param} could not be passed by reference")));
                         }
                     }
-                    Rare::AutoGlobal => {
-                        // The name is a constant string: read, not converted.
-                        let name = self.operand(w, clo, b).into_str().expect("AutoGlobal names a constant string");
-                        let main: &mut [Value] = if in_main { w } else { below };
-                        reg!(a) = Value::reference(self.with_main(main, |cx, main| cx.global_slot(main, name.as_bytes())));
-                    }
+                    Rare::AutoGlobal => return self.auto_global_ops(regs, clo, base, at, (a, b)),
                     Rare::GlobalBind => {
                         let name = self.var_name(w, clo, a);
                         let cell = make_ref(w, b);
@@ -2476,35 +2438,7 @@ impl Context<'_> {
                         let values: Vec<Value> = (0..n).map(|i| w[c as usize + i].clone()).collect();
                         reg!(a) = self.partial(&clo.code, class, callee, values, func.strict)?;
                     }
-                    Rare::CallableArgByRef => {
-                        let callee = reg!(b).clone();
-                        // A closure answers for itself (no frame made for it).
-                        if class != u16::MAX
-                            && let Some(by_ref) = Self::closure_takes_ref(&callee, class as usize)
-                        {
-                            reg!(a) = Value::bool(by_ref);
-                            return Ok(Next::Go(pc));
-                        }
-                        let retry = self.autoload_retry.clone();
-                        let by_ref = match self.resolve_callable(&callee) {
-                            Ok(t) if class == u16::MAX => {
-                                let name = reg!(c).to_php_string().unwrap_or_else(PhpStr::empty);
-                                self.named_takes_ref(&t, name.as_bytes())
-                            }
-                            Ok(t) => self.takes_ref(&t, class as usize),
-                            // A class not loaded yet: the autoloaders run and the
-                            // question is asked again (not answered "no", which
-                            // left the class unloaded for the call itself).
-                            Err(t @ Throw::Autoload(_)) => return Err(t),
-                            // Still not there after they ran: the call itself is
-                            // told so too, not running them again.
-                            Err(_) => {
-                                self.autoload_retry = retry;
-                                false
-                            }
-                        };
-                        reg!(a) = Value::bool(by_ref);
-                    }
+                    Rare::CallableArgByRef => return self.callable_arg_by_ref_ops(regs, base, at, (a, b, c, class)),
                     Rare::ReturnRef => {
                             let src = a;
                         let ret = self.frames.last().map_or(NO_RET, |f| f.ret);
@@ -2538,25 +2472,8 @@ impl Context<'_> {
                     let cell = make_ref(w, root);
                     reg!(var) = Value::reference(cell);
                 }
-                Instr::RefDim { var, root, keys, n, append } => {
-                    let path = self.key_path(w, clo, keys, n)?;
-                    let cell = make_ref(w, root);
-                    let mut value = std::mem::take(&mut *cell.borrow_mut());
-                    let r = self.dim_ref(&mut value, &path, append);
-                    self.key_path_done(path);
-                    *cell.borrow_mut() = value;
-                    reg!(var) = Value::reference(r?);
-                }
-                Instr::DimSetRef { root, keys, n, append, src } => {
-                    let path = self.key_path(w, clo, keys, n)?;
-                    let target = make_ref(w, src);
-                    let cell = make_ref(w, root);
-                    let mut value = std::mem::take(&mut *cell.borrow_mut());
-                    let r = self.dim_set_ref(&mut value, &path, append, target);
-                    self.key_path_done(path);
-                    *cell.borrow_mut() = value;
-                    r?;
-                }
+                Instr::RefDim { var, root, keys, n, append } => return self.ref_dim_ops(regs, clo, base, at, DimRefOps { var, root, keys, n, append }),
+                Instr::DimSetRef { root, keys, n, append, src } => return self.dim_set_ref_ops(regs, clo, base, at, DimRefOps { var: src, root, keys, n, append }),
                 Instr::IterInitRef { src, iter, end } => {
                     let cell = make_ref(w, src);
                     let object = cell.borrow().cloned_object();
@@ -2690,10 +2607,7 @@ impl Context<'_> {
                         pc = skip as usize;
                     }
                 }
-                Instr::FromCallable { dst, src } => {
-                    let v = self.operand(w, clo, src);
-                    reg!(dst) = self.static_callable(&v, false)?;
-                }
+                Instr::FromCallable { dst, src } => return self.first_class_callable_ops(regs, clo, base, at, (dst, src)),
                 Instr::CallValue { dst, callee, base: args, argc, vars } => return self.call_value_ops(regs, clo, base, at, (dst, callee, args, argc, vars)),
                 Instr::Silence { saved } => {
                     reg!(saved) = Value::int(self.error_level);
@@ -2709,26 +2623,7 @@ impl Context<'_> {
                         self.error_level = level;
                     }
                 }
-                Instr::Include { dst, src, kind } => {
-                    let v = self.operand(w, clo, src);
-                    // The registers are lent: a user-space wrapper's methods
-                    // may serve the file.
-                    self.isolate.regs = std::mem::take(regs);
-                    let loaded = self.load_include(&v, kind, &func.file);
-                    *regs = std::mem::take(&mut self.isolate.regs);
-                    let Some(program) = loaded? else {
-                        regs[base + dst as usize] = Value::bool(kind.once());
-                        return Ok(Next::Go(pc));
-                    };
-                    let program = match program {
-                        Ok(p) => p,
-                        Err(()) => {
-                            regs[base + dst as usize] = Value::FALSE;
-                            return Ok(Next::Go(pc));
-                        }
-                    };
-                    return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
-                }
+                Instr::Include { dst, src, kind } => return self.include_ops(regs, clo, base, at, (dst, src, kind)),
                 Instr::Eval { dst, src } => {
                     let code = self.operand(w, clo, src);
                     let program = self.load_eval(&code)?;
@@ -2781,34 +2676,7 @@ impl Context<'_> {
                     };
                     self.unpack_into(w, arr, items)?;
                 }
-                Instr::New { dst, class: i } => {
-                    // A named class: its site's cache has the class and how
-                    // to make its objects (instances.rs).
-                    let info = match Self::cached_new(clo, i) {
-                        Some(info) => info,
-                        None => {
-                            let class = self.class_at(clo, i, w)?;
-                            if self.unresolved(&class) {
-                                self.resolve_class(regs, &class)?;
-                                return Ok(Next::Go(at));
-                            }
-                            let (info, kept) = self.new_info(&class);
-                            if kept && matches!(func.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..)) {
-                                Self::remember_new(clo, i, &info);
-                            }
-                            info
-                        }
-                    };
-                    let object = {
-                        let read = |i: usize| if i < base { below[i].clone() } else { w[i - base].clone() };
-                        self.make_from(&read, &info, true, false)?.0
-                    };
-                    // Not destructed unless constructed (an argument may throw first).
-                    object.destructed.set(true);
-                    reg!(dst) = Value::object(object);
-                    // For the Construct after the arguments.
-                    self.last_new = Some(info);
-                }
+                Instr::New { dst, class: i } => return self.new_ops(regs, clo, base, at, (dst, i)),
                 Instr::ConstructSpread { obj, args } => {
                     let object = reg!(obj).cloned_object().expect("ConstructSpread follows New");
                     object.destructed.set(false);
@@ -3017,27 +2885,7 @@ impl Context<'_> {
                         self.remember_prop(site, o, &name);
                     }
                 }
-                Instr::IssetProp { dst, obj, name } => {
-                    let target = reg!(obj).deref();
-                    let name = name!(name).clone();
-                    if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
-                        let v = self.run_nested(regs, hook?, &mut [])?;
-                        regs[base + dst as usize] = Value::bool(!v.deref().is_null_or_undef());
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Isset) {
-                        let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                        let v = self.run_magic(regs, found, &mut [pname])?;
-                        regs[base + dst as usize] = Value::bool(v.to_bool());
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(lo) = self.lazy_pending(&target, &name) {
-                        self.lazy_init(regs, &lo)?;
-                        return Ok(Next::Go(insn_at));
-                    }
-                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    reg!(dst) = Value::bool(self.isset_prop(&target, &name)?);
-                }
+                Instr::IssetProp { dst, obj, name } => return self.isset_prop_ops(regs, clo, base, at, (dst, obj, name)),
                 Instr::UnsetProp { obj, name } => {
                     let target = reg!(obj).deref();
                     let name = name!(name).clone();
@@ -3061,59 +2909,7 @@ impl Context<'_> {
                 }
                 Instr::MethodCall { .. } => return self.method_call(regs, clo, base, argc, at),
                 Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
-                    let site = &func.sites[method as usize];
-                    // `parent::$prop::get()` on a parent whose property has
-                    // no such hook: the stored value of `$this->prop`.
-                    if let Some(rest) = site.display.as_bytes().strip_prefix(b"$")
-                        && let Some(at_sep) = rest.windows(2).position(|x| x == b"::")
-                    {
-                        let target = self.class_of(func, class, w)?;
-                        if target.method_sym(site.sym).is_none() {
-                            let this = self.frames.last().and_then(|f| f.this.clone());
-                            let Some(this) = this else { return Err(self.throw("Error", "Using $this when not in object context")) };
-                            let prop = Value::str(&rest[..at_sep]);
-                            let v = if rest.ends_with(b"::set") {
-                                let v = reg!(args).deref();
-                                self.write_prop(&Value::object(this), &prop, v.clone())?;
-                                v
-                            } else {
-                                self.fetch_prop(&Value::object(this), &prop, false)?
-                            };
-                            for r in &mut w[args as usize..args as usize + argc as usize] {
-                                clear(r);
-                            }
-                            reg!(dst) = v;
-                            return Ok(Next::Go(pc));
-                        }
-                    }
-                    // The site's cache entry for this class and scope; else
-                    // the full resolution, remembered for the next call.
-                    let target = self.class_at(clo, class, w)?;
-                    let cache = &clo.methods[method as usize];
-                    let m = match self.cached_static(cache, &target, func, class) {
-                        Some(m) => m,
-                        None => {
-                            let m = self.static_frame(func, class, Some(site.sym), site.display.as_bytes(), w)?;
-                            self.remember_static(cache, &target, &m);
-                            m
-                        }
-                    };
-                    // The variables passed as they are: sent now the method
-                    // is known (by reference where it takes one; __callStatic
-                    // takes them by value).
-                    if vars != p8_bytecode::NO_VARS {
-                        let user = match (&m.func, &m.trampoline) {
-                            (classes::Code::User(f), None) => Some(Rc::clone(f)),
-                            _ => None,
-                        };
-                        let native = matches!(m.func, classes::Code::Native(..)) && m.trampoline.is_none();
-                        let sym = site.sym;
-                        self.send_vars(w, clo, vars, args, |cx, n| match &user {
-                            Some(f) => f.code.param_by_ref(n),
-                            None => native && cx.method_takes_ref(&target, Some(sym), n),
-                        });
-                    }
-                    return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                    return self.static_call_ops(regs, clo, base, at, StaticCallOps { dst, class, method, args, argc, vars });
                 }
                 Instr::ClassConst { dst, class, name } => {
                     let name_reg = name;
@@ -3144,9 +2940,9 @@ impl Context<'_> {
                     }
                     let v = self.class_constant(func, class, &name, w)?;
                     if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
-                        && let Some((key, keep)) = self.class_const_key(clo, class, &name, w)
+                        && let Some(((key, keep), scope)) = self.class_const_key(clo, class, &name, w)
                     {
-                        *site.borrow_mut() = ConstSite { key, _keep: keep, value: v.clone() };
+                        *site.borrow_mut() = ConstSite { key, _keep: keep, scope, value: v.clone() };
                     }
                     reg!(dst) = v;
                 }
@@ -3174,22 +2970,7 @@ impl Context<'_> {
                     store(&cell, v.clone());
                     reg!(dst) = v;
                 }
-                Instr::AssignStaticPropOp { op, class, name, val, dst } => {
-                    if let Some(c) = self.lazy_class(func, class, w)? {
-                        self.resolve_class(regs, &c)?;
-                        return Ok(Next::Go(at));
-                    }
-                    let name_reg = name;
-                    let name = name!(name).clone();
-                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
-                    let y = self.operand(w, clo, val);
-                    let x = cell.borrow().deref();
-                    let r = ops::binary(op, &x, &y, &mut self.diags);
-                    self.report_diags();
-                    let v = r.map_err(|e| self.op_error(e))?;
-                    store(&cell, v.clone());
-                    reg!(dst) = v;
-                }
+                Instr::AssignStaticPropOp { op, class, name, val, dst } => return self.assign_static_prop_op_ops(regs, clo, base, at, (op, class, name, val, dst)),
                 Instr::InstanceOf { dst, src, class } => {
                     let v = self.operand(w, clo, src);
                     // PHP fetches `static`/`self`/`parent` for an object
@@ -3274,29 +3055,54 @@ impl Context<'_> {
                     return Ok(Next::Switch);
                 }
 
-                Instr::ReturnNull => {
-                    if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
-                        self.script_end(regs)?;
-                    }
-                    if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
-                        self.finish(&g, Value::NULL);
-                    }
-                    leave(&mut self.frames, regs, Value::NULL);
-                    return Ok(Next::Switch);
-                }
-                Instr::Yield { dst, value, key, has_key } => {
-                    let v = self.operand(w, clo, value);
-                    let k = if has_key { Some(self.operand(w, clo, key)) } else { None };
-                    return Ok(self.suspend(regs, v, k, pc, Some(dst)));
-                }
-                Instr::YieldFrom { dst, src } => {
-                    match self.yield_from(regs, base, src, at)? {
-                        Ok(next) => return Ok(next),
-                        Err(result) => regs[base + dst as usize] = result,
-                    }
-                }
+                Instr::ReturnNull => return self.return_null_out(regs),
+                Instr::Yield { dst, value, key, has_key } => return self.yield_ops(regs, clo, base, at, (dst, value, if has_key { Some(key) } else { None })),
+                Instr::YieldFrom { dst, src } => return self.yield_from_ops(regs, base, at, (dst, src)),
         }
         Ok(Next::Go(pc))
+    }
+
+    /// `return;` where the loop's ReturnNull arm does not return itself:
+    /// the script's end (its shutdown work), a generator's return (the
+    /// generator finished), the bottom frame of a nested run. `step` runs
+    /// it, and the loop's arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn return_null_out(&mut self, regs: &mut Vec<Value>) -> Result<Next, Throw> {
+        if self.frames.len() == 1 && self.frames.floor == 0 && self.fibers.is_empty() {
+            self.script_end(regs)?;
+        }
+        if let Some(g) = self.frames.last_mut().and_then(|f| f.take_generator()) {
+            self.finish(&g, Value::NULL);
+        }
+        leave(&mut self.frames, regs, Value::NULL);
+        Ok(Next::Switch)
+    }
+
+    /// `yield value` / `yield key => value` (the Yield at `at`, the value
+    /// sent in to `dst`): the generator's frame suspended (`suspend`).
+    /// `step` runs it, and the loop's Yield arm, with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    pub(crate) fn yield_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, value, key): (Reg, Reg, Option<Reg>)) -> Result<Next, Throw> {
+        let w = &regs[base..base + clo.code.nregs as usize];
+        let v = self.operand(w, clo, value);
+        let k = key.map(|key| self.operand(w, clo, key));
+        Ok(self.suspend(regs, v, k, at + 1, Some(dst)))
+    }
+
+    /// `yield from src` (the YieldFrom at `at`, its result to `dst`): the
+    /// inner generator's or array's values given on (`yield_from`), the
+    /// frame suspended until it is done. `step` runs it, and the loop's
+    /// YieldFrom arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn yield_from_ops(&mut self, regs: &mut Vec<Value>, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+        match self.yield_from(regs, base, src, at)? {
+            Ok(next) => Ok(next),
+            Err(result) => {
+                regs[base + dst as usize] = result;
+                Ok(Next::Go(at + 1))
+            }
+        }
     }
 
     /// The generated instructions' cold path (`cold=` in ops.def): their
@@ -3341,6 +3147,434 @@ impl Context<'_> {
             self.remember_method(&clo.methods[method as usize], o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `C::m(args)` (the StaticCall at `at`), every case: a hook's
+    /// `parent::$p::get()` on a parent without that hook; the method the
+    /// site's cache has for the class and scope, else the full resolution
+    /// (`static_frame`, remembered); the variables the call sends itself,
+    /// sent as the method takes them; the call (`call_method`: a user
+    /// method's frame, a native one, __callStatic, the errors). `step`
+    /// runs it, and the loop's StaticCall arms for what their cached case
+    /// does not take, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn static_call_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: StaticCallOps) -> Result<Next, Throw> {
+        let StaticCallOps { dst, class, method, args, argc, vars } = ops;
+        let pc = at + 1;
+        let func = &*clo.code;
+        let w = &mut regs[base..base + func.nregs as usize];
+        let site = &func.sites[method as usize];
+        // `parent::$prop::get()` on a parent whose property has
+        // no such hook: the stored value of `$this->prop`.
+        if let Some(rest) = site.display.as_bytes().strip_prefix(b"$")
+            && let Some(at_sep) = rest.windows(2).position(|x| x == b"::")
+        {
+            let target = self.class_of(func, class, w)?;
+            if target.method_sym(site.sym).is_none() {
+                let this = self.frames.last().and_then(|f| f.this.clone());
+                let Some(this) = this else { return Err(self.throw("Error", "Using $this when not in object context")) };
+                let prop = Value::str(&rest[..at_sep]);
+                let v = if rest.ends_with(b"::set") {
+                    let v = w[args as usize].deref();
+                    self.write_prop(&Value::object(this), &prop, v.clone())?;
+                    v
+                } else {
+                    self.fetch_prop(&Value::object(this), &prop, false)?
+                };
+                let w = &mut regs[base..base + func.nregs as usize];
+                for r in &mut w[args as usize..args as usize + argc as usize] {
+                    clear(r);
+                }
+                w[dst as usize] = v;
+                return Ok(Next::Go(pc));
+            }
+        }
+        // The site's cache entry for this class and scope; else
+        // the full resolution, remembered for the next call.
+        let target = self.class_at(clo, class, w)?;
+        let cache = &clo.methods[method as usize];
+        let m = match self.cached_static(cache, &target, func, class) {
+            Some(m) => m,
+            None => {
+                let w = &regs[base..base + func.nregs as usize];
+                let m = self.static_frame(func, class, Some(site.sym), site.display.as_bytes(), w)?;
+                self.remember_static(cache, &target, &m);
+                m
+            }
+        };
+        // The variables passed as they are: sent now the method
+        // is known (by reference where it takes one; __callStatic
+        // takes them by value).
+        if vars != p8_bytecode::NO_VARS {
+            let user = match (&m.func, &m.trampoline) {
+                (classes::Code::User(f), None) => Some(Rc::clone(f)),
+                _ => None,
+            };
+            let native = matches!(m.func, classes::Code::Native(..)) && m.trampoline.is_none();
+            let sym = site.sym;
+            let w = &mut regs[base..base + func.nregs as usize];
+            self.send_vars(w, clo, vars, args, |cx, n| match &user {
+                Some(f) => f.code.param_by_ref(n),
+                None => native && cx.method_takes_ref(&target, Some(sym), n),
+            });
+        }
+        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `include` / `require` (`_once`) of the path in `src` (the Include at
+    /// `at`, its result to `dst`): the file loaded (the registers lent: a
+    /// user-space stream wrapper may serve it) and its code run as a frame
+    /// above this one, in this scope; a file included once already, one
+    /// that failed (the warning). `step` runs it, and the loop's Include
+    /// arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn include_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, src, kind): (Reg, Reg, p8_bytecode::IncludeKind)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let func = &*clo.code;
+        let v = self.operand(&regs[base..base + func.nregs as usize], clo, src);
+        // The registers are lent: a user-space wrapper's methods
+        // may serve the file.
+        self.isolate.regs = std::mem::take(regs);
+        let loaded = self.load_include(&v, kind, &func.file);
+        *regs = std::mem::take(&mut self.isolate.regs);
+        let Some(program) = loaded? else {
+            regs[base + dst as usize] = Value::bool(kind.once());
+            return Ok(Next::Go(pc));
+        };
+        let program = match program {
+            Ok(p) => p,
+            Err(()) => {
+                regs[base + dst as usize] = Value::FALSE;
+                return Ok(Next::Go(pc));
+            }
+        };
+        Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc))
+    }
+
+    /// Whether `$f(..)` sends argument `n` by reference (the
+    /// CallableArgByRef at `at`: the callable in `callee`; `n` u16::MAX: a
+    /// named argument, its name in `name`): a closure answers itself; any
+    /// other callable resolved (its class autoloaded, then this instruction
+    /// again). `step` runs it, and the loop's arm for what is not a
+    /// closure, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn callable_arg_by_ref_ops(&mut self, regs: &mut [Value], base: usize, at: usize, (dst, callee, name, n): (Reg, Reg, Reg, u16)) -> Result<Next, Throw> {
+        let callee = regs[base + callee as usize].clone();
+        // A closure answers for itself (no frame made for it).
+        if n != u16::MAX
+            && let Some(by_ref) = Self::closure_takes_ref(&callee, n as usize)
+        {
+            regs[base + dst as usize] = Value::bool(by_ref);
+            return Ok(Next::Go(at + 1));
+        }
+        let retry = self.autoload_retry.clone();
+        let by_ref = match self.resolve_callable(&callee) {
+            Ok(t) if n == u16::MAX => {
+                let name = regs[base + name as usize].to_php_string().unwrap_or_else(PhpStr::empty);
+                self.named_takes_ref(&t, name.as_bytes())
+            }
+            Ok(t) => self.takes_ref(&t, n as usize),
+            // A class not loaded yet: the autoloaders run and the
+            // question is asked again (not answered "no", which
+            // left the class unloaded for the call itself).
+            Err(t @ Throw::Autoload(_)) => return Err(t),
+            // Still not there after they ran: the call itself is
+            // told so too, not running them again.
+            Err(_) => {
+                self.autoload_retry = retry;
+                false
+            }
+        };
+        regs[base + dst as usize] = Value::bool(by_ref);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `(object) $v` (the ToObject at `at`). `step` runs it, and the loop's
+    /// ToObject arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn object_cast_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+        let v = self.operand(&regs[base..base + clo.code.nregs as usize], clo, src);
+        regs[base + dst as usize] = self.object_cast(v);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$$name` read (the VarGet at `at`, the name in `name`; `flags` bit 0:
+    /// quiet, bit 1: a global's): the running scope's variable of that
+    /// name, or the global's (a function's scope, a file included at
+    /// global scope); undefined: the warning, null. `step` runs it, and
+    /// the loop's VarGet arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn var_get_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, name, flags): (Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let in_main = base == 0;
+        let nregs = clo.code.nregs as usize;
+        let name = self.var_name(&regs[base..base + nregs], clo, name);
+        let global = flags & 2 != 0;
+        let scope = global || self.frames.last().is_some_and(|f| f.global);
+        let v = if scope && !in_main {
+            let (below, _) = regs.split_at_mut(base);
+            self.with_main(below, |cx, main| cx.global_value(main, &name))
+        } else {
+            self.var_value(&regs[base..base + nregs], in_main, &name)
+        };
+        regs[base + dst as usize] = match v {
+            Some(v) => v,
+            None => {
+                if flags & 1 == 0 {
+                    let what = if global { "global variable" } else { "variable" };
+                    self.warn(format!("Undefined {what} ${}", String::from_utf8_lossy(&name)));
+                }
+                Value::NULL
+            }
+        };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$GLOBALS`, `$_SERVER`, … (the AutoGlobal at `at`: the name, a
+    /// constant string, in `name`): a reference to the global's slot.
+    /// `step` runs it, and the loop's AutoGlobal arm, with none of
+    /// `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn auto_global_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, name): (Reg, Reg)) -> Result<Next, Throw> {
+        let nregs = clo.code.nregs as usize;
+        // The name is a constant string: read, not converted.
+        let name = self.operand(&regs[base..base + nregs], clo, name).into_str().expect("AutoGlobal names a constant string");
+        let cell = if base == 0 {
+            self.with_main(&mut regs[..nregs], |cx, main| cx.global_slot(main, name.as_bytes()))
+        } else {
+            let (below, _) = regs.split_at_mut(base);
+            self.with_main(below, |cx, main| cx.global_slot(main, name.as_bytes()))
+        };
+        regs[base + dst as usize] = Value::reference(cell);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `C::$name op= val` (the AssignStaticPropOp at `at`, the result to
+    /// `dst`): a class not linked yet linked, then this instruction again;
+    /// the static property's cell read, computed (the warnings, the
+    /// errors), written. `step` runs it, and the loop's AssignStaticPropOp
+    /// arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn assign_static_prop_op_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (op, class, name, val, dst): (BinOp, u16, Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let w = &regs[base..base + func.nregs as usize];
+        if let Some(c) = self.lazy_class(func, class, w)? {
+            self.resolve_class(regs, &c)?;
+            return Ok(Next::Go(at));
+        }
+        let w = &regs[base..base + func.nregs as usize];
+        let name_reg = name;
+        let name = Self::val(w, clo, name).clone();
+        let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
+        let y = self.operand(w, clo, val);
+        let x = cell.borrow().deref();
+        let r = ops::binary(op, &x, &y, &mut self.diags);
+        self.report_diags();
+        let v = r.map_err(|e| self.op_error(e))?;
+        store(&cell, v.clone());
+        regs[base + dst as usize] = v;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `unset($var)` (the UnsetVar at `at`): the variable undefined; in a
+    /// file included at global scope it is the global itself, removed
+    /// there too. `step` runs it, and the loop's UnsetVar arm for that
+    /// case, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn unset_var_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, var: Reg) -> Result<Next, Throw> {
+        if base != 0
+            && self.frames.last().is_some_and(|f| f.global)
+            && let Some(name) = clo.code.cv_names.get(var as usize)
+        {
+            let name = name.as_bytes().to_vec();
+            let (below, _) = regs.split_at_mut(base);
+            self.with_main(below, |cx, main| cx.global_clear(main, &name));
+        }
+        regs[base + var as usize] = Value::UNDEF;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `strlen(...)`, `$o->m(...)` (the FromCallable at `at`: the callable
+    /// in `src`, the Closure to `dst`). `step` runs it, and the loop's
+    /// FromCallable arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn first_class_callable_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+        let v = self.operand(&regs[base..base + clo.code.nregs as usize], clo, src);
+        regs[base + dst as usize] = self.static_callable(&v, false)?;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// A class declared where its code runs (the DeclareClass at `at`:
+    /// declaration `class` of the running code). `step` runs it, and the
+    /// loop's DeclareClass arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn declare_class_ops(&mut self, clo: &Closure, at: usize, class: u16) -> Result<Next, Throw> {
+        let def = Arc::clone(&clo.code.decls[class as usize]);
+        self.declare_class(&def)?;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// A function declared where its code runs (the DeclareFunction at
+    /// `at`: lambda `i` of the running code); one declared already is the
+    /// fatal error. `step` runs it, and the loop's DeclareFunction arm,
+    /// with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn declare_function_ops(&mut self, clo: &Closure, at: usize, i: u16) -> Result<Next, Throw> {
+        let declared = Arc::clone(&clo.code.lambdas[i as usize]);
+        if let Err(message) = self.declare(Arc::clone(&declared)) {
+            return Err(Throw::Fatal { message, file: Rc::from(&*declared.file), line: declared.line });
+        }
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$var = &$root[k1]..[kn]` (`append`: a last `[]`; an element passed
+    /// by reference too: the RefDim at `at`): the root made a reference,
+    /// the element made one in it (`dim_ref`: made where missing, the
+    /// errors), `var` bound to it. `step` runs it, and the loop's RefDim
+    /// arm for a path (its root alone it binds itself), with none of
+    /// `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn ref_dim_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
+        let DimRefOps { var, root, keys, n, append } = ops;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let path = self.key_path(w, clo, keys, n)?;
+        let cell = make_ref(w, root);
+        let mut value = std::mem::take(&mut *cell.borrow_mut());
+        let r = self.dim_ref(&mut value, &path, append);
+        self.key_path_done(path);
+        *cell.borrow_mut() = value;
+        regs[base + var as usize] = Value::reference(r?);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$root[k1]..[kn] = &$src` (the DimSetRef at `at`; `var` is `src`):
+    /// the source made a reference, the root too, the element bound to the
+    /// source's cell in it (`dim_set_ref`). `step` runs it, and the loop's
+    /// DimSetRef arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn dim_set_ref_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, ops: DimRefOps) -> Result<Next, Throw> {
+        let DimRefOps { var: src, root, keys, n, append } = ops;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let path = self.key_path(w, clo, keys, n)?;
+        let target = make_ref(w, src);
+        let cell = make_ref(w, root);
+        let mut value = std::mem::take(&mut *cell.borrow_mut());
+        let r = self.dim_set_ref(&mut value, &path, append, target);
+        self.key_path_done(path);
+        *cell.borrow_mut() = value;
+        r?;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$x = &C::$name` (the StaticRef at `at`: class reference `class`,
+    /// the name in `name`, the reference to `dst`): a class not linked yet
+    /// linked, then this instruction again; the static property's cell,
+    /// made a reference if it holds none. `step` runs it, and the loop's
+    /// StaticRef arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn static_ref_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, name, class): (Reg, Reg, u16)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let w = &regs[base..base + func.nregs as usize];
+        if let Some(c) = self.lazy_class(func, class, w)? {
+            self.resolve_class(regs, &c)?;
+            return Ok(Next::Go(at));
+        }
+        let w = &regs[base..base + func.nregs as usize];
+        let name = Self::val(w, clo, name).clone();
+        let cell = self.static_cell(func, class, &name, w)?;
+        let inner = cell.borrow().cloned_reference();
+        let r = match inner {
+            Some(r) => r,
+            None => {
+                let v = std::mem::take(&mut *cell.borrow_mut());
+                let v = if v.is_undef() { Value::NULL } else { v };
+                let r = Rc::new(RefCell::new(v));
+                *cell.borrow_mut() = Value::reference(Rc::clone(&r));
+                r
+            }
+        };
+        regs[base + dst as usize] = Value::reference(r);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `new C` (the New at `at`, class reference `i`, the object to `dst`),
+    /// every case: the class the site's cache has, else found (a class in
+    /// a register by its name, one not linked yet: linked, then this
+    /// instruction again) and its NewInfo (remembered for a class the code
+    /// names); the object made (`make_from`: a Throwable's trace, the
+    /// constructor's visibility). `step` runs it, and the loop's New arm
+    /// for what it does not take itself, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn new_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, i): (Reg, u16)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let nregs = clo.code.nregs as usize;
+        // A named class: its site's cache has the class and how
+        // to make its objects (instances.rs).
+        let info = match Self::cached_new(clo, i) {
+            Some(info) => info,
+            None => {
+                let class = self.class_at(clo, i, &regs[base..base + nregs])?;
+                if self.unresolved(&class) {
+                    self.resolve_class(regs, &class)?;
+                    return Ok(Next::Go(at));
+                }
+                let (info, kept) = self.new_info(&class);
+                if kept && matches!(clo.code.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..)) {
+                    Self::remember_new(clo, i, &info);
+                }
+                info
+            }
+        };
+        let object = {
+            let read = |i: usize| regs[i].clone();
+            self.make_from(&read, &info, true, false)?.0
+        };
+        // Not destructed unless constructed (an argument may throw first).
+        object.destructed.set(true);
+        regs[base + dst as usize] = Value::object(object);
+        // For the Construct after the arguments.
+        self.last_new = Some(info);
+        Ok(Next::Go(pc))
+    }
+
+    /// `isset($o->name)` (the IssetProp at `at`, the result to `dst`), every
+    /// case: a get hook, __isset, a lazy object (initialized, then this
+    /// instruction again), the property's value. `step` runs it, and the
+    /// loop's IssetProp arm for what its cached case does not take, with
+    /// none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn isset_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, obj, name): (Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let w = &regs[base..base + clo.code.nregs as usize];
+        let target = w[obj as usize].deref();
+        let name = Self::val(w, clo, name).clone();
+        if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
+            let v = self.run_nested(regs, hook?, &mut [])?;
+            regs[base + dst as usize] = Value::bool(!v.deref().is_null_or_undef());
+            return Ok(Next::Go(pc));
+        }
+        if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Isset) {
+            let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            let v = self.run_magic(regs, found, &mut [pname])?;
+            regs[base + dst as usize] = Value::bool(v.to_bool());
+            return Ok(Next::Go(pc));
+        }
+        if let Some(lo) = self.lazy_pending(&target, &name) {
+            self.lazy_init(regs, &lo)?;
+            return Ok(Next::Go(at));
+        }
+        let target = self.lazy_forward(&target, &name).unwrap_or(target);
+        regs[base + dst as usize] = Value::bool(self.isset_prop(&target, &name)?);
+        Ok(Next::Go(pc))
+    }
+
+    /// `f(args)` (the Call at `at`: call site `site`, the `argc` arguments
+    /// at `args`, the result to `dst`) for what the loop's Call arm does
+    /// not take itself (a site not resolved yet, a generator, missing
+    /// arguments: the error, an interrupt due): `call_site`, with none of
+    /// `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn call_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (site, args, argc, dst): (u16, Reg, u8, Reg)) -> Result<Next, Throw> {
+        self.call_site(regs, clo, base, site, (args, argc, dst), at + 1)
     }
 
     /// `$f(args)` (the CallValue at `at`: the callable in `callee`, the
@@ -3799,8 +4033,16 @@ impl Context<'_> {
                     && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                 {
                     let pname = name!(name).clone();
-                    let v = self.operand_take(w, clo, val, take);
+                    // (Copied, the temporary released only once the write
+                    // is done: a typed property's class may be autoloaded
+                    // first, and this instruction runs again then; an
+                    // error leaves the value to the unwinding, as the
+                    // uncached path below does.)
+                    let v = self.operand(w, clo, val);
                     self.write_cached(o, slot, &pname, v.clone())?;
+                    if take {
+                        clear(&mut reg!(val));
+                    }
                     reg!(dst) = v;
                     return Ok(Next::Go(pc));
                 }

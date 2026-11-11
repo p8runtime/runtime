@@ -124,6 +124,44 @@ pub const LIST_KEY_REG: u32 = 1 << 31;
 /// 16..20): the value is constant b, not register b.
 pub const PROP_OP_K: u32 = 1 << 30;
 
+/// RefDim's and DimSetRef's `imm`: the key count (bits 0..8), REF_APPEND
+/// (a last `[]`), REF_KEY_K (the one key is constant `imm >> 10`, not
+/// register c).
+pub const REF_APPEND: u32 = 1 << 8;
+pub const REF_KEY_K: u32 = 1 << 9;
+
+/// Yield's `imm`: the value constant `imm & 0x3fff` with YIELD_VALUE_K
+/// (else register b), the key constant `imm >> 14 & 0x3fff` with
+/// YIELD_KEY_K (else register c), YIELD_HAS_KEY (`yield k => v`).
+/// YieldFrom's: its source constant `imm & 0x3fff` with YIELD_VALUE_K.
+pub const YIELD_VALUE_K: u32 = 1 << 28;
+pub const YIELD_KEY_K: u32 = 1 << 29;
+pub const YIELD_HAS_KEY: u32 = 1 << 30;
+
+/// Include's and FromCallable's `imm` bit: the operand is constant
+/// `imm >> 8 & 0x3fff` (else register b); Include's kind in bits 0..2
+/// (`include_kind`).
+pub const SRC_K: u32 = 1 << 31;
+
+/// Include's kind in an immediate (`lower`'s numbering).
+pub fn include_kind(imm: u32) -> crate::IncludeKind {
+    match imm & 3 {
+        0 => crate::IncludeKind::Include,
+        1 => crate::IncludeKind::IncludeOnce,
+        2 => crate::IncludeKind::Require,
+        _ => crate::IncludeKind::RequireOnce,
+    }
+}
+
+/// AssignStaticPropOp's `imm`: the name constant (bits 0..14), the
+/// operator (14..18), STATIC_OP_K (the value is constant b, else
+/// register b).
+pub const STATIC_OP_K: u32 = 1 << 18;
+
+/// IssetProp's `imm`: the name is register c (else `imm` is the name's
+/// property site).
+pub const ISSET_PROP_DYN: u32 = 1 << 31;
+
 /// Capture's `imm` bits: by reference (`use (&$x)`); quiet (no warning
 /// for an undefined variable).
 pub const CAPTURE_REF: u32 = 1;
@@ -376,6 +414,15 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             _ => None,
         }
     };
+    // An instruction with one source a register (b) or a constant (SRC_K,
+    // its index in `imm >> 8`), `imm`'s low byte its own.
+    let src_or_k = |op: Op, dst: Reg, src: Reg, low: u32| -> Option<Insn> {
+        match k(src) {
+            Some(kk) if kk < 1 << 14 => i(op, dst, 0, 0, low | kk << 8 | SRC_K),
+            Some(_) => None,
+            None => i(op, dst, src, 0, low),
+        }
+    };
     // A block of registers (arguments, a concatenation's parts) is in the
     // window whole: the loop indexes it from its first.
     let block = |start: Reg, n: u8| (n == 0 || r(start + Reg::from(n) - 1).is_some()).then_some(());
@@ -392,16 +439,29 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         // The generated instructions (`ops.def`): the encoder picks the
         // specialisation of the operands' kinds.
         Instr::This { dst } => enc::this(enc::This { dst: o(dst)? }),
-        Instr::FetchProp { dst, obj, name, .. } => {
-            let site = Opnd::Imm(prop_site(name, nconsts)?);
-            enc::fetch_prop(enc::FetchProp { dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site })
-        }
-        Instr::AssignProp { obj, name, val, dst, take: t } => {
-            let site = Opnd::Imm(prop_site(name, nconsts)?);
-            let obj = if obj == THIS { Opnd::This } else { o(obj)? };
-            let mode = Opnd::Flag(if t { kinds::TAKE } else { kinds::COPY });
-            enc::assign_prop(enc::AssignProp { obj, val: o(val)?, mode, res: res(code, pc, dst), dst: o(dst)?, site })
-        }
+        Instr::FetchProp { dst, obj, name, .. } => match prop_site(name, nconsts) {
+            Some(site) => enc::fetch_prop(enc::FetchProp { dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site: Opnd::Imm(site) }),
+            // `$o->$name`: the name in a register (a hand arm).
+            None => i(Op::FetchPropDyn, dst, if obj == THIS { 0 } else { obj }, name, if obj == THIS { PROP_PATH_THIS } else { 0 }),
+        },
+        Instr::AssignProp { obj, name, val, dst, take: t } => match prop_site(name, nconsts) {
+            Some(site) => {
+                let obj = if obj == THIS { Opnd::This } else { o(obj)? };
+                let mode = Opnd::Flag(if t { kinds::TAKE } else { kinds::COPY });
+                enc::assign_prop(enc::AssignProp { obj, val: o(val)?, mode, res: res(code, pc, dst), dst: o(dst)?, site: Opnd::Imm(site) })
+            }
+            // `$o->$name = $v`: the name and the value in registers (a hand
+            // arm; the result always written, the Free after run as it is).
+            None => {
+                let flags = if obj == THIS { PROP_PATH_THIS } else { 0 } | if t { TAKE } else { 0 };
+                let (v, vk) = match k(val) {
+                    Some(kk) if kk < 256 => (kk as Reg, PROP_OP_K),
+                    Some(_) => return None,
+                    None => (val, 0),
+                };
+                i(Op::AssignPropDyn, if obj == THIS { 0 } else { obj }, v, name, flags | vk | u32::from(r(dst)?) << 8)
+            }
+        },
         Instr::JumpLt { .. }
         | Instr::JumpNotLt { .. }
         | Instr::JumpLe { .. }
@@ -615,6 +675,88 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::CallValue, dst, callee, base, u32::from(argc) | u32::from(vars) << 8)
         }
         Instr::CallSpread { dst, callee, args } => i(Op::CallSpread, dst, callee, args, 0),
+        Instr::BindRef { var, src } => i(Op::BindRef, var, src, 0, 0),
+        Instr::UnsetVar { var } => i(Op::UnsetVar, var, 0, 0, 0),
+        // (The name in a register; VarGet's flags in imm.)
+        Instr::Rare { op: Rare::ToObject, a, b, .. } => i(Op::ToObject, a, b, 0, 0),
+        // (The argument's position in imm: u16::MAX for a named one, its
+        // name in register c.)
+        Instr::Rare { op: Rare::CallableArgByRef, a, b, c, class } => i(Op::CallableArgByRef, a, b, if class == u16::MAX { c } else { 0 }, u32::from(class)),
+        Instr::Rare { op: Rare::VarGet, a, b, c, .. } => i(Op::VarGet, a, b, 0, u32::from(c)),
+        Instr::Rare { op: Rare::AutoGlobal, a, b, .. } => i(Op::AutoGlobal, a, b, 0, 0),
+        Instr::Rare { op: Rare::ArrayPushRef, a, b, .. } => i(Op::ArrayPushRef, a, b, 0, 0),
+        // `C::$name op= v` (class reference c below 256, the name a constant,
+        // the value a register or a constant below 256).
+        Instr::AssignStaticPropOp { op, class, name, val, dst } if class < 256 => {
+            let nk = prop_site(name, nconsts).filter(|&s| s < 1 << 14)?;
+            let (v, vk) = match k(val) {
+                Some(kk) if kk < 256 => (kk as Reg, STATIC_OP_K),
+                Some(_) => return None,
+                None => (val, 0),
+            };
+            i(Op::AssignStaticPropOp, dst, v, class, nk | binop_imm(op) << 14 | vk)
+        }
+        Instr::DeclareClass { class } => i(Op::DeclareClass, 0, 0, 0, u32::from(class)),
+        Instr::DeclareFunction { func } => i(Op::DeclareFunction, 0, 0, 0, u32::from(func)),
+        // `include $path`, `f(...)`: the operand a register or a constant.
+        Instr::Include { dst, src, kind } => {
+            let kind = match kind {
+                crate::IncludeKind::Include => 0,
+                crate::IncludeKind::IncludeOnce => 1,
+                crate::IncludeKind::Require => 2,
+                crate::IncludeKind::RequireOnce => 3,
+            };
+            src_or_k(Op::Include, dst, src, kind)
+        }
+        Instr::FromCallable { dst, src } => src_or_k(Op::FromCallable, dst, src, 0),
+        // `yield k => v`, `yield from src` (an operand a register or a
+        // constant).
+        Instr::Yield { dst, value, key, has_key } => {
+            let (vb, vk) = match k(value) {
+                Some(kk) if kk < 1 << 14 => (0, kk | YIELD_VALUE_K),
+                Some(_) => return None,
+                None => (value, 0),
+            };
+            let (kc, kf) = match k(key) {
+                _ if !has_key => (0, 0),
+                Some(kk) if kk < 1 << 14 => (0, kk << 14 | YIELD_KEY_K),
+                Some(_) => return None,
+                None => (key, 0),
+            };
+            i(Op::Yield, dst, vb, kc, vk | kf | if has_key { YIELD_HAS_KEY } else { 0 })
+        }
+        Instr::YieldFrom { dst, src } => match k(src) {
+            Some(kk) if kk < 1 << 14 => i(Op::YieldFrom, dst, 0, 0, kk | YIELD_VALUE_K),
+            Some(_) => None,
+            None => i(Op::YieldFrom, dst, src, 0, 0),
+        },
+        // `&$root[k0]..` and `$root[k0].. = &$src`: the keys a block of
+        // registers in the window, or one constant.
+        Instr::RefDim { var, root, keys, n, append } | Instr::DimSetRef { root, keys, n, append, src: var } => {
+            let op = if matches!(code[pc], Instr::RefDim { .. }) { Op::RefDim } else { Op::DimSetRef };
+            let flags = u32::from(n) | if append { REF_APPEND } else { 0 };
+            match k(keys) {
+                Some(kk) if n == 1 && kk < 1 << 14 => i(op, var, root, 0, flags | REF_KEY_K | kk << 10),
+                Some(_) => None,
+                None => {
+                    block(keys, n)?;
+                    i(op, var, root, if n == 0 { 0 } else { keys }, flags)
+                }
+            }
+        }
+        // `$x = &C::$name` (the name loaded into register b).
+        Instr::Rare { op: Rare::StaticRef, a, b, class, .. } => i(Op::StaticRef, a, b, 0, u32::from(class)),
+        // `isset($a[k0][k1]..)`: the keys a block of registers in the window.
+        Instr::IssetDim { dst, var, keys, n: n @ 2.. } if const_index(keys).is_none() => {
+            block(keys, n)?;
+            i(Op::IssetDimPath, dst, var, keys, u32::from(n))
+        }
+        // `isset($o->p)` (the name a constant: its cache entry).
+        Instr::IssetProp { dst, obj, name } => match prop_site(name, nconsts) {
+            Some(site) => i(Op::IssetProp, dst, obj, 0, site),
+            // `isset($o->$name)`: the name in register c.
+            None => i(Op::IssetProp, dst, obj, name, ISSET_PROP_DYN),
+        },
         // `$o->p op= v`, `$this->p op= v` (the name a constant: its cache
         // entry; the value a register, or a constant below 256).
         Instr::AssignPropOp { op, obj, name, val, dst } => {
@@ -1006,6 +1148,44 @@ mod tests {
         assert_eq!(at(13).unwrap(), Insn { op: Op::Capture, a: 5, b: 3, c: 0, imm: CAPTURE_REF });
         assert_eq!(at(14).unwrap(), Insn { op: Op::Neg, a: 6, b: 3, c: 0, imm: 0 });
         assert_eq!(at(15).unwrap(), Insn { op: Op::CallSpread, a: 6, b: 5, c: 4, imm: 0 });
+    }
+
+    #[test]
+    fn the_seventh_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // A name in a register: the dynamic forms.
+            Instr::FetchProp { dst: 6, obj: THIS, name: 3, quiet: false },
+            Instr::AssignProp { obj: 5, name: 3, val: c(8), dst: 6, take: false },
+            Instr::IssetProp { dst: 6, obj: 5, name: 3 },
+            Instr::IssetProp { dst: 6, obj: 5, name: c(7) },
+            Instr::IssetDim { dst: 6, var: 5, keys: 10, n: 3 },
+            Instr::BindRef { var: 4, src: 5 },
+            Instr::RefDim { var: 4, root: 5, keys: c(7), n: 1, append: false },
+            Instr::DimSetRef { root: 5, keys: 10, n: 2, append: true, src: 4 },
+            Instr::rare(Rare::StaticRef, 6, 3, 0, 2),
+            Instr::AssignStaticPropOp { op: BinOp::Add, class: 2, name: c(7), val: 3, dst: 6 },
+            Instr::Yield { dst: 6, value: 3, key: c(7), has_key: true },
+            Instr::Include { dst: 6, src: 3, kind: crate::IncludeKind::RequireOnce },
+            Instr::UnsetVar { var: 4 },
+            Instr::DeclareClass { class: 9 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_in(&code, pc, &consts, 2, &[], &[]);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::FetchPropDyn, a: 6, b: 0, c: 3, imm: PROP_PATH_THIS });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::AssignPropDyn, a: 5, b: 8, c: 3, imm: PROP_OP_K | 6 << 8 });
+        assert_eq!(at(2).unwrap(), Insn { op: Op::IssetProp, a: 6, b: 5, c: 3, imm: ISSET_PROP_DYN });
+        assert_eq!(at(3).unwrap(), Insn { op: Op::IssetProp, a: 6, b: 5, c: 0, imm: 7 });
+        assert_eq!(at(4).unwrap(), Insn { op: Op::IssetDimPath, a: 6, b: 5, c: 10, imm: 3 });
+        assert_eq!(at(5).unwrap(), Insn { op: Op::BindRef, a: 4, b: 5, c: 0, imm: 0 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::RefDim, a: 4, b: 5, c: 0, imm: 1 | REF_KEY_K | 7 << 10 });
+        assert_eq!(at(7).unwrap(), Insn { op: Op::DimSetRef, a: 4, b: 5, c: 10, imm: 2 | REF_APPEND });
+        assert_eq!(at(8).unwrap(), Insn { op: Op::StaticRef, a: 6, b: 3, c: 0, imm: 2 });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::AssignStaticPropOp, a: 6, b: 3, c: 2, imm: 7 });
+        assert_eq!(at(10).unwrap(), Insn { op: Op::Yield, a: 6, b: 3, c: 0, imm: 7 << 14 | YIELD_KEY_K | YIELD_HAS_KEY });
+        assert_eq!(at(11).unwrap(), Insn { op: Op::Include, a: 6, b: 3, c: 0, imm: 3 });
+        assert_eq!(at(12).unwrap(), Insn { op: Op::UnsetVar, a: 4, b: 0, c: 0, imm: 0 });
+        assert_eq!(at(13).unwrap(), Insn { op: Op::DeclareClass, a: 0, b: 0, c: 0, imm: 9 });
     }
 
     #[test]
