@@ -3985,8 +3985,16 @@ impl Context<'_> {
                     && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
                 {
                     let pname = name!(name).clone();
-                    let v = self.operand_take(w, clo, val, take);
+                    // (Copied, the temporary released only once the write
+                    // is done: a typed property's class may be autoloaded
+                    // first, and this instruction runs again then; an
+                    // error leaves the value to the unwinding, as the
+                    // uncached path below does.)
+                    let v = self.operand(w, clo, val);
                     self.write_cached(o, slot, &pname, v.clone())?;
+                    if take {
+                        clear(&mut reg!(val));
+                    }
                     reg!(dst) = v;
                     return Ok(Next::Go(pc));
                 }
