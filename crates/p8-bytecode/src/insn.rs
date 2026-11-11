@@ -108,6 +108,16 @@ pub const PATH_UNUSED: u32 = 1 << 31;
 /// AssignPropDim's `imm` bit: the object is the frame's `$this`.
 pub const PROP_PATH_THIS: u32 = 1 << 29;
 
+/// AssignDimPath's and AssignPropDim's `imm` bit: a `[]` after the keys
+/// (the value appended there).
+pub const PATH_APPEND: u32 = 1 << 30;
+
+/// A path write's PATH_UNUSED and PATH_APPEND.
+fn path_flags(code: &[Instr], pc: usize, dst: Reg, append: bool) -> u32 {
+    let unused = if res(code, pc, dst) == Opnd::Flag(kinds::UNUSED) { PATH_UNUSED } else { 0 };
+    unused | if append { PATH_APPEND } else { 0 }
+}
+
 /// The constant operand of a fused step (the `b` and `c` bytes).
 #[inline(always)]
 pub fn wide(insn: &Insn) -> usize {
@@ -505,27 +515,28 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::MakeClosure { dst, func, is_static } => i(Op::MakeClosure, dst, 0, 0, u32::from(func) | u32::from(is_static) << 16),
         Instr::CollectVariadic { var } => i(Op::CollectVariadic, var, 0, 0, 0),
         Instr::ArrayUnpack { arr, src } => i(Op::ArrayUnpack, arr, src, 0, 0),
-        // `$o->p[k0]..[kn-1] = v` (`$this->p[..]` with DIM_THIS): the
-        // keys from base + 2, a block in the window.
-        Instr::AssignPropDim { op: None, base, name, n, append: false, val, dst } if const_index(val).is_none() => {
+        // `$o->p[k0]..[kn-1] = v` and `$o->p[k0]..[] = v` (`$this->p[..]`
+        // with DIM_THIS): the keys from base + 2, a block in the window.
+        Instr::AssignPropDim { op: None, base, name, n, append, val, dst } if const_index(val).is_none() => {
             let (this, n) = (n & crate::DIM_THIS != 0, n & !crate::DIM_THIS);
-            if !(1..=PATH_KEYS).contains(&n) {
+            if n > PATH_KEYS || (n == 0 && !append) {
                 return None;
             }
             let site = prop_site(name, nconsts).filter(|&s| s < 1 << 16)?;
             block(base + 2, n)?;
-            let unused = if res(code, pc, dst) == Opnd::Flag(kinds::UNUSED) { PATH_UNUSED } else { 0 };
+            let flags = path_flags(code, pc, dst, append) | if this { PROP_PATH_THIS } else { 0 };
             let obj = if this { 0 } else { base };
-            i(Op::AssignPropDim, obj, base + 2, val, site | u32::from(r(dst)?) << 16 | u32::from(n) << 24 | if this { PROP_PATH_THIS } else { 0 } | unused)
+            i(Op::AssignPropDim, obj, base + 2, val, site | u32::from(r(dst)?) << 16 | u32::from(n) << 24 | flags)
         }
         Instr::ConstructSpread { obj, args } => i(Op::ConstructSpread, obj, args, 0, 0),
         Instr::SendVarStatic { class, method, n, arg, var } => i(Op::SendVarStatic, arg, var, Reg::from(n), u32::from(method) | u32::from(class) << 16),
         Instr::BindGlobal { var, name } if usize::from(name) < nconsts => i(Op::BindGlobal, var, 0, 0, u32::from(name)),
-        // (Keys and value registers: the keys a block in the window.)
-        Instr::AssignDim { var, keys, n: n @ 2..=PATH_KEYS, append: false, val, dst } if const_index(keys).is_none() && const_index(val).is_none() => {
+        // Two keys or more, or one and a `[]` after it (`ASSIGN_DIM` and
+        // `APPEND_DIM` are the others). (Keys and value registers: the
+        // keys a block in the window.)
+        Instr::AssignDim { var, keys, n: n @ 1..=PATH_KEYS, append, val, dst } if (n >= 2 || append) && const_index(keys).is_none() && const_index(val).is_none() => {
             block(keys, n)?;
-            let unused = if res(code, pc, dst) == Opnd::Flag(kinds::UNUSED) { PATH_UNUSED } else { 0 };
-            i(Op::AssignDimPath, var, keys, val, u32::from(n) | u32::from(r(dst)?) << 8 | unused)
+            i(Op::AssignDimPath, var, keys, val, u32::from(n) | u32::from(r(dst)?) << 8 | path_flags(code, pc, dst, append))
         }
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
@@ -753,7 +764,7 @@ mod tests {
             // A path of two keys (registers 10, 11), its result freed next.
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: 3, dst: 6 },
             Instr::Free { reg: 6 },
-            // Five keys, a literal value, a trailing `[]`: not inline.
+            // Five keys, a literal value: not inline. Keys then `[]`: inline.
             Instr::AssignDim { var: 1, keys: 10, n: 5, append: false, val: 3, dst: 6 },
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: c(3), dst: 6 },
             Instr::AssignDim { var: 1, keys: 10, n: 2, append: true, val: 3, dst: 6 },
@@ -764,6 +775,9 @@ mod tests {
             Instr::Free { reg: 6 },
             Instr::AssignPropDim { op: Some(BinOp::Add), base: 20, name: c(4), n: 1, append: false, val: 3, dst: 6 },
             Instr::SendVarStatic { class: 2, method: 5, n: 1, arg: 11, var: 1 },
+            // `$this->p[] = v`; no keys and no `[]` is no path.
+            Instr::AssignPropDim { op: None, base: 20, name: c(4), n: crate::DIM_THIS, append: true, val: 3, dst: 6 },
+            Instr::AssignPropDim { op: None, base: 20, name: c(4), n: 0, append: false, val: 3, dst: 6 },
         ];
         let consts = consts();
         let at = |pc| lower_at(&code, pc, &consts, 2);
@@ -771,11 +785,13 @@ mod tests {
         assert_eq!(at(1).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_UNUSED });
         assert!(at(3).is_none());
         assert!(at(4).is_none());
-        assert!(at(5).is_none());
+        assert_eq!(at(5).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_APPEND });
         assert_eq!(at(6).unwrap(), Insn { op: Op::AssignPropDim, a: 0, b: 22, c: 3, imm: 4 | 6 << 16 | 1 << 24 | PROP_PATH_THIS });
         assert_eq!(at(7).unwrap(), Insn { op: Op::AssignPropDim, a: 20, b: 22, c: 3, imm: 4 | 6 << 16 | 2 << 24 | PATH_UNUSED });
         assert!(at(9).is_none());
         assert_eq!(at(10).unwrap(), Insn { op: Op::SendVarStatic, a: 11, b: 1, c: 1, imm: 5 | 2 << 16 });
+        assert_eq!(at(11).unwrap(), Insn { op: Op::AssignPropDim, a: 0, b: 22, c: 3, imm: 4 | 6 << 16 | PROP_PATH_THIS | PATH_APPEND });
+        assert!(at(12).is_none());
     }
 
     #[test]

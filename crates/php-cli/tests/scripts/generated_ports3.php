@@ -222,7 +222,11 @@ class S {
     static function byref(&$x) { $x .= '!'; return $x; }
     static function byval($x) { $x .= '?'; return $x; }
     static function pick(string $how, $v) {
-        return $how === 'ref' ? static::byref($v) : static::byval($v);
+        // (An argument that is no variable: each is sent on its own.)
+        return $how === 'ref' ? static::byref($v, $how . '') : static::byval($v, $how . '');
+    }
+    static function undef($how) {
+        return static::byval($nope, $how . '');
     }
 }
 class T extends S {
@@ -235,7 +239,7 @@ for ($r = 0; $r < 2; $r++) {
     $b = 'b';
     $m = 'byval';
     var_dump(S::$m($b), $b);
-    var_dump(S::pick('ref', 'p'), T::pick('ref', 'q'), T::pick('val', 'v'));
+    var_dump(S::pick('ref', 'p'), T::pick('ref', 'q'), T::pick('val', 'v'), T::undef('u'));
     $n = 'byref';
     var_dump(S::$n($undefvar));
     var_dump($undefvar);
@@ -282,6 +286,54 @@ for ($r = 0; $r < 2; $r++) {
     var_dump($n instanceof NoCtor);
     $gen = (function () { yield 1; yield 2; })();
     $p = new Point(...$gen);
+}
+
+echo "-- appends at the end of a path\n";
+class Bag {
+    public $items;
+    public array $typed = [];
+    public ?array $maybe = null;
+    public $full = [PHP_INT_MAX => 'last'];
+    function add($v) {
+        $this->items[] = $v;
+        $this->typed[] = $v;
+        $this->maybe[] = $v;
+        $this->typed['by'][] = $v;
+        try {
+            $this->full[] = $v;
+        } catch (Error $e) {
+            echo get_class($e), ': ', $e->getMessage(), "\n";
+        }
+        return count($this->items);
+    }
+}
+for ($r = 0; $r < 2; $r++) {
+    $bag = new Bag;
+    var_dump($bag->add('a'), $bag->add('b'));
+    var_dump($bag->items, $bag->typed, $bag->maybe);
+    $k = 'key';
+    $a = [];
+    $a[$k][] = 1;
+    $a[$k][] = 2;
+    $a[$k]['in'][] = 3;
+    $a['x' . $r][] = 'made';
+    $a[$k . 'f'] = false;
+    $a[$k . 'f'][] = 'from false';
+    $a[$k . 'm'] = [PHP_INT_MAX => 0];
+    try {
+        $a[$k . 'm'][] = 'no room';
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    $a[$k . 's'] = 'str';
+    try {
+        $a[$k . 's'][] = 'x';
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    var_dump($a);
+    $v = ($a[$k][] = 'used');
+    var_dump($v);
 }
 
 echo "-- method calls: native methods, classes a site has not seen\n";

@@ -422,18 +422,24 @@ string(2) "a!"
 string(2) "a!"
 string(2) "b?"
 string(1) "b"
+
+Warning: Undefined variable $nope in %s on line 229
 string(2) "p!"
 string(2) "q#"
 string(2) "v?"
+string(1) "?"
 string(1) "!"
 string(1) "!"
 string(2) "a!"
 string(2) "a!"
 string(2) "b?"
 string(1) "b"
+
+Warning: Undefined variable $nope in %s on line 229
 string(2) "p!"
 string(2) "q#"
 string(2) "v?"
+string(1) "?"
 string(2) "!!"
 string(2) "!!"
 -- new with spread arguments
@@ -446,7 +452,7 @@ Point(1, 0) rest {"extra":2}
 Point(8, 9) rest []
 Point(by ref, 2) rest []
 Error: Named parameter $x overwrites previous argument
-ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 272 and exactly 2 expected
+ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 276 and exactly 2 expected
 Error: Unknown named parameter $c
 bool(true)
 Point(1, 2) rest []
@@ -459,10 +465,141 @@ Point(1, 0) rest {"extra":2}
 Point(8, 9) rest []
 Point(by ref, 2) rest []
 Error: Named parameter $x overwrites previous argument
-ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 272 and exactly 2 expected
+ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed in %s on line 276 and exactly 2 expected
 Error: Unknown named parameter $c
 bool(true)
 Point(1, 2) rest []
+-- appends at the end of a path
+Error: Cannot add element to the array as the next element is already occupied
+Error: Cannot add element to the array as the next element is already occupied
+int(1)
+int(2)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["by"]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [1]=>
+  string(1) "b"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 321
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+array(5) {
+  ["key"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    ["in"]=>
+    array(1) {
+      [0]=>
+      int(3)
+    }
+  }
+  ["x0"]=>
+  array(1) {
+    [0]=>
+    string(4) "made"
+  }
+  ["keyf"]=>
+  array(1) {
+    [0]=>
+    string(10) "from false"
+  }
+  ["keym"]=>
+  array(1) {
+    [9223372036854775807]=>
+    int(0)
+  }
+  ["keys"]=>
+  string(3) "str"
+}
+string(4) "used"
+Error: Cannot add element to the array as the next element is already occupied
+Error: Cannot add element to the array as the next element is already occupied
+int(1)
+int(2)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["by"]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+  [1]=>
+  string(1) "b"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 321
+Error: Cannot add element to the array as the next element is already occupied
+Error: [] operator not supported for strings
+array(5) {
+  ["key"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    ["in"]=>
+    array(1) {
+      [0]=>
+      int(3)
+    }
+  }
+  ["x1"]=>
+  array(1) {
+    [0]=>
+    string(4) "made"
+  }
+  ["keyf"]=>
+  array(1) {
+    [0]=>
+    string(10) "from false"
+  }
+  ["keym"]=>
+  array(1) {
+    [9223372036854775807]=>
+    int(0)
+  }
+  ["keys"]=>
+  string(3) "str"
+}
+string(4) "used"
 -- method calls: native methods, classes a site has not seen
 int(19)
 int(2)

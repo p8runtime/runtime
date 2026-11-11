@@ -1080,8 +1080,8 @@ impl Context<'_> {
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let unused = imm & insn::PATH_UNUSED != 0;
                         let dst = rx!((imm >> 16) as u8);
-                        let n = (imm >> 24 & 0xf) as usize;
-                        let written = assign_prop_path(&mut w[..], &o, site.get(), scope, (rx!(b), n), rx!(c), (!unused).then_some(dst));
+                        let path = Path { keys: rx!(b), n: (imm >> 24 & 0xf) as usize, append: imm & insn::PATH_APPEND != 0 };
+                        let written = assign_prop_path(&mut w[..], &o, site.get(), scope, path, rx!(c), (!unused).then_some(dst));
                         drop(o);
                         let Some(released) = written else { slow!() };
                         if unused {
@@ -1143,7 +1143,8 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let unused = imm & insn::PATH_UNUSED != 0;
                         let dst = rx!((imm >> 8) as u8);
-                        let Some(released) = assign_path(&mut w[..], rx!(a), rx!(b), (imm & 0xff) as usize, rx!(c), (!unused).then_some(dst)) else { slow!() };
+                        let path = Path { keys: rx!(b), n: (imm & 0xff) as usize, append: imm & insn::PATH_APPEND != 0 };
+                        let Some(released) = assign_path(&mut w[..], rx!(a), path, rx!(c), (!unused).then_some(dst)) else { slow!() };
                         if unused {
                             // (What the skipped Free does: a stale value there goes now.)
                             let released = released | clear(&mut w[dst]);
@@ -1277,18 +1278,28 @@ fn place_spread(regs: &mut Vec<Value>, at: usize, list: &PhpArray) {
     }
 }
 
-/// `$var[k0]..[kn-1] = $val` (`Op::AssignDimPath`), `$var` an array, the
-/// keys the `n` registers from `keys`, each an int or a string: each level
-/// separated (copy-on-write) and written in place, a missing or null one
-/// made an empty array, as `update_path` walks it; the value (and, with a
-/// `dst`, the result) a copy. None, with nothing written, when a key is of
-/// another type (or is `$var` itself), the value is undefined, or a level
-/// is anything but an array or null (a reference, an object, a string,
-/// false: `step`'s, which may only find the levels before it separated).
-/// Else whether a write released memory.
+/// The keys of a path write (`Op::AssignDimPath`, `Op::AssignPropDim`):
+/// the `n` registers from `keys`, then `[]` when `append`.
+#[derive(Clone, Copy)]
+pub(crate) struct Path {
+    pub(crate) keys: usize,
+    pub(crate) n: usize,
+    pub(crate) append: bool,
+}
+
+/// `$var[k0]..[kn-1] = $val` (or `..[] = $val`: `Op::AssignDimPath`),
+/// `$var` an array, each key an int or a string: each level separated
+/// (copy-on-write) and written in place, a missing or null one made an
+/// empty array, as `update_path` walks it; the value (and, with a `dst`,
+/// the result) a copy. None, with nothing written, when a key is of
+/// another type (or is `$var` itself), the value is undefined, a level is
+/// anything but an array or null (a reference, an object, a string,
+/// false), or the next key to append at is taken: `step`'s, which may
+/// only find the levels before it separated. Else whether a write
+/// released memory.
 #[inline(never)]
-fn assign_path(w: &mut [Value], var: usize, keys: usize, n: usize, val: usize, dst: Option<usize>) -> Option<bool> {
-    let path = keys..keys + n;
+fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usize>) -> Option<bool> {
+    let path = p.keys..p.keys + p.n;
     if path.contains(&var) || !w[var].is_array() || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
@@ -1296,7 +1307,7 @@ fn assign_path(w: &mut [Value], var: usize, keys: usize, n: usize, val: usize, d
     // The root out of its register while it is written (nothing else
     // reads it meanwhile), then back.
     let mut root = std::mem::take(&mut w[var]);
-    let written = write_path(&mut root, &w[path], v.clone());
+    let written = write_path(&mut root, &w[path], p.append, v.clone());
     w[var] = root;
     let released = written?;
     Some(match dst {
@@ -1305,8 +1316,8 @@ fn assign_path(w: &mut [Value], var: usize, keys: usize, n: usize, val: usize, d
     })
 }
 
-/// `$o->p[k0]..[kn-1] = $val` (`Op::AssignPropDim`), the keys the `n`
-/// registers from `keys.0`, each an int or a string: the declared slot
+/// `$o->p[k0]..[kn-1] = $val` (or `..[] = $val`: `Op::AssignPropDim`),
+/// each key an int or a string: the declared slot
 /// the name's cache entry `site` holds for this class and `scope`
 /// (`cached_slot`: visible, the object not lazy), of a class with no
 /// hooked property, the property neither readonly nor of a narrower set
@@ -1314,20 +1325,20 @@ fn assign_path(w: &mut [Value], var: usize, keys: usize, n: usize, val: usize, d
 /// `assign_path` walks a variable (`update_slot_dim`'s write). None, with
 /// nothing written but levels separated, for anything else (`step`'s).
 #[inline(never)]
-fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usize, keys: (usize, usize), val: usize, dst: Option<usize>) -> Option<bool> {
+fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usize, path: Path, val: usize, dst: Option<usize>) -> Option<bool> {
     let slot = cached_slot(site, o, scope)?;
     let p = &o.class.properties[slot];
     if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
         return None;
     }
-    let path = &w[keys.0..keys.0 + keys.1];
-    if !path.iter().all(|k| k.is_int() || k.is_str()) {
+    let keys = &w[path.keys..path.keys + path.n];
+    if !keys.iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
     let v = copied(&w[val])?;
     let cell = &o.slots()[slot];
     let mut root = cell.replace(Value::UNDEF);
-    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, path, v.clone()) } else { None };
+    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone()) } else { None };
     p8_runtime::object::put_slot(cell, root);
     let released = written?;
     Some(match dst {
@@ -1336,13 +1347,14 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
     })
 }
 
-/// `assign_path`'s walk below the root.
-fn write_path(root: &mut Value, keys: &[Value], v: Value) -> Option<bool> {
+/// `assign_path`'s walk below the root: every key a level when `append`
+/// (the value pushed onto the last), else all but the last.
+fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Option<bool> {
     let key = |k: &Value| match k.as_int() {
         Some(i) => Key::Int(i),
         None => Key::from_string(k.cloned_str().expect("a string key")),
     };
-    let (last, levels) = keys.split_last()?;
+    let (last, levels) = if append { (None, keys) } else { keys.split_last().map(|(l, rest)| (Some(l), rest))? };
     let mut cur = root;
     for k in levels {
         if cur.is_null() {
@@ -1354,6 +1366,11 @@ fn write_path(root: &mut Value, keys: &[Value], v: Value) -> Option<bool> {
         *cur = Value::array(PhpArray::new());
     }
     let arr = cur.array_mut()?;
+    let Some(last) = last else {
+        // (A taken next key: the error, `step`'s.)
+        arr.push(v).ok()?;
+        return Some(false);
+    };
     let key = key(last);
     match arr.get_mut(&key) {
         Some(e) if e.is_reference() => None,

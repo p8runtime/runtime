@@ -112,17 +112,19 @@ fn globals_bound_in_functions_stay_in_the_loop() {
 #[test]
 fn dimension_paths_stay_in_the_loop() {
     let out = flat(
-        "class P { public $d = []; function put($k, $v) { $this->d[$k] = $v; $this->d['all'][$k] = 1; } }
-         $o = new P; $a = []; $b = ['x' => ['y' => []]];
+        "class P { public $d = []; public $list; function put($k, $v) { $this->d[$k] = $v; $this->d['all'][$k] = 1; $this->list[] = $v; } }
+         $o = new P; $a = []; $b = ['x' => ['y' => []]]; $c = [];
          for ($i = 0; $i < $n; $i++) {
              $a['k' . ($i % 3)]['n'] = $i;
              $b['x']['y'][$i % 4] = [$i];
              $o->put($i % 5, 'v');
              $o->d['two'][$i % 2] = $i;
+             $o->d['seq'][] = $i;
+             $c['k' . ($i % 2)][] = $i;
          }
-         echo count($a), ' ', count($b['x']['y']), ' ', count($o->d), ' ', count($o->d['all']), ' ', implode(',', $o->d['two']);",
+         echo count($a), ' ', count($b['x']['y']), ' ', count($o->d), ' ', count($o->d['all']), ' ', implode(',', $o->d['two']), ' ', count($o->list), ' ', count($o->d['seq']), ' ', count($c['k1']);",
     );
-    assert_eq!(out, "3 4 7 5 18,19");
+    assert_eq!(out, "3 4 8 5 18,19 20 20 10");
 }
 
 /// `new C(...$args)` with a PHP constructor, positions only (a list, and
@@ -138,15 +140,16 @@ fn new_with_spread_arguments_stays_in_the_loop() {
     assert_eq!(out, "16");
 }
 
-/// `static::f($x)` (the method, so by-reference or not, known only when
-/// it runs): the sends inline.
+/// `static::f($x, $y + 1)` (the method, so by-reference or not, known
+/// only when it runs; an argument that is no variable, so each is sent
+/// on its own, SendVarStatic): the sends inline.
 #[test]
 fn static_call_sends_stay_in_the_loop() {
     let out = flat(
         "class S {
-             static function r(&$x) { $x++; return $x; }
-             static function v($x) { return $x + 1; }
-             static function go($y) { $z = $y; return static::r($z) + static::v($y); }
+             static function r(&$x, $d) { $x += $d; return $x; }
+             static function v($x, $d) { return $x + $d; }
+             static function go($y) { $z = $y; return static::r($z, $y * 0 + 1) + static::v($y, $y * 0 + 1); }
          }
          $t = 0;
          for ($i = 0; $i < $n; $i++) { $t += S::go($i); }

@@ -172,12 +172,14 @@ hand SendVarStatic
 /// `global $name` in a function: a = a reference to the global named by
 /// constant imm (its cache entry, `Closure::globals`)
 hand BindGlobal
-/// a[k0]..[kn-1] = c, the n keys the registers from b (2 to PATH_KEYS);
-/// imm: n, the result register (bits 8..16), PATH_UNUSED
+/// a[k0]..[kn-1] = c (or `..[] = c`, PATH_APPEND), the n keys the
+/// registers from b (1 to PATH_KEYS); imm: n, the result register (bits
+/// 8..16), PATH_APPEND, PATH_UNUSED
 hand AssignDimPath
-/// a->(property site imm & 0xffff)[k0]..[kn-1] = c, the n keys the
-/// registers from b (1 to PATH_KEYS); imm: the result register (bits
-/// 16..24), n (bits 24..28), PROP_PATH_THIS (`$this`, not a), PATH_UNUSED
+/// a->(property site imm & 0xffff)[k0]..[kn-1] = c (or `..[] = c`), the
+/// n keys the registers from b (0 to PATH_KEYS); imm: the result register
+/// (bits 16..24), n (bits 24..28), PROP_PATH_THIS (`$this`, not a),
+/// PATH_APPEND, PATH_UNUSED
 hand AssignPropDim
 
 # The constant forms: the same operations with one operand a literal,
