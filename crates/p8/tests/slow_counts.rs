@@ -509,7 +509,7 @@ fn generators_references_static_ops_and_includes_stay_in_the_loop() {
 /// by isset, isset of an element of null and of a string's offsets, an
 /// enum case, a returned array bound by reference, writes to elements
 /// bound by reference (an int key, a string key, a path), `(object)`,
-/// `$$name`, `$_SERVER`, `[&$x]`, and `$f($a['k'])` of a callable name
+/// `$$name`, `$_SERVER` in a function, `[&$x]`, and `$f($a['k'])` of a callable name
 /// asking whether it takes the element by reference: inline (the cast,
 /// `$$name`, the superglobal and the callable's question out of line on
 /// their arms' operands).
@@ -521,12 +521,13 @@ fn dynamic_properties_references_and_cases_stay_in_the_loop() {
          class P1 extends P0 {} class P2 extends P0 {}
          function addm(array &$m) { $m[] = 1; }
          function rr(): array { $m = []; addm($m); return $m; }
+         function sv() { return $_SERVER === null || is_array($_SERVER) ? 1 : 0; }
          $ps = [new P1, new P2]; $std = new stdClass; $std->dyn = 2; $dn = 'dyn'; $nul = null; $str = 'abc';
          $re = [0]; $rx = &$re[0]; $rs = ['k' => 0]; $ry = &$rs['k']; $rp = ['a' => [0]]; $rz = &$rp['a'][0];
          $t = 0; $e = null; $vv = 'str'; $x0 = 0; $cb = 'strlen'; $ca = ['s' => 'abcd'];
          for ($i = 0; $i < $n; $i++) {
              $ob = (object) ['p' => 1];
-             $t += $ob->p + strlen($$vv) + ($_SERVER === null || is_array($_SERVER) ? 1 : 0);
+             $t += $ob->p + strlen($$vv) + sv();
              $lit = [&$x0];
              $t += $cb($ca['s']);
              $t += $ps[$i % 2]->put($i % 4);
