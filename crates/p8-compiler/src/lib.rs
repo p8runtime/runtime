@@ -4995,12 +4995,18 @@ impl<'src> Compiler<'src> {
                         f.emit(Instr::ArrayUnpack { arr: dst, src });
                         continue;
                     }
+                    // The key is evaluated before the value, as PHP's
+                    // zend_compile_array does (#461). (A variable key is
+                    // read when the element is added, in both.)
+                    let key = match item.key {
+                        Some(k) => Some(self.expr(f, k)?),
+                        None => None,
+                    };
                     if item.by_ref {
                         // `[&$x]`, `[k => &$x]`: the element is a reference.
                         let (src, _) = self.ref_source(f, item.value, item.span)?;
-                        match item.key {
-                            Some(k) => {
-                                let key = self.expr(f, k)?;
+                        match key {
+                            Some(key) => {
                                 f.emit(Instr::rare(Rare::ArraySetRef, dst, key, src, 0));
                             }
                             None => {
@@ -5010,9 +5016,8 @@ impl<'src> Compiler<'src> {
                         continue;
                     }
                     let val = self.expr(f, item.value)?;
-                    match item.key {
-                        Some(k) => {
-                            let key = self.expr(f, k)?;
+                    match key {
+                        Some(key) => {
                             // The element's temporary is read only here.
                             f.emit(Instr::ArraySet { arr: dst, key, val, take: is_temp(val) });
                         }
@@ -5501,12 +5506,17 @@ impl<'src> Compiler<'src> {
             }
             Expr::Yield { key, value, from: false, .. } => {
                 f.is_generator = true;
+                // The key first, as zend_compile_yield (#461).
+                let key = match key {
+                    Some(k) => Some(self.expr(f, k)?),
+                    None => None,
+                };
                 let value = match value {
                     Some(v) => self.expr(f, v)?,
                     None => f.constant(Frozen::Null),
                 };
                 let (key, has_key) = match key {
-                    Some(k) => (self.expr(f, k)?, true),
+                    Some(k) => (k, true),
                     None => (value, false),
                 };
                 let dst = f.temp();
