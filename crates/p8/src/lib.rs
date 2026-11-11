@@ -37,6 +37,8 @@ use std::sync::{Arc, Mutex};
 mod file_cache;
 mod opcache;
 pub use opcache::OpcacheSettings;
+mod package;
+pub use package::{Package, PackageCheck, PackageError};
 mod request;
 
 pub use p8_interp::{Host, InterruptHandle};
@@ -87,7 +89,79 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
-        Platform { compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, compiled: AtomicUsize::new(0), opcache: None, partials: AtomicUsize::new(0) }) }
+        Platform {
+            compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, package: None, compiled: AtomicUsize::new(0), opcache: None, partials: AtomicUsize::new(0) }),
+        }
+    }
+
+    /// What a package must have been written by to be used by this
+    /// Platform: this engine with these extensions.
+    fn engine(&self) -> [u8; 16] {
+        package::engine(self.compiler.registry.modules())
+    }
+
+    /// The package in the file at `path`, if this engine wrote it and it is
+    /// sound (see [`Package`]); `check` is how a run checks each packaged
+    /// file against the file on disk.
+    pub fn open_package(&self, path: impl AsRef<std::path::Path>, check: PackageCheck) -> Result<Package, PackageError> {
+        Package::open(path.as_ref(), &self.engine(), check)
+    }
+
+    /// The package appended to the running executable ([`Platform::bake`]):
+    /// Ok(None) when it has none.
+    pub fn executable_package(&self, check: PackageCheck) -> Result<Option<Package>, PackageError> {
+        let exe = std::env::current_exe().map_err(PackageError::Io)?;
+        Package::appended(&exe, &self.engine(), check)
+    }
+
+    /// A package held in memory.
+    pub fn package_from_bytes(&self, bytes: Vec<u8>, check: PackageCheck) -> Result<Package, PackageError> {
+        Package::in_memory(bytes, &self.engine(), check)
+    }
+
+    /// Take compiled files from `package`: a file it has, unchanged, is
+    /// neither parsed nor compiled; any other file, and eval()'d code,
+    /// compiles as without it.
+    pub fn with_package(self, package: Package) -> Platform {
+        let compiler = Arc::try_unwrap(self.compiler).unwrap_or_else(|_| panic!("a package is set before the Platform is shared"));
+        Platform { compiler: Arc::new(Compiler { package: Some(package), ..compiler }) }
+    }
+
+    /// Compile every PHP file under `root` (`.php`, `.inc`, `.phtml`, not in
+    /// hidden folders) and write them as one package to `out`, replacing
+    /// it whole. A file that does not compile is left out (a run compiles
+    /// it, and reports its error, as without a package).
+    pub fn write_package(&self, root: &std::path::Path, out: &std::path::Path) -> std::io::Result<Packed> {
+        let symbols = self.compiler.registry.symbols();
+        let mut built = Vec::new();
+        let mut failed = Vec::new();
+        for path in package::sources(root) {
+            let Ok(real) = canonicalize(&path) else { continue };
+            let file = real.to_string_lossy().into_owned();
+            let (Ok(source), Ok(meta)) = (std::fs::read(&real), std::fs::metadata(&real)) else { continue };
+            match compile(&self.compiler.registry, &source, &file, false) {
+                Ok(program) => built.push(package::Built::new(file, &source, &meta, p8_bytecode::serial::encode(&program, symbols))),
+                Err(e) => failed.push(e),
+            }
+        }
+        let files = built.len();
+        let bytes = package::bytes(built, &self.engine());
+        package::write_file(out, &[&bytes], None)?;
+        Ok(Packed { files, failed, bytes: bytes.len() as u64 })
+    }
+
+    /// Write to `out` a copy of the running executable with the package at
+    /// `package` appended: run, the copy takes its compiled files from it
+    /// ([`Platform::executable_package`]). A package the running engine
+    /// would not use is refused; a package the executable already carries
+    /// is replaced.
+    pub fn bake(&self, package: &std::path::Path, out: &std::path::Path) -> Result<(), PackageError> {
+        let bytes = std::fs::read(package).map_err(PackageError::Io)?;
+        self.package_from_bytes(bytes.clone(), PackageCheck::Hash)?;
+        let exe = std::env::current_exe().map_err(PackageError::Io)?;
+        let mut program = std::fs::read(&exe).map_err(PackageError::Io)?;
+        program.truncate(package::executable_len(&program));
+        package::write_file(out, &[&program, &bytes, &package::tail(&bytes)], Some(&exe)).map_err(PackageError::Io)
     }
 
     /// Report the cache this Platform keeps (keep_compiled, file_cache) as
@@ -178,6 +252,8 @@ struct Compiler {
     cache: Option<Mutex<HashMap<String, Kept>>>,
     /// Where compiled files are kept on disk, if anywhere.
     files: Option<Arc<file_cache::FileCache>>,
+    /// The project's files compiled ahead of time, if there are.
+    package: Option<Package>,
     /// Files compiled from source.
     compiled: AtomicUsize,
     /// Zend OPcache over the cache, when the host reports one.
@@ -186,17 +262,48 @@ struct Compiler {
     partials: AtomicUsize,
 }
 
-/// A compiled file kept by its path: the source it was compiled from and
-/// what OPcache knows of it.
+/// A compiled file kept by its path: what it is checked by when it is
+/// loaded again, and what OPcache knows of it.
 struct Kept {
-    source: Vec<u8>,
+    source: Source,
     program: Arc<p8_bytecode::Program>,
     stats: opcache::ScriptStats,
 }
 
+/// What a kept file was made from.
+enum Source {
+    /// The source it was compiled (or read from the file cache) for.
+    Bytes(Vec<u8>),
+    /// A packaged file's source, by its length and hash (the package
+    /// holds no source, and none is copied).
+    Hash(usize, [u8; 16]),
+    /// A packaged file taken without its source being read, of this
+    /// length: the package checks it again each time it is loaded.
+    Unread(u64),
+}
+
+impl Source {
+    /// Whether `source` is the source this was made from.
+    fn is(&self, source: &[u8]) -> bool {
+        match self {
+            Source::Bytes(bytes) => bytes.as_slice() == source,
+            Source::Hash(len, hash) => *len == source.len() && xxhash_rust::xxh3::xxh3_128(source).to_le_bytes() == *hash,
+            Source::Unread(_) => false,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Source::Bytes(bytes) => bytes.len(),
+            Source::Hash(len, _) => *len,
+            Source::Unread(len) => *len as usize,
+        }
+    }
+}
+
 impl Compiler {
     fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
-        let Some(cache) = &self.cache else { return self.load(source, file) };
+        let Some(cache) = &self.cache else { return self.load(source, file).map(|(program, _)| program) };
         // While OPcache runs, a file it caches is checked by its rules (so,
         // as in PHP, a changed file can run as it was until revalidated);
         // anything else p8 keeps is used again only while its source is
@@ -210,7 +317,7 @@ impl Compiler {
                     // One OPcache would not cache: a miss each time it is
                     // loaded, while it still would not (else it is
                     // compiled again, to be cached now).
-                    Some(o) => entry.source.as_slice() == source
+                    Some(o) => entry.source.is(source)
                         && match o.refusal(file, source.len()) {
                             Some(refusal) => {
                                 o.miss(refusal == opcache::Refusal::Blacklisted);
@@ -218,7 +325,7 @@ impl Compiler {
                             }
                             None => false,
                         },
-                    None => entry.source.as_slice() == source,
+                    None => entry.source.is(source),
                 };
                 if valid {
                     if let Some(o) = opcache.filter(|_| entry.stats.opcache) {
@@ -229,7 +336,7 @@ impl Compiler {
                 kept.remove(file);
             }
         }
-        let program = self.load(source, file)?;
+        let (program, packaged) = self.load(source, file)?;
         let stats = match opcache {
             Some(o) => match o.refusal(file, source.len()) {
                 Some(refusal) => {
@@ -243,8 +350,44 @@ impl Compiler {
             },
             None => opcache::ScriptStats::default(),
         };
-        cache.lock().unwrap_or_else(|e| e.into_inner()).insert(file.to_string(), Kept { source: source.to_vec(), program: Arc::clone(&program), stats });
+        let source = match packaged {
+            Some(hash) => Source::Hash(source.len(), hash),
+            None => Source::Bytes(source.to_vec()),
+        };
+        cache.lock().unwrap_or_else(|e| e.into_inner()).insert(file.to_string(), Kept { source, program: Arc::clone(&program), stats });
         Ok(program)
+    }
+
+    /// The program of the file at `file` (a resolved path) when the
+    /// package vouches for it without its source being read (see
+    /// [`PackageCheck`]); None: its source is to be read and loaded.
+    fn file_unread(&self, file: &str) -> Option<Arc<p8_bytecode::Program>> {
+        let package = self.package.as_ref()?;
+        if !package.vouches(file) {
+            return None;
+        }
+        if let Some(cache) = &self.cache
+            && let Some(entry) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(file)
+        {
+            // Kept from its source (read when the package did not vouch
+            // for it): loaded that way again.
+            return matches!(entry.source, Source::Unread(_)).then(|| Arc::clone(&entry.program));
+        }
+        let (program, len) = package.unread(file, self.registry.symbols())?;
+        let program = Arc::new(program);
+        if let Some(cache) = &self.cache {
+            let kept = Kept { source: Source::Unread(len), program: Arc::clone(&program), stats: opcache::ScriptStats::default() };
+            cache.lock().unwrap_or_else(|e| e.into_inner()).insert(file.to_string(), kept);
+        }
+        Some(program)
+    }
+
+    /// Whether a file can be loaded without its source being read: a
+    /// package that checks files by their size and time, or trusts
+    /// itself (not while OPcache, which checks files by its own rules,
+    /// runs).
+    fn loads_unread(&self) -> bool {
+        self.package.as_ref().is_some_and(|p| p.check() != PackageCheck::Hash) && !self.opcache.as_ref().is_some_and(|o| o.active())
     }
 
     /// A request starts: OPcache's pending restart (opcache_reset())
@@ -258,20 +401,26 @@ impl Compiler {
         }
     }
 
-    /// A file's program: from the file cache, else compiled (and kept there).
-    fn load(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
+    /// A file's program: from the package (with its source's hash), else
+    /// from the file cache, else compiled (and kept there).
+    fn load(&self, source: &[u8], file: &str) -> Result<(Arc<p8_bytecode::Program>, Option<[u8; 16]>), Error> {
         let symbols = self.registry.symbols();
+        if let Some(package) = &self.package
+            && let Some((program, hash)) = package.load(source, file, symbols)
+        {
+            return Ok((Arc::new(program), Some(hash)));
+        }
         if let Some(files) = &self.files
             && let Some(program) = files.load(source, file, symbols)
         {
-            return Ok(Arc::new(program));
+            return Ok((Arc::new(program), None));
         }
         self.compiled.fetch_add(1, Ordering::Relaxed);
         let program = compile(&self.registry, source, file, false)?;
         if let Some(files) = &self.files {
             files.store(source, file, &program, symbols);
         }
-        Ok(program)
+        Ok((program, None))
     }
 }
 
@@ -289,6 +438,14 @@ impl p8_interp::Loader for Load {
     fn code_cache(&self) -> Option<Arc<dyn p8_runtime::opcache::CodeCache>> {
         self.0.opcache.as_ref()?;
         Some(Arc::clone(&self.0) as Arc<dyn p8_runtime::opcache::CodeCache>)
+    }
+
+    fn loads_unread(&self) -> bool {
+        self.0.loads_unread()
+    }
+
+    fn load_unread(&self, file: &str) -> Option<Arc<p8_bytecode::Program>> {
+        self.0.file_unread(file)
     }
 
     fn load_eval(&self, code: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, p8_interp::LoadError> {
@@ -356,6 +513,17 @@ fn disassemble(program: &p8_bytecode::Program) -> String {
 pub struct Script {
     program: Arc<p8_bytecode::Program>,
     registry: Arc<Registry>,
+}
+
+/// What [`Platform::write_package`] wrote.
+#[derive(Debug)]
+pub struct Packed {
+    /// Files compiled into the package.
+    pub files: usize,
+    /// Files that do not compile, left out.
+    pub failed: Vec<Error>,
+    /// The package's size.
+    pub bytes: u64,
 }
 
 /// A file that does not compile.

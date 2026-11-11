@@ -27,6 +27,10 @@ p8-ext-pdo-sqlite = { path = "../p8-ext-pdo-sqlite" }
 p8-ext-openssl = { path = "../p8-ext-openssl" }
 p8-ext-intl = { path = "../p8-ext-intl" }
 
+# build.rs hashes the engine's source: a package is used only by the same engine.
+[build-dependencies]
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
 # The tests count hash-table work (p8_runtime::counts).
 [dev-dependencies]
 p8-runtime = { path = "../p8-runtime", features = ["counts"] }
