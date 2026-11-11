@@ -133,4 +133,29 @@ destructed
 after unset
 bool(false)
 c
+-- scalars, dynamic properties, cases, references, casts, variable variables
+false true true false false false false true false 
+1 1 truefalsefalse
+quiet
+h Spades Spades true
+one two three
+{"x":1,"y":[2]} stdClass {"scalar":"str"} true
+abc
+
+Warning: Undefined variable $nope_0 in %s on line 290
+NULL
+g argv
+10
+false true true false false false false true false 
+1 1 truefalsefalse
+quiet
+h Spades Spades true
+one two three
+{"x":1,"y":[2]} stdClass {"scalar":"str"} true
+abc
+
+Warning: Undefined variable $nope_1 in %s on line 290
+NULL
+g argv
+10
 done

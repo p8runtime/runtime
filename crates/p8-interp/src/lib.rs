@@ -2237,10 +2237,7 @@ impl Context<'_> {
                             arr.insert(key, Value::reference(cell));
                         }
                     }
-                    Rare::ToObject => {
-                        let v = self.operand(w, clo, b);
-                        reg!(a) = self.object_cast(v);
-                    }
+                    Rare::ToObject => return self.to_object_ops(regs, clo, base, at, (a, b)),
                     // An intrinsic the loop did not run (a conversion, an
                     // object, a warning): the builtin's call, as a Call's.
                     Rare::Strlen | Rare::Count | Rare::IsNull | Rare::IsBool | Rare::IsInt | Rare::IsFloat | Rare::IsString | Rare::IsArray | Rare::IsObject | Rare::ArrayKeyExists => {
@@ -2273,22 +2270,7 @@ impl Context<'_> {
                         let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
                         reg!(a) = Value::reference(cell);
                     }
-                    Rare::VarGet => {
-                        let name = self.var_name(w, clo, b);
-                        let global = c & 2 != 0;
-                        let scope = global || self.frames.last().is_some_and(|f| f.global);
-                        let v = if scope && !in_main { self.with_main(below, |cx, main| cx.global_value(main, &name)) } else { self.var_value(w, in_main, &name) };
-                        match v {
-                            Some(v) => reg!(a) = v,
-                            None => {
-                                if c & 1 == 0 {
-                                    let what = if global { "global variable" } else { "variable" };
-                                    self.warn(format!("Undefined {what} ${}", String::from_utf8_lossy(&name)));
-                                }
-                                reg!(a) = Value::NULL;
-                            }
-                        }
-                    }
+                    Rare::VarGet => return self.var_get_ops(regs, clo, base, at, (a, b, c)),
                     Rare::VarUnset => {
                         let name = self.var_name(w, clo, a);
                         let at_global = self.frames.last().is_some_and(|f| f.global);
@@ -2358,12 +2340,7 @@ impl Context<'_> {
                             return Err(self.throw("Error", format!("{name}(): Argument #1{param} could not be passed by reference")));
                         }
                     }
-                    Rare::AutoGlobal => {
-                        // The name is a constant string: read, not converted.
-                        let name = self.operand(w, clo, b).into_str().expect("AutoGlobal names a constant string");
-                        let main: &mut [Value] = if in_main { w } else { below };
-                        reg!(a) = Value::reference(self.with_main(main, |cx, main| cx.global_slot(main, name.as_bytes())));
-                    }
+                    Rare::AutoGlobal => return self.auto_global_ops(regs, clo, base, at, (a, b)),
                     Rare::GlobalBind => {
                         let name = self.var_name(w, clo, a);
                         let cell = make_ref(w, b);
@@ -3251,6 +3228,65 @@ impl Context<'_> {
             }
         };
         Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc))
+    }
+
+    /// `(object) $v` (the ToObject at `at`). `step` runs it, and the loop's
+    /// ToObject arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn to_object_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+        let v = self.operand(&regs[base..base + clo.code.nregs as usize], clo, src);
+        regs[base + dst as usize] = self.object_cast(v);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$$name` read (the VarGet at `at`, the name in `name`; `flags` bit 0:
+    /// quiet, bit 1: a global's): the running scope's variable of that
+    /// name, or the global's (a function's scope, a file included at
+    /// global scope); undefined: the warning, null. `step` runs it, and
+    /// the loop's VarGet arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn var_get_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, name, flags): (Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let in_main = base == 0;
+        let nregs = clo.code.nregs as usize;
+        let name = self.var_name(&regs[base..base + nregs], clo, name);
+        let global = flags & 2 != 0;
+        let scope = global || self.frames.last().is_some_and(|f| f.global);
+        let v = if scope && !in_main {
+            let (below, _) = regs.split_at_mut(base);
+            self.with_main(below, |cx, main| cx.global_value(main, &name))
+        } else {
+            self.var_value(&regs[base..base + nregs], in_main, &name)
+        };
+        regs[base + dst as usize] = match v {
+            Some(v) => v,
+            None => {
+                if flags & 1 == 0 {
+                    let what = if global { "global variable" } else { "variable" };
+                    self.warn(format!("Undefined {what} ${}", String::from_utf8_lossy(&name)));
+                }
+                Value::NULL
+            }
+        };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$GLOBALS`, `$_SERVER`, … (the AutoGlobal at `at`: the name, a
+    /// constant string, in `name`): a reference to the global's slot.
+    /// `step` runs it, and the loop's AutoGlobal arm, with none of
+    /// `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn auto_global_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, name): (Reg, Reg)) -> Result<Next, Throw> {
+        let nregs = clo.code.nregs as usize;
+        // The name is a constant string: read, not converted.
+        let name = self.operand(&regs[base..base + nregs], clo, name).into_str().expect("AutoGlobal names a constant string");
+        let cell = if base == 0 {
+            self.with_main(&mut regs[..nregs], |cx, main| cx.global_slot(main, name.as_bytes()))
+        } else {
+            let (below, _) = regs.split_at_mut(base);
+            self.with_main(below, |cx, main| cx.global_slot(main, name.as_bytes()))
+        };
+        regs[base + dst as usize] = Value::reference(cell);
+        Ok(Next::Go(at + 1))
     }
 
     /// `C::$name op= val` (the AssignStaticPropOp at `at`, the result to

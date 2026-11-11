@@ -507,8 +507,10 @@ fn generators_references_static_ops_and_includes_stay_in_the_loop() {
 /// `$this->list[k] = v` from a base class's method on two subclasses, a
 /// stdClass's dynamic property read (by name and `$o->$name`) and asked
 /// by isset, isset of an element of null and of a string's offsets, an
-/// enum case, a returned array bound by reference, and writes to elements
-/// bound by reference (an int key, a string key, a path): inline.
+/// enum case, a returned array bound by reference, writes to elements
+/// bound by reference (an int key, a string key, a path), `(object)`,
+/// `$$name`, `$_SERVER` and `[&$x]`: inline (the cast, `$$name` and the
+/// superglobal out of line on their arms' operands).
 #[test]
 fn dynamic_properties_references_and_cases_stay_in_the_loop() {
     let out = flat(
@@ -519,8 +521,11 @@ fn dynamic_properties_references_and_cases_stay_in_the_loop() {
          function rr(): array { $m = []; addm($m); return $m; }
          $ps = [new P1, new P2]; $std = new stdClass; $std->dyn = 2; $dn = 'dyn'; $nul = null; $str = 'abc';
          $re = [0]; $rx = &$re[0]; $rs = ['k' => 0]; $ry = &$rs['k']; $rp = ['a' => [0]]; $rz = &$rp['a'][0];
-         $t = 0; $e = null;
+         $t = 0; $e = null; $vv = 'str'; $x0 = 0;
          for ($i = 0; $i < $n; $i++) {
+             $ob = (object) ['p' => 1];
+             $t += $ob->p + strlen($$vv) + (count($_SERVER) > 0 ? 1 : 0);
+             $lit = [&$x0];
              $t += $ps[$i % 2]->put($i % 4);
              $t += $std->dyn + $std->$dn + (isset($std->dyn) ? 1 : 0);
              $t += (isset($nul['k']) ? 1 : 0) + (isset($str[1]) ? 1 : 0) + (isset($str[5]) ? 1 : 0);
@@ -530,7 +535,7 @@ fn dynamic_properties_references_and_cases_stay_in_the_loop() {
          }
          echo $t, ' ', $rx + $ry + $rz, ' ', $e->name;",
     );
-    assert_eq!(out, "178 57 B");
+    assert_eq!(out, "278 57 B");
 }
 
 /// A class and a function declared where the code runs, then used: no

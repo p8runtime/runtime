@@ -235,6 +235,14 @@ hand AssignPropOp
 hand BindRef
 /// `unset($a)`
 hand UnsetVar
+/// a = (object) b
+hand ToObject
+/// a = $$b (imm: bit 0 quiet, bit 1 a global's)
+hand VarGet
+/// a = a reference to the superglobal named b
+hand AutoGlobal
+/// `[&$b]`: a reference to b appended to the array literal in a
+hand ArrayPushRef
 /// a = `C::$name op= b` (class reference c, the name constant imm & 0x3fff,
 /// the operator imm >> 14 & 15, constant b with STATIC_OP_K)
 hand AssignStaticPropOp

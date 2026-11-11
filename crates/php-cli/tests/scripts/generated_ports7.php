@@ -260,4 +260,38 @@ for ($r = 0; $r < 2; $r++) {
     }
     echo DeclaredInLoop::C, "\n";
 }
+echo "-- scalars, dynamic properties, cases, references, casts, variable variables\n";
+enum Suit: string { case Hearts = 'h'; case Spades = 's'; const Wild = self::Spades; }
+$GLOBALS['glob_for_test'] = 'g';
+function read_globals() { return $GLOBALS['glob_for_test'] . ' ' . (isset($_SERVER['argv']) ? 'argv' : 'no argv'); }
+for ($r = 0; $r < 2; $r++) {
+    $nul = null; $str = 'abc'; $int = 5; $bool = true;
+    foreach ([isset($nul['k']), isset($str[0]), isset($str[-1]), isset($str[-4]), isset($str[3]), isset($int[0]), isset($bool['x']), isset($str['1']), isset($str['x'])] as $set) {
+        echo var_export($set, true), ' ';
+    }
+    echo "\n";
+    $s = new stdClass;
+    $s->a = 1;
+    $s->n = null;
+    $k = 'a';
+    echo $s->a, ' ', $s->$k, ' ', var_export(isset($s->a), true), var_export(isset($s->n), true), var_export(isset($s->none), true), "\n";
+    echo $s->none ?? 'quiet', "\n";
+    echo Suit::Hearts->value, ' ', Suit::Wild->name, ' ', Suit::from('s')->name, ' ', var_export(Suit::Hearts === Suit::Hearts, true), "\n";
+    $arr = [1, 'k' => 2, 'p' => [3]];
+    $r1 = &$arr[0]; $r2 = &$arr['k']; $r3 = &$arr['p'][0];
+    $arr[0] = 'one'; $arr['k'] = 'two'; $arr['p'][0] = 'three';
+    echo $r1, ' ', $r2, ' ', $r3, "\n";
+    unset($r1, $r2, $r3);
+    $o = (object) ['x' => 1, 'y' => [2]];
+    echo json_encode($o), ' ', get_class((object) null), ' ', json_encode((object) 'str'), ' ', var_export((object) $o === $o, true), "\n";
+    $vn = 'str';
+    echo $$vn, "\n";
+    $missing = 'nope_' . $r;
+    echo var_export($$missing, true), "\n";
+    echo read_globals(), "\n";
+    $x = 1;
+    $lit = [&$x, 2];
+    $lit[0] = 10;
+    echo $x, "\n";
+}
 echo "done\n";

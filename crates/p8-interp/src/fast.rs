@@ -1555,6 +1555,30 @@ impl Context<'_> {
                         }
                         done!(put(&mut w[rx!(a)], Value::UNDEF));
                     }
+                    // `(object) $v`, `$$name`, `$GLOBALS` and the other
+                    // superglobals: out of line on the arm's operands.
+                    Op::ToObject => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.to_object_ops(regs, clo, base, at, ops));
+                    }
+                    Op::VarGet => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.var_get_ops(regs, clo, base, at, ops));
+                    }
+                    Op::AutoGlobal => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.auto_global_ops(regs, clo, base, at, ops));
+                    }
+                    // `[&$x]`: x made a reference, appended to the literal
+                    // (as `step` appends it).
+                    Op::ArrayPushRef => {
+                        ops!(a, b, c, imm);
+                        let cell = make_ref(&mut w[..], Reg::from(b));
+                        if let Some(arr) = w[rx!(a)].array_mut() {
+                            let _ = arr.push(Value::reference(cell));
+                        }
+                        pc += 1;
+                    }
                     // `C::$name op= v`: out of line on the arm's operands
                     // (`assign_static_prop_op_ops`).
                     Op::AssignStaticPropOp => {

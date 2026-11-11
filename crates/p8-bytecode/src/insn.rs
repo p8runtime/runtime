@@ -677,6 +677,11 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::CallSpread { dst, callee, args } => i(Op::CallSpread, dst, callee, args, 0),
         Instr::BindRef { var, src } => i(Op::BindRef, var, src, 0, 0),
         Instr::UnsetVar { var } => i(Op::UnsetVar, var, 0, 0, 0),
+        // (The name in a register; VarGet's flags in imm.)
+        Instr::Rare { op: Rare::ToObject, a, b, .. } => i(Op::ToObject, a, b, 0, 0),
+        Instr::Rare { op: Rare::VarGet, a, b, c, .. } => i(Op::VarGet, a, b, 0, u32::from(c)),
+        Instr::Rare { op: Rare::AutoGlobal, a, b, .. } => i(Op::AutoGlobal, a, b, 0, 0),
+        Instr::Rare { op: Rare::ArrayPushRef, a, b, .. } => i(Op::ArrayPushRef, a, b, 0, 0),
         // `C::$name op= v` (class reference c below 256, the name a constant,
         // the value a register or a constant below 256).
         Instr::AssignStaticPropOp { op, class, name, val, dst } if class < 256 => {
