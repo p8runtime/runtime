@@ -1,4 +1,4 @@
-# The reference PHP (BASE: tests/php-src/reference.sh) as MediaWiki 1.46
+# The reference PHP (BASE: crates/php-test/php-src/reference.sh) as MediaWiki 1.46
 # requires it (composer.json "ext-*"): that image plus intl and calendar.
 ARG BASE
 FROM ${BASE}

@@ -1,7 +1,6 @@
-//! The workspace builds one command for users, `p8`; the other binaries
-//! are php-src's test runner and the legacy engine's own (its `php`, which
-//! its integration tests in tests/ run, and dev tools). Any other binary
-//! (a second command beside p8, the legacy `php-fpm`) fails this.
+//! The workspace builds one command for users, `p8`, and php-src's test
+//! runner, `php-test`. Any other binary (a second command beside p8, the
+//! legacy engine's `php` or `php-fpm`) fails this.
 
 use std::process::Command;
 
@@ -31,7 +30,7 @@ fn binaries() -> Vec<String> {
 
 #[test]
 fn p8_is_the_only_command() {
-    assert_eq!(binaries(), ["dump_bytecode", "gild-router", "gild-wasm", "p8", "php", "php-perf", "php-test"]);
+    assert_eq!(binaries(), ["p8", "php-test"]);
     // And it is the one this package builds.
     assert!(std::path::Path::new(env!("CARGO_BIN_EXE_p8")).is_file());
 }
