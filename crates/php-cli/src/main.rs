@@ -362,7 +362,7 @@ impl Cli {
         }
         // --stdio is a way to serve; without -S it means nothing. --bake
         // goes with --compile, and --compile runs nothing.
-        if stdio.is_some() && serve.is_none() || bake.is_some() && compile.is_none() || compile.is_some() && (path.is_some() || code.is_some()) {
+        if (stdio.is_some() && serve.is_none()) || (bake.is_some() && compile.is_none()) || (compile.is_some() && (path.is_some() || code.is_some())) {
             return None;
         }
         Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake })
@@ -444,6 +444,23 @@ mod tests {
         assert!(code.code.as_deref() == Some("echo 1;") && code.path.is_none() && code.args == ["z"]);
         let f = Cli::parse(["-f", "t.php", "--", "a"].iter().map(|a| a.to_string())).expect("parsed");
         assert!(f.path == t() && f.args == ["a"]);
+    }
+
+    /// --compile and --package are long options php does not have: a
+    /// script named `compile` is still a script.
+    #[test]
+    fn takes_the_package_options() {
+        let cli = |args: &[&str]| Cli::parse(args.iter().map(|a| a.to_string()));
+        let compile = cli(&["--compile", "site", "--package", "out.p8", "--bake", "app"]).expect("parsed");
+        assert_eq!((compile.compile.as_deref(), compile.package.as_deref(), compile.bake.as_deref(), compile.path), (Some("site"), Some("out.p8"), Some("app"), None));
+        let run = cli(&["--package", "out.p8", "--package-check", "stat", "t.php", "a"]).expect("parsed");
+        assert_eq!((run.package.as_deref(), run.check, run.path, run.args), (Some("out.p8"), p8::PackageCheck::Stat, t(), vec!["a".to_string()]));
+        assert_eq!(cli(&["t.php"]).expect("parsed").check, p8::PackageCheck::Hash);
+        assert_eq!(parse(&["compile", "site"]), Some((false, Some("compile".to_string()))));
+        // --bake needs --compile; --compile runs no script; a check is one of three.
+        assert!(cli(&["--bake", "app", "t.php"]).is_none());
+        assert!(cli(&["--compile", "site", "t.php"]).is_none());
+        assert!(cli(&["--package-check", "mtime", "t.php"]).is_none());
     }
 
     /// -S with --stdio: one request over stdin and stdout, from a client.
