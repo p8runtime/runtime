@@ -212,7 +212,9 @@ fn a_file_wanted_by_many_threads_at_once_is_compiled_once() {
 fn a_warm_isolates_kept_registers_count_against_memory_limit() {
     let platform = platform();
     let deep = "<?php ini_set('memory_limit', '-1'); function f($n) { return $n ? f($n - 1) + 1 : 0; } echo f(200000);";
-    let small = "<?php ini_set('memory_limit', '2M'); function g($n) { return $n ? g($n - 1) + 1 : 0; } echo g(100);";
+    // (No hard limit: the kept megabytes are past twice 2M as well, and the
+    // soft limit's error is the one this test reads.)
+    let small = "<?php ini_set('memory_hard_limit_percent', '-1'); ini_set('memory_limit', '2M'); function g($n) { return $n ? g($n - 1) + 1 : 0; } echo g(100);";
     let mut fresh = platform.new_isolate();
     assert_eq!(request(&platform, &mut fresh, small), (0, "100".to_string()));
     let mut warm = platform.new_isolate();
