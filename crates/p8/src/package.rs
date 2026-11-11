@@ -547,18 +547,18 @@ mod tests {
     fn a_package_finds_its_files_by_path_and_source() {
         let (bytes, registry) = sample(&[7; 16]);
         let symbols = registry.symbols();
-        let p = Package::in_memory(bytes, &[7; 16], PackageCheck::Hash).ok().expect("opens");
+        let p = Package::in_memory(bytes, &[7; 16], PackageCheck::Hash).expect("opens");
         assert_eq!(p.len(), 2);
         assert!(p.load(b"<?php echo 1;", "/p/a.php", symbols).is_some());
         assert!(p.load(b"<?php function b() { return 2; }", "/p/b.php", symbols).is_some());
         assert!(p.load(b"<?php echo 2;", "/p/a.php", symbols).is_none(), "another source");
         assert!(p.load(b"<?php echo 1;", "/p/c.php", symbols).is_none(), "a file it does not have");
         assert!(!p.vouches("/p/a.php"), "Hash reads every source");
-        let trusting = Package::in_memory(sample(&[7; 16]).0, &[7; 16], PackageCheck::Trust).ok().expect("opens");
+        let trusting = Package::in_memory(sample(&[7; 16]).0, &[7; 16], PackageCheck::Trust).expect("opens");
         assert!(trusting.vouches("/p/a.php") && trusting.unread("/p/a.php", symbols).is_some());
         assert!(!trusting.vouches("/p/c.php") && trusting.unread("/p/c.php", symbols).is_none());
         // Stat: the packaged time (1 s 2 ns) is not that of a file on disk.
-        let stat = Package::in_memory(sample(&[7; 16]).0, &[7; 16], PackageCheck::Stat).ok().expect("opens");
+        let stat = Package::in_memory(sample(&[7; 16]).0, &[7; 16], PackageCheck::Stat).expect("opens");
         assert!(!stat.vouches("/p/a.php"));
     }
 
