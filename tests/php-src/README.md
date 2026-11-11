@@ -31,8 +31,8 @@ next to this repository, then:
 
 ```sh
 cargo build --release --bin php-test
-cargo build --release -p php-cli --bin php2
-target/release/php-test ../php-src --suite ../p8-test-suite --php target/release/php2
+cargo build --release -p php-cli --bin p8
+target/release/php-test ../php-src --suite ../p8-test-suite --php target/release/p8
 ```
 
 Every target test runs, compared with the suite's results: the tests gained

@@ -1,4 +1,4 @@
-//! opcache.file_cache through the php2 CLI: it is OPcache's, so as in PHP 8.6
+//! opcache.file_cache through the p8 CLI: it is OPcache's, so as in PHP 8.6
 //! it takes effect only when OPcache starts, which in the CLI needs
 //! opcache.enable_cli=1 as well.
 
@@ -19,14 +19,14 @@ fn the_cli_file_cache_needs_enable_cli() {
     let cache = dir.join("cache");
     std::fs::create_dir_all(&cache).expect("cache dir");
     let run = |enable_cli: &str| {
-        let out = Command::new(env!("CARGO_BIN_EXE_php2"))
+        let out = Command::new(env!("CARGO_BIN_EXE_p8"))
             .arg("-d")
             .arg(format!("opcache.file_cache={}", cache.display()))
             .arg("-d")
             .arg(format!("opcache.enable_cli={enable_cli}"))
             .arg(&script)
             .output()
-            .expect("run php2");
+            .expect("run p8");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "ran");
     };
     run("0");

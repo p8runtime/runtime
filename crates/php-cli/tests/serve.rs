@@ -35,9 +35,9 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// What `php2 <dir>/index.php` prints.
+/// What `p8 <dir>/index.php` prints.
 fn cli_output(dir: &Path) -> String {
-    let out = run(env!("CARGO_BIN_EXE_php2"), &[dir.join("index.php").to_str().expect("utf-8")]);
+    let out = run(env!("CARGO_BIN_EXE_p8"),&[dir.join("index.php").to_str().expect("utf-8")]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     text(&out.stdout)
 }
@@ -169,10 +169,10 @@ fn a_project_without_a_package_is_served_from_source() {
 
 #[test]
 fn a_package_for_another_engine_is_not_used() {
-    // php2 --compile writes a package for the CLI's extensions; the server
-    // loads more (the built-in server's), so it is another engine's.
+    // `p8 compile --cli` writes a package for the CLI's extensions; the
+    // server loads more (the built-in server's), so it is another engine's.
     let dir = project("cli_package");
-    let out = run(env!("CARGO_BIN_EXE_php2"), &["--compile", dir.to_str().expect("utf-8")]);
+    let out = run(env!("CARGO_BIN_EXE_p8"), &["compile", dir.to_str().expect("utf-8"), "--cli"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let serve = Serve::start(&dir);
     let (body, line) = serve.get("/index.php");

@@ -4,9 +4,9 @@
 - `crates/` holds **p8**, the new engine (design: the p8 APS, `p8runtime/aps`, cited as `APS N`), and its hosts:
   - `p8`: the public embedding API; hosts use only this crate.
   - `p8-syntax` (lexer, parser, AST; the legacy engine uses it too), `p8-compiler`, `p8-bytecode`, `p8-runtime` (values, operators, the extension ABI), `p8-interp`, `p8-ext-*` (builtins): p8's internals.
-  - `php-cli`: the command-line host (`php2` until p8 replaces the legacy engine).
+  - `php-cli`: the `p8` command, the only one users run: php's command line (`p8 script.php`, `-r`, `-S`, ...), plus `p8 compile` and `p8 serve`.
 - `src/` is the legacy engine: VM/executor (`src/vm/`), runtime extensions (`src/runtime/`), builtins (`src/builtins/`). It is replaced by p8 at php-src parity; fixes go into p8.
-- `src/bin/` hosts the legacy CLI entry points: `php` and `php-fpm`.
+- `src/bin/` holds php-src's test runner (`php-test`) and dev tools (`php-perf`, `gild-wasm`, `gild-router`, `dump_bytecode`).
 - `tests/` holds the legacy engine's integration tests; each p8 crate has its own `tests/`.
 - `crates/p8-syntax/src/tests/` and its snapshots are not compiled yet (they predate this repo's layout).
 
@@ -14,8 +14,7 @@
 - `cargo build`: compile the interpreter and binaries.
 - `cargo test`: run the full Rust test suite (unit + integration).
 - `cargo test --test array_functions`: run a single integration test file.
-- `cargo run --bin php -- <script.php>`: execute a PHP script with the CLI binary.
-- `cargo run --bin php-fpm`: start the FPM server implementation.
+- `cargo run --release -p php-cli --bin p8 -- <script.php>`: execute a PHP script with p8.
 
 ## Coding Style & Naming Conventions
 - Follow standard Rust formatting (`cargo fmt`) with default rustfmt settings.

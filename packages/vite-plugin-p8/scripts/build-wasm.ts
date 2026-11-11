@@ -1,4 +1,4 @@
-// Build php2 for wasm32-wasip1 (the workspace's `wasm` profile: release,
+// Build p8 for wasm32-wasip1 (the workspace's `wasm` profile: release,
 // optimized for size, stripped) and copy it beside package.json.
 //
 //   npm run build:wasm
@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(packageDir, '../..');
 const cargo = process.env.CARGO ?? 'cargo';
-const ran = spawnSync(cargo, ['build', '--profile', 'wasm', '-p', 'php-cli', '--bin', 'php2', '--target', 'wasm32-wasip1'], { cwd: repo, stdio: 'inherit' });
+const ran = spawnSync(cargo, ['build', '--profile', 'wasm', '-p', 'php-cli', '--bin', 'p8', '--target', 'wasm32-wasip1'], { cwd: repo, stdio: 'inherit' });
 if (ran.status !== 0) process.exit(ran.status ?? 1);
 const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(repo, 'target');
-const built = join(target, 'wasm32-wasip1/wasm/php2.wasm');
-copyFileSync(built, join(packageDir, 'php2.wasm'));
-console.log(`php2.wasm: ${statSync(built).size} bytes`);
+const built = join(target, 'wasm32-wasip1/wasm/p8.wasm');
+copyFileSync(built, join(packageDir, 'p8.wasm'));
+console.log(`p8.wasm: ${statSync(built).size} bytes`);

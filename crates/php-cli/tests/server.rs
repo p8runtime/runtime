@@ -1,4 +1,4 @@
-//! `php2 -S`: PHP's built-in web server. Each case sends a raw request and
+//! `p8 -S`: PHP's built-in web server. Each case sends a raw request and
 //! compares the whole raw response (status line, headers, body) with what
 //! `php -S` of php:8.4-cli answered to the same bytes (tests/server/expected,
 //! the dates, temporary file names, document root and PHP version replaced
@@ -27,7 +27,7 @@ fn server_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/server")
 }
 
-/// A running `php2 -S` and what it logged.
+/// A running `p8 -S` and what it logged.
 struct Server {
     child: Child,
     port: u16,
@@ -36,7 +36,7 @@ struct Server {
 
 impl Server {
     fn start(args: &[&str]) -> Server {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_php2")).args(["-S", "127.0.0.1:0"]).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().expect("start php2 -S");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_p8")).args(["-S", "127.0.0.1:0"]).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().expect("start p8 -S");
         let stderr = child.stderr.take().expect("stderr");
         let log = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel();
@@ -228,7 +228,7 @@ X-Powered-By is not {}", p8::powered_by()));
         let ours = format!(" p8/{}", p8::P8_VERSION);
         let ours_json = format!(" p8\\/{}", p8::P8_VERSION);
         let got = normalize(text.replace(&ours, "").replace(&ours_json, "").as_bytes(), &root);
-        // The PHP version is the build's: what php2 reports (PHP_VERSION)
+        // The PHP version is the build's: what p8 reports (PHP_VERSION)
         // whatever release recorded the answers.
         let (got, expected) = (php_version_token(&got), php_version_token(&expected));
         if got != expected {
@@ -361,7 +361,7 @@ fn a_changed_script_is_compiled_again() {
 
 #[test]
 fn refuses_what_php_refuses() {
-    let run = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_php2")).args(args).output().expect("run");
+    let run = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_p8")).args(args).output().expect("run");
     let out = run(&["-S", "nonsense"]);
     assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stderr).as_ref()), (Some(1), "Invalid address: nonsense\n"));
     let out = run(&["-S", "127.0.0.1:99999"]);

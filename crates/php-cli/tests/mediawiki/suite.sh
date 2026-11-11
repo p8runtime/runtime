@@ -13,14 +13,14 @@
 # settings, and unit tests touch no database. Both runs use the checkout's
 # tracked files exactly as pinned.
 #
-# Usage: crates/php-cli/tests/mediawiki/suite.sh [path to php2]
+# Usage: crates/php-cli/tests/mediawiki/suite.sh [path to p8]
 # Needs docker and the p8-test-suite checkout next to this repository (or
 # P8_TEST_SUITE=<its path>), for the PHP version it pins. Takes about a
 # minute under PHP, longer under p8.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
-php2=${1:-$repo/target/release/php2}
+p8=${1:-$repo/target/release/p8}
 work=$repo/.tmp/mediawiki-suite
 version=1.46.2
 commit=d0d9a283f219a1c9487754dc96598080a4a4e30a
@@ -77,7 +77,7 @@ tail -3 "$work/php.txt"
 
 # p8.
 p8_status=0
-"$php2" -d memory_limit=2G vendor/bin/phpunit --testsuite core:unit --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
+"$p8" -d memory_limit=2G vendor/bin/phpunit --testsuite core:unit --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
 tail -3 "$work/p8.txt"
 
 php_version=$(docker run --rm "$image" php -r 'echo PHP_VERSION;')

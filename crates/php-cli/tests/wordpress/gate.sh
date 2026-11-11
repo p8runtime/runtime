@@ -19,7 +19,7 @@
 # p8-test-suite "Real apps" data): the apps it shows working, what it did,
 # and whether it matched.
 #
-# Usage: crates/php-cli/tests/wordpress/gate.sh [path to php2]
+# Usage: crates/php-cli/tests/wordpress/gate.sh [path to p8]
 # Needs docker and the p8-test-suite checkout next to this repository
 # (or P8_TEST_SUITE=<its path>), for the PHP version it pins. Works in
 # .tmp/wordpress-gate; MariaDB listens on 127.0.0.1:3307 (container
@@ -27,7 +27,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
-php2=${1:-$repo/target/release/php2}
+p8=${1:-$repo/target/release/p8}
 work=$repo/.tmp/wordpress-gate
 version=7.1.4
 mkdir -p "$work"
@@ -99,7 +99,7 @@ php_ref() {
 p8() {
     local status=0
     rm -f mailbox
-    MAILBOX="$work/mailbox" WPDBHOST=127.0.0.1:3307 WPDBNAME=wp_p8 "$php2" -d sendmail_path="$work/sendmail.sh" "$1" || status=$?
+    MAILBOX="$work/mailbox" WPDBHOST=127.0.0.1:3307 WPDBNAME=wp_p8 "$p8" -d sendmail_path="$work/sendmail.sh" "$1" || status=$?
     cat mailbox >&2 2>/dev/null || true
     rm -f mailbox
     return $status

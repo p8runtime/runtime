@@ -107,7 +107,7 @@ pub fn zend_engine_version() -> String {
     format!("4.{PHP_MINOR_VERSION}.{PHP_RELEASE_VERSION}")
 }
 
-/// p8's own version (P8_VERSION, php2 -v, X-Powered-By, phpinfo()): the
+/// p8's own version (P8_VERSION, p8 -v, X-Powered-By, phpinfo()): the
 /// release p8 is built as, from Cargo.
 pub const P8_VERSION: &str = env!("CARGO_PKG_VERSION");
 

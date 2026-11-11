@@ -1,13 +1,13 @@
-// p8's php2, built for wasm32-wasip1, run under Node's WASI (node:wasi).
+// The p8 command, built for wasm32-wasip1, run under Node's WASI (node:wasi).
 //
 // The WebAssembly module is compiled once; every run instantiates it again,
 // because a WASI command runs its `main` once per instance (`_start`), and
-// php2 serves one script or one request per `main`, as `php` does per
+// p8 serves one script or one request per `main`, as `php` does per
 // process.
 //
 // Files: each preopened directory is mapped at its own absolute path, so
 // __FILE__, __DIR__, include paths and file names are the ones the native
-// php2 sees. node:wasi grants a preopen every right; the directories given
+// p8 sees. node:wasi grants a preopen every right; the directories given
 // as `readOnly` are made read-only here, at the WASI calls, with EROFS
 // (PHP's "Read-only file system").
 //
@@ -16,9 +16,9 @@
 import { readFile } from 'node:fs/promises';
 import { WASI } from 'node:wasi';
 
-/** One run of php2: its command line, environment, stdin and directories. */
+/** One run of p8: its command line, environment, stdin and directories. */
 export interface RunOptions {
-  /** php2's arguments (after the program name). */
+  /** p8's arguments (after the program name). */
   args: string[];
   /** The environment the script sees (none of Node's is passed). */
   env?: Record<string, string>;
@@ -65,7 +65,7 @@ const RIGHTS_THAT_WRITE =
 
 type Fn = (...args: any[]) => any;
 
-/** php2.wasm, compiled. */
+/** p8.wasm, compiled. */
 export class P8 {
   readonly module: WebAssembly.Module;
 
@@ -73,13 +73,13 @@ export class P8 {
     this.module = module;
   }
 
-  /** Read and compile php2.wasm (once per process). */
+  /** Read and compile p8.wasm (once per process). */
   static async load(wasmPath: string): Promise<P8> {
     const bytes = await readFile(wasmPath);
     return new P8(await WebAssembly.compile(bytes));
   }
 
-  /** Run php2 once, in a new instance. */
+  /** Run p8 once, in a new instance. */
   async run(options: RunOptions): Promise<RunResult> {
     const readOnly = options.readOnly ?? [];
     const writable = options.writable ?? [];
@@ -87,7 +87,7 @@ export class P8 {
     for (const dir of [...readOnly, ...writable]) preopens[dir] = dir;
     const wasi = new WASI({
       version: 'preview1',
-      args: ['php2', ...options.args],
+      args: ['p8', ...options.args],
       env: options.env ?? {},
       preopens,
       returnOnExit: true,
@@ -189,8 +189,8 @@ export class P8 {
     try {
       status = wasi.start(instance);
     } catch (e) {
-      // A trap (a Rust panic aborts): what php2 printed says why.
-      throw new Error(`php2 ${options.args.join(' ')} trapped: ${e}\n${Buffer.concat(err).toString()}${Buffer.concat(out).toString()}`, { cause: e });
+      // A trap (a Rust panic aborts): what p8 printed says why.
+      throw new Error(`p8 ${options.args.join(' ')} trapped: ${e}\n${Buffer.concat(err).toString()}${Buffer.concat(out).toString()}`, { cause: e });
     }
     return { status, stdout: Buffer.concat(out), stderr: Buffer.concat(err) };
   }

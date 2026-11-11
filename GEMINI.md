@@ -1,6 +1,6 @@
 # p8
 
-A PHP 8.6 engine in safe Rust. Hosts use the `p8` crate only. The command-line host is `php2` (`crates/php-cli`), including `php2 -S`.
+A PHP 8.6 engine in safe Rust. Hosts use the `p8` crate only. The command is `p8` (`crates/php-cli`): it runs PHP with php's command line (including `p8 -S`), and `p8 compile` / `p8 serve` compile and serve a project.
 
 Not released yet. It is graded on php-src's own tests: https://p8-test-suite.addis.gg
 
@@ -8,14 +8,14 @@ Not released yet. It is graded on php-src's own tests: https://p8-test-suite.add
 
 - `crates/p8`: the public embedding API.
 - `crates/p8-syntax`, `p8-compiler`, `p8-bytecode`, `p8-runtime`, `p8-interp`, `p8-ext-*`: engine internals. Hosts do not depend on these.
-- `crates/php-cli`: the `php2` host.
-- `src/`: the legacy interpreter. It is replaced by p8 at php-src parity. Its binaries live in `src/bin/`.
+- `crates/php-cli`: the `p8` command.
+- `src/`: the legacy interpreter. It is replaced by p8 at php-src parity. `src/bin/` holds php-src's test runner (`php-test`) and dev tools.
 
 ## Commands
 
 ```bash
 cargo build -p php-cli --release
-./target/release/php2 -r 'echo PHP_VERSION, "\n";'
+./target/release/p8 -r 'echo PHP_VERSION, "\n";'
 cargo test -p p8
 ```
 

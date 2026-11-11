@@ -3,24 +3,16 @@ name = "php-cli"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "The php command-line host for p8"
+description = "p8, the command: runs PHP as php does, and compiles and serves a project"
 
-[lib]
-name = "php_cli"
-path = "src/lib.rs"
-
-[[bin]]
-name = "php2"
-path = "src/main.rs"
-
-# `p8 compile` and `p8 serve` (#382): the same web server as php2 -S.
+# The one command this workspace builds for users.
 [[bin]]
 name = "p8"
-path = "src/p8.rs"
+path = "src/main.rs"
 
 [dependencies]
 p8 = { path = "../p8" }
-# php2's allocator on every platform (native and wasm32-wasip1): a pure-Rust
+# p8's allocator on every platform (native and wasm32-wasip1): a pure-Rust
 # mimalloc (#319). Pinned exactly: an upgrade is a reviewed change, with the
 # allocator measurements rerun (bench/alloc-experiment).
 rusty_alloc-api = "=2.4.0"
