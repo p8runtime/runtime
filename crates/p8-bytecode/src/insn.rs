@@ -679,6 +679,9 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::UnsetVar { var } => i(Op::UnsetVar, var, 0, 0, 0),
         // (The name in a register; VarGet's flags in imm.)
         Instr::Rare { op: Rare::ToObject, a, b, .. } => i(Op::ToObject, a, b, 0, 0),
+        // (The argument's position in imm: u16::MAX for a named one, its
+        // name in register c.)
+        Instr::Rare { op: Rare::CallableArgByRef, a, b, c, class } => i(Op::CallableArgByRef, a, b, if class == u16::MAX { c } else { 0 }, u32::from(class)),
         Instr::Rare { op: Rare::VarGet, a, b, c, .. } => i(Op::VarGet, a, b, 0, u32::from(c)),
         Instr::Rare { op: Rare::AutoGlobal, a, b, .. } => i(Op::AutoGlobal, a, b, 0, 0),
         Instr::Rare { op: Rare::ArrayPushRef, a, b, .. } => i(Op::ArrayPushRef, a, b, 0, 0),

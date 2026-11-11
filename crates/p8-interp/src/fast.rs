@@ -1568,6 +1568,19 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.to_object_ops(regs, clo, base, at, ops));
                     }
+                    // Whether `$f(..)` sends an argument by reference: a
+                    // closure answers itself here; any other callable is
+                    // resolved out of line (`callable_arg_by_ref_ops`).
+                    Op::CallableArgByRef => {
+                        ops!(a, b, c, imm);
+                        if imm != u32::from(u16::MAX)
+                            && let Some(by_ref) = Self::closure_takes_ref(&w[rx!(b)], imm as usize)
+                        {
+                            done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                            continue;
+                        }
+                        out!((Reg::from(a), Reg::from(b), Reg::from(c), imm as u16), |cx, regs, _, base, _, at, ops| cx.callable_arg_by_ref_ops(regs, base, at, ops));
+                    }
                     Op::VarGet => {
                         ops!(a, b, c, imm);
                         out!((Reg::from(a), Reg::from(b), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.var_get_ops(regs, clo, base, at, ops));

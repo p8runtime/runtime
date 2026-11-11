@@ -2390,35 +2390,7 @@ impl Context<'_> {
                         let values: Vec<Value> = (0..n).map(|i| w[c as usize + i].clone()).collect();
                         reg!(a) = self.partial(&clo.code, class, callee, values, func.strict)?;
                     }
-                    Rare::CallableArgByRef => {
-                        let callee = reg!(b).clone();
-                        // A closure answers for itself (no frame made for it).
-                        if class != u16::MAX
-                            && let Some(by_ref) = Self::closure_takes_ref(&callee, class as usize)
-                        {
-                            reg!(a) = Value::bool(by_ref);
-                            return Ok(Next::Go(pc));
-                        }
-                        let retry = self.autoload_retry.clone();
-                        let by_ref = match self.resolve_callable(&callee) {
-                            Ok(t) if class == u16::MAX => {
-                                let name = reg!(c).to_php_string().unwrap_or_else(PhpStr::empty);
-                                self.named_takes_ref(&t, name.as_bytes())
-                            }
-                            Ok(t) => self.takes_ref(&t, class as usize),
-                            // A class not loaded yet: the autoloaders run and the
-                            // question is asked again (not answered "no", which
-                            // left the class unloaded for the call itself).
-                            Err(t @ Throw::Autoload(_)) => return Err(t),
-                            // Still not there after they ran: the call itself is
-                            // told so too, not running them again.
-                            Err(_) => {
-                                self.autoload_retry = retry;
-                                false
-                            }
-                        };
-                        reg!(a) = Value::bool(by_ref);
-                    }
+                    Rare::CallableArgByRef => return self.callable_arg_by_ref_ops(regs, base, at, (a, b, c, class)),
                     Rare::ReturnRef => {
                             let src = a;
                         let ret = self.frames.last().map_or(NO_RET, |f| f.ret);
@@ -3229,6 +3201,44 @@ impl Context<'_> {
             }
         };
         Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc))
+    }
+
+    /// Whether `$f(..)` sends argument `n` by reference (the
+    /// CallableArgByRef at `at`: the callable in `callee`; `n` u16::MAX: a
+    /// named argument, its name in `name`): a closure answers itself; any
+    /// other callable resolved (its class autoloaded, then this instruction
+    /// again). `step` runs it, and the loop's arm for what is not a
+    /// closure, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn callable_arg_by_ref_ops(&mut self, regs: &mut [Value], base: usize, at: usize, (dst, callee, name, n): (Reg, Reg, Reg, u16)) -> Result<Next, Throw> {
+        let callee = regs[base + callee as usize].clone();
+        // A closure answers for itself (no frame made for it).
+        if n != u16::MAX
+            && let Some(by_ref) = Self::closure_takes_ref(&callee, n as usize)
+        {
+            regs[base + dst as usize] = Value::bool(by_ref);
+            return Ok(Next::Go(at + 1));
+        }
+        let retry = self.autoload_retry.clone();
+        let by_ref = match self.resolve_callable(&callee) {
+            Ok(t) if n == u16::MAX => {
+                let name = regs[base + name as usize].to_php_string().unwrap_or_else(PhpStr::empty);
+                self.named_takes_ref(&t, name.as_bytes())
+            }
+            Ok(t) => self.takes_ref(&t, n as usize),
+            // A class not loaded yet: the autoloaders run and the
+            // question is asked again (not answered "no", which
+            // left the class unloaded for the call itself).
+            Err(t @ Throw::Autoload(_)) => return Err(t),
+            // Still not there after they ran: the call itself is
+            // told so too, not running them again.
+            Err(_) => {
+                self.autoload_retry = retry;
+                false
+            }
+        };
+        regs[base + dst as usize] = Value::bool(by_ref);
+        Ok(Next::Go(at + 1))
     }
 
     /// `(object) $v` (the ToObject at `at`). `step` runs it, and the loop's

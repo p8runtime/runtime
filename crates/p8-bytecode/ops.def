@@ -241,6 +241,9 @@ hand BindRef
 hand UnsetVar
 /// a = (object) b
 hand ToObject
+/// a = whether the callable in b takes argument imm by reference
+/// (u16::MAX: the named one whose name is in c)
+hand CallableArgByRef
 /// a = $$b (imm: bit 0 quiet, bit 1 a global's)
 hand VarGet
 /// a = a reference to the superglobal named b
