@@ -2981,9 +2981,6 @@ pub(crate) fn owner_write(cell: &RefCell<Value>, v: Value) {
 #[inline(never)]
 pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Value) -> bool {
     let Some((last, before)) = keys.split_last() else { return false };
-    if before.is_empty() {
-        return owner_write(cell, last, v);
-    }
     let hit = {
         let held = cell.borrow();
         let find = |a: &PhpArray, k: &Value| -> Option<Value> {
@@ -3014,9 +3011,7 @@ pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Va
             })
     };
     if hit {
-        // (The array goes after the borrow: its element holds this cell.)
-        let old = cell.replace(v.clone());
-        drop(old);
+        owner_write(cell, v.clone());
     }
     hit
 }
