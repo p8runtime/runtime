@@ -74,10 +74,13 @@ fn class_arg(ctx: &mut dyn Ctx, v: &Value) -> Result<Rc<Class>, Throw> {
     match v.as_object() {
         Some(o) => Ok(Rc::clone(&o.class)),
         None => {
-            let name = text(v);
+            // The name as its string (a count, no copy): the text for the
+            // message is made only when it is needed (#412: a copy per
+            // call was 34k strings made and freed on Laravel's tests).
+            let name = v.to_php_string().unwrap_or_else(PhpStr::empty);
             match ctx.class_load(name.as_bytes())? {
                 Some(c) => Ok(c),
-                None => Err(fail(ctx, format!("Class \"{name}\" does not exist"))),
+                None => Err(fail(ctx, format!("Class \"{}\" does not exist", String::from_utf8_lossy(name.as_bytes())))),
             }
         }
     }

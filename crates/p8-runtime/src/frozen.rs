@@ -20,18 +20,20 @@ impl Text {
 
 impl From<&[u8]> for Text {
     fn from(bytes: &[u8]) -> Self {
+        crate::counts::bump(crate::counts::Count::TextMade);
         Text(Arc::from(bytes))
     }
 }
 
 impl From<&str> for Text {
     fn from(s: &str) -> Self {
-        Text(Arc::from(s.as_bytes()))
+        Text::from(s.as_bytes())
     }
 }
 
 impl From<Vec<u8>> for Text {
     fn from(bytes: Vec<u8>) -> Self {
+        crate::counts::bump(crate::counts::Count::TextMade);
         Text(Arc::from(bytes))
     }
 }

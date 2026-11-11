@@ -98,6 +98,14 @@ impl StrHead {
     fn of(bytes: Bytes) -> StrHead {
         StrHead { hash: AtomicU64::new(0), bytes }
     }
+
+    /// A string handle's allocation, holding these bytes (each one
+    /// counted, for the tests: `counts::Count::StrMade`).
+    #[inline(always)]
+    fn made(bytes: Bytes) -> Rc<StrHead> {
+        crate::counts::bump(crate::counts::Count::StrMade);
+        Rc::new(StrHead::of(bytes))
+    }
 }
 
 /// A string in program memory (PHP's interned strings): a compiled
@@ -317,7 +325,7 @@ impl PhpStr {
         if let Some(s) = Self::small(&bytes) {
             return s;
         }
-        PhpStr(Rc::new(Inner::of(Bytes::Heap(bytes))))
+        PhpStr(Inner::made(Bytes::Heap(bytes)))
     }
 
     /// A buffer to build a string in (smart_str), with room for `hint`
@@ -383,14 +391,14 @@ impl PhpStr {
     fn inline(bytes: &[u8]) -> PhpStr {
         let mut buf = [0; INLINE];
         buf[..bytes.len()].copy_from_slice(bytes);
-        PhpStr(Rc::new(Inner::of(Bytes::Inline { len: bytes.len() as u8, buf })))
+        PhpStr(Inner::made(Bytes::Inline { len: bytes.len() as u8, buf }))
     }
 
     /// A copy of `bytes`: in the string's own allocation when short, and
     /// no allocation at all for zero or one bytes.
     fn copy_of(bytes: &[u8]) -> Self {
         if bytes.len() > INLINE {
-            return PhpStr(Rc::new(Inner::of(Bytes::Heap(bytes.to_vec()))));
+            return PhpStr(Inner::made(Bytes::Heap(bytes.to_vec())));
         }
         Self::small(bytes).unwrap_or_else(|| Self::inline(bytes))
     }
@@ -463,7 +471,7 @@ impl PhpStr {
                 let old = self.as_bytes();
                 let mut v = Vec::with_capacity(grown(old.len(), more));
                 v.extend_from_slice(old);
-                self.0 = Rc::new(Inner::of(Bytes::Heap(v)));
+                self.0 = Inner::made(Bytes::Heap(v));
             }
         }
         let inner = Rc::get_mut(&mut self.0).expect("unshared above");
