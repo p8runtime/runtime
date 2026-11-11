@@ -88,6 +88,16 @@ impl Context<'_> {
         clo.news.get(i as usize)?.borrow().upgrade()
     }
 
+    /// For the loop's New of a class reference its site does not cache
+    /// (`new static`, `new self`, `new parent`): the class known without a
+    /// lookup (`static_target`), and its NewInfo if one was kept. Out of
+    /// line: a named class's `new` is the arm's straight path.
+    #[inline(never)]
+    pub(crate) fn new_info_kept(&self, clo: &Closure, i: u16) -> Option<Rc<NewInfo>> {
+        let class = self.static_target(clo, i)?;
+        self.new_infos.get(&(Rc::as_ptr(&class) as usize)).cloned()
+    }
+
     pub(crate) fn remember_new(clo: &Closure, i: u16, info: &Rc<NewInfo>) {
         if let Some(site) = clo.news.get(i as usize) {
             *site.borrow_mut() = Rc::downgrade(info);
