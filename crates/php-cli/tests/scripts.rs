@@ -209,3 +209,22 @@ fn replace(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     }
     out
 }
+
+/// NumberFormatter's significant-digit patterns (#451): `#` after a run
+/// of `@` is optional digits, `@@##` two to four of them (ICU's
+/// DecimalFormat "Significant Digits" table: 3.14159 is 3.142, 1.23004 is
+/// 1.23); `@` after such a `#` is refused ("Cannot nest # inside of a run
+/// of @", number_patternstring.cpp).
+#[test]
+fn intl_significant_digit_patterns() {
+    let code = r#"
+        foreach (['@@@' => [12345, 0.12345], '@@##' => [3.14159, 1.23004]] as $p => $ns) {
+            $f = new NumberFormatter('en', NumberFormatter::PATTERN_DECIMAL, $p);
+            foreach ($ns as $n) { echo $p, ' ', $n, ' => ', $f->format($n), "\n"; }
+        }
+        var_dump((new NumberFormatter('en', NumberFormatter::DECIMAL))->setPattern('@#@'));
+    "#;
+    let out = Command::new(env!("CARGO_BIN_EXE_p8")).arg("-r").arg(code).output().expect("run p8");
+    let want = "@@@ 12345 => 12300\n@@@ 0.12345 => 0.123\n@@## 3.14159 => 3.142\n@@## 1.23004 => 1.23\nbool(false)\n";
+    assert_eq!(String::from_utf8_lossy(&out.stdout), want);
+}
