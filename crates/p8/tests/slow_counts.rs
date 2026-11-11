@@ -440,6 +440,24 @@ fn lists_static_variables_and_by_reference_foreach_stay_in_the_loop() {
     assert_eq!(out, "3200 1,22,43 4");
 }
 
+/// An array literal of 300 elements made at run time (#456): each
+/// element's temporaries go back once it is added, so the function stays
+/// inside the 256 registers an instruction names, and its instructions
+/// run in the loop (a function past them runs every one on `step`).
+#[test]
+fn a_wide_array_literal_stays_in_the_loop() {
+    let items: Vec<String> = (0..300).map(|k| format!("'k{k}' => $x + {k}")).collect();
+    let body = format!(
+        "function wide($x) {{ return [{}]; }}
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) {{ $a = wide($i); $t += $a['k0'] + $a['k299']; }}
+         echo count($a), ' ', $t;",
+        items.join(", ")
+    );
+    let out = flat(&body);
+    assert_eq!(out, "300 6360");
+}
+
 /// A base class's methods on objects of three subclasses in turn (each
 /// property access's entry filled again for the class it meets), its
 /// private and protected constants through `self::`, `isset($this->v)`,
