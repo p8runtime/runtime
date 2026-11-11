@@ -6,7 +6,7 @@
   - `p8-syntax` (lexer, parser, AST; the legacy engine uses it too), `p8-compiler`, `p8-bytecode`, `p8-runtime` (values, operators, the extension ABI), `p8-interp`, `p8-ext-*` (builtins): p8's internals.
   - `php-cli`: the `p8` command, the only one users run: php's command line (`p8 script.php`, `-r`, `-S`, ...), plus `p8 compile` and `p8 serve`.
 - `src/` is the legacy engine: VM/executor (`src/vm/`), runtime extensions (`src/runtime/`), builtins (`src/builtins/`). It is replaced by p8 at php-src parity; fixes go into p8.
-- `src/bin/` holds php-src's test runner (`php-test`) and dev tools (`php-perf`, `gild-wasm`, `gild-router`, `dump_bytecode`).
+- `src/bin/` holds php-src's test runner (`php-test`), the legacy engine's CLI (`php`, which the legacy tests in `tests/` run; not a user command) and dev tools (`php-perf`, `gild-wasm`, `gild-router`, `dump_bytecode`).
 - `tests/` holds the legacy engine's integration tests; each p8 crate has its own `tests/`.
 - `crates/p8-syntax/src/tests/` and its snapshots are not compiled yet (they predate this repo's layout).
 

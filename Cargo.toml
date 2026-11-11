@@ -104,6 +104,14 @@ wasmtime-wasi = { version = "27", optional = true }
 walkdir = "2.4"
 pwhash = "1"
 
+# The legacy engine's CLI. Not a user command (that is p8): the legacy
+# engine's own integration tests run it (tests/class_linking.rs,
+# compile_checks.rs, no_panics.rs, nullsafe.rs, opcache.rs, php_defaults.rs).
+[[bin]]
+name = "php"
+path = "src/bin/php.rs"
+required-features = ["cli"]
+
 [[bin]]
 name = "gild-wasm"
 path = "src/bin/gild_wasm.rs"

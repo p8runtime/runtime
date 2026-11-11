@@ -9,7 +9,7 @@ Not released yet. It is graded on php-src's own tests: https://p8-test-suite.add
 - `crates/p8`: the public embedding API.
 - `crates/p8-syntax`, `p8-compiler`, `p8-bytecode`, `p8-runtime`, `p8-interp`, `p8-ext-*`: engine internals. Hosts do not depend on these.
 - `crates/php-cli`: the `p8` command.
-- `src/`: the legacy interpreter. It is replaced by p8 at php-src parity. `src/bin/` holds php-src's test runner (`php-test`) and dev tools.
+- `src/`: the legacy interpreter. It is replaced by p8 at php-src parity. `src/bin/` holds php-src's test runner (`php-test`), the legacy CLI its own tests run (`php`) and dev tools.
 
 ## Commands
 
