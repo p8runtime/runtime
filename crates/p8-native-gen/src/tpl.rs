@@ -17,8 +17,8 @@
 use crate::emit::{Emit, NotNative, R, plain_words};
 // (`native_dispatch!` names the templates `tpl::<name>`.)
 use crate::tpl;
-use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{self, InstBuilder, MemFlags, types};
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData as MemFlags, types};
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
 use p8_bytecode::insn::{self, Insn, Op, args, spec};
@@ -106,6 +106,7 @@ pub fn free(e: &mut Emit, args::Free { reg }: args::Free) -> R {
 
 /// `vmops::ret`: the interpreter's return runs it (what it reads and
 /// moves out of the frame is its own).
+#[allow(clippy::extra_unused_type_parameters, reason = "the generated dispatch names every template's specialisation; a return's kinds do not matter here")]
 pub fn ret<S: spec::Ret>(e: &mut Emit, _: args::Ret) -> R {
     e.hand_back()
 }
@@ -144,43 +145,52 @@ pub fn jump_cond<S: spec::JumpCond>(e: &mut Emit, args::JumpCond { cond, target 
     let ok = e.b.ins().bor(is_bool, is_int);
     e.guard(ok);
     let p = e.payload(cond);
-    let set = e.b.ins().icmp_imm(IntCC::NotEqual, p, 0);
-    let go = if S::When::ID == T { set } else { e.b.ins().bxor_imm(set, 1) };
+    let set = e.b.ins().icmp_imm_u(IntCC::NotEqual, p, 0);
+    let go = if S::When::ID == T { set } else { e.b.ins().bxor_imm_u(set, 1) };
     e.branch(go, target)
 }
 
-/// `vmops::jump_cmp`: two ints (anything else is `test`'s, the
-/// interpreter's).
+/// `vmops::jump_cmp`: two ints, or two floats (`test`'s `num_test`: an
+/// ordered comparison, false with a NAN, as PHP's `ZEND_IS_SMALLER` on
+/// doubles; `==` and `===` of two floats alike). An int with a float, and
+/// anything else, are the interpreter's.
 pub fn jump_cmp<S: spec::JumpCmp>(e: &mut Emit, args::JumpCmp { a, b, target }: args::JumpCmp) -> R {
-    let cc = match S::Cmp::ID {
-        LT => IntCC::SignedLessThan,
-        LE => IntCC::SignedLessThanOrEqual,
-        GT => IntCC::SignedGreaterThan,
-        GE => IntCC::SignedGreaterThanOrEqual,
-        // EQ and ID: two ints are equal and identical alike.
-        _ => IntCC::Equal,
+    let (cc, fcc) = match S::Cmp::ID {
+        LT => (IntCC::SignedLessThan, FloatCC::LessThan),
+        LE => (IntCC::SignedLessThanOrEqual, FloatCC::LessThanOrEqual),
+        GT => (IntCC::SignedGreaterThan, FloatCC::GreaterThan),
+        GE => (IntCC::SignedGreaterThanOrEqual, FloatCC::GreaterThanOrEqual),
+        // EQ and ID: two ints (two floats) are equal and identical alike.
+        _ => (IntCC::Equal, FloatCC::Equal),
     };
     let b = operand::<S::B>(e, b)?;
-    if let Operand::Lit(t, _) = b
-        && t != tag::INT
-    {
-        return Err(NotNative);
-    }
     let ta = e.tag(a);
-    let mut ok = e.is(ta, tag::INT);
-    if let Operand::Reg(r) = b {
-        let tb = e.tag(r);
-        let int_b = e.is(tb, tag::INT);
-        ok = e.b.ins().band(ok, int_b);
-    }
-    e.guard(ok);
+    let (int_a, float_a) = (e.is(ta, tag::INT), e.is(ta, tag::FLOAT));
+    let (both_int, both_float) = match b {
+        Operand::Reg(r) => {
+            let tb = e.tag(r);
+            let (int_b, float_b) = (e.is(tb, tag::INT), e.is(tb, tag::FLOAT));
+            (e.b.ins().band(int_a, int_b), e.b.ins().band(float_a, float_b))
+        }
+        Operand::Lit(t, _) if t == tag::INT => (int_a, e.b.ins().iconst(types::I8, 0)),
+        Operand::Lit(t, _) if t == tag::FLOAT => (e.b.ins().iconst(types::I8, 0), float_a),
+        Operand::Lit(..) => return Err(NotNative),
+    };
     let x = e.payload(a);
     let y = match b {
         Operand::Reg(r) => e.payload(r),
         Operand::Lit(_, p) => e.iconst(p),
     };
-    let holds = e.b.ins().icmp(cc, x, y);
-    let go = if S::When::ID == T { holds } else { e.b.ins().bxor_imm(holds, 1) };
+    let (fx, fy) = (e.b.ins().bitcast(types::F64, MemFlags::new(), x), e.b.ins().bitcast(types::F64, MemFlags::new(), y));
+    // (A NAN is the interpreter's: `num_test` leaves it to `test_values`.)
+    let ordered = e.b.ins().fcmp(FloatCC::Ordered, fx, fy);
+    let floats_ok = e.b.ins().band(both_float, ordered);
+    let ok = e.b.ins().bor(both_int, floats_ok);
+    e.guard(ok);
+    let ints = e.b.ins().icmp(cc, x, y);
+    let floats = e.b.ins().fcmp(fcc, fx, fy);
+    let holds = e.b.ins().select(both_int, ints, floats);
+    let go = if S::When::ID == T { holds } else { e.b.ins().bxor_imm_u(holds, 1) };
     e.branch(go, target)
 }
 
@@ -236,7 +246,7 @@ fn numbers(e: &mut Emit, op: BinOp, dst: u32, a: u32, b: Operand) -> R {
         BinOp::Sub => e.b.ins().ssub_overflow(x, y),
         _ => e.b.ins().smul_overflow(x, y),
     };
-    let fits = e.b.ins().icmp_imm(IntCC::Equal, over, 0);
+    let fits = e.b.ins().icmp_imm_u(IntCC::Equal, over, 0);
     e.guard(fits);
     let it = e.iconst(tag::INT);
     e.store(dst, it, n);
@@ -312,7 +322,7 @@ pub fn inc_dec_var(e: &mut Emit, insn: &Insn) -> R {
     let x = e.payload(var);
     let one = e.iconst(1);
     let (n, over) = if insn.op == Op::IncVar { e.b.ins().sadd_overflow(x, one) } else { e.b.ins().ssub_overflow(x, one) };
-    let fits = e.b.ins().icmp_imm(IntCC::Equal, over, 0);
+    let fits = e.b.ins().icmp_imm_u(IntCC::Equal, over, 0);
     e.guard(fits);
     e.store_payload(var, n);
     e.next()
@@ -353,7 +363,7 @@ pub fn step_jump(e: &mut Emit, insn: &Insn) -> R {
     let x = e.payload(var);
     let one = e.iconst(1);
     let (n, over) = if inc { e.b.ins().sadd_overflow(x, one) } else { e.b.ins().ssub_overflow(x, one) };
-    let fits = e.b.ins().icmp_imm(IntCC::Equal, over, 0);
+    let fits = e.b.ins().icmp_imm_u(IntCC::Equal, over, 0);
     e.guard(fits);
     let y = match bound {
         // A literal bound of another type: the step, then the test.
@@ -392,15 +402,15 @@ pub fn call(e: &mut Emit, _: &Insn) -> R {
     let pc = e.b.ins().iconst(types::I32, i64::from(e.pc));
     let inst = e.b.ins().call(e.call, &[e.ctx, pc]);
     let status = e.b.inst_results(inst)[0];
-    let done = e.b.ins().icmp_imm(IntCC::Equal, status, i64::from(calls::DONE));
+    let done = e.b.ins().icmp_imm_u(IntCC::Equal, status, i64::from(calls::DONE));
     let other = e.b.create_block();
     e.b.set_cold_block(other);
     e.b.ins().brif(done, next, &[], other, &[]);
     e.b.switch_to_block(other);
     // The other answers are the exit reasons of the same numbers.
     let reason = e.b.ins().uextend(types::I64, status);
-    let high = e.b.ins().ishl_imm(reason, 32);
-    let code = e.b.ins().bor_imm(high, i64::from(e.pc));
+    let high = e.b.ins().ishl_imm_u(reason, 32);
+    let code = e.b.ins().bor_imm_u(high, i64::from(e.pc));
     e.b.ins().return_(&[code]);
     Ok(())
 }

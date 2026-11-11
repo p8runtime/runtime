@@ -12,7 +12,7 @@
 //! instruction undone.
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{self, InstBuilder, MemFlags, types};
+use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData as MemFlags, types};
 use cranelift_frontend::FunctionBuilder;
 use p8_bytecode::Function;
 use p8_native_abi::{self as abi, exit, tag};
@@ -90,19 +90,19 @@ impl Emit<'_, '_> {
 
     /// Whether `tag` is `want`.
     pub fn is(&mut self, tag: ir::Value, want: u64) -> ir::Value {
-        self.b.ins().icmp_imm(IntCC::Equal, tag, want as i64)
+        self.b.ins().icmp_imm_u(IntCC::Equal, tag, want as i64)
     }
 
     /// Whether `tag` is a plain value's (nothing to release).
     pub fn is_plain(&mut self, tag: ir::Value) -> ir::Value {
-        self.b.ins().icmp_imm(IntCC::UnsignedLessThan, tag, tag::FIRST_HEAP as i64)
+        self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, tag, tag::FIRST_HEAP as i64)
     }
 
     /// Whether `tag` is a plain value that reads as itself: not undefined
     /// (whose read warns), nothing to release.
     pub fn is_readable(&mut self, tag: ir::Value) -> ir::Value {
         let plain = self.is_plain(tag);
-        let defined = self.b.ins().icmp_imm(IntCC::NotEqual, tag, tag::UNDEF as i64);
+        let defined = self.b.ins().icmp_imm_u(IntCC::NotEqual, tag, tag::UNDEF as i64);
         self.b.ins().band(plain, defined)
     }
 
@@ -155,7 +155,7 @@ impl Emit<'_, '_> {
         if target <= self.pc {
             let word = self.b.ins().load(types::I64, FLAGS, self.ctx, abi::CTX_INTERRUPT);
             let due = self.b.ins().load(types::I64, FLAGS, word, 0);
-            let none = self.b.ins().icmp_imm(IntCC::Equal, due, 0);
+            let none = self.b.ins().icmp_imm_u(IntCC::Equal, due, 0);
             self.guard_at(none, at);
         }
         self.b.ins().jump(to, &[]);

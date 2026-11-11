@@ -142,9 +142,9 @@ impl NativeCode for Code {
         let mut ctx = Ctx { regs: std::ptr::null_mut(), interrupt, frame: std::ptr::from_mut(frame).cast() };
         // (Taken after `frame` went into `ctx`: nothing touches the frame
         // again until the native code calls back or returns.)
-        // SAFETY (4): `ctx.frame` is `frame`, borrowed for this call.
+        // SAFETY: (4): `ctx.frame` is `frame`, borrowed for this call.
         ctx.regs = unsafe { frame_of(&mut ctx) }.window().as_mut_ptr();
-        // SAFETY (3): `f` is the image's function `id` (checked in range
+        // SAFETY: (3): `f` is the image's function `id` (checked in range
         // above), of the declared signature; `ctx` lives across the call.
         let r = unsafe { f(&mut ctx) };
         let pc = r as u32;
@@ -169,7 +169,7 @@ impl NativeCode for Code {
 /// `ctx.frame` is the `NativeFrame` [`Code::run`] put there, and `run`
 /// is still running (4).
 unsafe fn frame_of<'c>(ctx: &'c mut Ctx) -> &'c mut NativeFrame<'c, 'c> {
-    // SAFETY (4): the caller's promise; the lifetimes are no longer than
+    // SAFETY: (4): the caller's promise; the lifetimes are no longer than
     // the borrow of `ctx`, which `run` outlives.
     unsafe { &mut *ctx.frame.cast::<NativeFrame<'c, 'c>>() }
 }
@@ -181,10 +181,10 @@ unsafe fn frame_of<'c>(ctx: &'c mut Ctx) -> &'c mut NativeFrame<'c, 'c> {
 /// `ctx` is the pointer [`Code::run`] passed the native function (4).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn p8n_call(ctx: *mut Ctx, pc: u32) -> u32 {
-    // SAFETY (4): the native code passes on the `ctx` `run` gave it,
+    // SAFETY: (4): the native code passes on the `ctx` `run` gave it,
     // while `run` is on the stack below.
     let ctx = unsafe { &mut *ctx };
-    // SAFETY (4): `ctx.frame` is `run`'s frame.
+    // SAFETY: (4): `ctx.frame` is `run`'s frame.
     let frame = unsafe { frame_of(ctx) };
     let done = frame.call(pc);
     let regs = frame.window().as_mut_ptr();
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn p8n_call(ctx: *mut Ctx, pc: u32) -> u32 {
 
 /// A value's two words, as native code reads them.
 fn words(v: &Value) -> [u64; 2] {
-    // SAFETY (5): a `Value` is 16 bytes (asserted above) of two words, a
+    // SAFETY: (5): a `Value` is 16 bytes (asserted above) of two words, a
     // payload word in every variant (`value.rs`'s invariant), so every
     // byte is initialised; read, not moved: the value is untouched.
     unsafe { std::ptr::read(std::ptr::from_ref(v).cast::<[u64; 2]>()) }
@@ -217,7 +217,7 @@ pub fn check_layout() {
         assert!(want[0] < tag::FIRST_HEAP);
     }
     for (t, p) in [(tag::NULL, 0), (tag::BOOL, 1), (tag::BOOL, 0), (tag::INT, 42u64), (tag::INT, (-3i64) as u64), (tag::FLOAT, 2.5f64.to_bits()), (tag::UNDEF, 0)] {
-        // SAFETY (5): a plain tag with its payload word is what that
+        // SAFETY: (5): a plain tag with its payload word is what that
         // variant is (`value.rs`), and a plain value has nothing to drop.
         let v: Value = unsafe { mem::transmute::<[u64; 2], Value>([t, p]) };
         assert_eq!(v.plain_words(), Some([t, p]), "a value native code writes");
@@ -235,18 +235,18 @@ pub fn check_layout() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn p8_native_main(argc: c_int, argv: *const *const c_char, image: *const Image) -> c_int {
     check_layout();
-    // SAFETY (1): the generated object's image; magic and version are the
+    // SAFETY: (1): the generated object's image; magic and version are the
     // first two words of any version of it.
     let (magic, version) = unsafe { ((*image).magic, (*image).version) };
     if magic != image::MAGIC_WORD || version != image::VERSION_WORD {
         eprintln!("this executable's native code was made for another p8 runtime");
         return 70;
     }
-    // SAFETY (1): this version's image, read-only data of the object.
+    // SAFETY: (1): this version's image, read-only data of the object.
     let image = unsafe { &*image };
     let count = usize::try_from(image.count).expect("a count");
     let package_len = usize::try_from(image.package_len).expect("a length");
-    // SAFETY (1): `count` function addresses and `count` keys, and the
+    // SAFETY: (1): `count` function addresses and `count` keys, and the
     // package's bytes, in the object's data, for the life of the process.
     let (functions, keys, package) = unsafe {
         (
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn p8_native_main(argc: c_int, argv: *const *const c_char,
     };
     let mut args: Vec<String> = (1..usize::try_from(argc).unwrap_or(0))
         .map(|i| {
-            // SAFETY (2): `argv[i]` for i < argc is a NUL-terminated string.
+            // SAFETY: (2): `argv[i]` for i < argc is a NUL-terminated string.
             let s = unsafe { CStr::from_ptr(*argv.add(i)) };
             s.to_string_lossy().into_owned()
         })

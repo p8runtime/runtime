@@ -81,10 +81,11 @@ pub fn build(functions: &[Input], package: &[u8]) -> Result<Built, String> {
     sig.params.push(AbiParam::new(types::I64));
     sig.returns.push(AbiParam::new(types::I64));
     let mut ctx = module.make_context();
-    let mut fbc = FunctionBuilderContext::new();
     let (mut ids, mut native, mut names) = (Vec::new(), Vec::new(), Vec::new());
     for input in functions {
         ctx.func.signature = sig.clone();
+        // (A fresh one: a function given up half built leaves its state.)
+        let mut fbc = FunctionBuilderContext::new();
         let made = function(&mut module, &mut ctx.func, &mut fbc, call, input.function);
         if made.is_ok() {
             let id = native.len();
@@ -118,12 +119,12 @@ fn function(module: &mut ObjectModule, func: &mut ir::Function, fbc: &mut Functi
     b.ins().jump(blocks[0], &[]);
     for (pc, insn) in f.insns.iter().enumerate() {
         b.switch_to_block(blocks[pc]);
-        let regs = b.ins().load(types::I64, ir::MemFlags::trusted(), ctx, abi::CTX_REGS);
+        let regs = b.ins().load(types::I64, ir::MemFlagsData::trusted(), ctx, abi::CTX_REGS);
         let mut e = emit::Emit { b: &mut b, func: f, pc: pc as u32, blocks: &blocks, ctx, regs, call };
         tpl::instruction(&mut e, insn)?;
     }
     b.seal_all_blocks();
-    b.finalize();
+    b.finalize(module.target_config());
     Ok(())
 }
 
@@ -190,7 +191,7 @@ fn image_and_main(module: &mut ObjectModule, ids: &[FuncId], native: &[(u32, u32
         let status = b.inst_results(inst)[0];
         b.ins().return_(&[status]);
         b.seal_all_blocks();
-        b.finalize();
+        b.finalize(module.target_config());
     }
     module.define_function(main, &mut ctx).map_err(|e| err("main")(format!("{e:?}")))?;
     Ok(())
@@ -200,7 +201,7 @@ fn image_and_main(module: &mut ObjectModule, ids: &[FuncId], native: &[(u32, u32
 /// platform (`rustc --print native-static-libs` for `libp8_native.a`).
 fn system_libs() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        &["-framework", "CoreFoundation", "-framework", "Security", "-liconv", "-lSystem", "-lc", "-lm"]
+        &["-liconv", "-framework", "CoreFoundation", "-lSystem", "-lc", "-lm"]
     } else {
         &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl", "-lc"]
     }
