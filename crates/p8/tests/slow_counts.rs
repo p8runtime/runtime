@@ -381,8 +381,8 @@ fn native_constructors_and_calls_of_values_stay_in_the_loop() {
     assert_eq!(out, "19");
 }
 
-/// `[$a, $b] = ..` (of elements bound by reference too) and `['k' => $v]
-/// = ..`, a function's and a method's `static $x` (stepped through the
+/// `[$a, $b] = ..` and `$a[1]` (of elements bound by reference too),
+/// `['k' => $v] = ..`, a function's and a method's `static $x` (stepped through the
 /// reference), `foreach ($a as $k => &$v)` over an array, and `f($a['k'])`
 /// asking whether the function takes it by reference: inline. (Making
 /// `$a['k']` a reference for one that does, and `unset($v)`, are other
@@ -399,9 +399,9 @@ fn lists_static_variables_and_by_reference_foreach_stay_in_the_loop() {
              ['k' => $v, 'j' => $w] = $map;
              $t += $a + $b + $v + $w + counter() + $s->m();
              foreach ($arr as $key => &$e) { $e += $key; }
-             $t += plain($d['k']);
+             $t += plain($d['k']) + $arr[1];
          }
          echo $t, ' ', implode(',', $arr), ' ', $d['k'];",
     );
-    assert_eq!(out, "2950 1,22,43 4");
+    assert_eq!(out, "3200 1,22,43 4");
 }

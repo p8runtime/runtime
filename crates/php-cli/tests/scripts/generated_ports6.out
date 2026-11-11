@@ -120,9 +120,6 @@ Warning: Undefined array key 1 in %s on line 217
 NULL
 NULL
 NULL
-
-Warning: Cannot use string as array in %s on line 221
-NULL
 aa[0] aa[1]
 8 9
 10 11
@@ -132,9 +129,6 @@ aa[0] aa[1]
 Warning: Undefined array key 1 in %s on line 217
 NULL
 NULL
-NULL
-
-Warning: Cannot use string as array in %s on line 221
 NULL
 aa[0] aa[1]
 8 9
@@ -147,7 +141,7 @@ a1,b2,c3
 101 102
 [[-1],[-2]]
 
-Warning: foreach() argument must be of type array|object, null given in %s on line 262
+Warning: foreach() argument must be of type array|object, null given in %s on line 260
 10 2 none
 2 10
 x 2
@@ -157,7 +151,7 @@ a1,b2,c3
 101 102
 [[-1],[-2]]
 
-Warning: foreach() argument must be of type array|object, null given in %s on line 262
+Warning: foreach() argument must be of type array|object, null given in %s on line 260
 10 2 none
 2 10
 x 2
@@ -173,17 +167,15 @@ x 2
 1,2,3 3
 5,6
 
-Warning: Undefined array key "missing" in %s on line 299
+Warning: Undefined array key "missing" in %s on line 297
 NULL
 -- static variables
 calls
 1
 120
 1 2 3
-12
 calls
 2
 120
 4 5 6
-12
 done

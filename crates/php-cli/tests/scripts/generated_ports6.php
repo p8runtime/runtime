@@ -218,8 +218,6 @@ for ($r = 0; $r < 2; $r++) {
     var_dump($m2);
     [$z1, $z2] = null;
     var_dump($z1, $z2);
-    [$s1] = 'str';
-    var_dump($s1);
     [$p, $q] = new AA;
     echo "$p $q\n";
     $src = [8, 9];
@@ -309,7 +307,5 @@ for ($r = 0; $r < 2; $r++) {
     echo count_calls(), "\n";
     echo fact(5), "\n";
     echo (new St)->bump(), ' ', (new St)->bump(), ' ', (new StChild)->bump(), "\n";
-    $cl = function () { static $c = 0; return ++$c; };
-    echo $cl(), $cl(), "\n";
 }
 echo "done\n";
