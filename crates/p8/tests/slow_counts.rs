@@ -576,3 +576,66 @@ fn declarations_run_in_the_loop() {
     );
     assert_eq!((out.as_str(), slow), ("", empty));
 }
+
+/// A variable sent to a function the call site has not resolved yet (one
+/// declared where the code runs, as an included file's): out of line on
+/// the arm's operands, which resolve the site, not the detour; compared
+/// with an empty script, as above.
+#[test]
+fn a_first_call_sends_its_variable_in_the_loop() {
+    let (_, empty) = run("", 1);
+    let (out, slow) = run(
+        "if ($n > 0) { function late2($x, &$y) { $y = $x; return $x; } }
+         $v = 'f'; $w = null;
+         if (late2($v, $w) !== 'f' || $w !== 'f') { throw new Exception($v); }",
+        1,
+    );
+    assert_eq!((out.as_str(), slow), ("", empty));
+}
+
+/// `$this->p[$k] = v` on a property `next($this->p[$k])` bound by
+/// reference (WP_Hook::apply_filters), `$this->class::$m()` of a class
+/// name in a property, a property read of an object a `global` holds (a
+/// class with `__get`), `$a['x'][$k] = true` through a by-reference
+/// parameter (a literal value), a string's offset through a reference and
+/// `empty()` of a reference's missing element, `(bool)` and `(array)` of
+/// an object, `global` in the main script, a variable sent undefined, `.`
+/// of a string a reference holds (an included file's globals):
+/// inline, or out of line on the arms' operands, not the detour.
+#[test]
+fn reference_paths_class_names_casts_and_globals_stay_in_the_loop() {
+    let out = flat(
+        "class H {
+             private $it = []; private $pr = [10 => 1, 20 => 2];
+             function apply($v) {
+                 $l = 0;
+                 $this->it[$l] = $this->pr;
+                 do { $v += current($this->it[$l]); } while (false !== next($this->it[$l]));
+                 unset($this->it[$l]);
+                 return $v;
+             }
+         }
+         class M { public $declared = 3; function __get($n) { return 7; } }
+         class Fac { static function make($x) { return $x * 2; } }
+         class Holder { public $cls = 'Fac'; function call($m, $x) { return $this->cls::$m($x); } }
+         function g() { global $gm; return $gm->declared; }
+         function setk(array &$a, $k) { $a['x'][$k] = true; }
+         function first(&$s) { return $s[0]; }
+         function quiet(array &$r) { return empty($r['missing']) ? 1 : 0; }
+         // (Declared where the code runs: its calls send their variables
+         // by SendVar, the callee not known when compiled.)
+         if ($n > 0) { function byval($x) { return $x === null ? 1 : 0; } }
+         $gm = new M; $h = new H; $ho = new Holder; $arr = []; $str = 'hello'; $t = 0; $o = new M; $gs = 'ab'; $rv = &$gs;
+         for ($i = 0; $i < $n; $i++) {
+             global $mainvar;
+             $t += $h->apply(0) + g() + $ho->call('make', 1);
+             setk($arr, $i % 3);
+             $t += ord(first($str)) - 100 + quiet($arr);
+             $t += ((bool) $o ? 1 : 0) + count((array) $o);
+             $t += @byval($undefined);
+             $t += strlen($rv . '/x') + strlen('p/' . $rv) + strlen($rv . $rv);
+         }
+         echo $t, ' ', count($arr['x']), ' ', var_export($mainvar, true);",
+    );
+    assert_eq!(out, "560 3 NULL");
+}

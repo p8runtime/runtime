@@ -79,10 +79,6 @@ op FETCH_STATIC_PROP fetch_static_prop cold=step cls=NAMED|STATIC|SCOPE dst=REG 
 /// holds), `dst` = the value; C as INSTANCEOF's. A miss, an undefined
 /// value are cold (`step`, which fills the entry).
 op ASSIGN_STATIC_PROP assign_static_prop cold=step cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
-/// `dst = $src::class` (`ClassConst` of a class in a register, the name
-/// `class`): the object's class name; anything else (a string naming a
-/// class, the error of another value) is cold (`step`).
-op CLASS_NAME class_name cold=step dst=REG src=REG
 
 # ---- written by hand ---------------------------------------------------
 
@@ -293,6 +289,10 @@ hand Neg
 /// closure a captures variable b (`use ($b)`; imm: CAPTURE_REF `use (&$b)`,
 /// CAPTURE_QUIET no warning for an undefined one)
 hand Capture
+/// a = $b::class (`ClassConst` of class reference imm, a class in
+/// register b, the name `class`): an object's class name; a string naming
+/// a class (autoloaded), the error of anything else, out of line
+hand ClassName
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as
