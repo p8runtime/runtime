@@ -168,19 +168,21 @@ struct Incoming {
 /// The limit the watchdog reports when it fires.
 static LIMIT_SECONDS: AtomicU32 = AtomicU32::new(0);
 
+/// A watchdog's deadline (none: disarmed) and whether it is to stop (its
+/// isolate is gone), with the condition its thread waits on.
+type WatchState = Arc<(Mutex<(Option<Instant>, bool)>, Condvar)>;
+
 /// Stops the request that runs past max_execution_time, and leaves one
-/// that finished alone.
-/// One per isolate (each worker's own): its deadline, and whether the
-/// watchdog is to stop (its isolate is gone).
+/// that finished alone. One per isolate (each worker's own).
 struct Watchdog {
-    state: Arc<(Mutex<(Option<Instant>, bool)>, Condvar)>,
+    state: WatchState,
 }
 
 impl Watchdog {
     /// Where there are no threads (WASI) nothing watches, and the limit is
     /// not kept, as in a PHP built without timers.
     fn start(handle: p8::InterruptHandle) -> Watchdog {
-        let state: Arc<(Mutex<(Option<Instant>, bool)>, Condvar)> = Arc::new((Mutex::new((None, false)), Condvar::new()));
+        let state: WatchState = Arc::new((Mutex::new((None, false)), Condvar::new()));
         let shared = Arc::clone(&state);
         let _ = std::thread::Builder::new().spawn(move || {
             let (lock, cv) = &*shared;
