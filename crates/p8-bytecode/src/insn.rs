@@ -405,7 +405,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
     let cmp_c = |cmp: Cmp, a: Reg, b: Reg| -> Option<(Cmp, Reg, u32)> {
         match (k(a), k(b)) {
             (None, Some(kb)) => Some((cmp, a, kb)),
-            (Some(ka), None) => Some((swapped(cmp), b, ka)),
+            // (`K <=> $b` is not `$b <=> K`: it keeps its order, in `step`.)
+            (Some(ka), None) if cmp != Cmp::Spaceship => Some((swapped(cmp), b, ka)),
             _ => None,
         }
     };
@@ -442,8 +443,11 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         // The generated instructions (`ops.def`): the encoder picks the
         // specialisation of the operands' kinds.
         Instr::This { dst } => enc::this(enc::This { dst: o(dst)? }),
-        Instr::FetchProp { dst, obj, name, .. } => match prop_site(name, nconsts) {
-            Some(site) => enc::fetch_prop(enc::FetchProp { dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site: Opnd::Imm(site) }),
+        Instr::FetchProp { dst, obj, name, quiet } => match prop_site(name, nconsts) {
+            Some(site) => {
+                let mode = Opnd::Flag(if quiet { kinds::IS } else { kinds::R });
+                enc::fetch_prop(enc::FetchProp { mode, dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site: Opnd::Imm(site) })
+            }
             // `$o->$name`: the name in a register (a hand arm).
             None => i(Op::FetchPropDyn, dst, if obj == THIS { 0 } else { obj }, name, if obj == THIS { PROP_PATH_THIS } else { 0 }),
         },
@@ -486,7 +490,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
         Instr::Return { src } => enc::ret(enc::Ret { src: o(src)? }),
         Instr::InstanceOf { dst, src, class } => {
-            enc::instance_of(enc::InstanceOf { cls: class_flag(classes, class)?, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
+            // (A class in a register, `parent`: OTHER, always out of line.)
+            classes.get(usize::from(class))?;
+            let cls = class_flag(classes, class).unwrap_or(Opnd::Flag(kinds::OTHER));
+            enc::instance_of(enc::InstanceOf { cls, dst: o(dst)?, src: o(src)?, class: Opnd::Imm(u32::from(class)) })
         }
         Instr::ClassConst { dst, class, name } => match dynamic_class_name(classes, class, name, consts) {
             // `$obj::class`.
@@ -523,7 +530,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
 
         // The hand-written ones.
         Instr::Rare { op: Rare::VerifyArgs, .. } => i(Op::VerifyArgs, 0, 0, 0, 0),
-        Instr::Rare { op: Rare::VerifyReturn, a, .. } => i(Op::VerifyReturn, a, 0, 0, 0),
+        // (b: 0 a value returned, 1 none, for the TypeError's text.)
+        Instr::Rare { op: Rare::VerifyReturn, a, b, .. } => i(Op::VerifyReturn, a, u16::from(b != 0), 0, 0),
         Instr::Rare { op, a, b, c, class } if op.is_intrinsic() => {
             let kind = INTRINSICS.iter().position(|&k| k == op)? as u32;
             i(Op::Intrinsic, a, b, c, u32::from(class) | kind << 16)
@@ -692,6 +700,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         // name in register c.)
         Instr::Rare { op: Rare::CallableArgByRef, a, b, c, class } => i(Op::CallableArgByRef, a, b, if class == u16::MAX { c } else { 0 }, u32::from(class)),
         Instr::Rare { op: Rare::VarGet, a, b, c, .. } => i(Op::VarGet, a, b, 0, u32::from(c)),
+        Instr::Rare { op: Rare::VarRef, a, b, c, .. } => i(Op::VarRef, a, b, 0, u32::from(c)),
+        Instr::UnsetProp { obj, name } => i(Op::UnsetProp, obj, 0, 0, u32::from(name)),
         Instr::Rare { op: Rare::AutoGlobal, a, b, .. } => i(Op::AutoGlobal, a, b, 0, 0),
         Instr::Rare { op: Rare::ArrayPushRef, a, b, .. } => i(Op::ArrayPushRef, a, b, 0, 0),
         // `C::$name op= v` (class reference c below 256, the name a constant,
@@ -781,6 +791,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::Silence { saved } => i(Op::Silence, saved, 0, 0, 0),
         Instr::Unsilence { saved } => i(Op::Unsilence, saved, 0, 0, 0),
         Instr::Neg { dst, src } => i(Op::Neg, dst, src, 0, 0),
+        Instr::BitNot { dst, src } => i(Op::BitNot, dst, src, 0, 0),
         Instr::Capture { closure, var, by_ref, quiet } => {
             i(Op::Capture, closure, var, 0, if by_ref { CAPTURE_REF } else { 0 } | if quiet { CAPTURE_QUIET } else { 0 })
         }
@@ -1218,6 +1229,38 @@ mod tests {
         assert_eq!(at(1).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 7, imm: 1 | 6 << 8 | PATH_VAL_K | PATH_APPEND });
         assert!(at(2).is_none());
         assert_eq!(at(3).unwrap(), Insn { op: Op::ClassName, a: 5, b: 3, c: 0, imm: 1 });
+    }
+
+    #[test]
+    fn the_ninth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // `$x instanceof $cls` (class reference 1 a class in register
+            // 3), and of `parent` (2).
+            Instr::InstanceOf { dst: 5, src: 4, class: 1 },
+            Instr::InstanceOf { dst: 5, src: 4, class: 2 },
+            // `~$x`.
+            Instr::BitNot { dst: 5, src: 4 },
+            // `$x?->p` / `$x->p ?? …`: a quiet read; and a plain one.
+            Instr::FetchProp { dst: 5, obj: 4, name: c(3), quiet: true },
+            Instr::FetchProp { dst: 5, obj: 4, name: c(3), quiet: false },
+            // A return of none (`return;`): the TypeError's text.
+            Instr::Rare { op: Rare::VerifyReturn, a: 5, b: 1, c: 0, class: 0 },
+            // `K <=> $b` keeps its order (not CompareC); `K < $b` swaps.
+            Instr::Compare { cmp: Cmp::Spaceship, dst: 5, a: c(1), b: 4 },
+            Instr::Compare { cmp: Cmp::Lt, dst: 5, a: c(1), b: 4 },
+        ];
+        let consts = consts();
+        let classes = [ClassRef::Static, ClassRef::Dynamic(3), ClassRef::ParentScope];
+        let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &[]);
+        assert_eq!(at(0).unwrap().op, Op::P8_INSTANCEOF_OTHER);
+        assert_eq!(at(1).unwrap().op, Op::P8_INSTANCEOF_OTHER);
+        assert_eq!(at(2).unwrap(), Insn { op: Op::BitNot, a: 5, b: 4, c: 0, imm: 0 });
+        assert_eq!(at(3).unwrap().op, Op::P8_FETCH_PROP_IS_REG);
+        assert_eq!(at(4).unwrap().op, Op::P8_FETCH_PROP_R_REG);
+        assert_eq!(at(5).unwrap(), Insn { op: Op::VerifyReturn, a: 5, b: 1, c: 0, imm: 0 });
+        assert!(at(6).is_none());
+        assert_eq!(at(7).unwrap(), Insn { op: Op::CompareC, a: 5, b: 4, c: 0, imm: cmp_imm(Cmp::Gt) | 1 << 8 });
     }
 
     #[test]

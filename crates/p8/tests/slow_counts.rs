@@ -639,3 +639,45 @@ fn reference_paths_class_names_casts_and_globals_stay_in_the_loop() {
     );
     assert_eq!(out, "560 3 NULL");
 }
+
+/// What the arms' entries do not answer (#376), each iteration: `static::X`
+/// and `static::$s` of a called class that alternates (the entry holds
+/// one), a parameter's default `A::X` (its code runs on a new closure, so
+/// every read is a first one), `__get` and `__isset`, a null receiver
+/// under `?->`, a new object's dynamic property written and unset,
+/// `$GLOBALS['x'] = ` and `&$$name`, `__set`, a deprecated
+/// constant, `instanceof` of a class in a register, a return value
+/// coerced, `<=>` and `==` of arrays, `~` of an int and of a float,
+/// ArrayAccess writes with a key and appending, `.=` of a Stringable:
+/// out of line on the arms' operands, not the detour.
+#[test]
+fn misses_run_out_of_line_on_their_operands() {
+    let out = flat(
+        "class A { const X = 1; public static $s = 10; static function x() { return static::X; } static function s() { return static::$s; } static function set($v) { static::$s = $v; } }
+         class B extends A { const X = 2; public static $s = 20; }
+         class G { private $d = ['k' => 3]; function __get($n) { return $this->d[$n] ?? 0; } function __isset($n) { return isset($this->d[$n]); } }
+         class S { public $got = 0; function __set($n, $v) { $this->got += $v; } }
+         class Box implements ArrayAccess { public $n = 0; function offsetExists($k): bool { return true; } function offsetGet($k): mixed { return 0; } function offsetSet($k, $v): void { $this->n += $v; } function offsetUnset($k): void {} }
+         class Str { function __toString(): string { return 's'; } }
+         function dflt($v = A::X) { return $v; }
+         function coerce($v): int { return $v; }
+         $g = new G; $set = new S; $box = new Box; $str = new Str; $nul = null; $cls = 'A'; $t = 0; $cat = ''; $f = 2.0; $arrs = [[1, 2], [1, 3]];
+         for ($i = 0; $i < $n; $i++) {
+             $t += A::x() + B::x() + dflt();
+             $t += A::s() + B::s(); A::set(10); B::set(20);
+             $t += $g->k + ($g->k ?? 0) + ($nul?->p ?? 1);
+             $o = new stdClass; $o->a = 1; $t += $o->a; unset($o->a);
+             $set->v = 1;
+             $GLOBALS['gv'] = $i; $vn = 'gv'; $r = &$$vn; $r++;
+             $t += @E_STRICT >> 11;
+             $t += $g instanceof $cls ? 0 : 1;
+             $t += coerce('4');
+             $t += ($arrs[0] <=> $arrs[1]) + ($arrs[0] == $arrs[1] ? 0 : 1);
+             $t += (~$i & 1) + ~$f;
+             $box[$i] = 1; $box[] = 1;
+             $cat .= $str;
+         }
+         echo $t, ' ', $set->got, ' ', $box->n, ' ', strlen($cat), ' ', $gv, ' ', count((array) $o);",
+    );
+    assert_eq!(out, "910 20 40 20 20 0");
+}
