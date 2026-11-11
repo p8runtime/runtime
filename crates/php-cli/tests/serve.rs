@@ -321,11 +321,13 @@ fn a_request_past_its_time_ends_and_its_worker_goes_on() {
 
 /// A recursion that never ends is stopped by memory_limit, and the worker
 /// (the only one) then runs the next request as a fresh one would: the
-/// register file the recursion grew is not kept against the next request.
+/// register file the recursion grew is not kept against the next request,
+/// so a small request under a small limit (8M) runs.
 #[test]
 fn a_runaway_recursion_leaves_its_worker_serving() {
     let forever = "<?php function forever($n) { return forever($n + 1) + 1; } echo forever(0);";
-    let fast = "<?php function twice($n) { return 2 * $n; } echo 'fast ', twice(21);";
+    // (100 calls deep: the call stack grows, so memory_limit is checked.)
+    let fast = "<?php ini_set('memory_limit', '8M'); function down($n) { return $n ? down($n - 1) + 1 : 0; } echo 'fast ', down(100);";
     let dir = site("runaway", &[("forever.php", forever), ("fast.php", fast)]);
     let serve = Serve::start_with(&dir, &["--workers", "1"]);
     let started = Instant::now();
@@ -333,7 +335,7 @@ fn a_runaway_recursion_leaves_its_worker_serving() {
     assert!(started.elapsed() < Duration::from_secs(15), "the runaway request took {:?}", started.elapsed());
     for _ in 0..2 {
         let (head, body, _) = fetch(serve.port, "/fast.php");
-        assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body == "fast 42", "{head}{body}");
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body == "fast 100", "{head}{body}");
     }
 }
 
