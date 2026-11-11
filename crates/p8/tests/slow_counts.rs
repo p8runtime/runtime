@@ -194,11 +194,13 @@ fn scalar_casts_stay_in_the_loop() {
              $t += (int) ('1' . ($i % 10)) + (int) ($i * 0.5) + (int) (bool) $i + (int) $rr;
              $s = (string) $i . (string) ($i * 0.25) . (string) $yes . (string) $nul;
              $f += (float) $i + (float) $half;
-             $u = (array) $i + (array) $nul + (array) $list;
+             $u = (array) $i;
+             $e = (array) $nul;
+             $l = (array) $list;
          }
-         echo $t, ' ', $s, ' ', $f, ' ', implode(',', $u);",
+         echo $t, ' ', $s, ' ', $f, ' ', implode(',', $u), count($e), implode(',', $l);",
     );
-    assert_eq!(out, "539 194.751 200 19,6");
+    assert_eq!(out, "539 194.751 200 1905,6");
 }
 
 /// `$o->p++`, `--$o->p`, `$this->p++` on declared properties (untyped,
@@ -225,7 +227,8 @@ fn steps_of_properties_stay_in_the_loop() {
 fn method_arguments_asked_by_reference_stay_in_the_loop() {
     let out = flat(
         "class M { function v($x) { return $x; } }
-         $m = new M; $a = ['k' => 2]; $o = new stdClass; $o->p = 3; $t = 0;
+         class P { public $p = 3; }
+         $m = new M; $a = ['k' => 2]; $o = new P; $t = 0;
          for ($i = 0; $i < $n; $i++) { $t += $m->v($a['k']) + $m->v($o->p); }
          echo $t;",
     );
