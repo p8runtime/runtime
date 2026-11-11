@@ -29,8 +29,44 @@ fn scripts_match_php_8_4_from_a_package() {
     check(&["--package".as_ref(), package.as_os_str()]);
 }
 
+/// The same scripts through a native executable of them all (`p8 compile
+/// --native`, #402): the functions with machine code run as it, every
+/// other one (most of them), and whatever the machine code hands back, on
+/// the interpreter; the output is the same, byte for byte. Needs the
+/// runtime library beside p8 (`cargo build --release --locked -p p8-native`).
+#[test]
+fn scripts_match_php_8_4_as_a_native_executable() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let (package, exe) = (tmp.join("scripts.native.package"), tmp.join("scripts.native"));
+    let host = Path::new(env!("CARGO_BIN_EXE_p8")).with_file_name("libp8_native.a");
+    assert!(host.is_file(), "{} is missing: build it with `cargo build --release --locked -p p8-native`", host.display());
+    let out = Command::new(env!("CARGO_BIN_EXE_p8"))
+        .arg("compile")
+        .arg(&dir)
+        .arg("--package")
+        .arg(&package)
+        .arg("--native")
+        .arg(&exe)
+        .arg("--native-host")
+        .arg(&host)
+        .output()
+        .expect("run p8 compile --native");
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // (Some of the corpus's functions are native: else this tests nothing.)
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!said.contains("with 0 of"), "{said}");
+    check_with(exe.as_os_str(), &[]);
+}
+
 /// Every tests/scripts/NAME.php run with `options` prints NAME.out.
 fn check(options: &[&std::ffi::OsStr]) {
+    check_with(env!("CARGO_BIN_EXE_p8").as_ref(), options);
+}
+
+/// The same, run by `exe`.
+fn check_with(exe: &std::ffi::OsStr, options: &[&std::ffi::OsStr]) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
     let mut scripts: Vec<_> = std::fs::read_dir(&dir)
         .expect("tests/scripts")
@@ -43,7 +79,7 @@ fn check(options: &[&std::ffi::OsStr]) {
     for script in &scripts {
         // Bytes: a script may print text in another encoding (XMLWriter's ISO-8859-1).
         let want = std::fs::read(script.with_extension("out")).expect("expected output");
-        let out = Command::new(env!("CARGO_BIN_EXE_p8")).args(options).arg(script).output().expect("run p8");
+        let out = Command::new(exe).args(options).arg(script).output().expect("run p8");
         if String::from_utf8_lossy(&out.stderr).contains("p8: not using the package") {
             failures.push(format!("{}: the package was not used", script.display()));
         }

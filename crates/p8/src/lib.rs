@@ -41,6 +41,15 @@ mod package;
 pub use package::{Package, PackageCheck, PackageError};
 mod request;
 
+/// Native code (#402): what a p8-built executable gives the engine to run
+/// some of its package's functions as machine code
+/// ([`Platform::with_native`]), and what its code generator reads
+/// ([`Platform::packaged_functions`]).
+pub mod native {
+    pub use crate::package::PackagedFunction;
+    pub use p8_interp::native::{CallDone, Exit, NativeCode, NativeFrame};
+}
+
 pub use p8_interp::{Host, InterruptHandle};
 pub use p8_ext_standard::{P8_VERSION, PHP_VERSION, powered_by};
 pub use p8_runtime::ext::Response;
@@ -90,8 +99,36 @@ pub struct Platform {
 impl Platform {
     pub fn new(extensions: &[Extension]) -> Platform {
         Platform {
-            compiler: Arc::new(Compiler { registry: Arc::new(Registry::new(extensions)), cache: None, files: None, package: None, compiled: AtomicUsize::new(0), opcache: None, partials: AtomicUsize::new(0) }),
+            compiler: Arc::new(Compiler {
+                registry: Arc::new(Registry::new(extensions)),
+                cache: None,
+                files: None,
+                package: None,
+                compiled: AtomicUsize::new(0),
+                opcache: None,
+                partials: AtomicUsize::new(0),
+                native: None,
+            }),
         }
+    }
+
+    /// Run natively the package functions `code` has machine code for:
+    /// `keys` names them by id, each (file, function) as
+    /// [`Platform::packaged_functions`] numbered them for the package this
+    /// Platform takes its files from (set first, [`Platform::with_package`]:
+    /// the executable's own). Code compiled from source is never native.
+    pub fn with_native(self, code: &'static dyn native::NativeCode, keys: &[(u32, u32)]) -> Platform {
+        let compiler = Arc::try_unwrap(self.compiler).unwrap_or_else(|_| panic!("native code is set before the Platform is shared"));
+        let package = compiler.package.map(|p| p.with_native(keys));
+        Platform { compiler: Arc::new(Compiler { package, native: Some(code), ..compiler }) }
+    }
+
+    /// Every function of every file in the package at `path` (by file, in
+    /// the package's order, then by its place in the file's functions), as
+    /// the native backend compiles them.
+    pub fn packaged_functions(&self, path: impl AsRef<std::path::Path>) -> Result<Vec<native::PackagedFunction>, PackageError> {
+        let package = self.open_package(path, PackageCheck::Trust)?;
+        Ok(package.functions(self.compiler.registry.symbols()))
     }
 
     /// What a package must have been written by to be used by this
@@ -244,7 +281,11 @@ impl Platform {
 
     /// An engine for the calling thread.
     pub fn new_isolate(&self) -> Isolate {
-        Isolate { inner: p8_interp::Isolate::new(Arc::clone(&self.compiler.registry)), compiler: Arc::clone(&self.compiler) }
+        let mut inner = p8_interp::Isolate::new(Arc::clone(&self.compiler.registry));
+        if let Some(code) = self.compiler.native {
+            inner.set_native(code);
+        }
+        Isolate { inner, compiler: Arc::clone(&self.compiler) }
     }
 
     /// Compile a file's source.
@@ -272,6 +313,8 @@ struct Compiler {
     opcache: Option<opcache::Opcache>,
     /// Partial applications' closures compiled.
     partials: AtomicUsize,
+    /// The executable's native code ([`Platform::with_native`]).
+    native: Option<&'static dyn native::NativeCode>,
 }
 
 /// A compiled file kept by its path: what it is checked by when it is

@@ -216,6 +216,7 @@ impl Closure {
             meta: Default::default(),
             partials: Vec::new(),
             compile_diags: Vec::new(),
+            native: None,
         };
         Closure::with_consts(Arc::new(code), |c| c.to_value())
     }

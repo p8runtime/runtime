@@ -10,6 +10,17 @@ that way.
 compiler rejects `unsafe` blocks, functions and impls anywhere in our code.
 `forbid` cannot be overridden by an inner `#[allow]`.
 
+One crate is the exception, by decision (#402): `crates/p8-native`, the
+boundary to the machine code of an executable `p8 compile --native` builds.
+Calling generated code and exposing a helper to it cannot be done in safe
+Rust, so that crate, and only it, holds `unsafe`: one file, every block
+with its `SAFETY:` comment (clippy's `undocumented_unsafe_blocks` denied),
+its doc comment the audit guide, the value layout it relies on checked at
+startup. `crates/p8/tests/safety.rs` checks that every other p8 crate still
+forbids `unsafe` and that the boundary stays one audited file. Machine code
+is never loaded or mapped at run time: it exists only in executables linked
+ahead of time.
+
 PHP values live in a garbage-collected arena and are addressed by
 generational handles. A handle that outlives its value is detected on use
 and stops the request with a panic; it can never read whatever later reused

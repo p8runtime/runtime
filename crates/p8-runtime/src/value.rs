@@ -112,6 +112,24 @@ enum V<'a> {
 /// The first tag holding memory: tags below it are plain.
 const FIRST_HEAP_TAG: u8 = 6;
 
+/// The tag word of each plain value (`Repr`'s discriminants), for code
+/// that reads and writes values as their two words: the native code of a
+/// p8-built executable (#402), which touches plain values only. The tag is
+/// the first word and the payload the second (`repr(u64)`: the primitive
+/// representation's layout); the boundary crate (`p8-native`) checks both
+/// against live values before any native code runs.
+pub mod tag {
+    pub const NULL: u64 = 0;
+    pub const BOOL: u64 = 1;
+    pub const INT: u64 = 2;
+    pub const FLOAT: u64 = 3;
+    pub const UNDEF: u64 = 4;
+    pub const ISTR: u64 = 5;
+    /// Tags at or above this hold memory (a count to keep, a release).
+    pub const FIRST_HEAP: u64 = 6;
+}
+const _: () = assert!(tag::FIRST_HEAP == FIRST_HEAP_TAG as u64);
+
 // The layout the engine is tuned for: a zval's 16 bytes, and `Option<Value>`
 // no bigger (the tag's spare values are its `None`).
 const _: () = assert!(mem::size_of::<Value>() == 16);
@@ -529,6 +547,23 @@ impl Value {
     #[inline(always)]
     pub fn is_plain(&self) -> bool {
         self.tag() < FIRST_HEAP_TAG
+    }
+
+    /// A plain value's two words as they are laid out (its tag, `tag::*`,
+    /// then its payload: the int, the float's bits, the bool's 0 or 1,
+    /// the program-memory string's address, 0 for null and undefined);
+    /// None for a value holding memory. What the native-code boundary
+    /// checks the layout it reads and writes by against (#402).
+    pub fn plain_words(&self) -> Option<[u64; 2]> {
+        match self.0 {
+            Repr::Null(w) => Some([tag::NULL, w as u64]),
+            Repr::Bool(w) => Some([tag::BOOL, w as u64]),
+            Repr::Int(w) => Some([tag::INT, w as u64]),
+            Repr::Float(w) => Some([tag::FLOAT, w as u64]),
+            Repr::Undef(w) => Some([tag::UNDEF, w as u64]),
+            Repr::IStr(s) => Some([tag::ISTR, std::ptr::from_ref(s) as usize as u64]),
+            _ => None,
+        }
     }
 
     /// The representation's tag (its `repr(u64)` discriminant).

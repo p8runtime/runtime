@@ -235,6 +235,8 @@ pub struct Isolate {
     /// Partial applications' closure code, compiled once for the isolate
     /// (per site and function applied) and shared by every request.
     pub(crate) partials: RefCell<HashMap<crate::partial::CacheKey, crate::partial::Compiled>>,
+    /// The executable's native code, when it has some (`native.rs`).
+    pub(crate) native: Option<&'static dyn crate::native::NativeCode>,
 }
 
 /// The names of classes the engine makes objects of itself (a closure, a
@@ -267,6 +269,7 @@ impl Isolate {
             thawed: RefCell::new(HashMap::with_capacity_and_hasher(1 << 15, Default::default())),
             unbuilt: Closure::unbuilt(&registry),
             partials: RefCell::new(HashMap::default()),
+            native: None,
             registry,
         }
     }

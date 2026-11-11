@@ -1,0 +1,31 @@
+[package]
+name = "p8-native-gen"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "p8's native backend: Cranelift, embedded, compiles a package's functions to machine code from the op templates (ops.def), and links a p8-built executable"
+
+[dependencies]
+p8-bytecode = { path = "../p8-bytecode" }
+p8-runtime = { path = "../p8-runtime" }
+p8-native-abi = { path = "../p8-native-abi" }
+# Cranelift, pinned exactly (APS 10: from crates.io by version; an upgrade
+# is a reviewed change): the version the Phase 0 prototype measured (#401).
+# codegen: the code generator; frontend: building its IR; module/object:
+# functions, data and symbols written as a relocatable object file;
+# native: the ISA and CPU features of the machine it runs on.
+cranelift-codegen = "=0.135.8"
+cranelift-frontend = "=0.135.8"
+cranelift-module = "=0.135.8"
+cranelift-object = "=0.135.8"
+cranelift-native = "=0.135.8"
+
+# The unit tests compile PHP to compile it again.
+[dev-dependencies]
+bumpalo = { version = "3.12", features = ["collections"] }
+p8-compiler = { path = "../p8-compiler" }
+p8-syntax = { path = "../p8-syntax" }
+
+# build.rs writes the templates' dispatch from ops.def.
+[build-dependencies]
+p8-vmgen = { path = "../p8-vmgen" }

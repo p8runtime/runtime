@@ -918,6 +918,13 @@ pub struct Function {
     /// the file is compiled, then raises them (user error handler included)
     /// before it runs; the loader does the same.
     pub compile_diags: Vec<CompileDiag>,
+    /// The native function the running executable has for this code (its
+    /// index in the executable's table, #402), given to the code as it is
+    /// read from the package that executable carries, before the code is
+    /// shared (APS 5: nothing of it changes after); None for code compiled
+    /// here, or with no native function. Not stored: a package holds
+    /// bytecode only.
+    pub native: Option<u32>,
 }
 
 /// A non-fatal error raised while compiling: its PHP error level

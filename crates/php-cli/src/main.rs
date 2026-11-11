@@ -18,7 +18,6 @@
 //! A script named `compile` or `serve` runs as `p8 ./compile`, or after
 //! any option (`p8 -f compile`).
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 // p8's allocator, on every platform it is built for: rusty_alloc, a
@@ -41,43 +40,11 @@ const USAGE: &str = "usage: p8 [--dump] [-l] [--repeat N] [-d name=value]... [--
        p8 -S <addr>:<port> [-t docroot] [-q] [router.php]
        p8 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)
        p8 compile [dir] [--package <file>] [--cli] [--bake <file>]   (every PHP file under dir, default the current directory, compiled into dir/.p8/package, for p8 serve; --package: written there instead; --cli: for `p8 --package <file> <script>` runs instead; --bake: also a copy of p8 that runs scripts with it, implies --cli)
+       p8 compile [dir] --native <file> [--native-host <libp8_native.a>]   (also an executable with the package and its functions as machine code; implies --cli)
        p8 serve [dir] [--listen <addr>:<port>]   (dir, default the current directory, served over HTTP from dir/.p8/package; default 127.0.0.1:8000)";
 
-/// The extensions p8 loads (`server`: with what the built-in web server
-/// adds). A WASI build has no sockets, so it is a PHP built without
-/// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
-fn extensions(server: bool) -> Vec<p8::Extension> {
-    use p8::extensions::*;
-    let mut all = vec![STANDARD];
-    if server {
-        all.push(SERVER);
-    }
-    all.extend([
-        XML,
-        TOKENIZER,
-        MBSTRING,
-        PCRE,
-        #[cfg(not(target_os = "wasi"))]
-        MYSQLI,
-        #[cfg(not(target_os = "wasi"))]
-        CURL,
-        GD,
-        ZIP,
-        FILEINFO,
-        SESSION,
-        PDO,
-        PDO_SQLITE,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_MYSQL,
-        #[cfg(not(target_os = "wasi"))]
-        SOCKETS,
-        OPENSSL,
-        INTL,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_PGSQL,
-    ]);
-    all
-}
+// (Shared with the native executables `p8 compile --native` builds.)
+use php_cli::{Stdout, extensions, on_deep_stack};
 
 /// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
 /// the runs after this one (off unless set, as in PHP). It is OPcache's,
@@ -154,22 +121,16 @@ fn write_package(compile: &Compile) -> i32 {
         }
         println!("{exe}: p8 with the package");
     }
+    if let Some(exe) = &compile.native {
+        match php_cli::native::write(&platform, &out, compile.native_host.as_deref(), exe) {
+            Ok(said) => println!("{said}"),
+            Err(e) => {
+                eprintln!("p8: could not write {exe}: {e}");
+                return 1;
+            }
+        }
+    }
     0
-}
-
-/// Run `f` with a native stack deep enough for deep PHP recursion: on a
-/// thread with a 64 MiB stack. WASI has no threads; there the binary's
-/// own stack is that size (see build.rs).
-#[cfg(not(target_os = "wasi"))]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(f).expect("interpreter thread").join().unwrap_or(255)
-}
-
-/// Run `f` with a native stack deep enough for deep PHP recursion: WASI
-/// has no threads, so the binary's own stack is 64 MiB (see build.rs).
-#[cfg(target_os = "wasi")]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    f()
 }
 
 fn main() {
@@ -325,6 +286,12 @@ struct Compile {
     /// Also write a copy of p8 with the package appended, which runs
     /// scripts as `p8 --package` does (so `--cli` is implied).
     bake: Option<String>,
+    /// `--native <file>`: also write an executable with the package and its
+    /// functions as machine code (`php_cli::native`; `--cli` is implied).
+    native: Option<String>,
+    /// `--native-host <file>`: the runtime library it is linked with
+    /// (default: libp8_native.a beside p8).
+    native_host: Option<String>,
 }
 
 /// Where `p8 serve` listens unless `--listen` says otherwise.
@@ -337,17 +304,23 @@ impl Command {
             Some("compile") => {
                 args.next();
                 let (mut dir, mut package, mut cli, mut bake) = (None, None, false, None);
+                let (mut native, mut native_host) = (None, None);
                 while let Some(arg) = args.next() {
                     match arg.as_str() {
                         "--package" if package.is_none() => package = Some(args.next()?),
                         "--cli" => cli = true,
                         "--bake" if bake.is_none() => bake = Some(args.next()?),
+                        "--native" if native.is_none() => native = Some(args.next()?),
+                        "--native-host" if native_host.is_none() => native_host = Some(args.next()?),
                         _ if !arg.starts_with('-') && dir.is_none() => dir = Some(arg),
                         _ => return None,
                     }
                 }
-                let cli = cli || bake.is_some();
-                Some(Command::Compile(Compile { dir: dir.unwrap_or_else(|| ".".to_string()), package, cli, bake }))
+                if native_host.is_some() && native.is_none() {
+                    return None;
+                }
+                let cli = cli || bake.is_some() || native.is_some();
+                Some(Command::Compile(Compile { dir: dir.unwrap_or_else(|| ".".to_string()), package, cli, bake, native, native_host }))
             }
             Some("serve") => {
                 args.next();
@@ -477,25 +450,6 @@ impl p8::Host for Discard {
     fn write(&mut self, _: &[u8]) {}
 }
 
-/// The terminal: a request's output goes to stdout, written through on
-/// every write as PHP's CLI does (sapi_cli_ub_write writes each piece to
-/// fd 1; implicit_flush is on). Nothing waits in a buffer, so output stays
-/// in order with STDERR, a prompt shows before reading STDIN, and
-/// fwrite(STDOUT)/fflush(STDOUT) reach the reader at once.
-struct Stdout(std::io::Stdout);
-
-impl p8::Host for Stdout {
-    fn write(&mut self, bytes: &[u8]) {
-        let mut out = self.0.lock();
-        let _ = out.write_all(bytes);
-        let _ = out.flush();
-    }
-
-    fn flush(&mut self) {
-        let _ = self.0.flush();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Cli, Command, Compile, LISTEN};
@@ -563,12 +517,16 @@ mod tests {
     #[test]
     fn takes_compile_and_serve() {
         let compile = |dir: &str, package: Option<&str>, cli: bool, bake: Option<&str>| {
-            Some(Command::Compile(Compile { dir: dir.into(), package: package.map(Into::into), cli, bake: bake.map(Into::into) }))
+            Some(Command::Compile(Compile { dir: dir.into(), package: package.map(Into::into), cli, bake: bake.map(Into::into), native: None, native_host: None }))
         };
         assert_eq!(command(&["compile"]), compile(".", None, false, None));
         assert_eq!(command(&["compile", "site", "--package", "out.p8"]), compile("site", Some("out.p8"), false, None));
         assert_eq!(command(&["compile", "--cli", "site"]), compile("site", None, true, None));
         assert_eq!(command(&["compile", "site", "--bake", "app"]), compile("site", None, true, Some("app")));
+        // --native implies --cli; --native-host goes with --native.
+        let native = Compile { dir: "site".into(), package: None, cli: true, bake: None, native: Some("app".into()), native_host: Some("lib.a".into()) };
+        assert_eq!(command(&["compile", "site", "--native", "app", "--native-host", "lib.a"]), Some(Command::Compile(native)));
+        assert_eq!(command(&["compile", "site", "--native-host", "lib.a"]), None);
         assert_eq!(command(&["serve"]), Some(Command::Serve { dir: ".".into(), listen: LISTEN.into() }));
         assert_eq!(command(&["serve", "site", "--listen", "0.0.0.0:80"]), Some(Command::Serve { dir: "site".into(), listen: "0.0.0.0:80".into() }));
         assert_eq!(command(&["serve", "--listen", "[::1]:9000", "site"]), Some(Command::Serve { dir: "site".into(), listen: "[::1]:9000".into() }));
