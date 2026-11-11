@@ -407,7 +407,10 @@ pub fn parse_pattern(pattern: &str) -> Result<Props, PatternError> {
     while let Some(c) = r.peek() {
         match c {
             '#' if !seen_dot => {
-                if int_zero > 0 || sig_at > 0 && sig_hash == 0 && false {
+                // ("# cannot follow 0 before decimal point"; after a run of
+                // @ a # is an optional significant digit, `@@##`: ICU's
+                // parseIntegerFormat.)
+                if int_zero > 0 {
                     return Err(syntax(&r));
                 }
                 if sig_at > 0 {

@@ -173,6 +173,8 @@ pub(crate) const OB_FINAL: i64 = 8;
 pub(crate) const NO_INTERRUPT: u64 = 0;
 /// InterruptHandle::terminate (other values: a timeout of that many seconds).
 pub(crate) const TERMINATE: u64 = u64::MAX;
+/// The call stack went past memory_limit (`StackLimit`).
+pub(crate) const OUT_OF_MEMORY: u64 = u64::MAX - 1;
 
 /// Stops the request an isolate is running, from any thread: what a host's
 /// watchdog holds. The request ends with a fatal error at the next loop
@@ -183,7 +185,7 @@ pub struct InterruptHandle(Arc<AtomicU64>);
 impl InterruptHandle {
     /// End the request with PHP's max_execution_time error.
     pub fn timeout(&self, seconds: u64) {
-        self.0.store(seconds.clamp(1, TERMINATE - 1), AtomicOrdering::Relaxed);
+        self.0.store(seconds.clamp(1, OUT_OF_MEMORY - 1), AtomicOrdering::Relaxed);
     }
 
     /// End the request (the host is shutting it down).
@@ -324,13 +326,15 @@ impl Isolate {
     pub fn new_context<'i>(&'i mut self, host: &'i mut dyn Host) -> Context<'i> {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
+        let limit = StackLimit::new(Arc::clone(&stop), self.registry.ini_default(b"memory_limit").flatten());
+        let frames = Frames { limit: Some(Rc::new(limit)), ..Frames::default() };
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
         let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
         Context {
             stop,
             isolate: self,
-            frames: Frames::default(),
+            frames,
             functions: HashMap::default(),
             closures: Vec::new(),
             codes: Vec::new(),

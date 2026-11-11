@@ -162,6 +162,8 @@ impl Context<'_> {
     fn fiber_start_frame(&mut self, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
         let at = FIRST_REG;
         let mut task = Task::default();
+        // (Its stack is charged against the request's memory_limit too.)
+        task.frames.limit = self.frames.limit.clone();
         task.regs.resize(at + args.len() + 1, Value::UNDEF);
         for (n, a) in args.iter().enumerate() {
             task.regs[at + n] = a.deref();

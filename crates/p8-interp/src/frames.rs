@@ -192,6 +192,42 @@ pub(crate) struct Frames {
     /// holds its Extra boxed, and these are those boxes, moved back.)
     #[allow(clippy::vec_box)] // the frames' own boxes, kept to be handed back
     pub(crate) spare: Vec<Box<Extra>>,
+    /// The request's memory_limit, which the storage of these frames and
+    /// of their register file is charged against (None: no limit, a
+    /// stack of the engine's own).
+    pub(crate) limit: Option<Rc<StackLimit>>,
+    /// The register file's storage as `grow_regs` last made it, in bytes.
+    pub(crate) reg_bytes: usize,
+}
+
+/// memory_limit, as the call stack meets it. The call stack is PHP's VM
+/// stack: there its pages are allocated from the request's heap, so a call
+/// deeper than the limit allows ends the request with the heap's fatal
+/// error (zend_vm_stack_extend, zend_mm_check_limit). Here it is two
+/// vectors, the register file and the frame list, charged when their
+/// storage grows (a deeper call than any so far), never per call. Going
+/// past the limit leaves the error pending, as PHP 8.6 does
+/// (zend_mm_delayed_error): the growth goes ahead and the next call, or
+/// loop iteration, raises it through the interrupt flag every call already
+/// reads (`Context::interrupted`).
+pub(crate) struct StackLimit {
+    /// memory_limit in bytes (usize::MAX: -1, none).
+    pub(crate) bytes: Cell<usize>,
+    /// The allocation that went past it: "tried to allocate" in the error.
+    pub(crate) tried: Cell<usize>,
+    /// The isolate's interrupt flag.
+    pub(crate) stop: Arc<AtomicU64>,
+}
+
+impl StackLimit {
+    pub(crate) fn new(stop: Arc<AtomicU64>, text: Option<&[u8]>) -> Self {
+        StackLimit { bytes: Cell::new(text.map_or(usize::MAX, limit_bytes)), tried: Cell::new(0), stop }
+    }
+}
+
+/// memory_limit's bytes: a quantity ("128M"); -1 (any negative) is none.
+pub(crate) fn limit_bytes(text: &[u8]) -> usize {
+    usize::try_from(p8_runtime::ini::quantity(text)).unwrap_or(usize::MAX)
 }
 
 /// A finished frame's Extra: what it holds goes now, the box is kept (up
@@ -298,6 +334,14 @@ impl Frames {
     #[cold]
     #[inline(never)]
     fn grow(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        if self.slots.len() == self.slots.capacity() {
+            // (Vec's own growth, made explicit so that what is charged is
+            // what is allocated.)
+            let cap = (self.slots.capacity() * 2).max(4);
+            let bytes = cap * std::mem::size_of::<Frame>();
+            self.charge(bytes + self.reg_bytes, bytes);
+            self.slots.reserve_exact(cap - self.slots.len());
+        }
         self.slots.push(Frame {
             func: Rc::clone(func),
             pc: 0,
@@ -319,6 +363,33 @@ impl Frames {
     pub(crate) fn pop(&mut self) -> &mut Frame {
         self.len -= 1;
         &mut self.slots[self.len]
+    }
+
+    /// `regs` made `need` registers long, for a frame deeper than any so
+    /// far: storage it allocates is charged against memory_limit.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn grow_regs(&mut self, regs: &mut Vec<Value>, need: usize) {
+        if need > regs.capacity() {
+            // (Vec's own growth, made explicit: see `grow`.)
+            let cap = need.max(regs.capacity() * 2);
+            let bytes = cap * std::mem::size_of::<Value>();
+            self.charge(bytes + self.slots.capacity() * std::mem::size_of::<Frame>(), bytes);
+            regs.reserve_exact(cap - regs.len());
+            self.reg_bytes = bytes;
+        }
+        regs.resize(need, Value::UNDEF);
+    }
+
+    /// The call stack's storage is to be `total` bytes, after an
+    /// allocation of `tried`: past memory_limit, the out-of-memory error
+    /// is left pending (see `StackLimit`). An interrupt the host asked for
+    /// (a timeout) stays the one raised.
+    fn charge(&self, total: usize, tried: usize) {
+        let Some(limit) = &self.limit else { return };
+        if total > limit.bytes.get() && limit.stop.compare_exchange(NO_INTERRUPT, OUT_OF_MEMORY, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed).is_ok() {
+            limit.tried.set(tried);
+        }
     }
 
     /// Drop every frame and slot (and the closures they hold).

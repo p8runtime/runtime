@@ -88,7 +88,8 @@ impl NativeFrame<'_, '_> {
     /// arm runs it: a user function the site has resolved, called with
     /// its required arguments, entered natively when it has native code,
     /// and run on the interpreter from wherever that hands it back. The
-    /// result lands in the call's register. Anything else is not taken.
+    /// result lands in the call's register. Anything else is not taken,
+    /// and so is any call once nested runs reach their stack limit.
     pub fn call(&mut self, pc: u32) -> CallDone {
         let cx = &mut *self.cx;
         let top = cx.frames.last().expect("a frame");
@@ -102,6 +103,13 @@ impl NativeFrame<'_, '_> {
         let target = &cx.closures[t as usize];
         // (The loop's Call arm's conditions.)
         if n < target.code.required || target.code.is_generator || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+            return CallDone::NotTaken;
+        }
+        // The callee runs nested, on the native stack: past the limit
+        // nested runs keep to, the interpreter makes the call, its frames
+        // on the heap, and a deep recursion goes on as without native
+        // code (#444).
+        if cx.stack_exhausted() {
             return CallDone::NotTaken;
         }
         let native = target.code.native;
