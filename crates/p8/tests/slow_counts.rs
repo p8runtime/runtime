@@ -413,10 +413,12 @@ fn appends_through_references_silence_negation_captures_and_spreads_stay_in_the_
     assert_eq!(out, "20 20 -20 N 20 20");
 }
 
-/// `[$a, $b] = ..` and `$a[1]` (of elements bound by reference too),
-/// `['k' => $v] = ..`, a function's and a method's `static $x` (stepped through the
+/// `[$a, $b] = ..` and `$a[1]` (of elements bound by reference too, of
+/// an array and of an array held through a reference), `['k' => $v] =
+/// ..`, a function's and a method's `static $x` (stepped through the
 /// reference), `foreach ($a as $k => &$v)` over an array, and `f($a['k'])`
-/// asking whether the function takes it by reference: inline. (Making
+/// of a function declared at run time asking whether it takes it by
+/// reference: inline. (Making
 /// `$a['k']` a reference for one that does, and `unset($v)`, are other
 /// instructions, `step`'s.)
 #[test]
@@ -424,14 +426,14 @@ fn lists_static_variables_and_by_reference_foreach_stay_in_the_loop() {
     let out = flat(
         "function counter() { static $c = 0; return ++$c; }
          class S { function m() { static $m = 100; return $m++; } }
-         function plain($x) { return $x; }
-         $s = new S; $arr = [1, 2, 3]; $map = ['k' => 5, 'j' => 6]; $d = ['k' => 4]; $t = 0;
+         if (true) { function plain($x) { return $x; } }
+         $s = new S; $arr = [1, 2, 3]; $map = ['k' => 5, 'j' => 6]; $d = ['k' => 4]; $t = 0; $one = 1; $bound = [&$one, 2];
          for ($i = 0; $i < $n; $i++) {
              [$a, $b] = $arr;
              ['k' => $v, 'j' => $w] = $map;
              $t += $a + $b + $v + $w + counter() + $s->m();
              foreach ($arr as $key => &$e) { $e += $key; }
-             $t += plain($d['k']) + $arr[1];
+             $t += plain($d['k']) + $arr[1] + $bound[0] - 1;
          }
          echo $t, ' ', implode(',', $arr), ' ', $d['k'];",
     );
