@@ -1,6 +1,6 @@
 #!/bin/bash
 # WordPress's own PHPUnit tests (wordpress-develop, pinned) under the
-# reference PHP (tests/php-src/reference.sh: docker, with the extensions
+# reference PHP (crates/php-test/php-src/reference.sh: docker, with the extensions
 # WordPress's CI has) and under p8, on
 # MariaDB, compared test by test (../apps/compare.php): how many of the tests
 # PHP passes p8 passes too. Writes the run as a p8-test-suite "suite" line
@@ -67,8 +67,8 @@ if ! docker ps --format '{{.Names}}' | grep -qx p8-mariadb; then
         -e MARIADB_ROOT_PASSWORD=p8root -e MARIADB_USER=wp -e MARIADB_PASSWORD=wp mariadb:11.4 >/dev/null
     until docker exec p8-mariadb mariadb -uroot -pp8root -e 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
 fi
-# shellcheck source=../../../../tests/php-src/reference.sh
-. "$repo/tests/php-src/reference.sh"
+# shellcheck source=../../../../crates/php-test/php-src/reference.sh
+. "$repo/crates/php-test/php-src/reference.sh"
 php_reference "${P8_TEST_SUITE:-$repo/../p8-test-suite}"
 image=$(php_image p8-php-wptests "$here/suite/Dockerfile" "$here/suite")
 for db in wptests_php wptests_p8; do

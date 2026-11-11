@@ -19,6 +19,17 @@ A project compiled ahead and served from its package (`.p8/` beside the source):
 ./target/release/p8 serve path/to/site --listen 127.0.0.1:8000
 ```
 
+## Test
+
+php-src's own tests, with php-src checked out at the commit
+[p8-test-suite](https://github.com/addiscorp/p8-test-suite) pins
+([crates/php-test/php-src](crates/php-test/php-src/README.md)):
+
+```bash
+cargo build -p php-test --release
+./target/release/php-test ../php-src --suite ../p8-test-suite --php target/release/p8
+```
+
 ## Embed
 
 Hosts talk only to the `p8` crate. `#![forbid(unsafe_code)]` is on the engine and the hosts. [SECURITY.md](SECURITY.md) is the rule.

@@ -1,4 +1,4 @@
-# The reference PHP (BASE: tests/php-src/reference.sh, the release
+# The reference PHP (BASE: crates/php-test/php-src/reference.sh, the release
 # p8-test-suite pins) for the gate: mysqli, and gd with the formats p8's gd
 # has (png, jpeg, gif, webp; no avif or freetype), so what WordPress offers
 # for images (wp_image_editor_supports) is the same under both. intl too,
