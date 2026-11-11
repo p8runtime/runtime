@@ -439,3 +439,78 @@ fn lists_static_variables_and_by_reference_foreach_stay_in_the_loop() {
     );
     assert_eq!(out, "3200 1,22,43 4");
 }
+
+/// A base class's methods on objects of three subclasses in turn (each
+/// property access's entry filled again for the class it meets), its
+/// private and protected constants through `self::`, `isset($this->v)`,
+/// `$o->$name` read, written and asked by isset, and `isset($a[k1][k2]..)`:
+/// inline.
+#[test]
+fn property_misses_class_constants_and_isset_stay_in_the_loop() {
+    let out = flat(
+        "class B0 {
+             public $v = 1; private const P = 2; protected const Q = 3;
+             function get() { return $this->v + self::P + self::Q; }
+             function set($x) { $this->v = $x; }
+             function has() { return isset($this->v); }
+         }
+         class B1 extends B0 {} class B2 extends B0 {} class B3 extends B0 {}
+         $objs = [new B1, new B2, new B3]; $t = 0; $name = 'v'; $a = ['x' => ['y' => ['z' => 1]]];
+         for ($i = 0; $i < $n; $i++) {
+             $o = $objs[$i % 3];
+             $o->set($i);
+             $t += $o->get() + ($o->has() ? 1 : 0);
+             $o->$name = 5;
+             $t += $o->$name + (isset($o->$name) ? 1 : 0) + (isset($a['x']['y']['z']) ? 1 : 0) + (isset($a['x']['n']) ? 10 : 0);
+         }
+         echo $t;",
+    );
+    // The sum of $i + 2 + 3 + 1 + 5 + 1 + 1.
+    assert_eq!(out, "450");
+}
+
+/// A generator gone through (its call, `yield`, `yield from`, its return),
+/// `new $class`, `new Exception`, a native static method, `f(...)`,
+/// references to an element, from an element, to a static property and
+/// to a variable, `S::$n += 1`, `unset($x)`, and an include that fails:
+/// in the loop's arms (out of line on their operands), not the detour.
+#[test]
+fn generators_references_static_ops_and_includes_stay_in_the_loop() {
+    let out = flat(
+        "class S { public static $n = 0; }
+         function gen($k) { yield $k; yield from [$k + 1, $k + 2]; }
+         $cls = 'stdClass'; $t = 0; $a = ['k' => 0]; $x = 1; $m = 0;
+         for ($i = 0; $i < $n; $i++) {
+             foreach (gen($i) as $v) { $t += $v; }
+             $o = new $cls;
+             $e = new Exception('e');
+             $f = Closure::fromCallable('strlen');
+             $g = strlen(...);
+             $t += $f('ab') + $g('abc');
+             $r = &$a['k']; $r++; unset($r);
+             $a['j'] = &$x;
+             $s = &S::$n; $s++; unset($s);
+             S::$n += 1;
+             $y = &$m; $y++; unset($y);
+             $tmp = 1; unset($tmp);
+             $inc = @include 'no-such-file-for-the-test.php';
+         }
+         echo $t, ' ', $a['k'], ' ', S::$n, ' ', $m, ' ', get_class($o), ' ', var_export($inc, true);",
+    );
+    assert_eq!(out, "730 20 40 20 stdClass false");
+}
+
+/// A class and a function declared where the code runs, then used: no
+/// instruction of the run goes to the detour (each declaration runs once,
+/// so this one counts instead of comparing two sizes).
+#[test]
+fn declarations_run_in_the_loop() {
+    let (out, slow) = run(
+        "if ($n > 0) { class Late { function m() { return 'm'; } } function late() { return 'f'; } }
+         $o = new Late;
+         $s = late() . $o->m();
+         if ($s !== 'fm') { throw new Exception($s); }",
+        1,
+    );
+    assert_eq!((out.as_str(), slow), ("", 0));
+}

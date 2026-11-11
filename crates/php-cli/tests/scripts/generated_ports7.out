@@ -1,0 +1,136 @@
+-- property caches across classes
+Base/prot/priv-Base/secret/shared/open truetrue
+Kid1/prot/priv-Kid1/secret/kid1-shared/open truetrue
+Kid2/prot/priv-Kid2/secret/shared/open truetrue
+Kid3/prot/priv-Kid3/secret/shared/open truetrue
+does not see
+Error: Cannot access protected property Kid1::$prot
+Error: Cannot access private constant Base::SECRET
+secret shared kid1-shared open
+Base/prot/priv-Base/secret/shared/open truetrue
+Kid1/prot/priv-Kid1/secret/kid1-shared/open truetrue
+Kid2/prot/priv-Kid2/secret/shared/open truetrue
+Kid3/prot/priv-Kid3/secret/shared/open truetrue
+does not see
+Error: Cannot access protected property Kid1::$prot
+Error: Cannot access private constant Base::SECRET
+secret shared kid1-shared open
+-- dynamic property names
+a='A' true
+n=5 true
+f=3.0 true
+hidden='h' false
+Error: Cannot access private property Dyn::$hidden
+Error: Cannot modify readonly property Dyn::$ro
+TypeError: Cannot assign string to property Dyn::$n of type int
+
+Deprecated: Creation of dynamic property Dyn::$fresh is deprecated in %s on line 90
+new false
+2 true
+__get x
+1 __isset x
+true
+__set x
+__isset y
+false
+zero
+a='A' true
+n=5 true
+f=3.0 true
+hidden='h' false
+Error: Cannot access private property Dyn::$hidden
+Error: Cannot modify readonly property Dyn::$ro
+TypeError: Cannot assign string to property Dyn::$n of type int
+
+Deprecated: Creation of dynamic property Dyn::$fresh is deprecated in %s on line 90
+new false
+2 true
+__get x
+1 __isset x
+true
+__set x
+__isset y
+false
+zero
+-- isset of paths
+offsetExists in
+offsetExists out
+true false false true true true false false true false false 
+true
+offsetExists in
+offsetExists out
+true false false true true true false false true false false 
+true
+-- calls, static calls, new
+StatKid x __callStatic missing
+2026
+Stat StatKid SplStack Exception 
+Error: Cannot instantiate abstract class Abs
+Error: Cannot instantiate interface Ifc
+Error: Class "NoSuchClassAnywhere" not found
+RuntimeException msg 3 153
+1,2
+late 0
+4 Stat Closure
+StatKid x __callStatic missing
+2026
+Stat StatKid SplStack Exception 
+Error: Cannot instantiate abstract class Abs
+Error: Cannot instantiate interface Ifc
+Error: Class "NoSuchClassAnywhere" not found
+RuntimeException msg 3 153
+1,2
+late 1
+4 Stat Closure
+-- references
+{"x":{"y":"made"},"list":["appended"]}
+3 3
+11 [0] p!
+Error: Access to undeclared static property SR::$undefined
+Error: Cannot create references to/from string offsets
+5
+9
+Error: Access to undeclared static property SR::$undefined
+DivisionByZeroError: Modulo by zero
+{"x":{"y":"made"},"list":["appended"]}
+3 3
+11 [0,1] p!!
+Error: Access to undeclared static property SR::$undefined
+Error: Cannot create references to/from string offsets
+5
+9
+Error: Access to undeclared static property SR::$undefined
+DivisionByZeroError: Modulo by zero
+-- generators
+10 first
+got sent
+second
+caught boom
+after
+0=inner1
+1=inner2
+ret
+2,4,6
+1,inner-ret
+10 first
+got sent
+second
+caught boom
+after
+0=inner1
+1=inner2
+ret
+2,4,6
+1,inner-ret
+-- includes, declarations, unset
+bool(false)
+destructed
+after unset
+bool(false)
+c
+bool(false)
+destructed
+after unset
+bool(false)
+c
+done
