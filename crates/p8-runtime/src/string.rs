@@ -45,6 +45,15 @@ impl StrHead {
         self.as_bytes().is_empty()
     }
 
+    /// The bytes allocated beside the head (none for a short string,
+    /// whose bytes are in it).
+    pub fn heap_bytes(&self) -> usize {
+        match &self.bytes {
+            Bytes::Inline { .. } => 0,
+            Bytes::Heap(v) => v.capacity(),
+        }
+    }
+
     /// The string's hash, computed on first use and kept. Nothing PHP
     /// code sees depends on it (arrays keep insertion order).
     ///
