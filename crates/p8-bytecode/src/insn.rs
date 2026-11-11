@@ -936,6 +936,37 @@ mod tests {
     }
 
     #[test]
+    fn the_sixth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            Instr::FuncArgByRef { dst: 6, site: 3, n: 1 },
+            Instr::StaticVar { var: 4, index: 0x0102, skip: 9 },
+            Instr::IterInitRef { src: 5, iter: 10, end: 20 },
+            Instr::IterNextRef { iter: 10, val: 6, key: 7, has_key: true, end: 20 },
+            Instr::IterNextRef { iter: 10, val: 6, key: 7, has_key: false, end: 20 },
+            // `[$a, 'k' => $b] = ..`: a literal key, a key in a register;
+            // a register past the window is not inline.
+            Instr::FetchList { dst: 6, arr: 5, key: c(7) },
+            Instr::FetchList { dst: 6, arr: 5, key: 8 },
+            Instr::FetchList { dst: 300, arr: 5, key: 8 },
+            Instr::CallValue { dst: 6, callee: 5, base: 10, argc: 2, vars: crate::NO_VARS },
+            Instr::CallValue { dst: 6, callee: 5, base: 10, argc: 2, vars: 3 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_in(&code, pc, &consts, 2, &[], &[]);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::FuncArgByRef, a: 6, b: 0, c: 1, imm: 3 });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::StaticVar, a: 4, b: 2, c: 1, imm: 9 });
+        assert_eq!(at(2).unwrap(), Insn { op: Op::IterInitRef, a: 5, b: 10, c: 0, imm: 20 });
+        assert_eq!(at(3).unwrap(), Insn { op: Op::IterNextRef, a: 10, b: 6, c: 7, imm: 20 | ITER_KEY });
+        assert_eq!(at(4).unwrap(), Insn { op: Op::IterNextRef, a: 10, b: 6, c: 0, imm: 20 });
+        assert_eq!(at(5).unwrap(), Insn { op: Op::FetchList, a: 6, b: 5, c: 0, imm: 7 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::FetchList, a: 6, b: 5, c: 8, imm: LIST_KEY_REG });
+        assert!(at(7).is_none());
+        assert_eq!(at(8).unwrap(), Insn { op: Op::CallValue, a: 6, b: 5, c: 10, imm: 2 | u32::from(crate::NO_VARS) << 8 });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::CallValue, a: 6, b: 5, c: 10, imm: 2 | 3 << 8 });
+    }
+
+    #[test]
     fn every_generated_opcode_is_listed() {
         // SPECS and the enum agree, in order, after the hand opcodes.
         let first = SPECS[0].0 as usize;
