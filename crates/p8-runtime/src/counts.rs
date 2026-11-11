@@ -48,11 +48,14 @@ pub enum Count {
     /// the name: a method or constant (`Names::find`), a property's slot
     /// (`Class::slot`'s table), a static property (by the interpreter).
     MemberLookup = 11,
+    /// A key looked for in a hashed array (`Hashed::find`): an element
+    /// read or written by key, a list's (packed) elements not counted.
+    Find = 12,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 12] = const { [const { std::cell::Cell::new(0) }; 12] };
+    static COUNTS: [std::cell::Cell<u64>; 13] = const { [const { std::cell::Cell::new(0) }; 13] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

@@ -194,3 +194,25 @@ fn static_property_writes_from_an_instance_method_use_the_cache() {
     );
     assert_eq!(out, "1! 230 21");
 }
+
+/// `$a[$k] = $v` where `$a` is a by-reference parameter, an int key and a
+/// string key into a hashed array: one lookup of the key per write, as
+/// ZEND_ASSIGN_DIM's (no second lookup to ask whether the element is bound
+/// to `$a`'s own cell, `$a[$k] = &$a`: the write finds that out from the
+/// element it has in hand). The 100 more writes at n = 120 than at n = 20
+/// are 100 more lookups.
+#[test]
+fn a_write_through_a_reference_looks_up_its_key_once() {
+    for (init, key) in [("['x' => 0, 3 => 0, 5 => 0]", "$i & 1 ? 5 : 3"), ("['x' => 0, 'p' => 0, 'q' => 0]", "$i & 1 ? 'q' : 'p'")] {
+        let body = format!(
+            "function f(array &$a, $k, $v) {{ $a[$k] = $v; }}
+             $a = {init};
+             for ($i = 0; $i < $n; $i++) {{ f($a, {key}, $i); }}
+             echo implode(',', $a);"
+        );
+        run(&body, 1, Count::Find);
+        let (a, b) = (run(&body, 20, Count::Find), run(&body, 120, Count::Find));
+        assert_eq!(a.0, "0,18,19", "{key}");
+        assert_eq!(b.1 - a.1, 100, "{key}: {} lookups at n = 20, {} at n = 120", a.1, b.1);
+    }
+}

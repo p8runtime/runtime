@@ -100,11 +100,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-/// The globals a request starts with, in the order PHP makes them.
 /// The exit status of a request that went past the hard limit: PHP's
 /// process's (`_exit(137)`, zend_mm_hard_limit_error).
 pub const HARD_LIMIT_STATUS: i32 = 137;
 
+/// The globals a request starts with, in the order PHP makes them.
 const REQUEST_GLOBALS: &[&str] = &["_GET", "_POST", "_COOKIE", "_FILES", "argv", "argc", "_SERVER", "_ENV", "_REQUEST"];
 
 /// isset($s[k]) on a string (zend_isset_dim_slow): the character at an
@@ -1863,12 +1863,7 @@ impl Context<'_> {
                                     self.lazy_init(regs, &o)?;
                                     return Ok(Next::Go(insn_at));
                                 }
-                                // A Closure is put in an array, as a scalar is (ZEND_CAST).
-                                if callable::closure_data(&o).is_some() {
-                                    Value::array(PhpArray::from_list(vec![Value::object(o)]))
-                                } else {
-                                    Value::array(classes::object_to_array(&o.proxy_instance().unwrap_or(o)))
-                                }
+                                classes::cast_object_to_array(&o)
                             } else if v.is_null() {
                                 Value::array(PhpArray::new())
                             } else {
@@ -2029,18 +2024,7 @@ impl Context<'_> {
                         pc = end as usize;
                     }
                 }
-                Instr::SendVar { site, n, arg, var } => {
-                    let by_ref = match self.resolve(clo, site)? {
-                        Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
-                        Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
-                        Callee::Constant(_) => false,
-                    };
-                    reg!(arg) = if by_ref {
-                        Value::reference(make_ref(w, var))
-                    } else {
-                        self.operand(w, clo, var)
-                    };
-                }
+                Instr::SendVar { site, n, arg, var } => return self.send_var_ops(regs, clo, base, at, (site, n, arg, var)),
                 Instr::SendVarMethod { obj, method, n, arg, var } => {
                     let site = &func.sites[method as usize];
                     let by_ref = match reg!(obj).deref().as_object() {
@@ -2168,20 +2152,7 @@ impl Context<'_> {
                     reg!(dst) = Value::str(PhpStr::new(bytes));
                     free_parts(w, start, n);
                 }
-                Instr::BindGlobal { var, name: k } => {
-                    // The name's constant, shared (not copied).
-                    let name = clo.consts[k as usize].as_str().expect("BindGlobal names a constant string").as_bytes();
-                    // The main frame's window starts at 0: it is `w` when
-                    // the main frame is running, else the start of `below`
-                    // (or of the first task's registers, in a fiber).
-                    let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
-                    // In a function, outside a fiber: where the cell is,
-                    // for the loop's next `global` of this name.
-                    if !in_main && self.fibers.is_empty() {
-                        self.remember_global(clo, k, name);
-                    }
-                    reg!(var) = Value::reference(cell);
-                }
+                Instr::BindGlobal { var, name: k } => return self.bind_global_ops(regs, clo, base, at, (var, k)),
                 Instr::MatchError { src } => {
                     let v = self.operand(w, clo, src);
                     return Err(self.throw("UnhandledMatchError", format!("Unhandled match case {}", match_case(&v))));
@@ -3326,6 +3297,59 @@ impl Context<'_> {
                 Value::NULL
             }
         };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$x::class` (the ClassName at `at`, class reference `class` a class
+    /// in a register) that is not an object's: the class a string names
+    /// (autoloaded), its declared name; the error of anything else; as
+    /// `step`'s ClassConst finds it (`class_constant`'s `class_of`).
+    #[inline(never)]
+    pub(crate) fn class_name_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, class): (Reg, u16)) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let c = self.class_of(&clo.code, class, w)?;
+        w[dst as usize] = Value::str(c.name.clone());
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `f($var)`'s argument `n` (the SendVar at `at`, call site `site`, the
+    /// argument's register `arg`): the callee resolved (the autoloader,
+    /// the error of an undefined function), then `$var` bound by reference
+    /// when it takes that argument so, else a copy (an undefined one's
+    /// warning). `step` runs it, and the loop's SendVar arm when the site
+    /// is not resolved yet or the variable is undefined.
+    #[inline(never)]
+    pub(crate) fn send_var_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (site, n, arg, var): (u16, u8, Reg, Reg)) -> Result<Next, Throw> {
+        let by_ref = match self.resolve(clo, site)? {
+            Callee::User(f) => self.codes[f as usize].param_by_ref(n as usize),
+            Callee::Builtin(i) => self.isolate.registry.by_ref(i, n as usize),
+            Callee::Constant(_) => false,
+        };
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        w[arg as usize] = if by_ref { Value::reference(make_ref(w, var)) } else { self.operand(w, clo, var) };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `global $name` (the BindGlobal at `at`: the variable `var`, the name
+    /// constant `k`): the variable bound to the global's cell, a global not
+    /// set yet made null. In a function, outside a fiber: where the cell
+    /// is, for the loop's next `global` of this name. `step` runs it, and
+    /// the loop's BindGlobal arm when its entry does not answer (a main
+    /// script's variable, a global not set yet, the first run).
+    #[inline(never)]
+    pub(crate) fn bind_global_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (var, k): (Reg, Reg)) -> Result<Next, Throw> {
+        let in_main = base == 0;
+        // The name's constant, shared (not copied).
+        let name = clo.consts[k as usize].as_str().expect("BindGlobal names a constant string").as_bytes();
+        // The main frame's window starts at 0: it is this frame's when the
+        // main frame is running, else the start of `below` (or of the
+        // first task's registers, in a fiber).
+        let (below, w) = regs.split_at_mut(base);
+        let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
+        if !in_main && self.fibers.is_empty() {
+            self.remember_global(clo, k, name);
+        }
+        w[var as usize] = Value::reference(cell);
         Ok(Next::Go(at + 1))
     }
 
@@ -6508,6 +6532,10 @@ fn silent_str(v: &Value) -> bool {
 #[inline(never)]
 fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
     let (x, y) = (&w[a as usize], src(w, b));
+    if x.is_reference() || y.is_reference() {
+        let (x, y) = (x.deref(), y.deref());
+        return concat_refs(w, dst, x, y);
+    }
     if !silent_str(x) || !silent_str(y) || w[dst as usize].is_reference() {
         return false;
     }
@@ -6536,6 +6564,10 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
 #[inline(never)]
 fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     let y = &w[b as usize];
+    if y.is_reference() {
+        let y = y.deref();
+        return concat_refs(w, dst, x.clone(), y);
+    }
     if !silent_str(x) || !silent_str(y) || w[dst as usize].is_reference() {
         return false;
     }
@@ -6547,6 +6579,23 @@ fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     let mut bytes = PhpStr::scratch(ops::string_len_hint(x) + ops::string_len_hint(y));
     ops::push_string(&mut bytes, x, &mut diags);
     ops::push_string(&mut bytes, y, &mut diags);
+    w[dst as usize] = Value::str(PhpStr::from_scratch(bytes));
+    true
+}
+
+/// `concat` of operands one of which a reference held (a variable of an
+/// included file's global scope, a by-reference parameter): their values,
+/// read out of the cells, joined as `concat` joins two values.
+#[cold]
+#[inline(never)]
+fn concat_refs(w: &mut [Value], dst: Reg, x: Value, y: Value) -> bool {
+    if !silent_str(&x) || !silent_str(&y) || w[dst as usize].is_reference() {
+        return false;
+    }
+    let mut diags = Vec::new();
+    let mut bytes = PhpStr::scratch(ops::string_len_hint(&x) + ops::string_len_hint(&y));
+    ops::push_string(&mut bytes, &x, &mut diags);
+    ops::push_string(&mut bytes, &y, &mut diags);
     w[dst as usize] = Value::str(PhpStr::from_scratch(bytes));
     true
 }

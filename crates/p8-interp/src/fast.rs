@@ -857,21 +857,28 @@ impl Context<'_> {
                     // the variable made a reference (an undefined one null,
                     // with no warning, as `step` makes it) when it takes it
                     // by reference (an unresolved site, an undefined
-                    // variable sent by value: `step`).
+                    // variable sent by value: out of line).
                     Op::SendVar => {
                         ops!(a, b, c, imm);
                         let n = (imm >> 16) as usize;
+                        // (A site not resolved yet, an undefined variable:
+                        // out of line, `send_var_ops`.)
+                        macro_rules! miss {
+                            () => {
+                                out!(((imm & 0xffff) as u16, n as u8, Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.send_var_ops(regs, clo, base, at, ops))
+                            };
+                        }
                         let by_ref = match clo.sites[(imm & 0xffff) as usize].get() {
                             Some(&Callee::User(f)) => self.codes[f as usize].param_by_ref(n),
                             Some(&Callee::Builtin(i)) => self.isolate.registry.by_ref(i, n),
                             Some(Callee::Constant(_)) => false,
-                            None => slow!(),
+                            None => miss!(),
                         };
                         if by_ref {
                             let cell = make_ref(&mut w[..], Reg::from(b));
                             done!(put(&mut w[rx!(a)], Value::reference(cell)));
                         } else {
-                            let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                            let Some(v) = copied(&w[rx!(b)]) else { miss!() };
                             done!(put(&mut w[rx!(a)], v));
                         }
                     }
@@ -1281,18 +1288,25 @@ impl Context<'_> {
                     // name's cache entry holds, while the main frame runs
                     // the code it was found for and the entry there has the
                     // name (ZEND_BIND_GLOBAL's cache slot and key test). A
-                    // miss, a global not set (`step` makes it null), a main
-                    // script's variable, a fiber running: `step`.
+                    // miss, a global not set (made null there), a main
+                    // script's variable, a fiber running: out of line.
                     Op::BindGlobal => {
                         ops!(a, b, c, imm);
-                        let Some(sites) = clo.globals.get() else { slow!() };
+                        // (Anything the entry does not answer: out of line,
+                        // `bind_global_ops`, which fills it.)
+                        macro_rules! miss {
+                            () => {
+                                out!((Reg::from(a), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.bind_global_ops(regs, clo, base, at, ops))
+                            };
+                        }
+                        let Some(sites) = clo.globals.get() else { miss!() };
                         let site = sites[imm as usize].get();
                         if !self.fibers.is_empty() || site.main != Arc::as_ptr(&self.frames.slots[0].func.code) as usize {
-                            slow!();
+                            miss!();
                         }
-                        let Some((key, cell)) = self.globals.get_index(site.index) else { slow!() };
+                        let Some((key, cell)) = self.globals.get_index(site.index) else { miss!() };
                         if cst!(imm).as_str().is_none_or(|n| n.as_bytes() != key.as_slice()) || cell.borrow().is_undef() {
-                            slow!();
+                            miss!();
                         }
                         let cell = Rc::clone(cell);
                         done!(put(&mut w[rx!(a)], Value::reference(cell)));
@@ -1304,7 +1318,8 @@ impl Context<'_> {
                         let unused = imm & insn::PATH_UNUSED != 0;
                         let dst = rx!((imm >> 8) as u8);
                         let path = Path { keys: rx!(b), n: (imm & 0xff) as usize, append: imm & insn::PATH_APPEND != 0 };
-                        let Some(released) = assign_path(&mut w[..], rx!(a), path, rx!(c), (!unused).then_some(dst)) else { slow!() };
+                        let val = if imm & insn::PATH_VAL_K != 0 { Src::Const(&clo.consts[usize::from(c)]) } else { Src::Reg(Reg::from(c)) };
+                        let Some(released) = assign_path(&mut w[..], rx!(a), path, val, (!unused).then_some(dst)) else { slow!() };
                         if unused {
                             // (What the skipped Free does: a stale value there goes now.)
                             let released = released | clear(&mut w[dst]);
@@ -1331,8 +1346,9 @@ impl Context<'_> {
                         let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else { slow!() };
                         done!(put(&mut w[rx!(c)], v));
                     }
-                    // `(int)`, `(float)`, `(string)`, `(bool)` of a value
-                    // that converts with nothing to report (`cast`).
+                    // `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` of
+                    // a value that converts with nothing to report, an
+                    // object to a bool or an array (`cast`).
                     Op::Cast => {
                         ops!(a, b, c, imm);
                         let Some(v) = cast(&w[rx!(b)], imm) else { slow!() };
@@ -1870,6 +1886,21 @@ impl Context<'_> {
                         data.captured.borrow_mut().push(v);
                         pc += 1;
                     }
+                    // `$x::class` of an object (through a reference too):
+                    // its class's name (shared, as PHP's interned name). A
+                    // string naming a class (`$this->class::$m()`), the
+                    // error of anything else: out of line, `class_name_ops`.
+                    Op::ClassName => {
+                        ops!(a, b, c, imm);
+                        let name = match w[rx!(b)].as_object() {
+                            Some(o) => Value::str(o.class.name.clone()),
+                            None => match ref_class_name(&w[rx!(b)]) {
+                                Some(name) => name,
+                                None => out!((Reg::from(a), imm as u16), |cx, regs, clo, base, _, at, ops| cx.class_name_ops(regs, clo, base, at, ops)),
+                            },
+                        };
+                        done!(put(&mut w[rx!(a)], name));
+                    }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // out of line, `return_null_out`).
                     Op::ReturnNull => {
@@ -2000,8 +2031,9 @@ pub(crate) struct Path {
     pub(crate) append: bool,
 }
 
-/// `$var[k0]..[kn-1] = $val` (or `..[] = $val`: `Op::AssignDimPath`),
-/// `$var` an array, each key an int or a string: each level separated
+/// `$var[k0]..[kn-1] = $val` (or `..[] = $val`: `Op::AssignDimPath`; the
+/// value a register or a literal), `$var` an array (or a reference to
+/// one), each key an int or a string: each level separated
 /// (copy-on-write) and written in place, a missing or null one made an
 /// empty array, as `update_path` walks it; the value (and, with a `dst`,
 /// the result) a copy. None, with nothing written, when a key is of
@@ -2011,7 +2043,7 @@ pub(crate) struct Path {
 /// only find the levels before it separated. Else whether a write
 /// released memory.
 #[inline(never)]
-fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usize>) -> Option<bool> {
+fn assign_path(w: &mut [Value], var: usize, p: Path, val: Src<'_>, dst: Option<usize>) -> Option<bool> {
     let path = p.keys..p.keys + p.n;
     // (A variable bound by reference: the array its cell holds.)
     let cell = w[var].as_reference().map(Rc::clone);
@@ -2022,27 +2054,11 @@ fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usi
     if path.contains(&var) || !is_array || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
-    let v = copied(&w[val])?;
+    let v = copied(src(w, val))?;
     // The root out of its register (or cell) while it is written (nothing
     // else reads it meanwhile), then back.
     let written = match &cell {
-        Some(cell) => {
-            let mut root = std::mem::take(&mut *cell.borrow_mut());
-            match write_path(&mut root, &w[path], p.append, v.clone(), Some(&**cell)) {
-                // The element bound to this variable's own cell (`$a['p'][0]
-                // = &$a`): the value goes into the cell, the array goes (as
-                // PHP's assignment through that reference replaces `$a`).
-                Some(Wrote::Owner) => {
-                    *cell.borrow_mut() = v.clone();
-                    drop(root);
-                    Some(true)
-                }
-                written => {
-                    *cell.borrow_mut() = root;
-                    written.map(|x| matches!(x, Wrote::Done(true)))
-                }
-            }
-        }
+        Some(cell) => write_cell_path(cell, &w[path], p.append, &v, true),
         None => {
             let mut root = std::mem::take(&mut w[var]);
             let written = write_path(&mut root, &w[path], p.append, v.clone(), None);
@@ -2079,7 +2095,16 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
     let v = copied(&w[val])?;
     let cell = &o.slots()[slot];
     let mut root = cell.replace(Value::UNDEF);
-    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone(), None).map(|x| matches!(x, Wrote::Done(true))) } else { None };
+    let untyped = p.ty.is_none();
+    let written = if let Some(rc) = root.as_reference() {
+        // A property bound by reference (`next($this->p[$k])` binds it):
+        // the array its cell holds, as `update_slot_dim` takes it.
+        write_cell_path(rc, keys, path.append, &v, untyped)
+    } else if root.is_array() || (root.is_null() && untyped) {
+        write_path(&mut root, keys, path.append, v.clone(), None).map(|x| matches!(x, Wrote::Done(true)))
+    } else {
+        None
+    };
     p8_runtime::object::put_slot(cell, root);
     let released = written?;
     Some(match dst {
@@ -2126,6 +2151,34 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: O
         None => {
             arr.insert(key, v);
             Some(Wrote::Done(false))
+        }
+    }
+}
+
+/// `write_path` into the array a reference's `cell` holds (or null, when
+/// `untyped`), taken out of the cell while it is written (nothing else
+/// reads it meanwhile), then back: whether the write released memory.
+/// The last element bound to that same cell (`$a['p'][0] = &$a`) makes
+/// the cell the value and the array goes, as PHP's assignment through
+/// that reference replaces it (`untyped` only: a typed property's
+/// reference checks the value first, `step`'s). None, nothing written,
+/// for anything else in the cell.
+fn write_cell_path(cell: &RefCell<Value>, keys: &[Value], append: bool, v: &Value, untyped: bool) -> Option<bool> {
+    let mut root = std::mem::take(&mut *cell.borrow_mut());
+    let written = if root.is_array() || (untyped && root.is_null()) { write_path(&mut root, keys, append, v.clone(), Some(cell)) } else { None };
+    match written {
+        Some(Wrote::Owner) if untyped => {
+            *cell.borrow_mut() = v.clone();
+            drop(root);
+            Some(true)
+        }
+        Some(Wrote::Owner) => {
+            *cell.borrow_mut() = root;
+            None
+        }
+        written => {
+            *cell.borrow_mut() = root;
+            written.map(|x| matches!(x, Wrote::Done(true)))
         }
     }
 }
@@ -2230,14 +2283,23 @@ fn dim_inc_dec(w: &mut [Value], var: usize, keys: usize, imm: u32) -> Option<Val
 /// `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` (`Op::Cast`, imm
 /// the kind) of `v` (a reference's value): null, a bool, an int, a float,
 /// a string, and an array but to a string, converted as `step` converts
-/// them, when that reports nothing. None for anything else: an undefined
-/// variable, an object (its cast handler, `__toString`, the warning, its
-/// properties), a float out of an int's range, NAN to a bool or an array,
-/// an array to a string.
+/// them, when that reports nothing; an object to a bool and to an array.
+/// None for anything else: an undefined variable, an object to the rest
+/// (`__toString`, the warning), a lazy one to an array, a float out of an
+/// int's range, NAN to a bool or an array, an array to a string.
 #[inline(never)]
 fn cast(v: &Value, kind: u32) -> Option<Value> {
     if let Some(cell) = v.as_reference() {
         return cast(&cell.borrow(), kind);
+    }
+    // An object to a bool (its class's cast handler, as `step` asks it)
+    // or to an array (one not lazy: its properties).
+    if let Some(o) = v.as_object() {
+        return match kind {
+            insn::CAST_BOOL => Some(Value::bool(v.to_bool())),
+            insn::CAST_ARRAY if !o.is_uninit_lazy() => Some(classes::cast_object_to_array(o)),
+            _ => None,
+        };
     }
     if !(v.is_null() || v.as_bool().is_some() || v.is_int() || v.is_float() || v.is_str() || v.is_array()) {
         return None;
@@ -2360,8 +2422,17 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
 /// `global` or `&`); None for anything else.
 #[cold]
 #[inline(never)]
-fn ref_object(v: &Value) -> Option<Rc<Object>> {
+pub(crate) fn ref_object(v: &Value) -> Option<Rc<Object>> {
     v.as_reference()?.borrow().cloned_object()
+}
+
+/// `$x::class` of an object a reference holds (`global $o; $o::class`).
+#[cold]
+#[inline(never)]
+fn ref_class_name(v: &Value) -> Option<Value> {
+    let cell = v.as_reference()?;
+    let held = cell.borrow();
+    Some(Value::str(held.as_object()?.class.name.clone()))
 }
 
 /// `&$o->p` (`Op::PropRef`): the declared slot the name's cache entry
@@ -2854,18 +2925,17 @@ pub(crate) fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
     }
 }
 
-/// `$a[k] = v` into the array `slot` holds (false when it holds none). An
+/// `$a[k] = v` into the array `slot` holds (None when it holds none). An
 /// element bound by reference gets the value in its cell, unless that cell
-/// is `owner`, the cell `slot` is borrowed from (`$a[k] = &$a`): false,
-/// the instruction's cold path.
+/// is `owner`, the cell `slot` is borrowed from (`$a[k] = &$a`): nothing
+/// written, `Some(Owner)`, and the caller writes the cell once its borrow
+/// is over (`owner_write`). (`Done`'s release is not told: the caller
+/// tests for one, as for any write.)
 #[inline(always)]
-pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&RefCell<Value>>) -> bool {
-    if !slot.is_array() {
-        return false;
-    }
-    let a = slot.array_mut().expect("checked above");
+pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
+    let a = slot.array_mut()?;
     match a.get_int_mut(k) {
-        Some(e) if is_owner(e, owner) => return false,
+        Some(e) if is_owner(e, owner) => return Some(Wrote::Owner),
         // An element bound by reference: the value goes into its cell.
         Some(e) if e.is_reference() => {
             let _ = write_ref(e.as_reference().expect("a reference"), v.clone());
@@ -2873,14 +2943,15 @@ pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&R
         Some(e) => *e = v.clone(),
         None => a.insert(Key::Int(k), v.clone()),
     }
-    true
+    Some(Wrote::Done(true))
 }
 
 /// Whether element `e` is a reference to `owner`, the cell its array is
 /// held in (borrowed, or taken out of, while the element is written): an
 /// array bound into itself, `$a[k] = &$a`. Writing through it would borrow
 /// that cell again (or be lost when the array is put back), so the
-/// writers above leave it to the instruction's cold path.
+/// writers above hand it back and the cell is written once the borrow is
+/// over (`owner_write`, `Wrote::Owner`).
 #[inline]
 pub(crate) fn is_owner(e: &Value, owner: Option<&RefCell<Value>>) -> bool {
     match (e.as_reference(), owner) {
@@ -2889,32 +2960,16 @@ pub(crate) fn is_owner(e: &Value, owner: Option<&RefCell<Value>>) -> bool {
     }
 }
 
-/// `$a[k] = v` where `$a` is bound by reference to `cell` and its element
-/// at `k` (an int or string key) is bound to that same cell (`$a[k] =
-/// &$a`): as PHP's assignment through that reference, the cell gets the
-/// value in place of the array. True when it was so (the old array
-/// released); false, nothing done, for any other element.
+/// `$a[k] = v` where `$a` is bound by reference to `cell` and the element
+/// the write found at `k` is bound to that same cell (`$a[k] = &$a`,
+/// `is_owner`): as PHP's assignment through that reference, the cell gets
+/// the value in place of the array. Called with no borrow of `cell` alive.
 #[cold]
 #[inline(never)]
-pub(crate) fn owner_write(cell: &Rc<RefCell<Value>>, key: &Value, v: &Value) -> bool {
-    let hit = {
-        let held = cell.borrow();
-        let Some(a) = held.as_array() else { return false };
-        let e = if let Some(i) = key.as_int() {
-            a.get_int(i)
-        } else if let Some(s) = key.as_str() {
-            a.get_str(s)
-        } else {
-            None
-        };
-        e.is_some_and(|e| is_owner(e, Some(&**cell)))
-    };
-    if hit {
-        // (The array goes after the borrow: its element holds this cell.)
-        let old = cell.replace(v.clone());
-        drop(old);
-    }
-    hit
+pub(crate) fn owner_write(cell: &RefCell<Value>, v: Value) {
+    // (The array goes after the borrow: its element holds this cell.)
+    let old = cell.replace(v);
+    drop(old);
 }
 
 /// `owner_write` along a path (`$a['p'][0] = v` where `$a['p'][0]` is

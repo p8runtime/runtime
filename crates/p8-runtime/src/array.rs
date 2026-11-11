@@ -501,6 +501,7 @@ impl Hashed {
     /// of this function's cost.
     #[inline(never)]
     fn find(&self, h: u64, key: Probe<'_>) -> Option<usize> {
+        crate::counts::bump(crate::counts::Count::Find);
         if self.small() {
             return self.scan(h, key);
         }
