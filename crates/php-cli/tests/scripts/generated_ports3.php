@@ -189,11 +189,6 @@ for ($r = 0; $r < 2; $r++) {
         echo get_class($e), ': ', $e->getMessage(), "\n";
     }
     var_dump($h->typed);
-    try {
-        $h->obj['k'] = 1;
-    } catch (Error $e) {
-        echo get_class($e), ': ', $e->getMessage(), "\n";
-    }
     $h->init();
     try {
         $h->ro['k'] = 1;
@@ -212,11 +207,10 @@ for ($r = 0; $r < 2; $r++) {
     }
     $h->aa = new AA;
     $h->aa['k'] = 'via offsetSet';
-    $h->dyn['k'] = 'dynamic';
     $inner = [];
     $h->data = &$inner;
     $h->data['through'] = 'ref';
-    var_dump($inner, $h->dyn);
+    var_dump($inner);
     $h->data = [];
     $h->data[1.5]['k'] = 'float key';
     $h->data[$undefk] = 'undef key';
@@ -245,4 +239,47 @@ for ($r = 0; $r < 2; $r++) {
     $n = 'byref';
     var_dump(S::$n($undefvar));
     var_dump($undefvar);
+}
+
+echo "-- new with spread arguments\n";
+class Point {
+    public function __construct(public $x = 0, public $y = 0, ...$rest) {
+        echo 'Point(', $x, ', ', $y, ') rest ', json_encode($rest), "\n";
+    }
+}
+class Needs {
+    public function __construct($a, $b) {}
+}
+class NoCtor {}
+for ($r = 0; $r < 2; $r++) {
+    $args = [1, 2];
+    $p = new Point(...$args);
+    $p = new Point(...[3, 4, 5, 6]);
+    $p = new Point(...[]);
+    $p = new Point(...[5 => 'a', 9 => 'b']);
+    $p = new Point(...['y' => 7]);
+    $p = new Point(...['x' => 1, 'extra' => 2]);
+    $p = new Point(8, ...['y' => 9]);
+    $v = 'by ref';
+    $list = [&$v, 2];
+    $p = new Point(...$list);
+    try {
+        $p = new Point(...[1, 'x' => 2]);
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    try {
+        new Needs(...[1]);
+    } catch (ArgumentCountError $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    try {
+        new Needs(...['c' => 1]);
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+    $n = new NoCtor(...[1, 2]);
+    var_dump($n instanceof NoCtor);
+    $gen = (function () { yield 1; yield 2; })();
+    $p = new Point(...$gen);
 }

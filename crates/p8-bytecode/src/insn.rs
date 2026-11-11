@@ -518,6 +518,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let obj = if this { 0 } else { base };
             i(Op::AssignPropDim, obj, base + 2, val, site | u32::from(r(dst)?) << 16 | u32::from(n) << 24 | if this { PROP_PATH_THIS } else { 0 } | unused)
         }
+        Instr::ConstructSpread { obj, args } => i(Op::ConstructSpread, obj, args, 0, 0),
         Instr::SendVarStatic { class, method, n, arg, var } => i(Op::SendVarStatic, arg, var, Reg::from(n), u32::from(method) | u32::from(class) << 16),
         Instr::BindGlobal { var, name } if usize::from(name) < nconsts => i(Op::BindGlobal, var, 0, 0, u32::from(name)),
         // (Keys and value registers: the keys a block in the window.)
@@ -742,6 +743,39 @@ mod tests {
         assert_eq!(at(5).unwrap(), Insn { op: Op::ArrayUnpack, a: 5, b: 1, c: 0, imm: 0 });
         assert_eq!(at(6).unwrap(), Insn { op: Op::StaticCallVars, a: 5, b: 10, c: 1, imm: 3 | 1 << 16 });
         assert!(at(7).is_none());
+    }
+
+    #[test]
+    fn the_third_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            Instr::BindGlobal { var: 1, name: 7 },
+            // A path of two keys (registers 10, 11), its result freed next.
+            Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: 3, dst: 6 },
+            Instr::Free { reg: 6 },
+            // Five keys, a literal value, a trailing `[]`: not inline.
+            Instr::AssignDim { var: 1, keys: 10, n: 5, append: false, val: 3, dst: 6 },
+            Instr::AssignDim { var: 1, keys: 10, n: 2, append: false, val: c(3), dst: 6 },
+            Instr::AssignDim { var: 1, keys: 10, n: 2, append: true, val: 3, dst: 6 },
+            // `$this->p['k'] = v` (DIM_THIS), and `$o->p[a][b] = v` with
+            // the object in 20 and its keys from 22.
+            Instr::AssignPropDim { op: None, base: 20, name: c(4), n: 1 | crate::DIM_THIS, append: false, val: 3, dst: 6 },
+            Instr::AssignPropDim { op: None, base: 20, name: c(4), n: 2, append: false, val: 3, dst: 6 },
+            Instr::Free { reg: 6 },
+            Instr::AssignPropDim { op: Some(BinOp::Add), base: 20, name: c(4), n: 1, append: false, val: 3, dst: 6 },
+            Instr::SendVarStatic { class: 2, method: 5, n: 1, arg: 11, var: 1 },
+        ];
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 2);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::BindGlobal, a: 1, b: 0, c: 0, imm: 7 });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::AssignDimPath, a: 1, b: 10, c: 3, imm: 2 | 6 << 8 | PATH_UNUSED });
+        assert!(at(3).is_none());
+        assert!(at(4).is_none());
+        assert!(at(5).is_none());
+        assert_eq!(at(6).unwrap(), Insn { op: Op::AssignPropDim, a: 0, b: 22, c: 3, imm: 4 | 6 << 16 | 1 << 24 | PROP_PATH_THIS });
+        assert_eq!(at(7).unwrap(), Insn { op: Op::AssignPropDim, a: 20, b: 22, c: 3, imm: 4 | 6 << 16 | 2 << 24 | PATH_UNUSED });
+        assert!(at(9).is_none());
+        assert_eq!(at(10).unwrap(), Insn { op: Op::SendVarStatic, a: 11, b: 1, c: 1, imm: 5 | 2 << 16 });
     }
 
     #[test]

@@ -89,3 +89,56 @@ fn closures_class_names_and_unpacking_stay_in_the_loop() {
     );
     assert_eq!(out, "Closure Closure P 5 0,1,k,2,3");
 }
+
+/// `global $x` in a function (a global of an included file's kind: not
+/// the main script's variable), read and written: inline once its
+/// first run cached the global's index.
+#[test]
+fn globals_bound_in_functions_stay_in_the_loop() {
+    let out = flat(
+        "$GLOBALS['g'] = 1; $GLOBALS['h'] = 'x';
+         function bump() { global $g; $g++; return $g; }
+         function both() { global $g, $h; return $h . $g; }
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += bump(); $s = both(); }
+         echo $t, ' ', $s;",
+    );
+    // n = 20: 2 + .. + 21.
+    assert_eq!(out, "230 x21");
+}
+
+/// `$a[k1][k2] = v` and three keys, on a variable and on a property
+/// (`$this->p[k] = v`, `$o->p[k1][k2] = v`): inline.
+#[test]
+fn dimension_paths_stay_in_the_loop() {
+    let out = flat(
+        "class P { public $d = []; function put($k, $v) { $this->d[$k] = $v; $this->d['all'][$k] = 1; } }
+         $o = new P; $a = []; $b = ['x' => ['y' => []]];
+         for ($i = 0; $i < $n; $i++) {
+             $a['k' . ($i % 3)]['n'] = $i;
+             $b['x']['y'][$i % 4] = [$i];
+             $o->put($i % 5, 'v');
+             $o->d['two'][$i % 2] = $i;
+         }
+         echo count($a), ' ', count($b['x']['y']), ' ', count($o->d), ' ', count($o->d['all']), ' ', implode(',', $o->d['two']);",
+    );
+    assert_eq!(out, "3 4 7 5 18,19");
+}
+
+/// `static::f($x)` (the method, so by-reference or not, known only when
+/// it runs): the sends inline.
+#[test]
+fn static_call_sends_stay_in_the_loop() {
+    let out = flat(
+        "class S {
+             static function r(&$x) { $x++; return $x; }
+             static function v($x) { return $x + 1; }
+             static function go($y) { $z = $y; return static::r($z) + static::v($y); }
+         }
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += S::go($i); }
+         echo $t;",
+    );
+    // n = 20: 2 * (1 + .. + 20).
+    assert_eq!(out, "420");
+}

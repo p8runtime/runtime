@@ -163,6 +163,9 @@ hand MakeClosure
 hand CollectVariadic
 /// the array in a gets b's elements (`[...$b]`)
 hand ArrayUnpack
+/// the constructor of the object in a, with b's values as its arguments
+/// (`new C(...$b)`)
+hand ConstructSpread
 /// pass b's variable as argument c of `C::m()` (method site imm & 0xffff,
 /// class reference imm >> 16) into register a
 hand SendVarStatic

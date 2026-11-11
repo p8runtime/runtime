@@ -972,6 +972,41 @@ impl Context<'_> {
                             Some(_) => slow!(),
                         }
                     }
+                    // `new C(...$args)`: a PHP constructor's frame pushed
+                    // here, the array's values (no string key: positions
+                    // only) placed after the frame's registers as `step`
+                    // places them (`place_args`: each read through a
+                    // reference). Named arguments, no constructor, a class
+                    // not seen by `new`, anything else: `step`.
+                    Op::ConstructSpread => {
+                        ops!(a, b, c, imm);
+                        let Some(object) = w[rx!(a)].as_object() else { slow!() };
+                        let info = match self.last_new.as_ref() {
+                            Some(i) if Rc::ptr_eq(&i.class, &object.class) => i,
+                            _ => match self.new_infos.get(&(Rc::as_ptr(&object.class) as usize)) {
+                                Some(i) => i,
+                                None => slow!(),
+                            },
+                        };
+                        let Some(crate::instances::Ctor { func: classes::Code::User(f), declaring, .. }) = &info.ctor else { slow!() };
+                        let Some(list) = w[rx!(b)].as_array() else { slow!() };
+                        let n = list.len();
+                        if f.code.is_generator || n < f.code.required || n > usize::from(u8::MAX) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT || !spread_plain(list) {
+                            slow!();
+                        }
+                        let (f, declaring, object, list) = (Rc::clone(f), Rc::clone(declaring), Rc::clone(object), w[rx!(b)].clone());
+                        object.destructed.set(false);
+                        let at = base + clo.code.nregs as usize;
+                        place_spread(regs, at, list.as_array().expect("an array"));
+                        drop(list);
+                        // (No `called`: it is the object's class, `called_class`.)
+                        let frame = self.frames.call(Some(&f), pc + 1, at, n, NO_RET);
+                        frame.this = Some(object);
+                        frame.scope = Some(declaring);
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }
                     // `C::f()` the site's cache has for this class and scope:
                     // a PHP method's frame pushed here. Anything else (a
                     // property hook's `parent::$p::get()`, a native method,
@@ -1216,6 +1251,26 @@ fn unpack_array(to: &mut Value, from: &PhpArray) -> bool {
         }
     }
     true
+}
+
+/// Whether `new C(...$list)` passes `list`'s values by position alone (no
+/// string key: `place_args` then reads each through its reference).
+#[inline(never)]
+fn spread_plain(list: &PhpArray) -> bool {
+    list.iter().all(|(k, _)| matches!(k, Key::Int(_)))
+}
+
+/// The values of a spread's list as arguments from register `at`, as
+/// `place_args` gives them (read through references), the register file
+/// grown to hold them.
+#[inline(never)]
+fn place_spread(regs: &mut Vec<Value>, at: usize, list: &PhpArray) {
+    if regs.len() < at + list.len() + 1 {
+        regs.resize(at + list.len() + 1, Value::UNDEF);
+    }
+    for (r, v) in regs[at..].iter_mut().zip(list.values()) {
+        *r = v.deref();
+    }
 }
 
 /// `$var[k0]..[kn-1] = $val` (`Op::AssignDimPath`), `$var` an array, the

@@ -268,8 +268,9 @@ pub(crate) enum MethodCode {
     User(std::rc::Weak<Closure>),
     /// A builtin class's method, its name, and which of its first 64
     /// parameters its stub signature takes by reference (bit n: parameter
-    /// n; looked up once, when the site remembers it).
-    Native(p8_runtime::object::Native, PhpStr, u64),
+    /// n; looked up once, the first time a send asks: most calls never
+    /// do, and a site that misses remembers its method again each time).
+    Native(p8_runtime::object::Native, PhpStr, Cell<Option<u64>>),
 }
 
 /// The parameters (bit n: parameter n, the first 64) that builtin method
@@ -396,7 +397,17 @@ impl Context<'_> {
         }
         match &s.code {
             MethodCode::User(c) => Some(c.upgrade()?.code.param_by_ref(n)),
-            MethodCode::Native(_, _, refs) if n < 64 => Some(refs & 1 << n != 0),
+            MethodCode::Native(_, name, refs) if n < 64 => {
+                let bits = match refs.get() {
+                    Some(bits) => bits,
+                    None => {
+                        let bits = native_refs(&*s.declaring.upgrade()?, name);
+                        refs.set(Some(bits));
+                        bits
+                    }
+                };
+                Some(bits & 1 << n != 0)
+            }
             MethodCode::Native(..) => None,
         }
     }
@@ -437,7 +448,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(&o.class) as usize,
@@ -517,7 +528,7 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), native_refs(declaring, name)),
+            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(target) as usize,
