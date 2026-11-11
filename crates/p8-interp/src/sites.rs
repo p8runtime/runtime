@@ -458,6 +458,15 @@ impl Context<'_> {
         self.cached_takes_ref(site, class, n)
     }
 
+    /// The same for a static-syntax call (`C::m($a['k'])`, StaticArgByRef):
+    /// the class known without a lookup (`static_target`), the method the
+    /// site's cache has for it. Out of line, as `cached_takes_ref_out`.
+    #[inline(never)]
+    pub(crate) fn static_takes_ref_out(&self, clo: &Closure, class: u16, method: usize, n: usize) -> Option<bool> {
+        let target = self.static_target(clo, class)?;
+        self.cached_takes_ref(&clo.methods[method], &target, n)
+    }
+
     /// The running code's class (its address; 0 outside one): what a
     /// private or protected property's cache entry is valid for.
     #[inline]

@@ -74,6 +74,11 @@ op CLASS_CONST class_const cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 
 /// code's scope, C as INSTANCEOF's; a miss is cold (`step`, which fills
 /// the entry).
 op FETCH_STATIC_PROP fetch_static_prop cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
+/// `C::$name = val` (`AssignStaticProp`): stored in the property's cell
+/// FETCH_STATIC_PROP's cache entry holds (through a reference the cell
+/// holds), `dst` = the value; C as INSTANCEOF's. A miss, an undefined
+/// value are cold (`step`, which fills the entry).
+op ASSIGN_STATIC_PROP assign_static_prop cold=step cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
 /// `dst = $src::class` (`ClassConst` of a class in a register, the name
 /// `class`): the object's class name; anything else (a string naming a
 /// class, the error of another value) is cold (`step`).
@@ -200,6 +205,14 @@ hand PropIncDec
 /// a = whether argument c of method site imm on the object in b is passed
 /// by reference
 hand MethodArgByRef
+/// a = a reference to the object in b's property (site imm), made one
+hand PropRef
+/// a = whether argument c of `C::m()` (method site imm & 0xffff, class
+/// reference imm >> 16) is passed by reference
+hand StaticArgByRef
+/// parameter a was passed (not a hole a named argument left): pc = imm,
+/// past its default's code
+hand ArgDefault
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

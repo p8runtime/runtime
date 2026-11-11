@@ -105,7 +105,7 @@ fn check(code: &[Instr]) {
 /// side of a comparison or a branch, the right side of `-` (both sides of
 /// `+`, `*` and `Binary`: a literal on the left is swapped, or CONST_LEFT),
 /// an assignment's or `op=`'s value, a property assignment's value
-/// (`$o->p = K`), a fused step's bound, a return, an
+/// (`$o->p = K`, `C::$p = K`), a fused step's bound, a return, an
 /// echo, a dimension's one key (or the value written, when the key is a
 /// register), an array literal's keys and values, and the name operands
 /// (a property's, a class constant's, a static property's), which `step`
@@ -182,8 +182,12 @@ fn rewrite(instr: &mut Instr, load: &mut impl FnMut(Reg) -> Reg) {
         AssignProp { obj, .. } => ld!(obj),
         AssignPropOp { obj, val, .. } => ld!(obj, val),
         AssignPropDim { val, .. } => ld!(val),
-        ClassConst { .. } | FetchStaticProp { .. } => {}
-        AssignStaticProp { val, .. } | AssignStaticPropOp { val, .. } => ld!(val),
+        // `&$o->p`: the name stays (the loop's PropRef reads its cache
+        // entry by it).
+        Rare { op: p8_bytecode::Rare::PropRef, b, .. } => ld!(b),
+        // A literal value stays (`C::$x = 'x'`: P8_ASSIGN_STATIC_PROP_*_K).
+        ClassConst { .. } | FetchStaticProp { .. } | AssignStaticProp { .. } => {}
+        AssignStaticPropOp { val, .. } => ld!(val),
         _ => crate::map_regs(instr, |r| if c(r) { load(r) } else { r }),
     }
 }

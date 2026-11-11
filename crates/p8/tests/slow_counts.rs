@@ -234,3 +234,75 @@ fn method_arguments_asked_by_reference_stay_in_the_loop() {
     );
     assert_eq!(out, "100");
 }
+
+/// Two calls of one method name in one function, on objects of two
+/// classes (each call its own cache entry), a receiver bound by `global`,
+/// and variables sent by reference to a function and a builtin: inline.
+#[test]
+fn method_call_sites_and_sends_by_reference_stay_in_the_loop() {
+    let out = flat(
+        "class F { function n($x) { return 1; } }
+         class G { function n($x) { return 2; } }
+         class H { public $f; public $g; function both() { return $this->f->n(1) + $this->g->n(2); } }
+         $h = new H; $h->f = new F; $h->g = new G;
+         $GLOBALS['cache'] = new G;
+         function via_global($k) { global $cache; return $cache->n($k); }
+         function inc(&$x) { $x++; }
+         $t = 0; $c = 0; $list = [];
+         for ($i = 0; $i < $n; $i++) { $t += $h->both() + via_global($i); inc($c); array_push($list, $i); }
+         echo $t, ' ', $c, ' ', count($list);",
+    );
+    assert_eq!(out, "100 20 20");
+}
+
+/// `&$o->p` (a property sent to a method's by-reference parameter, a
+/// private one through `$this`) on declared properties: inline once the
+/// name's cache entry is filled. (Binding one to a variable, `$r =
+/// &$o->p`, and `foreach (.. as &$v)` are other instructions, `step`'s.)
+#[test]
+fn references_to_properties_stay_in_the_loop() {
+    let out = flat(
+        "class R {
+             public $n = 0; private $own = 0;
+             function add(&$x, $by) { $x += $by; }
+             function mine() { $this->add($this->own, 1); return $this->own; }
+         }
+         $o = new R; $t = 0;
+         for ($i = 0; $i < $n; $i++) { $o->add($o->n, 2); $t = $o->mine(); }
+         echo $o->n, ' ', $t;",
+    );
+    assert_eq!(out, "40 20");
+}
+
+/// A parameter's default (an expression: its code runs when the argument
+/// is not passed), passed and not: inline.
+#[test]
+fn parameter_defaults_stay_in_the_loop() {
+    let out = flat(
+        "const BASE = 10;
+         function d($a, $b = BASE + 1, $c = [1, 2]) { return $a + $b + count($c); }
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += d(1) + d(1, 2) + d(1, 2, [3]); }
+         echo $t / $n;",
+    );
+    // (1 + 11 + 2) + (1 + 2 + 2) + (1 + 2 + 1).
+    assert_eq!(out, "23");
+}
+
+/// `C::$x = v`, `static::$x = v` and `self::$x = v` (a variable's value,
+/// a literal, a property bound by reference), and `C::m($a['k'])`
+/// asking whether the argument goes by reference: inline once the
+/// caches are filled.
+#[test]
+fn static_property_writes_and_static_arguments_stay_in_the_loop() {
+    let out = flat(
+        "class S {
+             public static $n = 0; public static $last = null; public static $r = 0;
+             static function put($v) { static::$last = $v; self::$n = self::$n + 1; S::$r = 5; return $v; }
+         }
+         $x = 7; $bound = &S::$r; $a = ['k' => 2]; $t = 0;
+         for ($i = 0; $i < $n; $i++) { S::$last = $x; $t += S::put($a['k']); S::$n = S::$n; }
+         echo S::$n, ' ', S::$last, ' ', $bound, ' ', $t / $n;",
+    );
+    assert_eq!(out, "20 2 5 2");
+}

@@ -2135,6 +2135,10 @@ impl Context<'_> {
                         let target = self.lazy_forward(&target, &name).unwrap_or(target);
                         let cell = self.prop_ref(&target, &name, class != 0)?;
                         reg!(dst) = Value::reference(cell);
+                        // The loop's PropRef finds the slot cached next time.
+                        if let (Some(site), Some(o)) = (const_index(c).and_then(|i| clo.props.get(i)), target.as_object()) {
+                            self.remember_prop(site, o, &name);
+                        }
                     }
                     Rare::AssignPropRef => {
                             let (obj, name, src) = (a, b, c);

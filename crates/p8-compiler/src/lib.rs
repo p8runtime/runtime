@@ -475,6 +475,25 @@ impl FnBuilder<'_> {
         (i, true)
     }
 
+    /// A site of its own for a method call (`$o->m()`, `$o?->m()`,
+    /// `C::m()`; its sends and by-reference tests share it), its
+    /// texts those of `site`, the first of that spelling (shared): each
+    /// call keeps its own cache entry (`Closure::methods`), as PHP gives
+    /// each INIT_METHOD_CALL its own runtime cache slot. Two calls of one
+    /// name on objects of two classes in one function
+    /// (`$this->files->notEmpty() || $this->dirs->notEmpty()`) would
+    /// otherwise replace each other's entry at every call. `site` itself
+    /// when it is new, or when there is no room for another.
+    fn own_site(&mut self, site: u16, new: bool) -> u16 {
+        if new || self.sites.len() >= usize::from(u16::MAX) {
+            return site;
+        }
+        let s = &self.sites[usize::from(site)];
+        let copy = Site { name: s.name.clone(), sym: s.sym, fallback: None, display: s.display.clone() };
+        self.sites.push(copy);
+        (self.sites.len() - 1) as u16
+    }
+
     /// Lay the frame out and renumber every register: the variables, then
     /// the temporaries. A constant becomes a constant operand
     /// (`p8_bytecode::const_operand`), read in place where the instruction
@@ -1324,6 +1343,11 @@ impl<'src> Compiler<'src> {
 
     /// The call site of a function or method named `display` (any case).
     fn named_site(&self, f: &mut FnBuilder, display: &[u8]) -> u16 {
+        self.named_site_new(f, display).0
+    }
+
+    /// `named_site`, and whether the site is new.
+    fn named_site_new(&self, f: &mut FnBuilder, display: &[u8]) -> (u16, bool) {
         f.site(false, display, || {
             let lower = display.to_ascii_lowercase();
             let sym = self.sym(&lower);
@@ -1331,7 +1355,12 @@ impl<'src> Compiler<'src> {
             let lower = if lower.as_slice() == display.as_bytes() { display.clone() } else { Text::from(lower) };
             (lower, sym, display)
         })
-        .0
+    }
+
+    /// A method call's site: one per call (`FnBuilder::own_site`).
+    fn method_site(&self, f: &mut FnBuilder, display: &[u8]) -> u16 {
+        let (site, new) = self.named_site_new(f, display);
+        f.own_site(site, new)
     }
 
     /// A class named in code: its symbol, lowercase name and the name as written.
@@ -5230,7 +5259,7 @@ impl<'src> Compiler<'src> {
                     let m = self.expr(f, method)?;
                     return self.call_pair(f, obj, m, args, hint, mark);
                 }
-                let site = self.named_site(f, text);
+                let site = self.method_site(f, text);
                 let (base, argc) = self.method_args(
                     f,
                     args,
@@ -5284,7 +5313,7 @@ impl<'src> Compiler<'src> {
                     let m = self.expr(f, method)?;
                     return self.call_pair(f, name, m, args, hint, mark);
                 }
-                let site = self.named_site(f, text);
+                let site = self.method_site(f, text);
                 let (base, argc, vars) = match self.deferred_args(f, args)? {
                     Some(sent) => sent,
                     None => {
@@ -5535,7 +5564,7 @@ impl<'src> Compiler<'src> {
                     return Err(self.unsupported(method.span(), "a method name in an expression"));
                 };
                 let text = self.text(*name);
-                let site = self.named_site(f, text);
+                let site = self.method_site(f, text);
                 let (base, argc) = self.method_args(
                     f,
                     args,
