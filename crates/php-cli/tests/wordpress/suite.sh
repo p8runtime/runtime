@@ -13,14 +13,14 @@
 # Both runs use the tests exactly as pinned: any local change to tracked
 # files is undone first.
 #
-# Usage: crates/php-cli/tests/wordpress/suite.sh [path to php2]
+# Usage: crates/php-cli/tests/wordpress/suite.sh [path to p8]
 # Needs docker and the p8-test-suite checkout next to this repository (or
 # P8_TEST_SUITE=<its path>), for the PHP version it pins. Takes ~10
 # minutes under PHP, longer under p8.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
-php2=${1:-$repo/target/release/php2}
+p8=${1:-$repo/target/release/p8}
 work=$repo/.tmp/wordpress-suite
 version=7.1.4
 commit=0afb74de8c3fe4c1869e44b62b0418d67b11aa4c
@@ -86,8 +86,8 @@ tail -3 "$work/php.txt"
 
 # p8.
 p8_status=0
-WPDBHOST=127.0.0.1:3307 WPDBNAME=wptests_p8 WPPHP="$php2" \
-    "$php2" -d memory_limit=1G vendor/bin/phpunit --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
+WPDBHOST=127.0.0.1:3307 WPDBNAME=wptests_p8 WPPHP="$p8" \
+    "$p8" -d memory_limit=1G vendor/bin/phpunit --log-junit "$work/p8.xml" --log-teamcity "$work/p8.tc" > "$work/p8.txt" 2>&1 || p8_status=$?
 tail -3 "$work/p8.txt"
 
 php_version=$(docker run --rm "$image" php -r 'echo PHP_VERSION;')

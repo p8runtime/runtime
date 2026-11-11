@@ -1,4 +1,4 @@
-//! p8 end to end through the php2 host: each tests/scripts/NAME.php must print exactly
+//! p8 end to end through the p8 host: each tests/scripts/NAME.php must print exactly
 //! what real PHP printed for it (NAME.out, recorded reading the script from
 //! stdin, its file name replaced by %s). Recorded with php:8.4-cli; p8's
 //! target is PHP 8.6 since 4 Nov 2026, and a script is re-recorded with 8.6
@@ -18,13 +18,13 @@ fn scripts_match_php_8_4() {
 }
 
 /// The same scripts, every one taken from a package of them all
-/// (`php2 --compile`, #381): the output is the same, byte for byte.
+/// (`p8 compile --cli`, #381): the output is the same, byte for byte.
 #[test]
 fn scripts_match_php_8_4_from_a_package() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts");
     let package = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scripts.package");
-    let out = Command::new(env!("CARGO_BIN_EXE_php2")).arg("--compile").arg(&dir).arg("--package").arg(&package).output().expect("run php2 --compile");
+    let out = Command::new(env!("CARGO_BIN_EXE_p8")).arg("compile").arg(&dir).arg("--cli").arg("--package").arg(&package).output().expect("run p8 compile");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     check(&["--package".as_ref(), package.as_os_str()]);
 }
@@ -43,8 +43,8 @@ fn check(options: &[&std::ffi::OsStr]) {
     for script in &scripts {
         // Bytes: a script may print text in another encoding (XMLWriter's ISO-8859-1).
         let want = std::fs::read(script.with_extension("out")).expect("expected output");
-        let out = Command::new(env!("CARGO_BIN_EXE_php2")).args(options).arg(script).output().expect("run php2");
-        if String::from_utf8_lossy(&out.stderr).contains("php2: not using the package") {
+        let out = Command::new(env!("CARGO_BIN_EXE_p8")).args(options).arg(script).output().expect("run p8");
+        if String::from_utf8_lossy(&out.stderr).contains("p8: not using the package") {
             failures.push(format!("{}: the package was not used", script.display()));
         }
         let shown = std::fs::canonicalize(script).expect("canonical path");

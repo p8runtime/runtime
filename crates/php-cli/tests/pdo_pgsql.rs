@@ -28,7 +28,7 @@ fn pdo_pgsql_matches_php_8_4() {
     let mut failures = Vec::new();
     for script in &scripts {
         let want = std::fs::read_to_string(script.with_extension("out")).expect("expected output");
-        let out = Command::new(env!("CARGO_BIN_EXE_php2")).arg(script).env("DBHOST", host).env("DBPORT", port).output().expect("run php2");
+        let out = Command::new(env!("CARGO_BIN_EXE_p8")).arg(script).env("DBHOST", host).env("DBPORT", port).output().expect("run p8");
         let shown = std::fs::canonicalize(script).expect("canonical path");
         let got = String::from_utf8_lossy(&out.stdout).replace(&*shown.to_string_lossy(), "%s");
         if let Some(line) = got.lines().zip(want.lines()).position(|(g, w)| g != w).or((got.lines().count() != want.lines().count()).then(|| got.lines().count().min(want.lines().count()))) {

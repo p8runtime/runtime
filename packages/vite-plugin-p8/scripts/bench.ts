@@ -1,4 +1,4 @@
-// What a render costs: compiling php2.wasm once (cold), then the first
+// What a render costs: compiling p8.wasm once (cold), then the first
 // and the following runs of the example's template and page.
 //
 //   npm run bench [-- runs]
@@ -47,6 +47,6 @@ for (let i = 0; i < runs; i++) {
 }
 
 const f = (n: number) => `${n.toFixed(1)} ms`;
-console.log(`php2.wasm compile (cold, once per process): ${f(compile)}`);
+console.log(`p8.wasm compile (cold, once per process): ${f(compile)}`);
 console.log(`card.php render: first ${f(firstRender)}, then median ${f(median(renders))} over ${runs}`);
 console.log(`GET /hello.php: first ${f(firstServe)}, then median ${f(median(serves))} over ${runs}`);

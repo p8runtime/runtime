@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs on addis from ~/p8-lane-alloc, inside `flock ~/p8-perf/.build.lock`
 # and `nix shell nixpkgs#valgrind nixpkgs#time` (the lock is held for the whole
-# script so wall times run on a quiet machine). Binaries: php2-<candidate>.
+# script so wall times run on a quiet machine). Binaries: p8-<candidate>.
 #   phase cg:   callgrind instructions; WordPress --repeat 1 (cold) and
 #               --repeat 4 (warm = (r4 - r1)/3), Laravel suite (cold).
 #   phase wall: wall ns + peak RSS outside valgrind, same three workloads.
@@ -30,22 +30,22 @@ run() { # run <workload> <candidate> <round>
       fresh
       n=${w#wp-r}
       if [ $phase = cg ]; then
-        (cd wp && valgrind --tool=callgrind --callgrind-out-file=../out/cg.tmp ../php2-$c --repeat $n render.php > ../$o.out 2> ../$o.err)
+        (cd wp && valgrind --tool=callgrind --callgrind-out-file=../out/cg.tmp ../p8-$c --repeat $n render.php > ../$o.out 2> ../$o.err)
         val=$(ir $o.err) rss=-
       else
         t0=$(date +%s%N)
-        (cd wp && time -f %M -o ../$o.rss ../php2-$c --repeat $n render.php > ../$o.out 2> ../$o.err)
+        (cd wp && time -f %M -o ../$o.rss ../p8-$c --repeat $n render.php > ../$o.out 2> ../$o.err)
         t1=$(date +%s%N); val=$((t1 - t0)) rss=$(tail -1 $o.rss)
       fi
       check=$(grep -a render_ms $o.err | sed 's/ bytes=.*//' | tr '\n' ' ')
       ;;
     lv)
       if [ $phase = cg ]; then
-        (cd $LV && valgrind --tool=callgrind --callgrind-out-file=$HOME/p8-lane-alloc/out/cg.tmp $HOME/p8-lane-alloc/php2-$c vendor/bin/phpunit --do-not-cache-result tests/Support/SupportCollectionTest.php > $HOME/p8-lane-alloc/$o.out 2> $HOME/p8-lane-alloc/$o.err)
+        (cd $LV && valgrind --tool=callgrind --callgrind-out-file=$HOME/p8-lane-alloc/out/cg.tmp $HOME/p8-lane-alloc/p8-$c vendor/bin/phpunit --do-not-cache-result tests/Support/SupportCollectionTest.php > $HOME/p8-lane-alloc/$o.out 2> $HOME/p8-lane-alloc/$o.err)
         val=$(ir $o.err) rss=-
       else
         t0=$(date +%s%N)
-        (cd $LV && time -f %M -o $HOME/p8-lane-alloc/$o.rss $HOME/p8-lane-alloc/php2-$c vendor/bin/phpunit --do-not-cache-result tests/Support/SupportCollectionTest.php > $HOME/p8-lane-alloc/$o.out 2> $HOME/p8-lane-alloc/$o.err)
+        (cd $LV && time -f %M -o $HOME/p8-lane-alloc/$o.rss $HOME/p8-lane-alloc/p8-$c vendor/bin/phpunit --do-not-cache-result tests/Support/SupportCollectionTest.php > $HOME/p8-lane-alloc/$o.out 2> $HOME/p8-lane-alloc/$o.err)
         t1=$(date +%s%N); val=$((t1 - t0)) rss=$(tail -1 $o.rss)
       fi
       check=$(lvline $o.out)

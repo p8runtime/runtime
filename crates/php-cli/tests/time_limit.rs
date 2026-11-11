@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 fn max_execution_time_stops_a_loop() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/time_limit/loop.php");
     let started = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_php2")).args(["-d", "max_execution_time=1"]).arg(&script).output().expect("run php2");
+    let out = Command::new(env!("CARGO_BIN_EXE_p8")).args(["-d", "max_execution_time=1"]).arg(&script).output().expect("run p8");
     let took = started.elapsed();
     let shown = std::fs::canonicalize(&script).expect("canonical path");
     let got = String::from_utf8_lossy(&out.stdout).replace(&*shown.to_string_lossy(), "%s");

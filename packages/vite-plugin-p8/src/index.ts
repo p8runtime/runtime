@@ -20,7 +20,7 @@ import { P8 } from './runtime.ts';
 export interface P8Options {
   /** The document root PHP pages are served from (default: Vite's root). */
   root?: string;
-  /** php2.wasm (default: the one beside this package's package.json). */
+  /** p8.wasm (default: the one beside this package's package.json). */
   wasm?: string;
   /** More directories PHP may read (a vendor directory outside the root). */
   readOnly?: string[];
@@ -33,11 +33,11 @@ export interface P8Options {
 const here = dirname(fileURLToPath(import.meta.url));
 /** This package's directory (src/ or dist/ is one below it). */
 const packageDir = resolve(here, '..');
-export const DEFAULT_WASM = join(packageDir, 'php2.wasm');
+export const DEFAULT_WASM = join(packageDir, 'p8.wasm');
 
 const loaded = new Map<string, Promise<P8>>();
 
-/** php2.wasm compiled, once per file per process. */
+/** p8.wasm compiled, once per file per process. */
 export function loadP8(wasm: string = DEFAULT_WASM): Promise<P8> {
   let p8 = loaded.get(wasm);
   if (!p8) {
@@ -117,7 +117,7 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 
 const plain = (a: string | undefined) => (a ?? '127.0.0.1').replace(/^::ffff:/, '');
 
-/** A Node request as php2 should see it off a connection. */
+/** A Node request as p8 should see it off a connection. */
 async function phpRequest(req: IncomingMessage): Promise<PhpRequest> {
   const headers: [string, string][] = [];
   for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) headers.push([req.rawHeaders[i], req.rawHeaders[i + 1]]);

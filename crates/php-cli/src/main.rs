@@ -1,10 +1,27 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
-//! The php command-line host for p8 (p8runtime/aps APS 3), named
-//! php2 while p8 is built next to the legacy engine: `php2 script.php`.
+//! `p8`, the command (p8runtime/aps APS 3, APS 8). It runs PHP as `php`
+//! does, with php's command line (`p8 script.php`, `-r`, `-d`, `-S`,
+//! stdin...), so Composer, PHPUnit, WP-CLI and php-src's test runner call
+//! it as they call php. Two first words are its own commands (#382):
+//!
+//! - `p8 compile [dir]` compiles every PHP file under `dir` (default: the
+//!   current directory) into its package, `<dir>/.p8/package`, which holds
+//!   each file's compiled code with its source's hash. The source stays
+//!   where it is.
+//! - `p8 serve [dir] [--listen <addr>:<port>]` serves `dir` over HTTP with
+//!   PHP's built-in web server (the one `p8 -S` runs), taking compiled
+//!   files from the package: a packaged file is neither parsed nor
+//!   compiled. A file changed since `p8 compile`, a new one and `eval()`'d
+//!   code compile from source, as without a package; with no package (or
+//!   one this p8 cannot use) the whole project does, and stderr says so.
+//!
+//! A script named `compile` or `serve` runs as `p8 ./compile`, or after
+//! any option (`p8 -f compile`).
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
-// php2's allocator, on every platform it is built for: rusty_alloc, a
+// p8's allocator, on every platform it is built for: rusty_alloc, a
 // pure-Rust mimalloc (#319). Small objects come from per-thread free lists
 // sharded by size, as PHP's own memory manager hands out its bins; on
 // WordPress and Laravel it measured 4-7% faster than glibc and macOS's
@@ -17,7 +34,16 @@ mod mime_types;
 mod server;
 mod status_phrases;
 
-/// The extensions php2 loads (`server`: with what the built-in web server
+const USAGE: &str = "usage: p8 [--dump] [-l] [--repeat N] [-d name=value]... [--package <file> [--package-check hash|stat|trust]] [-f] <file> [--] [args...]
+       p8 -v   (p8's version)
+       p8 [-d name=value]... -r <code> [--] [args...]
+       p8 [-d name=value]... [--] [args...]   (the script on stdin)
+       p8 -S <addr>:<port> [-t docroot] [-q] [router.php]
+       p8 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)
+       p8 compile [dir] [--package <file>] [--cli] [--bake <file>]   (every PHP file under dir, default the current directory, compiled into dir/.p8/package, for p8 serve; --package: written there instead; --cli: for `p8 --package <file> <script>` runs instead; --bake: also a copy of p8 that runs scripts with it, implies --cli)
+       p8 serve [dir] [--listen <addr>:<port>]   (dir, default the current directory, served over HTTP from dir/.p8/package; default 127.0.0.1:8000)";
+
+/// The extensions p8 loads (`server`: with what the built-in web server
 /// adds). A WASI build has no sockets, so it is a PHP built without
 /// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
 fn extensions(server: bool) -> Vec<p8::Extension> {
@@ -84,42 +110,49 @@ fn opcache(platform: p8::Platform, ini: &[(String, String)], cli: bool) -> p8::P
 /// is not sound for this engine is not used, and said so on stderr.
 fn open_package(platform: &p8::Platform, path: Option<&str>, check: p8::PackageCheck) -> Option<p8::Package> {
     match path {
-        Some(path) => platform.open_package(path, check).map_err(|e| eprintln!("php2: not using the package {path}: {e}")).ok(),
+        Some(path) => platform.open_package(path, check).map_err(|e| eprintln!("p8: not using the package {path}: {e}")).ok(),
         None => match platform.executable_package(check) {
             Ok(package) => package,
             // An executable that cannot be read back carries none.
             Err(p8::PackageError::Io(_)) => None,
             Err(e) => {
-                eprintln!("php2: not using the package in this executable: {e}");
+                eprintln!("p8: not using the package in this executable: {e}");
                 None
             }
         },
     }
 }
 
-/// `--compile <dir>`: every PHP file under `dir` compiled into a package
-/// at `out` (default `<dir>/.p8/package`), and with `bake`, a copy of this
+/// A project's package: `<dir>/.p8/package`.
+fn package_of(dir: &str) -> PathBuf {
+    Path::new(dir).join(".p8").join("package")
+}
+
+/// `p8 compile`: every PHP file under the project's folder compiled into a
+/// package, for the engine that will use it (a package is used only by the
+/// engine, extensions included, that wrote it): `p8 serve`'s, or with
+/// `--cli` the one that runs scripts. With `--bake`, also a copy of this
 /// executable carrying it. Returns the exit status.
-fn write_package(dir: &str, out: Option<&str>, bake: Option<&str>) -> i32 {
-    let platform = p8::Platform::new(&extensions(false));
-    let out = out.map_or_else(|| std::path::Path::new(dir).join(".p8").join("package"), std::path::PathBuf::from);
-    let packed = match platform.write_package(std::path::Path::new(dir), &out) {
+fn write_package(compile: &Compile) -> i32 {
+    let platform = p8::Platform::new(&extensions(!compile.cli));
+    let out = compile.package.as_ref().map_or_else(|| package_of(&compile.dir), PathBuf::from);
+    let packed = match platform.write_package(Path::new(&compile.dir), &out) {
         Ok(packed) => packed,
         Err(e) => {
-            eprintln!("php2: could not write {}: {e}", out.display());
+            eprintln!("p8: could not write {}: {e}", out.display());
             return 1;
         }
     };
     for error in &packed.failed {
-        eprintln!("php2: left out {} (it does not compile: {} on line {})", error.file, error.message, error.line);
+        eprintln!("p8: left out {} (it does not compile: {} on line {})", error.file, error.message, error.line);
     }
     println!("{} files compiled into {} ({} bytes)", packed.files, out.display(), packed.bytes);
-    if let Some(exe) = bake {
-        if let Err(e) = platform.bake(&out, std::path::Path::new(exe)) {
-            eprintln!("php2: could not write {exe}: {e}");
+    if let Some(exe) = &compile.bake {
+        if let Err(e) = platform.bake(&out, Path::new(exe)) {
+            eprintln!("p8: could not write {exe}: {e}");
             return 1;
         }
-        println!("{exe}: php2 with the package");
+        println!("{exe}: p8 with the package");
     }
     0
 }
@@ -140,27 +173,37 @@ fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
 }
 
 fn main() {
-    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake }) = Cli::parse(std::env::args().skip(1)) else {
-        eprintln!(
-            "usage: php2 [--dump] [-l] [--repeat N] [-d name=value]... [--package <file> [--package-check hash|stat|trust]] [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)\n       php2 --compile <dir> [--package <file>] [--bake <file>]   (every PHP file under <dir> compiled into a package: <dir>/.p8/package unless --package names it; --bake: also a copy of php2 that carries it)"
-        );
+    let Some(command) = Command::parse(std::env::args().skip(1)) else {
+        eprintln!("{USAGE}");
         std::process::exit(64);
     };
+    let status = match command {
+        Command::Compile(compile) => write_package(&compile),
+        Command::Serve { dir, listen } => {
+            let project = server::Project { package: package_of(&dir) };
+            let config = server::Config { address: listen, docroot: Some(dir), router: None, quiet: 0, ini: Vec::new(), project: Some(project) };
+            on_deep_stack(move || server::run(config))
+        }
+        Command::Php(cli) => php(cli),
+    };
+    std::process::exit(status);
+}
+
+/// What php's command line asks for: the script run, `-S` served, `-l`
+/// or `--dump`. Returns the exit status.
+fn php(cli: Cli) -> i32 {
+    let Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, repeat, quiet, version, package, check } = cli;
     if version {
         println!("p8 {} (cli), compatible with PHP {}", p8::P8_VERSION, p8::PHP_VERSION);
-        return;
-    }
-    if let Some(dir) = compile {
-        std::process::exit(write_package(&dir, package.as_deref(), bake.as_deref()));
+        return 0;
     }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
-        let config = server::Config { address, docroot, router: path, quiet, ini };
-        let status = on_deep_stack(move || match stdio {
+        let config = server::Config { address, docroot, router: path, quiet, ini, project: None };
+        return on_deep_stack(move || match stdio {
             Some(client) => server::run_stdio(config, client),
             None => server::run(config),
         });
-        std::process::exit(status);
     }
     // The script: a file, -r's code, or what stdin gives (as php names them).
     let (source, path) = match (code, path) {
@@ -174,7 +217,7 @@ fn main() {
             Ok(s) => (s, path),
             Err(e) => {
                 eprintln!("Could not open input file: {path} ({e})");
-                std::process::exit(1);
+                return 1;
             }
         },
     };
@@ -191,28 +234,32 @@ fn main() {
     let file = if named { path.clone() } else { p8::canonicalize(&path).map_or(path.clone(), |p| p.to_string_lossy().into_owned()) };
     // -l: compile only, as `php -l` checks a file's syntax.
     if lint {
-        match platform.compile(&source, &path) {
-            Ok(_) => println!("No syntax errors detected in {path}"),
+        return match platform.compile(&source, &path) {
+            Ok(_) => {
+                println!("No syntax errors detected in {path}");
+                0
+            }
             Err(error) => {
                 let label = if error.kind == p8::ErrorKind::Parse { "Parse error" } else { "Fatal error" };
                 println!("\n{label}: {} in {path} on line {}\nErrors parsing {path}", error.message, error.line);
-                std::process::exit(255);
+                255
             }
-        }
-        return;
+        };
     }
     if dump {
-        match platform.compile(&source, &file) {
-            Ok(script) => print!("{}", platform.disassemble(&script)),
+        return match platform.compile(&source, &file) {
+            Ok(script) => {
+                print!("{}", platform.disassemble(&script));
+                0
+            }
             Err(error) => {
                 eprintln!("{}", error.message);
-                std::process::exit(255);
+                255
             }
-        }
-        return;
+        };
     }
     // Deep PHP recursion needs a deep native stack.
-    let status = on_deep_stack(move || {
+    on_deep_stack(move || {
         let mut isolate = platform.new_isolate();
         // max_execution_time (0, the CLI's default: none): a watchdog
         // ends the run with PHP's fatal error once it has run that long.
@@ -254,12 +301,73 @@ fn main() {
             }
         }
         status
-    });
-    std::process::exit(status);
+    })
 }
 
-/// The command line, as `php` takes it: options, the file, then the
-/// script's own arguments.
+/// What the command line asks for: one of p8's own commands (its first
+/// word), else what php's command line asks for.
+#[derive(Debug, PartialEq)]
+enum Command {
+    Compile(Compile),
+    Serve { dir: String, listen: String },
+    Php(Cli),
+}
+
+/// `p8 compile [dir] [--package <file>] [--cli] [--bake <file>]`.
+#[derive(Debug, PartialEq)]
+struct Compile {
+    dir: String,
+    /// Where the package goes (default `<dir>/.p8/package`).
+    package: Option<String>,
+    /// For runs of scripts (`p8 --package <file> script.php`), not for
+    /// `p8 serve`: the two load different extensions.
+    cli: bool,
+    /// Also write a copy of p8 with the package appended, which runs
+    /// scripts as `p8 --package` does (so `--cli` is implied).
+    bake: Option<String>,
+}
+
+/// Where `p8 serve` listens unless `--listen` says otherwise.
+const LISTEN: &str = "127.0.0.1:8000";
+
+impl Command {
+    fn parse(args: impl Iterator<Item = String>) -> Option<Command> {
+        let mut args = args.peekable();
+        match args.peek().map(String::as_str) {
+            Some("compile") => {
+                args.next();
+                let (mut dir, mut package, mut cli, mut bake) = (None, None, false, None);
+                while let Some(arg) = args.next() {
+                    match arg.as_str() {
+                        "--package" if package.is_none() => package = Some(args.next()?),
+                        "--cli" => cli = true,
+                        "--bake" if bake.is_none() => bake = Some(args.next()?),
+                        _ if !arg.starts_with('-') && dir.is_none() => dir = Some(arg),
+                        _ => return None,
+                    }
+                }
+                let cli = cli || bake.is_some();
+                Some(Command::Compile(Compile { dir: dir.unwrap_or_else(|| ".".to_string()), package, cli, bake }))
+            }
+            Some("serve") => {
+                args.next();
+                let (mut dir, mut listen) = (None, None);
+                while let Some(arg) = args.next() {
+                    match arg.as_str() {
+                        "--listen" if listen.is_none() => listen = Some(args.next()?),
+                        _ if !arg.starts_with('-') && dir.is_none() => dir = Some(arg),
+                        _ => return None,
+                    }
+                }
+                Some(Command::Serve { dir: dir.unwrap_or_else(|| ".".to_string()), listen: listen.unwrap_or_else(|| LISTEN.to_string()) })
+            }
+            _ => Cli::parse(args).map(Command::Php),
+        }
+    }
+}
+
+/// php's command line: options, the file, then the script's own arguments.
+#[derive(Debug, PartialEq)]
 struct Cli {
     dump: bool,
     /// -l: check the file's syntax, run nothing.
@@ -286,18 +394,12 @@ struct Cli {
     quiet: u8,
     /// -v / --version: say which p8 this is and run nothing.
     version: bool,
-    /// --compile <dir>: compile every PHP file under it into a package
-    /// (written to --package, else <dir>/.p8/package) and run nothing.
-    compile: Option<String>,
-    /// --package <file>: take compiled files from this package (with
-    /// --compile: where to write it).
+    /// --package <file>: take compiled files from this package (one
+    /// `p8 compile --cli` wrote).
     package: Option<String>,
     /// --package-check hash|stat|trust: how a run checks a packaged
     /// file against the file on disk (p8::PackageCheck).
     check: p8::PackageCheck,
-    /// --bake <file> (with --compile): also write a copy of php2 with the
-    /// package appended, which runs as php2 --package does.
-    bake: Option<String>,
 }
 
 impl Cli {
@@ -314,7 +416,7 @@ impl Cli {
         let (mut path, mut code, mut dashes) = (None, None, false);
         let mut version = false;
         let mut repeat = 1;
-        let (mut compile, mut package, mut check, mut bake) = (None, None, p8::PackageCheck::Hash, None);
+        let (mut package, mut check) = (None, p8::PackageCheck::Hash);
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 // The script's own arguments follow (its code is on stdin
@@ -334,9 +436,7 @@ impl Cli {
                 "-t" => docroot = Some(args.next()?),
                 "-q" => quiet += 1,
                 "--repeat" => repeat = args.next()?.parse().ok().filter(|&n| n > 0)?,
-                // php has no long options of these names: `php2 compile`
-                // still runs a file named compile.
-                "--compile" => compile = Some(args.next()?),
+                // php has no long options of these names.
                 "--package" => package = Some(args.next()?),
                 "--package-check" => {
                     check = match args.next()?.as_str() {
@@ -346,7 +446,6 @@ impl Cli {
                         _ => return None,
                     }
                 }
-                "--bake" => bake = Some(args.next()?),
                 // No php.ini is read anyway.
                 "-n" => {}
                 other if other.starts_with("-d") => setting(&other[2..]),
@@ -360,12 +459,11 @@ impl Cli {
         if path.is_none() && code.is_none() && !dashes {
             path = args.next();
         }
-        // --stdio is a way to serve; without -S it means nothing. --bake
-        // goes with --compile, and --compile runs nothing.
-        if (stdio.is_some() && serve.is_none()) || (bake.is_some() && compile.is_none()) || (compile.is_some() && (path.is_some() || code.is_some())) {
+        // --stdio is a way to serve; without -S it means nothing.
+        if stdio.is_some() && serve.is_none() {
             return None;
         }
-        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake })
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version, package, check })
     }
 }
 
@@ -400,10 +498,14 @@ impl p8::Host for Stdout {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, Command, Compile, LISTEN};
 
     fn parse(args: &[&str]) -> Option<(bool, Option<String>)> {
         Cli::parse(args.iter().map(|a| a.to_string())).map(|c| (c.dump, c.path))
+    }
+
+    fn command(args: &[&str]) -> Option<Command> {
+        Command::parse(args.iter().map(|a| a.to_string()))
     }
 
     fn t() -> Option<String> {
@@ -446,24 +548,44 @@ mod tests {
         assert!(f.path == t() && f.args == ["a"]);
     }
 
-    /// --compile and --package are long options php does not have: a
-    /// script named `compile` is still a script.
+    /// --package and --package-check are long options php does not have.
     #[test]
     fn takes_the_package_options() {
         let cli = |args: &[&str]| Cli::parse(args.iter().map(|a| a.to_string()));
-        let compile = cli(&["--compile", "site", "--package", "out.p8", "--bake", "app"]).expect("parsed");
-        assert_eq!((compile.compile.as_deref(), compile.package.as_deref(), compile.bake.as_deref(), compile.path), (Some("site"), Some("out.p8"), Some("app"), None));
         let run = cli(&["--package", "out.p8", "--package-check", "stat", "t.php", "a"]).expect("parsed");
         assert_eq!((run.package.as_deref(), run.check, run.path, run.args), (Some("out.p8"), p8::PackageCheck::Stat, t(), vec!["a".to_string()]));
         assert_eq!(cli(&["t.php"]).expect("parsed").check, p8::PackageCheck::Hash);
-        assert_eq!(parse(&["compile", "site"]), Some((false, Some("compile".to_string()))));
-        // --bake needs --compile; --compile runs no script; a check is one of three.
-        assert!(cli(&["--bake", "app", "t.php"]).is_none());
-        assert!(cli(&["--compile", "site", "t.php"]).is_none());
         assert!(cli(&["--package-check", "mtime", "t.php"]).is_none());
     }
 
-    /// -S with --stdio: one request over stdin and stdout, from a client.
+    /// `compile` and `serve` are p8's own commands only as the first word:
+    /// a script of that name runs as `./compile`, or after an option.
+    #[test]
+    fn takes_compile_and_serve() {
+        let compile = |dir: &str, package: Option<&str>, cli: bool, bake: Option<&str>| {
+            Some(Command::Compile(Compile { dir: dir.into(), package: package.map(Into::into), cli, bake: bake.map(Into::into) }))
+        };
+        assert_eq!(command(&["compile"]), compile(".", None, false, None));
+        assert_eq!(command(&["compile", "site", "--package", "out.p8"]), compile("site", Some("out.p8"), false, None));
+        assert_eq!(command(&["compile", "--cli", "site"]), compile("site", None, true, None));
+        assert_eq!(command(&["compile", "site", "--bake", "app"]), compile("site", None, true, Some("app")));
+        assert_eq!(command(&["serve"]), Some(Command::Serve { dir: ".".into(), listen: LISTEN.into() }));
+        assert_eq!(command(&["serve", "site", "--listen", "0.0.0.0:80"]), Some(Command::Serve { dir: "site".into(), listen: "0.0.0.0:80".into() }));
+        assert_eq!(command(&["serve", "--listen", "[::1]:9000", "site"]), Some(Command::Serve { dir: "site".into(), listen: "[::1]:9000".into() }));
+        for wrong in [&["compile", "a", "b"][..], &["compile", "--listen", "x:1"], &["compile", "--package"], &["serve", "--listen"], &["serve", "-x"], &["serve", "a", "b"]] {
+            assert_eq!(command(wrong), None, "{wrong:?}");
+        }
+        // A script named compile or serve.
+        for (args, script) in [(&["./compile", "x"][..], "./compile"), (&["-f", "serve"], "serve"), (&["-d", "a=1", "compile"], "compile")] {
+            match command(args) {
+                Some(Command::Php(cli)) => assert_eq!(cli.path.as_deref(), Some(script), "{args:?}"),
+                other => panic!("{args:?}: {other:?}"),
+            }
+        }
+        // Anything else is php's command line.
+        assert!(matches!(command(&["t.php", "compile"]), Some(Command::Php(cli)) if cli.path == t() && cli.args == ["compile"]));
+    }
+
     #[test]
     fn version_flag() {
         assert!(Cli::parse(["-v"].iter().map(|a| a.to_string())).expect("parsed").version);
@@ -471,6 +593,7 @@ mod tests {
         assert!(!Cli::parse(["t.php"].iter().map(|a| a.to_string())).expect("parsed").version);
     }
 
+    /// -S with --stdio: one request over stdin and stdout, from a client.
     #[test]
     fn takes_a_request_over_stdio() {
         let cli = Cli::parse(["-S", "localhost:5173", "--stdio", "127.0.0.1:50000", "-t", "/site", "-q", "router.php"].iter().map(|a| a.to_string())).expect("parsed");
