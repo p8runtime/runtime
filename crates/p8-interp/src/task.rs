@@ -15,7 +15,7 @@
 //! frame", and code that reaches the globals from another task goes to
 //! the first task's registers (`Context::with_main`).
 
-use crate::{Context, Frame, Frames, NativeCall};
+use crate::{Context, Frame, Frames, Natives};
 use p8_runtime::array::PhpArray;
 use p8_runtime::value::Value;
 
@@ -28,7 +28,7 @@ pub(crate) struct Task {
     pub(crate) frames: Frames,
     pub(crate) regs: Vec<Value>,
     pub(crate) pc: usize,
-    pub(crate) natives: Vec<NativeCall>,
+    pub(crate) natives: Natives,
     pub(crate) running_builtin: Option<usize>,
     pub(crate) ref_wanted: Vec<usize>,
     pub(crate) named_extra: Option<(usize, PhpArray)>,

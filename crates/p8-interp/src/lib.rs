@@ -123,6 +123,22 @@ fn same_autoloader(a: &Value, b: &Value) -> bool {
     same && xm == ym
 }
 
+/// The builtins running that may call back into PHP, innermost last. A
+/// finished one's entry stays for the next (its list keeps its room), as
+/// a popped frame's slot does: a call moves no entry and allocates
+/// nothing.
+#[derive(Default)]
+pub(crate) struct Natives {
+    slots: Vec<NativeCall>,
+    len: usize,
+}
+
+impl Natives {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, NativeCall> {
+        self.slots[..self.len].iter()
+    }
+}
+
 /// A builtin that is running PHP code (array_map's callback): where it
 /// was called (the frame count then), its name and arguments.
 struct NativeCall {
@@ -3954,16 +3970,27 @@ impl Context<'_> {
 
     /// A builtin starts running at the current frame count (see NativeCall).
     pub(crate) fn push_native(&mut self, name: &'static str, method: Option<(PhpStr, PhpStr, Option<Rc<Object>>)>, args: &[Value], top: bool) {
-        let mut list = self.native_args.pop().unwrap_or_default();
-        list.extend(args.iter().map(Value::deref));
-        self.natives.push(NativeCall { depth: self.frames.len(), name, method, args: list, top });
+        let depth = self.frames.len();
+        let natives = &mut self.natives;
+        match natives.slots.get_mut(natives.len) {
+            Some(n) => {
+                (n.depth, n.name, n.method, n.top) = (depth, name, method, top);
+                n.args.extend(args.iter().map(Value::deref));
+            }
+            None => natives.slots.push(NativeCall { depth, name, method, args: args.iter().map(Value::deref).collect(), top }),
+        }
+        natives.len += 1;
     }
 
-    /// The innermost builtin of `natives` is done.
+    /// The innermost builtin of `natives` is done: what its entry holds
+    /// goes now, the entry stays for the next.
     pub(crate) fn pop_native(&mut self) {
-        if let Some(mut n) = self.natives.pop() {
+        let natives = &mut self.natives;
+        if natives.len > 0 {
+            natives.len -= 1;
+            let n = &mut natives.slots[natives.len];
             n.args.clear();
-            self.native_args.push(n.args);
+            n.method = None;
         }
     }
 

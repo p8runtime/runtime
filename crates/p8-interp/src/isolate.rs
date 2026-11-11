@@ -391,8 +391,7 @@ impl Isolate {
             key_path: Vec::new(),
             dim_keys: Vec::new(),
             lambdas: HashMap::default(),
-            natives: Vec::new(),
-            native_args: Vec::new(),
+            natives: Natives::default(),
             running_builtin: None,
             statics: HashMap::default(),
             magic_guard: Vec::new(),
@@ -574,10 +573,7 @@ pub struct Context<'i> {
     /// The closure of each function a Closure object runs (by its code).
     pub(crate) lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
-    pub(crate) natives: Vec<NativeCall>,
-    /// Argument lists of finished `natives`, kept for the next ones (a
-    /// call then allocates nothing).
-    pub(crate) native_args: Vec<Vec<Value>>,
+    pub(crate) natives: Natives,
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.
