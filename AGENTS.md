@@ -47,7 +47,7 @@ target/release/php-test ../php-src --suite ../p8-test-suite --php target/release
 
 ## Rules
 
-- `#![forbid(unsafe_code)]` on every crate; nothing p8 depends on builds or
+- `#![forbid(unsafe_code)]` on every crate but `p8-native`; nothing p8 depends on builds or
   links C (`SECURITY.md`, checked by `crates/p8/tests/safety.rs`).
 - `cargo fmt`; `cargo clippy --workspace --all-targets` adds no warning.
 - Tests live in each crate's `tests/`.
