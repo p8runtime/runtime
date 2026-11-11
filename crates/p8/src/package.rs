@@ -38,9 +38,10 @@
 
 use p8_bytecode::Program;
 use p8_runtime::symbol::Symbols;
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use xxhash_rust::xxh3::{Xxh3, xxh3_128};
 
 const MAGIC: &[u8; 8] = b"p8pack\0\0";
@@ -145,6 +146,8 @@ impl Bytes {
 
 /// A file as the index has it.
 struct Record<'a> {
+    /// Its number in the index (the order of the paths).
+    number: u32,
     path: &'a [u8],
     size: u64,
     modified: (i64, u32),
@@ -161,6 +164,18 @@ pub struct Package {
     /// The records, then the paths.
     index: Vec<u8>,
     check: PackageCheck,
+    /// The native functions of the executable carrying the package, by
+    /// file (its record's number): each (function's index in the file's
+    /// `Program::functions`, native id). Empty without native code.
+    native: HashMap<u32, Vec<(u32, u32)>>,
+}
+
+/// A function of a package, as the native backend compiles it: which
+/// file (its record's number) and which of the file's functions.
+pub struct PackagedFunction {
+    pub file: u32,
+    pub index: u32,
+    pub function: Arc<p8_bytecode::Function>,
 }
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
@@ -229,7 +244,30 @@ impl Package {
         if &header[8..24] != engine {
             return Err(PackageError::OtherEngine);
         }
-        Ok(Package { bytes, count, index, check })
+        Ok(Package { bytes, count, index, check, native: HashMap::new() })
+    }
+
+    /// Give the functions `keys` names (by id: file, function) their
+    /// native ids as each file is read (`program`).
+    pub(crate) fn with_native(mut self, keys: &[(u32, u32)]) -> Package {
+        self.native.clear();
+        for (id, &(file, index)) in keys.iter().enumerate() {
+            self.native.entry(file).or_default().push((index, id as u32));
+        }
+        self
+    }
+
+    /// Every function of every file, read and checked (a file whose
+    /// program is damaged has none).
+    pub(crate) fn functions(&self, symbols: &Symbols) -> Vec<PackagedFunction> {
+        let mut out = Vec::new();
+        for i in 0..self.count {
+            let Some(program) = self.record(i).and_then(|r| self.program(&r, symbols)) else { continue };
+            for (index, function) in program.functions.into_iter().enumerate() {
+                out.push(PackagedFunction { file: i as u32, index: index as u32, function });
+            }
+        }
+        out
     }
 
     /// How many files it holds.
@@ -251,6 +289,7 @@ impl Package {
         let paths = self.index.get(self.count * RECORD..)?;
         let (from, len) = (u32_at(r, 0)? as usize, u32_at(r, 4)? as usize);
         Some(Record {
+            number: u32::try_from(i).ok()?,
             path: paths.get(from..from.checked_add(len)?)?,
             size: u64_at(r, 8)?,
             modified: (u64_at(r, 16)? as i64, u32_at(r, 24)?),
@@ -282,7 +321,15 @@ impl Package {
         if xxh3_128(&bytes).to_le_bytes() != r.sum {
             return None;
         }
-        p8_bytecode::serial::decode(&bytes, symbols)
+        let mut program = p8_bytecode::serial::decode(&bytes, symbols)?;
+        // Native ids, given before the code is shared (APS 5: none of it
+        // changes after); a function already shared keeps none.
+        for &(index, id) in self.native.get(&r.number).map_or(&[][..], Vec::as_slice) {
+            if let Some(f) = program.functions.get_mut(index as usize).and_then(Arc::get_mut) {
+                f.native = Some(id);
+            }
+        }
+        Some(program)
     }
 
     /// The program packaged for `file`, and its source's hash, when

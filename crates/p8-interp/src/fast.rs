@@ -801,9 +801,16 @@ impl Context<'_> {
                                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     slow!();
                                 }
+                                // Code the executable has machine code for
+                                // (native.rs) runs that first; it hands the
+                                // frame back at a pc.
+                                let native = target.code.native;
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
+                                if let Some(id) = native {
+                                    pc = self.native_entry(regs, id)?;
+                                }
                                 continue 'frame;
                             }
                             Some(&Callee::Builtin(i)) => {

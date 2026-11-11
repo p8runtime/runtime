@@ -2,8 +2,6 @@
 //! The php command-line host for p8 (p8runtime/aps APS 3), named
 //! php2 while p8 is built next to the legacy engine: `php2 script.php`.
 
-use std::io::Write;
-
 // php2's allocator, on every platform it is built for: rusty_alloc, a
 // pure-Rust mimalloc (#319). Small objects come from per-thread free lists
 // sharded by size, as PHP's own memory manager hands out its bins; on
@@ -17,41 +15,7 @@ mod mime_types;
 mod server;
 mod status_phrases;
 
-/// The extensions php2 loads (`server`: with what the built-in web server
-/// adds). A WASI build has no sockets, so it is a PHP built without
-/// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
-fn extensions(server: bool) -> Vec<p8::Extension> {
-    use p8::extensions::*;
-    let mut all = vec![STANDARD];
-    if server {
-        all.push(SERVER);
-    }
-    all.extend([
-        XML,
-        TOKENIZER,
-        MBSTRING,
-        PCRE,
-        #[cfg(not(target_os = "wasi"))]
-        MYSQLI,
-        #[cfg(not(target_os = "wasi"))]
-        CURL,
-        GD,
-        ZIP,
-        FILEINFO,
-        SESSION,
-        PDO,
-        PDO_SQLITE,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_MYSQL,
-        #[cfg(not(target_os = "wasi"))]
-        SOCKETS,
-        OPENSSL,
-        INTL,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_PGSQL,
-    ]);
-    all
-}
+use php_cli::{Stdout, extensions, on_deep_stack};
 
 /// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
 /// the runs after this one (off unless set, as in PHP). It is OPcache's,
@@ -100,7 +64,7 @@ fn open_package(platform: &p8::Platform, path: Option<&str>, check: p8::PackageC
 /// `--compile <dir>`: every PHP file under `dir` compiled into a package
 /// at `out` (default `<dir>/.p8/package`), and with `bake`, a copy of this
 /// executable carrying it. Returns the exit status.
-fn write_package(dir: &str, out: Option<&str>, bake: Option<&str>) -> i32 {
+fn write_package(dir: &str, out: Option<&str>, bake: Option<&str>, native: Option<&str>, native_host: Option<&str>) -> i32 {
     let platform = p8::Platform::new(&extensions(false));
     let out = out.map_or_else(|| std::path::Path::new(dir).join(".p8").join("package"), std::path::PathBuf::from);
     let packed = match platform.write_package(std::path::Path::new(dir), &out) {
@@ -121,28 +85,22 @@ fn write_package(dir: &str, out: Option<&str>, bake: Option<&str>) -> i32 {
         }
         println!("{exe}: php2 with the package");
     }
+    if let Some(exe) = native {
+        match php_cli::native::write(&platform, &out, native_host, exe) {
+            Ok(said) => println!("{said}"),
+            Err(e) => {
+                eprintln!("php2: could not write {exe}: {e}");
+                return 1;
+            }
+        }
+    }
     0
 }
 
-/// Run `f` with a native stack deep enough for deep PHP recursion: on a
-/// thread with a 64 MiB stack. WASI has no threads; there the binary's
-/// own stack is that size (see build.rs).
-#[cfg(not(target_os = "wasi"))]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(f).expect("interpreter thread").join().unwrap_or(255)
-}
-
-/// Run `f` with a native stack deep enough for deep PHP recursion: WASI
-/// has no threads, so the binary's own stack is 64 MiB (see build.rs).
-#[cfg(target_os = "wasi")]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    f()
-}
-
 fn main() {
-    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake }) = Cli::parse(std::env::args().skip(1)) else {
+    let Some(Cli { dump, lint, path, code, ini, args, serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake, native, native_host }) = Cli::parse(std::env::args().skip(1)) else {
         eprintln!(
-            "usage: php2 [--dump] [-l] [--repeat N] [-d name=value]... [--package <file> [--package-check hash|stat|trust]] [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)\n       php2 --compile <dir> [--package <file>] [--bake <file>]   (every PHP file under <dir> compiled into a package: <dir>/.p8/package unless --package names it; --bake: also a copy of php2 that carries it)"
+            "usage: php2 [--dump] [-l] [--repeat N] [-d name=value]... [--package <file> [--package-check hash|stat|trust]] [-f] <file> [--] [args...]\n       php2 -v   (p8's version)\n       php2 [-d name=value]... -r <code> [--] [args...]\n       php2 [-d name=value]... [--] [args...]   (the script on stdin)\n       php2 -S <addr>:<port> [-t docroot] [-q] [router.php]\n       php2 -S <addr>:<port> --stdio <client addr>:<port> [-t docroot] [-q] [router.php]   (one request on stdin, its response on stdout)\n       php2 --compile <dir> [--package <file>] [--bake <file>]   (every PHP file under <dir> compiled into a package: <dir>/.p8/package unless --package names it; --bake: also a copy of php2 that carries it)\n       php2 --compile <dir> --native <file> [--native-host <libp8_native.a>]   (also an executable with the package and its functions compiled to machine code)"
         );
         std::process::exit(64);
     };
@@ -151,7 +109,7 @@ fn main() {
         return;
     }
     if let Some(dir) = compile {
-        std::process::exit(write_package(&dir, package.as_deref(), bake.as_deref()));
+        std::process::exit(write_package(&dir, package.as_deref(), bake.as_deref(), native.as_deref(), native_host.as_deref()));
     }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
@@ -298,6 +256,12 @@ struct Cli {
     /// --bake <file> (with --compile): also write a copy of php2 with the
     /// package appended, which runs as php2 --package does.
     bake: Option<String>,
+    /// --native <file> (with --compile): also write an executable with the
+    /// package and its functions as machine code (`php_cli::native`).
+    native: Option<String>,
+    /// --native-host <file>: the runtime library it is linked with
+    /// (default: libp8_native.a beside php2).
+    native_host: Option<String>,
 }
 
 impl Cli {
@@ -315,6 +279,7 @@ impl Cli {
         let mut version = false;
         let mut repeat = 1;
         let (mut compile, mut package, mut check, mut bake) = (None, None, p8::PackageCheck::Hash, None);
+        let (mut native, mut native_host) = (None, None);
         while let Some(arg) = args.next_if(|a| a.starts_with('-') && a != "-") {
             match arg.as_str() {
                 // The script's own arguments follow (its code is on stdin
@@ -347,6 +312,8 @@ impl Cli {
                     }
                 }
                 "--bake" => bake = Some(args.next()?),
+                "--native" => native = Some(args.next()?),
+                "--native-host" => native_host = Some(args.next()?),
                 // No php.ini is read anyway.
                 "-n" => {}
                 other if other.starts_with("-d") => setting(&other[2..]),
@@ -362,10 +329,11 @@ impl Cli {
         }
         // --stdio is a way to serve; without -S it means nothing. --bake
         // goes with --compile, and --compile runs nothing.
-        if (stdio.is_some() && serve.is_none()) || (bake.is_some() && compile.is_none()) || (compile.is_some() && (path.is_some() || code.is_some())) {
+        let builds = bake.is_some() || native.is_some() || native_host.is_some();
+        if (stdio.is_some() && serve.is_none()) || (builds && compile.is_none()) || (native_host.is_some() && native.is_none()) || (compile.is_some() && (path.is_some() || code.is_some())) {
             return None;
         }
-        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake })
+        Some(Cli { dump, lint, path, code, ini, args: args.collect(), serve, stdio, docroot, repeat, quiet, version, compile, package, check, bake, native, native_host })
     }
 }
 
@@ -377,25 +345,6 @@ struct Discard;
 
 impl p8::Host for Discard {
     fn write(&mut self, _: &[u8]) {}
-}
-
-/// The terminal: a request's output goes to stdout, written through on
-/// every write as PHP's CLI does (sapi_cli_ub_write writes each piece to
-/// fd 1; implicit_flush is on). Nothing waits in a buffer, so output stays
-/// in order with STDERR, a prompt shows before reading STDIN, and
-/// fwrite(STDOUT)/fflush(STDOUT) reach the reader at once.
-struct Stdout(std::io::Stdout);
-
-impl p8::Host for Stdout {
-    fn write(&mut self, bytes: &[u8]) {
-        let mut out = self.0.lock();
-        let _ = out.write_all(bytes);
-        let _ = out.flush();
-    }
-
-    fn flush(&mut self) {
-        let _ = self.0.flush();
-    }
 }
 
 #[cfg(test)]
@@ -459,6 +408,11 @@ mod tests {
         assert_eq!(parse(&["compile", "site"]), Some((false, Some("compile".to_string()))));
         // --bake needs --compile; --compile runs no script; a check is one of three.
         assert!(cli(&["--bake", "app", "t.php"]).is_none());
+        // --native goes with --compile, --native-host with --native.
+        let native = cli(&["--compile", "site", "--native", "app", "--native-host", "lib.a"]).expect("parsed");
+        assert_eq!((native.native.as_deref(), native.native_host.as_deref()), (Some("app"), Some("lib.a")));
+        assert!(cli(&["--native", "app", "t.php"]).is_none());
+        assert!(cli(&["--compile", "site", "--native-host", "lib.a"]).is_none());
         assert!(cli(&["--compile", "site", "t.php"]).is_none());
         assert!(cli(&["--package-check", "mtime", "t.php"]).is_none());
     }

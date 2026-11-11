@@ -497,14 +497,16 @@ macro_rules! record {
             }
         }
     };
-    // A record whose fields must agree with each other: read only if `$ok` holds.
-    ($t:ident { $($f:ident),* $(,)? } if $ok:path) => {
+    // A record whose fields must agree with each other: read only if `$ok`
+    // holds. The `unstored` fields are not written, and read back as their
+    // default (what the code is given where it runs, not what it is).
+    ($t:ident { $($f:ident),* $(,)? } unstored { $($u:ident),* } if $ok:path) => {
         impl Code for $t {
             fn put(&self, w: &mut Writer) {
                 $(self.$f.put(w);)*
             }
             fn get(r: &mut Reader) -> Got<Self> {
-                let x = $t { $($f: Code::get(r)?),* };
+                let x = $t { $($f: Code::get(r)?,)* $($u: Default::default()),* };
                 if $ok(&x) { Ok(x) } else { Err(Bad) }
             }
         }
@@ -516,7 +518,7 @@ record!(Program { main, functions, classes });
 record!(Function {
     name, sym, ret_type, strict, classes, class, is_static, params, returns_ref, code, insns, lines, consts, ncv, nregs, frees_temps, cv_names, sites, file, required, line,
     handlers, decls, is_generator, eval, own_location, lambdas, bound, silences, arg_vars, meta, partials, compile_diags,
-} if one_insn_per_instruction);
+} unstored { native } if one_insn_per_instruction);
 
 /// The loop reads `insns[pc]` and `step` reads `code[pc]`: one of each per pc.
 fn one_insn_per_instruction(f: &Function) -> bool {

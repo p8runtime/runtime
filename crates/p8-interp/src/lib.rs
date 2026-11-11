@@ -20,6 +20,7 @@ mod reflection;
 mod refs;
 mod throw;
 mod fast;
+pub mod native;
 mod vmops;
 
 /// How one instruction is run out of the loop (`step`, `cold_run`): on the

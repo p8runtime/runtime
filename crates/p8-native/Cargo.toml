@@ -1,0 +1,20 @@
+[package]
+name = "p8-native"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The boundary between p8 and the machine code of a p8-built executable (#402): the one audited crate allowed unsafe; built as the runtime library native executables are linked with"
+
+# The runtime library (`libp8_native.a`) `php2 --compile --native` links
+# with the generated object; it looks for it beside php2. Nothing depends
+# on this crate.
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+p8 = { path = "../p8" }
+p8-native-abi = { path = "../p8-native-abi" }
+p8-runtime = { path = "../p8-runtime" }
+php-cli = { path = "../php-cli", default-features = false }
+# php2's allocator (see php-cli), pinned as php2 pins it.
+rusty_alloc-api = "=2.4.0"
