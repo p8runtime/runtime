@@ -1,0 +1,927 @@
+-- unset of dimensions
+array(2) {
+  ["y"]=>
+  array(1) {
+    ["w"]=>
+    array(1) {
+      [1]=>
+      int(4)
+    }
+  }
+  ["n"]=>
+  NULL
+}
+array(2) {
+  ["y"]=>
+  array(1) {
+    ["w"]=>
+    array(0) {
+    }
+  }
+  ["n"]=>
+  NULL
+}
+array(1) {
+  ["p"]=>
+  array(2) {
+    ["q"]=>
+    int(1)
+    ["r"]=>
+    int(2)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["r"]=>
+    int(2)
+  }
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 44
+array(2) {
+  [0]=>
+  string(4) "zero"
+  [2]=>
+  string(3) "two"
+}
+array(1) {
+  ["a"]=>
+  &array(0) {
+  }
+}
+array(0) {
+}
+destruct o0
+after o
+destruct q0
+after q
+NULL
+
+Warning: Undefined variable $undefined_var in %s on line 67
+Error: Cannot unset string offsets
+Error: Cannot unset string offsets
+Error: Cannot unset offset in a non-array variable
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 88
+int(5)
+bool(false)
+unset(k)
+unset(j)
+array(0) {
+}
+Error: Cannot use object of type stdClass as array
+0=1 1=2 2=3 3=4 1
+array(2) {
+  ["y"]=>
+  array(1) {
+    ["w"]=>
+    array(1) {
+      [1]=>
+      int(4)
+    }
+  }
+  ["n"]=>
+  NULL
+}
+array(2) {
+  ["y"]=>
+  array(1) {
+    ["w"]=>
+    array(0) {
+    }
+  }
+  ["n"]=>
+  NULL
+}
+array(1) {
+  ["p"]=>
+  array(2) {
+    ["q"]=>
+    int(1)
+    ["r"]=>
+    int(2)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["r"]=>
+    int(2)
+  }
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 44
+array(2) {
+  [0]=>
+  string(4) "zero"
+  [2]=>
+  string(3) "two"
+}
+array(1) {
+  ["a"]=>
+  &array(0) {
+  }
+}
+array(0) {
+}
+destruct o1
+after o
+destruct q1
+after q
+NULL
+
+Warning: Undefined variable $undefined_var in %s on line 67
+Error: Cannot unset string offsets
+Error: Cannot unset string offsets
+Error: Cannot unset offset in a non-array variable
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 88
+int(5)
+bool(false)
+unset(k)
+unset(j)
+array(0) {
+}
+Error: Cannot use object of type stdClass as array
+0=1 1=2 2=3 3=4 1
+-- unset of property dimensions
+array(2) {
+  [0]=>
+  array(2) {
+    ["b"]=>
+    int(2)
+    ["c"]=>
+    array(1) {
+      ["d"]=>
+      int(3)
+    }
+  }
+  [1]=>
+  array(0) {
+  }
+}
+array(2) {
+  ["b"]=>
+  int(2)
+  ["c"]=>
+  array(0) {
+  }
+}
+array(1) {
+  ["c"]=>
+  array(0) {
+  }
+}
+array(2) {
+  [0]=>
+  array(2) {
+    ["b"]=>
+    int(2)
+    ["c"]=>
+    array(1) {
+      ["d"]=>
+      int(3)
+    }
+  }
+  [1]=>
+  array(0) {
+  }
+}
+array(2) {
+  ["b"]=>
+  int(2)
+  ["c"]=>
+  array(0) {
+  }
+}
+array(1) {
+  ["c"]=>
+  array(0) {
+  }
+}
+-- ++/-- on dimensions
+int(1)
+int(3)
+int(3)
+int(1)
+float(1.5)
+float(1.5)
+NULL
+int(1)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 136
+NULL
+NULL
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 137
+string(1) "a"
+string(1) "b"
+string(1) "5"
+int(6)
+int(9223372036854775807)
+float(9.223372036854776E+18)
+int(-9223372036854775808)
+float(-9.223372036854776E+18)
+
+Warning: Increment on type bool has no effect, this will change in the next major version of PHP in %s on line 141
+bool(true)
+bool(true)
+int(10)
+int(12)
+int(12)
+
+Warning: Undefined array key "missing" in %s on line 143
+NULL
+int(1)
+int(4)
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(1)
+}
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    &int(3)
+  }
+}
+int(3)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 167
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 169
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(4)
+  [""]=>
+  int(3)
+}
+
+Warning: Undefined array key "k" in %s on line 174
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot increment/decrement string offsets
+get(k)
+
+Notice: Indirect modification of overloaded element of Bag has no effect in %s on line 184
+int(1)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot use object of type stdClass as array
+TypeError: Cannot increment array
+int(1)
+int(3)
+int(3)
+int(1)
+float(1.5)
+float(1.5)
+NULL
+int(1)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 136
+NULL
+NULL
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 137
+string(1) "a"
+string(1) "b"
+string(1) "5"
+int(6)
+int(9223372036854775807)
+float(9.223372036854776E+18)
+int(-9223372036854775808)
+float(-9.223372036854776E+18)
+
+Warning: Increment on type bool has no effect, this will change in the next major version of PHP in %s on line 141
+bool(true)
+bool(true)
+int(10)
+int(12)
+int(12)
+
+Warning: Undefined array key "missing" in %s on line 143
+NULL
+int(1)
+int(4)
+array(2) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(2)
+}
+int(1)
+int(2)
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    &int(3)
+  }
+}
+int(3)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 167
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 169
+array(3) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(4)
+  [""]=>
+  int(3)
+}
+
+Warning: Undefined array key "k" in %s on line 174
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot increment/decrement string offsets
+get(k)
+
+Notice: Indirect modification of overloaded element of Bag has no effect in %s on line 184
+int(1)
+array(1) {
+  ["k"]=>
+  int(1)
+}
+Error: Cannot use object of type stdClass as array
+TypeError: Cannot increment array
+-- casts
+0:int(0)
+float(0)
+bool(false)
+string(0) ""
+1:int(1)
+float(1)
+bool(true)
+string(1) "1"
+2:int(0)
+float(0)
+bool(false)
+string(0) ""
+3:int(0)
+float(0)
+bool(false)
+string(1) "0"
+4:int(-7)
+float(-7)
+bool(true)
+string(2) "-7"
+5:int(42)
+float(42)
+bool(true)
+string(2) "42"
+6:int(1)
+float(1.5)
+bool(true)
+string(3) "1.5"
+7:int(0)
+float(-0)
+bool(false)
+string(2) "-0"
+8:
+Warning: The float 1.0E+20 is not representable as an int, cast occurred in %s on line 210
+int(7766279631452241920)
+float(1.0E+20)
+bool(true)
+string(7) "1.0E+20"
+9:
+Warning: The float -1.0E+20 is not representable as an int, cast occurred in %s on line 210
+int(-7766279631452241920)
+float(-1.0E+20)
+bool(true)
+string(8) "-1.0E+20"
+10:
+Warning: The float NAN is not representable as an int, cast occurred in %s on line 210
+int(0)
+float(NAN)
+
+Warning: unexpected NAN value was coerced to bool in %s on line 212
+bool(true)
+
+Warning: unexpected NAN value was coerced to string in %s on line 214
+string(3) "NAN"
+11:
+Warning: The float INF is not representable as an int, cast occurred in %s on line 210
+int(0)
+float(INF)
+bool(true)
+string(3) "INF"
+12:int(0)
+float(0.30000000000000004)
+bool(true)
+string(3) "0.3"
+13:int(12)
+float(12)
+bool(true)
+string(2) "12"
+14:int(12)
+float(12)
+bool(true)
+string(5) "12abc"
+15:int(0)
+float(0)
+bool(true)
+string(3) "abc"
+16:int(12)
+float(12)
+bool(true)
+string(3) " 12"
+17:int(12)
+float(12)
+bool(true)
+string(3) "12 "
+18:int(1000)
+float(1000)
+bool(true)
+string(3) "1e3"
+19:int(0)
+float(0)
+bool(true)
+string(4) "0x1A"
+20:int(0)
+float(0)
+bool(false)
+string(0) ""
+21:int(0)
+float(0)
+bool(false)
+string(1) "0"
+22:int(0)
+float(0)
+bool(false)
+
+Warning: Array to string conversion in %s on line 214
+string(5) "Array"
+23:int(1)
+float(1)
+bool(true)
+
+Warning: Array to string conversion in %s on line 214
+string(5) "Array"
+24:
+Warning: Object of class stdClass could not be converted to int in %s on line 210
+int(1)
+
+Warning: Object of class stdClass could not be converted to float in %s on line 211
+float(1)
+bool(true)
+Error: Object of class stdClass could not be converted to string
+25:
+Warning: Object of class Casty could not be converted to int in %s on line 210
+int(1)
+
+Warning: Object of class Casty could not be converted to float in %s on line 211
+float(1)
+bool(true)
+string(5) "casty"
+array(0) {
+}
+array(1) {
+  [0]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+array(1) {
+  [0]=>
+  float(1.5)
+}
+array(1) {
+  [0]=>
+  string(1) "x"
+}
+array(2) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  int(2)
+}
+
+Warning: unexpected NAN value was coerced to array in %s on line 220
+array(1) {
+  [0]=>
+  float(NAN)
+}
+array(0) {
+}
+int(1)
+string(1) "5"
+int(5)
+bool(true)
+float(5)
+array(1) {
+  [0]=>
+  int(5)
+}
+
+Warning: Undefined variable $undefined_cast in %s on line 227
+int(0)
+
+Warning: Undefined variable $undefined_cast in %s on line 228
+string(0) ""
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+int(57)
+string(4) "31.5"
+0:int(0)
+float(0)
+bool(false)
+string(0) ""
+1:int(1)
+float(1)
+bool(true)
+string(1) "1"
+2:int(0)
+float(0)
+bool(false)
+string(0) ""
+3:int(0)
+float(0)
+bool(false)
+string(1) "0"
+4:int(-7)
+float(-7)
+bool(true)
+string(2) "-7"
+5:int(42)
+float(42)
+bool(true)
+string(2) "42"
+6:int(1)
+float(1.5)
+bool(true)
+string(3) "1.5"
+7:int(0)
+float(-0)
+bool(false)
+string(2) "-0"
+8:
+Warning: The float 1.0E+20 is not representable as an int, cast occurred in %s on line 210
+int(7766279631452241920)
+float(1.0E+20)
+bool(true)
+string(7) "1.0E+20"
+9:
+Warning: The float -1.0E+20 is not representable as an int, cast occurred in %s on line 210
+int(-7766279631452241920)
+float(-1.0E+20)
+bool(true)
+string(8) "-1.0E+20"
+10:
+Warning: The float NAN is not representable as an int, cast occurred in %s on line 210
+int(0)
+float(NAN)
+
+Warning: unexpected NAN value was coerced to bool in %s on line 212
+bool(true)
+
+Warning: unexpected NAN value was coerced to string in %s on line 214
+string(3) "NAN"
+11:
+Warning: The float INF is not representable as an int, cast occurred in %s on line 210
+int(0)
+float(INF)
+bool(true)
+string(3) "INF"
+12:int(0)
+float(0.30000000000000004)
+bool(true)
+string(3) "0.3"
+13:int(12)
+float(12)
+bool(true)
+string(2) "12"
+14:int(12)
+float(12)
+bool(true)
+string(5) "12abc"
+15:int(0)
+float(0)
+bool(true)
+string(3) "abc"
+16:int(12)
+float(12)
+bool(true)
+string(3) " 12"
+17:int(12)
+float(12)
+bool(true)
+string(3) "12 "
+18:int(1000)
+float(1000)
+bool(true)
+string(3) "1e3"
+19:int(0)
+float(0)
+bool(true)
+string(4) "0x1A"
+20:int(0)
+float(0)
+bool(false)
+string(0) ""
+21:int(0)
+float(0)
+bool(false)
+string(1) "0"
+22:int(0)
+float(0)
+bool(false)
+
+Warning: Array to string conversion in %s on line 214
+string(5) "Array"
+23:int(1)
+float(1)
+bool(true)
+
+Warning: Array to string conversion in %s on line 214
+string(5) "Array"
+24:
+Warning: Object of class stdClass could not be converted to int in %s on line 210
+int(1)
+
+Warning: Object of class stdClass could not be converted to float in %s on line 211
+float(1)
+bool(true)
+Error: Object of class stdClass could not be converted to string
+25:
+Warning: Object of class Casty could not be converted to int in %s on line 210
+int(1)
+
+Warning: Object of class Casty could not be converted to float in %s on line 211
+float(1)
+bool(true)
+string(5) "casty"
+array(0) {
+}
+array(1) {
+  [0]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  int(1)
+}
+array(1) {
+  [0]=>
+  float(1.5)
+}
+array(1) {
+  [0]=>
+  string(1) "x"
+}
+array(2) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  int(2)
+}
+
+Warning: unexpected NAN value was coerced to array in %s on line 220
+array(1) {
+  [0]=>
+  float(NAN)
+}
+array(0) {
+}
+int(1)
+string(1) "5"
+int(5)
+bool(true)
+float(5)
+array(1) {
+  [0]=>
+  int(5)
+}
+
+Warning: Undefined variable $undefined_cast in %s on line 227
+int(0)
+
+Warning: Undefined variable $undefined_cast in %s on line 228
+string(0) ""
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+int(57)
+string(4) "31.5"
+-- ++/-- on properties
+int(0)
+int(2)
+int(2)
+int(0)
+int(0)
+int(1)
+NULL
+int(1)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 273
+NULL
+NULL
+float(1.5)
+float(2.5)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 275
+string(1) "a"
+string(1) "b"
+int(9223372036854775806)
+Error: Cannot modify readonly property Counter::$ro
+Error: Cannot modify private(set) property Counter::$asym from global scope
+int(1)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+  [2]=>
+  int(-1)
+}
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(2)
+  [2]=>
+  int(-2)
+}
+Error: Cannot access private property Counter::$secret
+hook set 1
+int(1)
+int(1)
+
+Deprecated: Creation of dynamic property Counter::$dyn is deprecated in %s on line 302
+int(1)
+__get(m)
+__set(m)
+int(1)
+__get(m)
+int(2)
+int(2)
+int(12)
+int(0)
+int(2)
+int(2)
+int(0)
+int(0)
+int(1)
+NULL
+int(1)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 273
+NULL
+NULL
+float(1.5)
+float(2.5)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 275
+string(1) "a"
+string(1) "b"
+int(9223372036854775806)
+Error: Cannot modify readonly property Counter::$ro
+Error: Cannot modify private(set) property Counter::$asym from global scope
+int(1)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(1)
+  [2]=>
+  int(-1)
+}
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(2)
+  [2]=>
+  int(-2)
+}
+Error: Cannot access private property Counter::$secret
+hook set 1
+int(1)
+int(1)
+
+Deprecated: Creation of dynamic property Counter::$dyn is deprecated in %s on line 302
+int(1)
+__get(m)
+__set(m)
+int(1)
+__get(m)
+int(2)
+int(2)
+int(12)
+-- by-reference method arguments
+string(1) "r"
+array(1) {
+  ["k"]=>
+  string(3) "set"
+}
+string(1) "r"
+array(2) {
+  ["k"]=>
+  string(3) "set"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    string(3) "set"
+  }
+}
+string(3) "set"
+string(4) "dflt"
+
+Warning: Undefined array key "missing" in %s on line 340
+NULL
+string(14) "__call magic 1"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(3) "set"
+string(2) "r2"
+string(3) "too"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(6) "bound0"
+array(1) {
+  ["x"]=>
+  &string(6) "bound0"
+}
+Error: Call to a member function byRef() on null
+string(1) "r"
+array(1) {
+  ["k"]=>
+  string(3) "set"
+}
+string(1) "r"
+array(2) {
+  ["k"]=>
+  string(3) "set"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    string(3) "set"
+  }
+}
+string(3) "set"
+string(4) "dflt"
+
+Warning: Undefined array key "missing" in %s on line 340
+NULL
+string(14) "__call magic 1"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(3) "set"
+string(2) "r2"
+string(3) "too"
+string(1) "r"
+string(3) "set"
+string(1) "r"
+string(6) "bound1"
+array(1) {
+  ["x"]=>
+  &string(6) "bound1"
+}
+Error: Call to a member function byRef() on null
+-- foreach over objects
+rewind current key k0=10
+next current key k1=20
+next rewind |
+x=1 y=2 a=1 b=2 0=1 got NULL
+k=2 3
+
+Deprecated: Creation of dynamic property Props::$dyn is deprecated in %s on line 431
+pub=1 dyn=6 | pub=1,prot=2,priv=3,dyn=6 | pub=1,prot=2,unset_one=4,own=5
+0=1 1=2 2=3 5=9 p=1 q=2 0=1 1=2 0=3 v=1 RuntimeException: from next
+v=7
+rewind current key k0=10
+next current key k1=20
+next rewind |
+x=1 y=2 a=1 b=2 0=1 got NULL
+k=2 3
+
+Deprecated: Creation of dynamic property Props::$dyn is deprecated in %s on line 431
+pub=1 dyn=6 | pub=1,prot=2,priv=3,dyn=6 | pub=1,prot=2,unset_one=4,own=5
+0=1 1=2 2=3 5=9 p=1 q=2 0=1 1=2 0=3 v=1 RuntimeException: from next
+v=7

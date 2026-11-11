@@ -94,12 +94,12 @@ pub const DIM_POST: u32 = POST << 8;
 pub const PROP_INC: u32 = INC << 16;
 pub const PROP_POST: u32 = POST << 16;
 
-/// Cast's `imm`: the kind (the scalar ones; `(array)` and `(unset)` are
-/// `Op::Slow`).
+/// Cast's `imm`: the kind (`(unset)` is `Op::Slow`).
 pub const CAST_INT: u32 = 0;
 pub const CAST_FLOAT: u32 = 1;
 pub const CAST_STRING: u32 = 2;
 pub const CAST_BOOL: u32 = 3;
+pub const CAST_ARRAY: u32 = 4;
 
 /// BinaryC's `imm` bit: the constant is the left operand (`K op b`), not
 /// the right (`b op K`).
@@ -570,7 +570,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
                 CastKind::Float => CAST_FLOAT,
                 CastKind::String => CAST_STRING,
                 CastKind::Bool => CAST_BOOL,
-                CastKind::Array | CastKind::Unset => return None,
+                CastKind::Array => CAST_ARRAY,
+                CastKind::Unset => return None,
             };
             i(Op::Cast, dst, src, 0, kind)
         }
@@ -847,7 +848,7 @@ mod tests {
             Instr::DimIncDec { var: 1, keys: 10, n: 1, dst: 6, inc: true, post: true },
             Instr::DimIncDec { var: 1, keys: 10, n: 2, dst: 6, inc: false, post: false },
             Instr::Cast { kind: CastKind::String, dst: 6, src: 1 },
-            Instr::Cast { kind: CastKind::Array, dst: 6, src: 1 },
+            Instr::Cast { kind: CastKind::Unset, dst: 6, src: 1 },
             Instr::PropIncDec { obj: THIS, name: c(4), dst: 6, inc: true, post: false },
             Instr::PropIncDec { obj: 20, name: c(4), dst: 6, inc: false, post: true },
             // A name that is no constant: not inline.

@@ -416,13 +416,18 @@ impl Context<'_> {
                     }};
                 }
                 // A foreach step over an array (`$key`: the key too). An
-                // object (a generator, an Iterator) is `step`'s. (One arm
-                // per opcode, so that no arm reads the opcode again: kept
-                // for that, it would hold a register through every arm.)
+                // object (a generator, an Iterator) runs out of line
+                // (`iter_next_object`, with none of `step`'s dispatch).
+                // (One arm per opcode, so that no arm reads the opcode
+                // again: kept for that, it would hold a register through
+                // every arm.)
                 macro_rules! iter_next {
                     ($key:expr) => {{
                         ops!(a, b, c, imm);
                         if !w[rx!(a)].is_array() {
+                            if w[rx!(a)].is_object() {
+                                cold!(iter_next_object);
+                            }
                             slow!();
                         }
                         let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize };
@@ -519,12 +524,12 @@ impl Context<'_> {
                         released |= put(&mut w[rx!(dst)], r);
                         done!(released);
                     }
-                    // `$o->m($v)`: an argument of the user method the call
-                    // site's cache names for this class and scope, copied
-                    // when it takes it by value, the variable made a
-                    // reference when it takes it by reference (a miss, an
-                    // undefined variable: `step`, which looks the method up
-                    // by name).
+                    // `$o->m($v)`: an argument of the method the call site's
+                    // cache names for this class and scope (a user one's
+                    // code, a native one's by-reference bits), copied when
+                    // it takes it by value, the variable made a reference
+                    // when it takes it by reference (a miss, an undefined
+                    // variable: `step`, which looks the method up by name).
                     Op::SendVarMethod => {
                         ops!(a, b, c, imm);
                         let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
@@ -537,6 +542,10 @@ impl Context<'_> {
                             }
                             _ => None,
                         });
+                        let by_ref = match by_ref {
+                            Some(by_ref) => Some(by_ref),
+                            None => self.cached_takes_ref_out(&clo.methods[method], &o.class, n),
+                        };
                         match by_ref {
                             Some(false) => {
                                 let Some(v) = copied(&w[rx!(var)]) else { slow!() };
@@ -741,11 +750,17 @@ impl Context<'_> {
                     }
                     // foreach over an array (a defined, non-reference
                     // register): the iterator is the array and position 0;
-                    // an empty one jumps past the loop. (An object, a
-                    // reference, anything that warns: `step`.)
+                    // an empty one jumps past the loop. An object runs out
+                    // of line (`iter_init_object`, with none of `step`'s
+                    // dispatch). (A reference, anything that warns: `step`.)
                     Op::IterInit => {
                         ops!(a, b, c, imm);
-                        let Some(arr) = w[rx!(a)].as_array() else { slow!() };
+                        let Some(arr) = w[rx!(a)].as_array() else {
+                            if w[rx!(a)].is_object() {
+                                cold!(iter_init_object);
+                            }
+                            slow!()
+                        };
                         if arr.is_empty() {
                             pc = imm as usize;
                         } else {
@@ -1197,11 +1212,12 @@ impl Context<'_> {
                     }
                     // Whether `$o->m(..)` takes argument c by reference, when
                     // the call site's cache knows the method for this class
-                    // and scope (`cached_takes_ref`); else `step`'s lookup.
+                    // and scope (`cached_takes_ref`, a user method's or a
+                    // native one's); else `step`'s lookup.
                     Op::MethodArgByRef => {
                         ops!(a, b, c, imm);
                         let Some(o) = w[rx!(b)].as_object() else { slow!() };
-                        let Some(by_ref) = self.cached_takes_ref(&clo.methods[imm as usize], &o.class, usize::from(c)) else { slow!() };
+                        let Some(by_ref) = self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, usize::from(c)) else { slow!() };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
                     }
                     // `return;` (`ret!`; the main frame's and a generator's:
@@ -1519,12 +1535,13 @@ fn dim_inc_dec(w: &mut [Value], var: usize, keys: usize, imm: u32) -> Option<Val
     })
 }
 
-/// `(int)`, `(float)`, `(string)`, `(bool)` (`Op::Cast`, imm the kind) of
-/// `v` (a reference's value): null, a bool, an int, a float, a string,
-/// and an array but to a string, converted as `step` converts them, when
-/// that reports nothing. None for anything else: an undefined variable,
-/// an object (its cast handler, `__toString`, the warning), a float out
-/// of an int's range, NAN to a bool, an array to a string.
+/// `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` (`Op::Cast`, imm
+/// the kind) of `v` (a reference's value): null, a bool, an int, a float,
+/// a string, and an array but to a string, converted as `step` converts
+/// them, when that reports nothing. None for anything else: an undefined
+/// variable, an object (its cast handler, `__toString`, the warning, its
+/// properties), a float out of an int's range, NAN to a bool or an array,
+/// an array to a string.
 #[inline(never)]
 fn cast(v: &Value, kind: u32) -> Option<Value> {
     if let Some(cell) = v.as_reference() {
@@ -1534,6 +1551,15 @@ fn cast(v: &Value, kind: u32) -> Option<Value> {
         return None;
     }
     match kind {
+        insn::CAST_ARRAY => Some(if v.is_array() {
+            v.clone()
+        } else if v.is_null() {
+            Value::array(PhpArray::new())
+        } else if v.is_nan() {
+            return None;
+        } else {
+            Value::array(PhpArray::from_list(vec![v.clone()]))
+        }),
         insn::CAST_INT => {
             if let Some(f) = v.as_float()
                 && ops::float_to_int_cast_diag(f).is_some()
