@@ -1,0 +1,5 @@
+# A package written outside the image holds that machine's paths; the image
+# writes its own with `p8 compile /app`.
+.p8
+Dockerfile
+.dockerignore
