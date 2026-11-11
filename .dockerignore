@@ -1,0 +1,9 @@
+# Context of docker/Dockerfile (the repository's root): the sources cargo
+# needs, without build output or a checkout's local state.
+.git
+target
+.target
+.tmp
+**/node_modules
+**/.p8
+docker
