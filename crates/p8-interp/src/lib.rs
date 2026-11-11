@@ -2808,6 +2808,26 @@ impl Context<'_> {
                         && let Some(pname) = name.cloned_str()
                     {
                         let o = Rc::clone(o);
+                        // An untyped property bound by reference whose element
+                        // at the path is bound to the property's own cell
+                        // (`$this->p[0] = &$this->p`): the value replaces the
+                        // array, as the loop's arm does (`write_cell_path`'s
+                        // `Wrote::Owner`). Native code runs this instruction
+                        // here, so this path must give what the arm gives.
+                        if op.is_none() && !append && n >= 1 && o.class.properties[slot].ty.is_none() {
+                            let held = o.slots()[slot].replace(Value::UNDEF);
+                            let cell = held.as_reference().map(Rc::clone);
+                            p8_runtime::object::put_slot(&o.slots()[slot], held);
+                            let path: Vec<Value> = keys.iter().map(Value::deref).collect();
+                            if let Some(cell) = cell
+                                && fast::owner_path_write(&cell, &path, &v.deref())
+                            {
+                                keys.clear();
+                                self.dim_keys = keys;
+                                regs[base + dst as usize] = v.deref();
+                                return Ok(Next::Go(pc));
+                            }
+                        }
                         let written = self.update_slot_dim(&o, Some(slot), &pname, &keys, append, v, op);
                         let r = self.finish_prop_dim(regs, written, &keys, append, op);
                         keys.clear();
