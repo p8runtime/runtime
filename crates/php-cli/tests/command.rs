@@ -1,6 +1,7 @@
 //! The workspace builds one command for users, `p8`; the other binaries
-//! are php-src's test runner and dev tools of the legacy engine. A second
-//! user command (a `php2`, a `php`, a `php-fpm`) fails this.
+//! are php-src's test runner and dev tools of the legacy engine. Any other
+//! binary (a second command beside p8, the legacy `php` or `php-fpm`)
+//! fails this.
 
 use std::process::Command;
 
