@@ -2,6 +2,8 @@
 build/
 .idea/
 /target
+/.target
+/.tmp
 .worktrees/
 test_repos/
 tmp_corpus/
