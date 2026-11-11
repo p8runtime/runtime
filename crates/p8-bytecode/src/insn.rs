@@ -208,7 +208,7 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, (&func.classes, &func.arg_vars)).unwrap_or(SLOW)).collect()
+    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect()
 }
 
 /// A class reference as the flag of an instruction that names a class:
@@ -293,12 +293,12 @@ fn res(code: &[Instr], pc: usize, dst: Reg) -> Opnd {
 /// `lower_in` of code that names no class (the unit tests').
 #[cfg(test)]
 fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<Insn> {
-    lower_in(code, pc, consts, ncv, (&[], &[]))
+    lower_in(code, pc, consts, ncv, &[], &[])
 }
 
 /// The instruction at `pc` lowered; `classes` and `arg_vars` are the
 /// function's (`Function::classes`, `Function::arg_vars`).
-fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, (classes, arg_vars): (&[ClassRef], &[Vec<(u8, Reg)>])) -> Option<Insn> {
+fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef], arg_vars: &[Vec<(u8, Reg)>]) -> Option<Insn> {
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
     let o = |reg: Reg| opnd(reg, consts, ncv);
@@ -679,6 +679,38 @@ mod tests {
         assert_eq!(at(15).unwrap(), Insn { op: Op::P8_ASSIGN_PROP_REG_K_COPY_USED, a: 1, b: 6, c: 0, imm: 7 | 4 << 16 });
         assert!(at(16).is_none());
         assert_eq!(at(17).unwrap(), Insn { op: Op::P8_MOVE_K, a: 5, b: 0, c: 0, imm: 8 });
+    }
+
+    #[test]
+    fn the_second_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // `empty($a['k'])`: IS, as `??`.
+            Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: true, empty: true },
+            // `$o::class` (class 0 is Dynamic(3)); `$o::K` is not CLASS_NAME.
+            Instr::ClassConst { dst: 5, class: 0, name: c(11) },
+            Instr::ClassConst { dst: 5, class: 0, name: c(7) },
+            Instr::MakeClosure { dst: 5, func: 2, is_static: true },
+            Instr::CollectVariadic { var: 1 },
+            Instr::ArrayUnpack { arr: 5, src: 1 },
+            // A static call sending variable 1 (entry 0 of arg_vars), and
+            // one whose variable is past the window.
+            Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 0 },
+            Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 1 },
+        ];
+        let mut consts = consts();
+        consts[11] = Frozen::Str("CLASS".into());
+        let classes = [ClassRef::Dynamic(3), ClassRef::Static];
+        let arg_vars = [vec![(0, 1)], vec![(0, 300)]];
+        let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &arg_vars);
+        assert_eq!(at(0).unwrap().op, Op::P8_FETCH_DIM_IS_KSTR);
+        assert_eq!(at(1).unwrap(), Insn { op: Op::P8_CLASS_NAME, a: 5, b: 3, c: 0, imm: 0 });
+        assert!(at(2).is_none());
+        assert_eq!(at(3).unwrap(), Insn { op: Op::MakeClosure, a: 5, b: 0, c: 0, imm: 2 | 1 << 16 });
+        assert_eq!(at(4).unwrap().op, Op::CollectVariadic);
+        assert_eq!(at(5).unwrap(), Insn { op: Op::ArrayUnpack, a: 5, b: 1, c: 0, imm: 0 });
+        assert_eq!(at(6).unwrap(), Insn { op: Op::StaticCallVars, a: 5, b: 10, c: 1, imm: 3 | 1 << 16 });
+        assert!(at(7).is_none());
     }
 
     #[test]
