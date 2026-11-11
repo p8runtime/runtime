@@ -12,72 +12,7 @@ use std::io::Write;
 #[global_allocator]
 static ALLOC: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
-mod http;
-mod mime_types;
-mod server;
-mod status_phrases;
-
-/// The extensions php2 loads (`server`: with what the built-in web server
-/// adds). A WASI build has no sockets, so it is a PHP built without
-/// mysqli, curl, pdo_mysql, sockets and pdo_pgsql: they are not loaded.
-fn extensions(server: bool) -> Vec<p8::Extension> {
-    use p8::extensions::*;
-    let mut all = vec![STANDARD];
-    if server {
-        all.push(SERVER);
-    }
-    all.extend([
-        XML,
-        TOKENIZER,
-        MBSTRING,
-        PCRE,
-        #[cfg(not(target_os = "wasi"))]
-        MYSQLI,
-        #[cfg(not(target_os = "wasi"))]
-        CURL,
-        GD,
-        ZIP,
-        FILEINFO,
-        SESSION,
-        PDO,
-        PDO_SQLITE,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_MYSQL,
-        #[cfg(not(target_os = "wasi"))]
-        SOCKETS,
-        OPENSSL,
-        INTL,
-        #[cfg(not(target_os = "wasi"))]
-        PDO_PGSQL,
-    ]);
-    all
-}
-
-/// `opcache.file_cache=<dir>`: keep compiled files in that directory, for
-/// the runs after this one (off unless set, as in PHP). It is OPcache's,
-/// so it takes effect only when OPcache starts: in the CLI (`cli`) that
-/// needs opcache.enable_cli=1 too, as in PHP 8.6.
-fn file_cache(platform: p8::Platform, ini: &[(String, String)], cli: bool) -> p8::Platform {
-    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.trim().to_string()).or_else(|| platform.ini_default(name));
-    if !p8::OpcacheSettings::from_ini(cli, &value).started() {
-        return platform;
-    }
-    let read_only = value("opcache.file_cache_read_only").is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "on" | "yes" | "true"));
-    match value("opcache.file_cache") {
-        Some(dir) if !dir.is_empty() && read_only => platform.read_only_file_cache(dir),
-        Some(dir) if !dir.is_empty() => platform.file_cache(dir),
-        _ => platform,
-    }
-}
-
-/// Zend OPcache over the kept files, started as PHP starts it from these
-/// settings (`-d`, else the built-in defaults): the CLI (`cli`) needs
-/// opcache.enable_cli as well as opcache.enable; php -S does not.
-fn opcache(platform: p8::Platform, ini: &[(String, String)], cli: bool) -> p8::Platform {
-    let value = |name: &str| ini.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.clone()).or_else(|| platform.ini_default(name));
-    let settings = p8::OpcacheSettings::from_ini(cli, &value);
-    platform.opcache(settings)
-}
+use php_cli::{extensions, file_cache, on_deep_stack, opcache, server};
 
 /// The package a run takes compiled files from: the one `--package` names,
 /// else the one appended to this executable (`--bake`), if any. One that
@@ -98,45 +33,11 @@ fn open_package(platform: &p8::Platform, path: Option<&str>, check: p8::PackageC
 }
 
 /// `--compile <dir>`: every PHP file under `dir` compiled into a package
-/// at `out` (default `<dir>/.p8/package`), and with `bake`, a copy of this
-/// executable carrying it. Returns the exit status.
+/// at `out` (default `<dir>/.p8/package`) for the CLI's engine, and with
+/// `bake`, a copy of this executable carrying it. Returns the exit status.
 fn write_package(dir: &str, out: Option<&str>, bake: Option<&str>) -> i32 {
-    let platform = p8::Platform::new(&extensions(false));
     let out = out.map_or_else(|| std::path::Path::new(dir).join(".p8").join("package"), std::path::PathBuf::from);
-    let packed = match platform.write_package(std::path::Path::new(dir), &out) {
-        Ok(packed) => packed,
-        Err(e) => {
-            eprintln!("php2: could not write {}: {e}", out.display());
-            return 1;
-        }
-    };
-    for error in &packed.failed {
-        eprintln!("php2: left out {} (it does not compile: {} on line {})", error.file, error.message, error.line);
-    }
-    println!("{} files compiled into {} ({} bytes)", packed.files, out.display(), packed.bytes);
-    if let Some(exe) = bake {
-        if let Err(e) = platform.bake(&out, std::path::Path::new(exe)) {
-            eprintln!("php2: could not write {exe}: {e}");
-            return 1;
-        }
-        println!("{exe}: php2 with the package");
-    }
-    0
-}
-
-/// Run `f` with a native stack deep enough for deep PHP recursion: on a
-/// thread with a 64 MiB stack. WASI has no threads; there the binary's
-/// own stack is that size (see build.rs).
-#[cfg(not(target_os = "wasi"))]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(f).expect("interpreter thread").join().unwrap_or(255)
-}
-
-/// Run `f` with a native stack deep enough for deep PHP recursion: WASI
-/// has no threads, so the binary's own stack is 64 MiB (see build.rs).
-#[cfg(target_os = "wasi")]
-fn on_deep_stack(f: impl FnOnce() -> i32 + Send + 'static) -> i32 {
-    f()
+    php_cli::write_package("php2", false, dir, &out, bake)
 }
 
 fn main() {
@@ -155,7 +56,7 @@ fn main() {
     }
     // php -S: the built-in web server (the file, if any, is its router).
     if let Some(address) = serve {
-        let config = server::Config { address, docroot, router: path, quiet, ini };
+        let config = server::Config { address, docroot, router: path, quiet, ini, project: None };
         let status = on_deep_stack(move || match stdio {
             Some(client) => server::run_stdio(config, client),
             None => server::run(config),

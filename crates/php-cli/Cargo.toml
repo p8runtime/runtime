@@ -5,9 +5,18 @@ edition = "2024"
 license = "MIT"
 description = "The php command-line host for p8"
 
+[lib]
+name = "php_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "php2"
 path = "src/main.rs"
+
+# `p8 compile` and `p8 serve` (#382): the same web server as php2 -S.
+[[bin]]
+name = "p8"
+path = "src/p8.rs"
 
 [dependencies]
 p8 = { path = "../p8" }

@@ -5,5 +5,6 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
         println!("cargo:rustc-link-arg-bin=php2=-zstack-size=67108864");
+        println!("cargo:rustc-link-arg-bin=p8=-zstack-size=67108864");
     }
 }
