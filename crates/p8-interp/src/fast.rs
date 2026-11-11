@@ -1070,7 +1070,7 @@ pub(crate) enum Flow {
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
     clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
-        Some(ty) if p.variadic => v.as_array().is_none_or(|list| list.values().all(|v| plain_arg(None, ty, v))),
+        Some(ty) if p.variadic => variadic_plain(ty, v),
         Some(_) if i >= argc || v.is_undef() => true,
         Some(ty) => plain_arg(clo.type_memo.get(i), ty, v),
     })
@@ -1131,6 +1131,14 @@ fn unpack_array(to: &mut Value, from: &PhpArray) -> bool {
         }
     }
     true
+}
+
+/// A typed variadic's list (`CollectVariadic`'s), each element plainly of
+/// the type (out of line: not on a plain call's path).
+#[cold]
+#[inline(never)]
+fn variadic_plain(ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+    v.as_array().is_none_or(|list| list.values().all(|v| plain_arg(None, ty, v)))
 }
 
 /// One argument plainly of its type (`ClassMemo::quick`), a reference's

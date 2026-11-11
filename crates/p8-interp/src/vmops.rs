@@ -232,26 +232,9 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
             None if S::Mode::ID == IS => Value::NULL,
             _ => return Ctl::Cold,
         }
-    } else if let Some(s) = hx.w[r(arr)].as_str() {
-        // A string's offset, an int key: its byte (one of the shared
-        // one-byte strings), counted from the end when negative. Out of
-        // range: null for IS, else cold (the warning); a string key is cold.
-        let i = match kv.as_int() {
-            Some(i) if S::Key::ID != KSTR => i,
-            _ => return Ctl::Cold,
-        };
-        let at = if i < 0 { i.wrapping_add(s.len() as i64) } else { i };
-        match usize::try_from(at).ok().and_then(|at| s.as_bytes().get(at)) {
-            Some(&b) => Value::str(PhpStr::byte(b)),
-            None if S::Mode::ID == IS => Value::NULL,
-            None => return Ctl::Cold,
-        }
-    } else if S::Mode::ID == IS && quiet_null(&hx.w[r(arr)]) {
-        // `??`/isset/empty of a dimension of null, an undefined variable
-        // or a scalar: null, with no warning.
-        Value::NULL
     } else {
-        match elem(&hx.w[..], arr as Reg, hx.src::<S::Key>(key)) {
+        // (Out of line: the array case is the arm's straight path.)
+        match dim_of(&hx.w[..], arr as Reg, hx.src::<S::Key>(key), S::Key::ID == KSTR, S::Mode::ID == IS) {
             Some(v) => v,
             None => return Ctl::Cold,
         }
@@ -260,12 +243,30 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
     Ctl::Next(true)
 }
 
-/// A container a quiet read (`??`, `empty`) of any dimension gives null
-/// from, silently, as ZEND_FETCH_DIM_IS does: null, undefined, a bool, an
-/// int, a float.
-#[inline(always)]
-fn quiet_null(v: &Value) -> bool {
-    v.is_null_or_undef() || v.is_bool() || v.is_int() || v.is_float()
+/// `$c[k]` of anything but an array: a string's offset, an int key, is its
+/// byte (one of the shared one-byte strings), counted from the end when
+/// negative (out of range: null when `quiet`, else None, the warning); a
+/// quiet read (`??`, `empty`) of null, an undefined variable or a scalar
+/// is null, silently, as ZEND_FETCH_DIM_IS gives; an array through a
+/// reference is `elem`'s. None (cold) for the rest: a string's string key
+/// (`kstr`: a literal one), an object, a warning.
+#[cold]
+#[inline(never)]
+fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Value> {
+    let c = &w[usize::from(arr)];
+    if let Some(s) = c.as_str() {
+        let i = if kstr { None } else { crate::fast::src(w, key).as_int() }?;
+        let at = if i < 0 { i.wrapping_add(s.len() as i64) } else { i };
+        return match usize::try_from(at).ok().and_then(|at| s.as_bytes().get(at)) {
+            Some(&b) => Some(Value::str(PhpStr::byte(b))),
+            None if quiet => Some(Value::NULL),
+            None => None,
+        };
+    }
+    if quiet && (c.is_null_or_undef() || c.is_bool() || c.is_int() || c.is_float()) {
+        return Some(Value::NULL);
+    }
+    elem(w, arr, key)
 }
 
 /// `$x::class` of an object: its class's name (shared, as PHP's interned
