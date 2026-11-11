@@ -98,13 +98,13 @@ fn globals_bound_in_functions_stay_in_the_loop() {
     let out = flat(
         "$GLOBALS['g'] = 1; $GLOBALS['h'] = 'x';
          function bump() { global $g; $g++; return $g; }
-         function both() { global $g, $h; return $h . $g; }
+         function both() { global $g, $h; return $g * 2 + ($h === 'x' ? 1 : 0); }
          $t = 0;
          for ($i = 0; $i < $n; $i++) { $t += bump(); $s = both(); }
          echo $t, ' ', $s;",
     );
-    // n = 20: 2 + .. + 21.
-    assert_eq!(out, "230 x21");
+    // n = 20: 2 + .. + 21, and 21 * 2 + 1.
+    assert_eq!(out, "230 43");
 }
 
 /// `$a[k1][k2] = v` and three keys, on a variable and on a property
