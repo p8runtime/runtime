@@ -843,6 +843,7 @@ impl Context<'_> {
 
     /// `$obj->method(args)`: the frame to push.
     pub(crate) fn method_frame(&mut self, target: &Value, key: Option<Sym>, display: &[u8]) -> Result<MethodFrame, Throw> {
+        p8_runtime::counts::bump(p8_runtime::counts::Count::MethodLookup);
         let object = if let Some(o) = target.as_object() {
             Rc::clone(o)
         } else if let Some(cell) = target.as_reference() {

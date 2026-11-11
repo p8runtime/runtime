@@ -264,7 +264,10 @@ impl Frames {
     pub(crate) fn site_code(&self, code: &std::rc::Weak<Closure>) -> Option<Option<Rc<Closure>>> {
         match self.slots.get(self.len) {
             Some(slot) if std::ptr::eq(Rc::as_ptr(&slot.func), code.as_ptr()) => Some(None),
-            _ => code.upgrade().map(Some),
+            _ => {
+                p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
+                code.upgrade().map(Some)
+            }
         }
     }
 
