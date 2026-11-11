@@ -919,6 +919,12 @@ impl Context<'_> {
         let (file, line) = self.location();
         let message = match self.stop.load(AtomicOrdering::Relaxed) {
             TERMINATE => "Execution was terminated by the host".to_string(),
+            // Raised once: shutdown functions run after it (zend_handle_delayed_oom).
+            OUT_OF_MEMORY => {
+                let _ = self.stop.compare_exchange(OUT_OF_MEMORY, NO_INTERRUPT, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed);
+                let (bytes, tried) = self.frames.limit.as_ref().map_or((0, 0), |l| (l.bytes.get(), l.tried.get()));
+                format!("Allowed memory size of {bytes} bytes exhausted (tried to allocate {tried} bytes)")
+            }
             seconds => format!("Maximum execution time of {seconds} second{} exceeded", if seconds == 1 { "" } else { "s" }),
         };
         Throw::Fatal { message, file, line }
@@ -5599,6 +5605,11 @@ impl Ctx for Context<'_> {
             b"display_errors" => {
                 let t = text.as_bytes().to_ascii_lowercase();
                 self.display_errors = !matches!(t.as_slice(), b"" | b"0" | b"off" | b"no" | b"false" | b"stderr");
+            }
+            b"memory_limit" => {
+                if let Some(limit) = &self.frames.limit {
+                    limit.bytes.set(limit_bytes(text.as_bytes()));
+                }
             }
             _ => {}
         }
