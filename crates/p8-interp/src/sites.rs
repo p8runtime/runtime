@@ -91,6 +91,10 @@ pub(crate) struct ConstSite {
     /// (Held, never read: a weak handle keeps the class's allocation, so
     /// its address, from being reused while the entry names it.)
     pub(crate) _keep: std::rc::Weak<Class>,
+    /// The scope it was read from (its class's address) for a private or
+    /// protected constant, whose access depends on it; 0 for a public one
+    /// (any scope).
+    pub(crate) scope: usize,
     pub(crate) value: Value,
 }
 
@@ -301,6 +305,107 @@ pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
             Some(v.clone())
         }
     })
+}
+
+/// The cache entry for property `name` of `o`'s class at `slot` (`prop`,
+/// found visible from code in `scope`, its address): none for a hooked
+/// one. Any scope may use a public property's entry, unless a parent's
+/// private one of the same name is there too (which one a scope sees then
+/// depends on it). `remember_prop` and the loop's refill share it.
+pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usize, prop: &p8_runtime::object::Property, scope: usize) -> Option<PropSite> {
+    if prop.hooks != 0 {
+        return None;
+    }
+    let shared = o.class.slots.get(name).is_some_and(|slots| slots.len() == 1);
+    let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { scope };
+    Some(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 })
+}
+
+/// The declared slot of property `name` of `o` that code in `scope` sees
+/// (`prop_slot`'s lookup and visibility test, the declaring class found
+/// in the object's chain), from the class alone: None when it cannot say
+/// (no such declared property, one this scope may not see: the full path,
+/// with its error or magic).
+pub(crate) fn visible_slot<'o>(o: &'o p8_runtime::object::Object, name: &[u8], scope: Option<&Rc<Class>>) -> Option<(usize, &'o p8_runtime::object::Property)> {
+    let slot = o.class.slot(name, scope.map(|s| s.lower.as_slice()))?;
+    let prop = &o.class.properties[slot];
+    let mut c = Some(&o.class);
+    let declaring = loop {
+        let k = c?;
+        if k.lower == prop.declaring {
+            break k;
+        }
+        c = k.parent.as_ref();
+    };
+    p8_runtime::object::visible(prop.visibility, declaring, scope.map(|s| &**s)).then_some((slot, prop))
+}
+
+/// The entry a property access with the name in a register (`$o->$name`)
+/// would have, made for this access alone (`visible_slot`, `prop_entry`):
+/// the loop's dynamic-name arms read and write through it as the cached
+/// ones do. None when the class alone cannot say.
+#[inline(never)]
+pub(crate) fn dyn_entry(o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) -> Option<PropSite> {
+    let name = name.as_str()?;
+    let (slot, prop) = visible_slot(o, name.as_bytes(), scope)?;
+    prop_entry(o, name.as_bytes(), slot, prop, scope.map_or(0, |c| Rc::as_ptr(c) as usize))
+}
+
+/// A read of property `name` that is no declared one of `o`'s class: the
+/// object's dynamic property of that name (a stdClass's, one added at run
+/// time), when the class has no __get and its kin and the object is not
+/// lazy. None for the rest (unset: the warning; magic: the full path).
+#[cold]
+#[inline(never)]
+pub(crate) fn dynamic_prop(o: &p8_runtime::object::Object, name: &Value) -> Option<Value> {
+    if o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0 || o.lazy.get() != 0 {
+        return None;
+    }
+    let name = name.as_str()?;
+    if o.class.properties.iter().any(|p| p.name.as_bytes() == name.as_bytes()) {
+        return None;
+    }
+    let v = o.dynamic().get_str(name)?.deref();
+    (!v.is_undef()).then_some(v)
+}
+
+/// `refill_prop` when the entry does not answer for `o`'s class and this
+/// scope, for the hand arms that go on to their own path test.
+#[inline(always)]
+pub(crate) fn refill_if_missed(site: &Cell<PropSite>, o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) {
+    let e = site.get();
+    if e.class != Rc::as_ptr(&o.class) as usize || (e.scope != 0 && e.scope != scope.map_or(0, |c| Rc::as_ptr(c) as usize)) {
+        let _ = refill_prop(site, o, name, scope);
+    }
+}
+
+/// A property access's cache entry `site` that does not answer for `o`'s
+/// class or this scope (a method of a base class running on objects of
+/// several subclasses): filled again for this class, from the class
+/// alone (`prop_slot`'s lookup and visibility test, the declaring class
+/// found in the object's chain), as the full path would fill it. False
+/// when the entry answers already (the miss is something else: an unset
+/// slot, a lazy object), or when the class alone cannot say (no such
+/// declared property, a property this scope may not see: the full path,
+/// with its error or magic).
+#[cold]
+#[inline(never)]
+pub(crate) fn refill_prop(site: &Cell<PropSite>, o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) -> bool {
+    let scope_addr = scope.map_or(0, |c| Rc::as_ptr(c) as usize);
+    let e = site.get();
+    if e.class == Rc::as_ptr(&o.class) as usize && (e.scope == 0 || e.scope == scope_addr) {
+        return false;
+    }
+    let Some(name) = name.as_str() else { return false };
+    let name = name.as_bytes();
+    let Some((slot, prop)) = visible_slot(o, name, scope) else { return false };
+    match prop_entry(o, name, slot, prop, scope_addr) {
+        Some(entry) => {
+            site.set(entry);
+            true
+        }
+        None => false,
+    }
 }
 
 /// The declared slot a property write the cache answers goes to: as for
@@ -599,15 +704,9 @@ impl Context<'_> {
     pub(crate) fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
         let Some(name) = name.as_str() else { return };
         let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else { return };
-        if prop.hooks != 0 {
-            return;
+        if let Some(entry) = prop_entry(o, name.as_bytes(), slot, prop, self.scope_addr()) {
+            site.set(entry);
         }
-        // Any scope may use a public property's entry, unless a parent's
-        // private one of the same name is there too (which one a scope
-        // sees then depends on it).
-        let shared = o.class.slots.get(name.as_bytes()).is_some_and(|slots| slots.len() == 1);
-        let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { self.scope_addr() };
-        site.set(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32 });
     }
 }
 

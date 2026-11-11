@@ -398,18 +398,29 @@ impl Context<'_> {
                 // `$vars` names (`Function::arg_vars`) are sent (`send_vars`).
                 // Anything else (a property hook's `parent::$p::get()`, a
                 // native method, __callStatic (`remember_static` caches no
-                // trampoline), the first call) is `step`'s.
+                // trampoline), the first call) is `static_call_ops`'s.
                 macro_rules! static_call {
                     ($vars:expr) => {{
                         ops!(a, b, c, imm);
                         let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
-                        let Some(m) = self.cached_static_call(clo, class, method) else { slow!() };
-                        // (Taken apart: the frame takes its parts, no copy.)
-                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { slow!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                            slow!();
-                        }
                         let vars: Option<u16> = $vars;
+                        // Anything else (the first call, a native method,
+                        // __callStatic, a hook's `parent::$p::get()`, a
+                        // generator, missing arguments, an interrupt due):
+                        // out of line on the arm's operands
+                        // (`static_call_ops`).
+                        macro_rules! uncached {
+                            () => {{
+                                let ops = StaticCallOps { dst: Reg::from(dst), class, method: method as u16, args: Reg::from(args), argc: n as u8, vars: vars.unwrap_or(p8_bytecode::NO_VARS) };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_call_ops(regs, clo, base, at, ops))
+                            }};
+                        }
+                        let Some(m) = self.cached_static_call(clo, class, method) else { uncached!() };
+                        // (Taken apart: the frame takes its parts, no copy.)
+                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { uncached!() };
+                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            uncached!();
+                        }
                         if let Some(vars) = vars {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
@@ -484,8 +495,15 @@ impl Context<'_> {
                     }
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
+                    // (A variable bound by reference: its value, `quick_ref`.)
                     Op::VerifyReturn => match &clo.code.ret_type {
-                        Some(ty) if clo.code.is_generator || !ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)]) => slow!(),
+                        Some(ty)
+                            if clo.code.is_generator
+                                || !(ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)])
+                                    || w[rx!(insn.a)].as_reference().is_some_and(|c| quick_ref(clo.type_memo.last(), ty, c))) =>
+                        {
+                            slow!()
+                        }
                         _ => pc += 1,
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
@@ -841,15 +859,22 @@ impl Context<'_> {
                     // its required arguments, and no interrupt pending: its
                     // frame pushed here. A builtin it resolved: frameless when
                     // it can be (the frame and window kept), else called out of
-                    // line. Anything else (a miss, a generator) is `step`'s.
+                    // line. Anything else (a site not resolved yet, a
+                    // generator, missing arguments, an interrupt due) runs
+                    // out of line on the arm's operands (`call_ops`).
                     Op::Call => {
                         ops!(a, b, c, imm);
                         let (args, n, dst) = (a, b, c);
+                        macro_rules! uncached {
+                            () => {
+                                out!((imm as u16, Reg::from(args), n, Reg::from(dst)), |cx, regs, clo, base, _, at, ops| cx.call_ops(regs, clo, base, at, ops))
+                            };
+                        }
                         match clo.sites[imm as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
                                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                                    slow!();
+                                    uncached!();
                                 }
                                 // Code the executable has machine code for
                                 // (native.rs) runs that first; it hands the
@@ -879,7 +904,7 @@ impl Context<'_> {
                                     continue 'frame;
                                 }
                             }
-                            _ => slow!(),
+                            _ => uncached!(),
                         }
                     }
                     // `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI
@@ -1020,15 +1045,22 @@ impl Context<'_> {
                         // `new self`, `new parent`: the class known without a
                         // lookup (`static_target`) and the NewInfo kept for it
                         // (`new_info_kept`). A class in a register, one not
-                        // made before: `step`.
+                        // made before, a Throwable (its trace), a
+                        // constructor this scope may not call (the error):
+                        // out of line on the arm's operands (`new_ops`).
+                        macro_rules! general {
+                            () => {
+                                out!((Reg::from(a), imm as u16), |cx, regs, clo, base, _, at, ops| cx.new_ops(regs, clo, base, at, ops))
+                            };
+                        }
                         let info = match Self::cached_new(clo, imm as u16) {
                             Some(info) => info,
                             None => match self.new_info_kept(clo, imm as u16) {
                                 Some(info) => info,
-                                None => slow!(),
+                                None => general!(),
                             },
                         };
-                        let Some(object) = self.make_plain(&info) else { slow!() };
+                        let Some(object) = self.make_plain(&info) else { general!() };
                         // Not destructed unless constructed (an argument may throw first).
                         object.destructed.set(true);
                         self.last_new = Some(info);
@@ -1127,7 +1159,7 @@ impl Context<'_> {
                     // a PHP method's frame pushed here. Anything else (a
                     // property hook's `parent::$p::get()`, a native method,
                     // __callStatic (`remember_static` caches no trampoline),
-                    // the first call) is `step`'s.
+                    // the first call) is `static_call_ops`'s, out of line.
                     Op::StaticCall => static_call!(None),
                     // The same, with the variables the call sends itself
                     // (`C::f($x)`: the method decides by-reference, so the
@@ -1187,6 +1219,9 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        // (A class or scope the entry has not seen: filled
+                        // again for this one, `refill_if_missed`.)
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         // (Its own handle: the window is written while it is used.)
                         let o = Rc::clone(o);
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
@@ -1303,6 +1338,7 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let Some(v) = prop_inc_dec(o, site.get(), scope, imm) else { slow!() };
                         done!(put(&mut w[rx!(b)], v));
@@ -1343,6 +1379,7 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         let Some(o) = w[rx!(b)].as_object() else { slow!() };
                         let Some(site) = clo.props.get(imm as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[imm as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let Some(cell) = prop_ref_cached(o, site.get(), scope) else { slow!() };
                         done!(put(&mut w[rx!(a)], Value::reference(cell)));
@@ -1509,10 +1546,255 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let y = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
                         let Some(v) = prop_op(o, site.get(), scope, insn::binop(imm >> 16), y) else { slow!() };
                         done!(put(&mut w[rx!(c)], v));
+                    }
+                    // `unset($x)`: the register undefined (a destructor due
+                    // runs here); in a file included at global scope (the
+                    // global too): out of line, `unset_var_ops`.
+                    Op::UnsetVar => {
+                        ops!(a, b, c, imm);
+                        if base != 0 && top.global {
+                            out!(Reg::from(a), |cx, regs, clo, base, _, at, var| cx.unset_var_ops(regs, clo, base, at, var));
+                        }
+                        done!(put(&mut w[rx!(a)], Value::UNDEF));
+                    }
+                    // `(object) $v`, `$$name`, `$GLOBALS` and the other
+                    // superglobals: out of line on the arm's operands.
+                    Op::ToObject => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.object_cast_ops(regs, clo, base, at, ops));
+                    }
+                    // Whether `$f(..)` sends an argument by reference: a
+                    // closure answers itself here; any other callable is
+                    // resolved out of line (`callable_arg_by_ref_ops`).
+                    Op::CallableArgByRef => {
+                        ops!(a, b, c, imm);
+                        if imm != u32::from(u16::MAX)
+                            && let Some(by_ref) = Self::closure_takes_ref(&w[rx!(b)], imm as usize)
+                        {
+                            done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                            continue;
+                        }
+                        out!((Reg::from(a), Reg::from(b), Reg::from(c), imm as u16), |cx, regs, _, base, _, at, ops| cx.callable_arg_by_ref_ops(regs, base, at, ops));
+                    }
+                    Op::VarGet => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.var_get_ops(regs, clo, base, at, ops));
+                    }
+                    Op::AutoGlobal => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.auto_global_ops(regs, clo, base, at, ops));
+                    }
+                    // `[&$x]`: x made a reference, appended to the literal
+                    // (as `step` appends it).
+                    Op::ArrayPushRef => {
+                        ops!(a, b, c, imm);
+                        let cell = make_ref(&mut w[..], Reg::from(b));
+                        if let Some(arr) = w[rx!(a)].array_mut() {
+                            let _ = arr.push(Value::reference(cell));
+                        }
+                        pc += 1;
+                    }
+                    // `C::$name op= v`: out of line on the arm's operands
+                    // (`assign_static_prop_op_ops`).
+                    Op::AssignStaticPropOp => {
+                        ops!(a, b, c, imm);
+                        let val = if imm & insn::STATIC_OP_K != 0 { p8_bytecode::const_operand(usize::from(b)) } else { Reg::from(b) };
+                        let ops = (insn::binop(imm >> 14), u16::from(c), p8_bytecode::const_operand((imm & 0x3fff) as usize), val, Reg::from(a));
+                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.assign_static_prop_op_ops(regs, clo, base, at, ops));
+                    }
+                    // A class or function declared where its code runs, a
+                    // file included, `f(...)`: out of line on the arm's
+                    // operands.
+                    Op::DeclareClass => {
+                        ops!(a, b, c, imm);
+                        out!(imm as u16, |cx, _, clo, _, _, at, class| cx.declare_class_ops(clo, at, class));
+                    }
+                    Op::DeclareFunction => {
+                        ops!(a, b, c, imm);
+                        out!(imm as u16, |cx, _, clo, _, _, at, i| cx.declare_function_ops(clo, at, i));
+                    }
+                    Op::Include => {
+                        ops!(a, b, c, imm);
+                        let src = if imm & insn::SRC_K != 0 { p8_bytecode::const_operand((imm >> 8 & 0x3fff) as usize) } else { Reg::from(b) };
+                        out!((Reg::from(a), src, insn::include_kind(imm)), |cx, regs, clo, base, _, at, ops| cx.include_ops(regs, clo, base, at, ops));
+                    }
+                    Op::FromCallable => {
+                        ops!(a, b, c, imm);
+                        let src = if imm & insn::SRC_K != 0 { p8_bytecode::const_operand((imm >> 8 & 0x3fff) as usize) } else { Reg::from(b) };
+                        out!((Reg::from(a), src), |cx, regs, clo, base, _, at, ops| cx.first_class_callable_ops(regs, clo, base, at, ops));
+                    }
+                    // `yield`: the generator's frame suspended, out of line
+                    // on the arm's operands (`yield_ops`).
+                    Op::Yield => {
+                        ops!(a, b, c, imm);
+                        let value = if imm & insn::YIELD_VALUE_K != 0 { p8_bytecode::const_operand((imm & 0x3fff) as usize) } else { Reg::from(b) };
+                        let key = (imm & insn::YIELD_HAS_KEY != 0).then(|| if imm & insn::YIELD_KEY_K != 0 { p8_bytecode::const_operand((imm >> 14 & 0x3fff) as usize) } else { Reg::from(c) });
+                        out!((Reg::from(a), value, key), |cx, regs, clo, base, _, at, ops| cx.yield_ops(regs, clo, base, at, ops));
+                    }
+                    // `yield from`: out of line on the arm's operands
+                    // (`yield_from_ops`).
+                    Op::YieldFrom => {
+                        ops!(a, b, c, imm);
+                        let src = if imm & insn::YIELD_VALUE_K != 0 { p8_bytecode::const_operand((imm & 0x3fff) as usize) } else { Reg::from(b) };
+                        out!((Reg::from(a), src), |cx, regs, _, base, _, at, ops| cx.yield_from_ops(regs, base, at, ops));
+                    }
+                    // `$a = &$b`: b made a reference, a bound to its cell.
+                    Op::BindRef => {
+                        ops!(a, b, c, imm);
+                        if a == b {
+                            pc += 1;
+                        } else {
+                            let cell = make_ref(&mut w[..], Reg::from(b));
+                            done!(put(&mut w[rx!(a)], Value::reference(cell)));
+                        }
+                    }
+                    // A RefDim with no keys and no `[]` (the root itself):
+                    // b made a reference, a bound to it; a path (`&$b['k']..`, an
+                    // element passed by reference): out of line on the arm's
+                    // operands (`ref_dim_ops`: the elements made, the
+                    // errors).
+                    Op::RefDim => {
+                        ops!(a, b, c, imm);
+                        let n = (imm & 0xff) as u8;
+                        if n == 0 && imm & insn::REF_APPEND == 0 {
+                            let cell = make_ref(&mut w[..], Reg::from(b));
+                            done!(put(&mut w[rx!(a)], Value::reference(cell)));
+                        } else {
+                            let keys = if imm & insn::REF_KEY_K != 0 { p8_bytecode::const_operand((imm >> 10) as usize) } else { Reg::from(c) };
+                            let ops = DimRefOps { var: Reg::from(a), root: Reg::from(b), keys, n, append: imm & insn::REF_APPEND != 0 };
+                            out!(ops, |cx, regs, clo, base, _, at, ops| cx.ref_dim_ops(regs, clo, base, at, ops));
+                        }
+                    }
+                    // `$b[k].. = &$a`: out of line on the arm's operands
+                    // (`dim_set_ref_ops`).
+                    Op::DimSetRef => {
+                        ops!(a, b, c, imm);
+                        let keys = if imm & insn::REF_KEY_K != 0 { p8_bytecode::const_operand((imm >> 10) as usize) } else { Reg::from(c) };
+                        let ops = DimRefOps { var: Reg::from(a), root: Reg::from(b), keys, n: (imm & 0xff) as u8, append: imm & insn::REF_APPEND != 0 };
+                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.dim_set_ref_ops(regs, clo, base, at, ops));
+                    }
+                    // `$a = &C::$name`: out of line on the arm's operands
+                    // (`static_ref_ops`).
+                    Op::StaticRef => {
+                        ops!(a, b, c, imm);
+                        let ops = (Reg::from(a), Reg::from(b), imm as u16);
+                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_ref_ops(regs, clo, base, at, ops));
+                    }
+                    // `$o->$name` (`$this->$name`): a declared, visible,
+                    // hookless, set property, by the entry made for this
+                    // access (`dyn_entry`), read as a cached one is; a
+                    // dynamic property of a class without magic. Anything
+                    // else (magic, the warning, an unset one): `step`.
+                    Op::FetchPropDyn => {
+                        ops!(a, b, c, imm);
+                        let o = if imm & insn::PROP_PATH_THIS != 0 {
+                            let Some(o) = &top.this else { slow!() };
+                            o
+                        } else {
+                            let Some(o) = w[rx!(b)].as_object() else { slow!() };
+                            o
+                        };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let found = match dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) {
+                            Some(entry) => cached_prop(entry, o, scope),
+                            // (A dynamic property: `dynamic_prop`.)
+                            None => dynamic_prop(o, &w[rx!(c)]),
+                        };
+                        let Some(v) = found else { slow!() };
+                        done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `$o->$name = $v`: the same entry, written as a cached
+                    // one is (`plain_slot`, `write_slot`), the value into the
+                    // result register (`imm >> 8`); TAKE: the value's
+                    // temporary released. Anything else: `step`.
+                    Op::AssignPropDyn => {
+                        ops!(a, b, c, imm);
+                        let o = if imm & insn::PROP_PATH_THIS != 0 {
+                            let Some(o) = &top.this else { slow!() };
+                            Rc::clone(o)
+                        } else {
+                            let Some(o) = w[rx!(a)].as_object() else { slow!() };
+                            Rc::clone(o)
+                        };
+                        let Some(entry) = dyn_entry(&o, &w[rx!(c)], top.scope.as_ref()) else { slow!() };
+                        let scope = (top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize), top.scope.as_deref());
+                        let v = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
+                        let Some((slot, plain)) = plain_slot(entry, &o, scope, v, !self.reinit.is_empty()) else { slow!() };
+                        if !vmops::write_slot(&o, slot, plain, v) {
+                            slow!();
+                        }
+                        let v = v.clone();
+                        drop(o);
+                        let _ = put(&mut w[rx!((imm >> 8) as u8)], v);
+                        if imm & insn::TAKE != 0 && imm & insn::PROP_OP_K == 0 {
+                            let _ = clear(&mut w[rx!(b)]);
+                        }
+                        // (The slot's old value may have been released.)
+                        done!(true);
+                    }
+                    // `isset($a[k0][k1]..)` through arrays (`isset_path`);
+                    // a string's offset, an ArrayAccess object on the way:
+                    // `step`.
+                    Op::IssetDimPath => {
+                        ops!(a, b, c, imm);
+                        let Some(set) = isset_path(&w[..], rx!(b), rx!(c), imm as usize) else { slow!() };
+                        done!(put(&mut w[rx!(a)], Value::bool(set)));
+                    }
+                    // `isset($o->p)` of a declared, set property the name's
+                    // cache entry answers (filled again for a class or scope
+                    // it has not seen: `refill_prop`): whether it is not
+                    // null (a declared, set property's isset asks no
+                    // __isset). Anything else (unset, magic, hooks, a lazy
+                    // object, not an object): out of line on the arm's
+                    // operands (`isset_prop_ops`).
+                    Op::IssetProp => {
+                        ops!(a, b, c, imm);
+                        let dynamic = imm & insn::ISSET_PROP_DYN != 0;
+                        let name = if dynamic { Reg::from(c) } else { p8_bytecode::const_operand(imm as usize) };
+                        macro_rules! general {
+                            () => {
+                                out!((Reg::from(a), Reg::from(b), name), |cx, regs, clo, base, _, at, ops| cx.isset_prop_ops(regs, clo, base, at, ops))
+                            };
+                        }
+                        let held;
+                        let o = match w[rx!(b)].as_object() {
+                            Some(o) => o,
+                            None => {
+                                held = ref_object(&w[rx!(b)]);
+                                match &held {
+                                    Some(o) => o,
+                                    None => general!(),
+                                }
+                            }
+                        };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        // `isset($o->$name)`: the entry made for this access
+                        // (`dyn_entry`).
+                        if dynamic {
+                            let Some(entry) = dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) else { general!() };
+                            let Some(v) = cached_prop(entry, o, scope) else { general!() };
+                            done!(put(&mut w[rx!(a)], Value::bool(!v.is_null())));
+                            continue;
+                        }
+                        let Some(site) = clo.props.get(imm as usize) else { general!() };
+                        let v = match cached_prop(site.get(), o, scope) {
+                            Some(v) => v,
+                            None if refill_prop(site, o, &clo.consts[imm as usize], top.scope.as_ref()) => match cached_prop(site.get(), o, scope) {
+                                Some(v) => v,
+                                None => general!(),
+                            },
+                            // A dynamic property that is set (`dynamic_prop`).
+                            None => match dynamic_prop(o, &clo.consts[imm as usize]) {
+                                Some(v) => v,
+                                None => general!(),
+                            },
+                        };
+                        done!(put(&mut w[rx!(a)], Value::bool(!v.is_null())));
                     }
                     // `f(...$args)`: the values placed and the call made out
                     // of line on the arm's operands (`call_spread_ops`).
@@ -1576,10 +1858,10 @@ impl Context<'_> {
                         pc += 1;
                     }
                     // `return;` (`ret!`; the main frame's and a generator's:
-                    // `step`).
+                    // out of line, `return_null_out`).
                     Op::ReturnNull => {
                         if self.frames.len() == self.frames.floor + 1 && (self.frames.floor == 0 || clo.code.is_generator) {
-                            slow!();
+                            out!((), |cx, regs, _, _, _, _, ()| cx.return_null_out(regs));
                         }
                         ret!(Value::NULL);
                     }
@@ -1733,15 +2015,26 @@ fn assign_path(w: &mut [Value], var: usize, p: Path, val: usize, dst: Option<usi
     let written = match &cell {
         Some(cell) => {
             let mut root = std::mem::take(&mut *cell.borrow_mut());
-            let written = write_path(&mut root, &w[path], p.append, v.clone());
-            *cell.borrow_mut() = root;
-            written
+            match write_path(&mut root, &w[path], p.append, v.clone(), Some(&**cell)) {
+                // The element bound to this variable's own cell (`$a['p'][0]
+                // = &$a`): the value goes into the cell, the array goes (as
+                // PHP's assignment through that reference replaces `$a`).
+                Some(Wrote::Owner) => {
+                    *cell.borrow_mut() = v.clone();
+                    drop(root);
+                    Some(true)
+                }
+                written => {
+                    *cell.borrow_mut() = root;
+                    written.map(|x| matches!(x, Wrote::Done(true)))
+                }
+            }
         }
         None => {
             let mut root = std::mem::take(&mut w[var]);
-            let written = write_path(&mut root, &w[path], p.append, v.clone());
+            let written = write_path(&mut root, &w[path], p.append, v.clone(), None);
             w[var] = root;
-            written
+            written.map(|x| matches!(x, Wrote::Done(true)))
         }
     };
     let released = written?;
@@ -1773,7 +2066,7 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
     let v = copied(&w[val])?;
     let cell = &o.slots()[slot];
     let mut root = cell.replace(Value::UNDEF);
-    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone()) } else { None };
+    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, keys, path.append, v.clone(), None).map(|x| matches!(x, Wrote::Done(true))) } else { None };
     p8_runtime::object::put_slot(cell, root);
     let released = written?;
     Some(match dst {
@@ -1784,7 +2077,11 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
 
 /// `assign_path`'s walk below the root: every key a level when `append`
 /// (the value pushed onto the last), else all but the last.
-fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Option<bool> {
+/// `owner`: the cell the root was taken out of, when it was. The last
+/// element bound to that cell (`$a['p'][0] = &$a`) is not written here:
+/// `Some(Owner)`, and the caller puts the value in the cell in place of
+/// the root, as PHP's assignment through that reference replaces `$a`.
+fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
     let key = |k: &Value| match k.as_int() {
         Some(i) => Key::Int(i),
         None => Key::from_string(k.cloned_str().expect("a string key")),
@@ -1804,17 +2101,27 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value) -> Optio
     let Some(last) = last else {
         // (A taken next key: the error, `step`'s.)
         arr.push(v).ok()?;
-        return Some(false);
+        return Some(Wrote::Done(false));
     };
     let key = key(last);
     match arr.get_mut(&key) {
-        Some(e) if e.is_reference() => None,
-        Some(e) => Some(put(e, v)),
+        Some(e) if is_owner(e, owner) => Some(Wrote::Owner),
+        // An element bound by reference: the value goes into its cell (as
+        // an assignment to a reference writes the referenced value).
+        Some(e) if e.is_reference() => Some(Wrote::Done(write_ref(e.as_reference()?, v))),
+        Some(e) => Some(Wrote::Done(put(e, v))),
         None => {
             arr.insert(key, v);
-            Some(false)
+            Some(Wrote::Done(false))
         }
     }
+}
+
+/// What `write_path` did: written (whether the write released memory), or
+/// nothing, the last element being bound to the root's own cell.
+pub(crate) enum Wrote {
+    Done(bool),
+    Owner,
 }
 
 /// An int or string key (`assign_path`'s, `unset_dim`'s) as the array
@@ -1977,6 +2284,36 @@ fn prop_inc_dec(o: &Rc<Object>, site: PropSite, scope: usize, imm: u32) -> Optio
     }
     cell.assign(new.clone());
     Some(if imm & insn::PROP_POST != 0 { Value::int(old) } else { new })
+}
+
+/// `isset($a[k0]..[kn-1])` through arrays (`Op::IssetDimPath`): each key
+/// an int or a string; a missing element or null on the way is not set;
+/// the last one set when it is not null. None (`step`'s: a string's
+/// offset, an ArrayAccess object, a key of another type) for the rest.
+#[inline(never)]
+fn isset_path(w: &[Value], var: usize, keys: usize, n: usize) -> Option<bool> {
+    let mut cur = w[var].deref();
+    for k in &w[keys..keys + n] {
+        let next = match cur.as_array() {
+            Some(a) => {
+                let e = if let Some(i) = k.as_int() {
+                    a.get_int(i)
+                } else if let Some(s) = k.as_str() {
+                    a.get_str(s)
+                } else {
+                    return None;
+                };
+                match e {
+                    Some(v) => v.deref(),
+                    None => return Some(false),
+                }
+            }
+            None if cur.is_null_or_undef() => return Some(false),
+            None => return None,
+        };
+        cur = next;
+    }
+    Some(!cur.is_null_or_undef())
 }
 
 /// `$o->p op= y` (`Op::AssignPropOp`): the declared slot the name's cache
@@ -2504,20 +2841,67 @@ pub(crate) fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
     }
 }
 
-/// `$a[k] = v` for a plain `v` into the array `slot` holds (false when it
-/// holds none), unless the element is a reference (false).
+/// `$a[k] = v` into the array `slot` holds (false when it holds none). An
+/// element bound by reference gets the value in its cell, unless that cell
+/// is `owner`, the cell `slot` is borrowed from (`$a[k] = &$a`): false,
+/// the instruction's cold path.
 #[inline(always)]
-pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value) -> bool {
-    match slot.as_array() {
-        Some(a) if !a.get_int(k).is_some_and(Value::is_reference) => {}
-        _ => return false,
+pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&RefCell<Value>>) -> bool {
+    if !slot.is_array() {
+        return false;
     }
     let a = slot.array_mut().expect("checked above");
     match a.get_int_mut(k) {
+        Some(e) if is_owner(e, owner) => return false,
+        // An element bound by reference: the value goes into its cell.
+        Some(e) if e.is_reference() => {
+            let _ = write_ref(e.as_reference().expect("a reference"), v.clone());
+        }
         Some(e) => *e = v.clone(),
         None => a.insert(Key::Int(k), v.clone()),
     }
     true
+}
+
+/// Whether element `e` is a reference to `owner`, the cell its array is
+/// held in (borrowed, or taken out of, while the element is written): an
+/// array bound into itself, `$a[k] = &$a`. Writing through it would borrow
+/// that cell again (or be lost when the array is put back), so the
+/// writers above leave it to the instruction's cold path.
+#[inline]
+pub(crate) fn is_owner(e: &Value, owner: Option<&RefCell<Value>>) -> bool {
+    match (e.as_reference(), owner) {
+        (Some(cell), Some(owner)) => std::ptr::eq(&**cell, owner),
+        _ => false,
+    }
+}
+
+/// `$a[k] = v` where `$a` is bound by reference to `cell` and its element
+/// at `k` (an int or string key) is bound to that same cell (`$a[k] =
+/// &$a`): as PHP's assignment through that reference, the cell gets the
+/// value in place of the array. True when it was so (the old array
+/// released); false, nothing done, for any other element.
+#[cold]
+#[inline(never)]
+pub(crate) fn owner_write(cell: &Rc<RefCell<Value>>, key: &Value, v: &Value) -> bool {
+    let hit = {
+        let held = cell.borrow();
+        let Some(a) = held.as_array() else { return false };
+        let e = if let Some(i) = key.as_int() {
+            a.get_int(i)
+        } else if let Some(s) = key.as_str() {
+            a.get_str(s)
+        } else {
+            None
+        };
+        e.is_some_and(|e| is_owner(e, Some(&**cell)))
+    };
+    if hit {
+        // (The array goes after the borrow: its element holds this cell.)
+        let old = cell.replace(v.clone());
+        drop(old);
+    }
+    hit
 }
 
 /// A copy of a register's value, as `step` makes one (strings and arrays
@@ -2531,15 +2915,6 @@ pub(crate) fn copied(v: &Value) -> Option<Value> {
     match v.as_reference() {
         Some(cell) => read_ref(cell),
         None => Some(v.clone()),
-    }
-}
-
-/// A copy of a value that holds nothing reference-counted (and is defined).
-#[inline(always)]
-pub(crate) fn plain(v: &Value) -> Option<Value> {
-    match v.kind() {
-        Kind::Null | Kind::Bool | Kind::Int | Kind::Float => Some(v.clone()),
-        _ => None,
     }
 }
 
