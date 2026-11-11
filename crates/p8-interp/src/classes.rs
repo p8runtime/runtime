@@ -97,6 +97,13 @@ impl Context<'_> {
         }
     }
 
+    /// `method_takes_ref` out of line, for the loop's sends on a site's
+    /// miss (SendVarMethod, MethodArgByRef: a class the site has not seen).
+    #[inline(never)]
+    pub(crate) fn method_takes_ref_out(&self, class: &Class, key: Sym, n: usize) -> bool {
+        self.method_takes_ref(class, Some(key), n)
+    }
+
     /// A call of a builtin method PHP deprecates (zend_deprecated_function).
     #[inline]
     pub(crate) fn method_deprecated(&mut self, m: &Method) {

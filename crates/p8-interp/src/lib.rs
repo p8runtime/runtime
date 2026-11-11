@@ -27,6 +27,28 @@ mod vmops;
 /// context `C`, its registers, the frame's closure, base, argument count
 /// and the instruction's pc.
 type Run<C> = fn(&mut C, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>;
+
+/// A MethodCall's operands (`Instr::MethodCall`'s, as the loop's arm
+/// decodes them from its `Insn`).
+#[derive(Clone, Copy)]
+pub(crate) struct MethodCallOps {
+    pub(crate) dst: Reg,
+    pub(crate) obj: Reg,
+    pub(crate) args: Reg,
+    pub(crate) argc: u8,
+    pub(crate) method: u16,
+}
+
+/// An IterNext's operands (`Instr::IterNext`'s, as the loop's arm decodes
+/// them from its `Insn`).
+#[derive(Clone, Copy)]
+pub(crate) struct IterNextOps {
+    pub(crate) iter: Reg,
+    pub(crate) val: Reg,
+    pub(crate) key: Reg,
+    pub(crate) has_key: bool,
+    pub(crate) end: u32,
+}
 mod frames;
 mod isolate;
 mod sites;
@@ -1365,14 +1387,35 @@ impl Context<'_> {
     /// Run the instruction at `pc` by `run` out of the loop, and what it
     /// raised (`slow`'s doc).
     #[inline(always)]
-    fn detour(&mut self, regs: &mut Vec<Value>, mut pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
+    fn detour(&mut self, regs: &mut Vec<Value>, pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
         p8_runtime::counts::bump(p8_runtime::counts::Count::Slow);
+        self.out_of_line(regs, pc, (), |cx, regs, clo, base, argc, at, ()| run(cx, regs, clo, base, argc, at))
+    }
+
+    /// The part of a loop arm's instruction at `pc` that runs out of line:
+    /// `run`, given the top frame's closure, base and argument count, the
+    /// pc and the operands `ops` the arm decoded (an interrupt due is
+    /// raised first), then what it raised (`went`). The arms' own helpers
+    /// (MethodCall's lookup and native methods, foreach over objects)
+    /// run through this, as `slow` and `cold` do with the instruction
+    /// whole.
+    #[inline(always)]
+    pub(crate) fn out_of_line<O>(&mut self, regs: &mut Vec<Value>, pc: usize, ops: O, run: impl FnOnce(&mut Self, &mut Vec<Value>, &Closure, usize, usize, usize, O) -> Result<Next, Throw>) -> Result<Flow, Throw> {
         let frame = self.frames.last().expect("a frame");
         let func = Rc::clone(&frame.func);
         let (base, argc) = (frame.base as usize, frame.argc as usize);
         self.pc = pc + 1;
-        let at = pc;
-        let ran = if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT { Err(self.interrupted()) } else { run(self, regs, &func, base, argc, pc) };
+        let ran = if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT { Err(self.interrupted()) } else { run(self, regs, &func, base, argc, pc, ops) };
+        self.went(regs, pc, ran)
+    }
+
+    /// What the instruction at `at`, run out of the loop, gave: the pc to
+    /// go on at, after the frame switch it made, the exception it raised
+    /// unwound to its handler, the autoloaders it asked for, the errors
+    /// and destructors it made due.
+    #[inline(never)]
+    fn went(&mut self, regs: &mut Vec<Value>, at: usize, ran: Result<Next, Throw>) -> Result<Flow, Throw> {
+        let mut pc = at;
         match ran {
             Ok(Next::Go(next)) => {
                 pc = next;
@@ -2603,44 +2646,7 @@ impl Context<'_> {
                     let v = self.operand(w, clo, src);
                     reg!(dst) = self.static_callable(&v, false)?;
                 }
-                Instr::CallValue { dst, callee, base: args, argc, vars } => {
-                    let target = self.operand(w, clo, callee);
-                    // An undefined callee: its warning reaches the error
-                    // handler, then the call fails before any argument is
-                    // read (INIT_DYNAMIC_CALL).
-                    if !self.pending_errors.is_empty() && target.is_null() {
-                        self.dispatch_errors(regs)?;
-                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
-                    }
-                    if vars != p8_bytecode::NO_VARS {
-                        // By reference where the callable takes one: a
-                        // closure answers itself; anything else resolved (a
-                        // callable that is not one fails at the call).
-                        let resolved = match Self::closure_takes_ref(&target, 0) {
-                            Some(_) => None,
-                            None => {
-                                let retry = self.autoload_retry.clone();
-                                match self.resolve_callable(&target) {
-                                    Ok(t) => Some(t),
-                                    // A class not loaded yet: the autoloaders run
-                                    // and this instruction again.
-                                    Err(t @ Throw::Autoload(_)) => return Err(t),
-                                    // Not callable: the call says so before any
-                                    // argument is read (INIT_DYNAMIC_CALL fails first).
-                                    Err(_) => {
-                                        self.autoload_retry = retry;
-                                        return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
-                                    }
-                                }
-                            }
-                        };
-                        self.send_vars(w, clo, vars, args, |cx, n| match &resolved {
-                            Some(t) => cx.takes_ref(t, n),
-                            None => Self::closure_takes_ref(&target, n).unwrap_or(false),
-                        });
-                    }
-                    return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
-                }
+                Instr::CallValue { dst, callee, base: args, argc, vars } => return self.call_value_ops(regs, clo, base, at, (dst, callee, args, argc, vars)),
                 Instr::Silence { saved } => {
                     reg!(saved) = Value::int(self.error_level);
                     // E_ERROR | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR | E_PARSE
@@ -2703,62 +2709,7 @@ impl Context<'_> {
                     let (old, new) = r?;
                     reg!(dst) = if post { old } else { new };
                 }
-                Instr::CallSpread { dst, callee, args } => {
-                    let target = self.operand(w, clo, callee);
-                    // (What the callable is, once it was resolved for the list.)
-                    let mut resolved = None;
-                    let list: Vec<Value> = match self.operand(w, clo, args).into_array() {
-                        // Named arguments: placed by the target's parameters.
-                        Ok(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
-                            match self.resolve_callable(&target)? {
-                                // __call / __callStatic take the named ones
-                                // in their array, by name.
-                                callable::Target::Frame(mut m) if m.trampoline.is_some() => {
-                                    let name = m.trampoline.take().unwrap_or_else(PhpStr::empty);
-                                    let mut packed = PhpArray::new();
-                                    for (k, v) in a.iter() {
-                                        packed.insert(k.clone(), v.deref());
-                                    }
-                                    let at = base + func.nregs as usize;
-                                    if regs.len() < at + 3 {
-                                        regs.resize(at + 3, Value::UNDEF);
-                                    }
-                                    regs[at] = Value::str(name);
-                                    regs[at + 1] = Value::array(packed);
-                                    return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
-                                }
-                                t => {
-                                    let list = self.place_args(&t, &a, true)?;
-                                    resolved = Some(t);
-                                    list
-                                }
-                            }
-                        }
-                        // References (the arguments compiled as ones) kept
-                        // for the parameters that take them.
-                        Ok(a) if a.values().any(Value::is_reference) => {
-                            let t = self.resolve_callable(&target)?;
-                            let list = a.values().enumerate().map(|(n, v)| if v.is_reference() && self.takes_ref(&t, n) { v.clone() } else { v.deref() }).collect();
-                            resolved = Some(t);
-                            list
-                        }
-                        Ok(a) => a.values().map(Value::deref).collect(),
-                        Err(_) => Vec::new(),
-                    };
-                    let at = base + func.nregs as usize;
-                    if regs.len() < at + list.len() + 1 {
-                        regs.resize(at + list.len() + 1, Value::UNDEF);
-                    }
-                    let argc = list.len() as u8;
-                    for (i, v) in list.into_iter().enumerate() {
-                        regs[at + i] = v;
-                    }
-                    let ret = (base + dst as usize) as u32;
-                    return match resolved {
-                        Some(t) => self.call_target(regs, t, at, argc, ret, pc),
-                        None => self.call_value(regs, &target, at, argc, ret, pc),
-                    };
-                }
+                Instr::CallSpread { dst, callee, args } => return self.call_spread_ops(regs, clo, base, at, (dst, callee, args)),
                 Instr::ArrayUnpack { arr, src } => {
                     let v = self.operand(w, clo, src);
                     let items = if let Some(a) = v.as_array() {
@@ -2831,41 +2782,7 @@ impl Context<'_> {
                     }
                     return self.call_method(regs, m, at, argc, NO_RET, pc);
                 }
-                Instr::Construct { obj, base: args, argc } => {
-                    let object = reg!(obj).cloned_object().expect("Construct follows New");
-                    object.destructed.set(false);
-                    // The class's NewInfo: the one its `new` left, else looked up.
-                    let info = match self.last_new.take() {
-                        Some(info) if Rc::ptr_eq(&info.class, &object.class) => info,
-                        _ => self.new_info(&object.class).0,
-                    };
-                    match &info.ctor {
-                        // A PHP constructor: its frame pushed here, on the
-                        // arguments where they are (as ZEND_NEW's call
-                        // frame), with no MethodFrame made and taken apart.
-                        Some(instances::Ctor { func: classes::Code::User(f), declaring, .. }) if !f.code.is_generator && argc as usize >= f.code.required => {
-                            if let Some(caller) = self.frames.last_mut() {
-                                caller.pc = pc as u32;
-                            }
-                            self.frames.push(f, base + args as usize, argc as usize, NO_RET);
-                            let frame = self.frames.last_mut().expect("the frame just pushed");
-                            frame.this = Some(object);
-                            frame.scope = Some(Rc::clone(declaring));
-                            frame.called = Some(Rc::clone(&info.class));
-                            enter(&mut self.frames, regs);
-                            return Ok(Next::Switch);
-                        }
-                        Some(ctor) => {
-                            let m = ctor.frame(object, &info.class);
-                            return self.call_method(regs, m, base + args as usize, argc, NO_RET, pc);
-                        }
-                        None => {
-                            for r in &mut w[args as usize..args as usize + argc as usize] {
-                                clear(r);
-                            }
-                        }
-                    }
-                }
+                Instr::Construct { obj, base: args, argc } => return self.construct(regs, base, at, (obj, args, argc)),
                 Instr::AssignPropOp { op, obj, name, val, dst } => {
                     let target = self.prop_target(w, clo, obj)?;
                     let y = self.operand(w, clo, val);
@@ -3344,9 +3261,19 @@ impl Context<'_> {
     /// and the loop runs it directly for what its own arm does not take (a
     /// native method, a class the site has not seen), with none of `step`'s
     /// dispatch.
-    #[inline(never)]
     fn method_call(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
         let Instr::MethodCall { dst, obj, method, base: args, argc } = clo.code.code[at] else { unreachable!("a MethodCall") };
+        self.method_call_ops(regs, clo, base, at, MethodCallOps { dst, obj, args, argc, method })
+    }
+
+    /// `method_call` on the operands the loop's MethodCall arm decoded
+    /// (the arm runs it for what its cached case does not take: a native
+    /// method, a class or scope the site has not seen, the lookup by
+    /// name on a miss, `__call`, the errors), with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    pub(crate) fn method_call_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: MethodCallOps) -> Result<Next, Throw> {
+        let MethodCallOps { dst, obj, args, argc, method } = ops;
         let pc = at + 1;
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let target = self.operand(w, clo, obj);
@@ -3368,15 +3295,183 @@ impl Context<'_> {
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }
 
+    /// `$f(args)` (the CallValue at `at`: the callable in `callee`, the
+    /// `argc` arguments at `args`, the variables `vars` names sent by the
+    /// callable's by-reference parameters, the result to `dst`): a
+    /// Closure's frame, a callable resolved, the errors (`call_value`).
+    /// `step` runs it, and the loop's CallValue arm, with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    pub(crate) fn call_value_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, callee, args, argc, vars): (Reg, Reg, Reg, u8, u16)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let target = self.operand(w, clo, callee);
+        // An undefined callee: its warning reaches the error
+        // handler, then the call fails before any argument is
+        // read (INIT_DYNAMIC_CALL).
+        if !self.pending_errors.is_empty() && target.is_null() {
+            self.dispatch_errors(regs)?;
+            return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+        }
+        if vars != p8_bytecode::NO_VARS {
+            // By reference where the callable takes one: a
+            // closure answers itself; anything else resolved (a
+            // callable that is not one fails at the call).
+            let resolved = match Self::closure_takes_ref(&target, 0) {
+                Some(_) => None,
+                None => {
+                    let retry = self.autoload_retry.clone();
+                    match self.resolve_callable(&target) {
+                        Ok(t) => Some(t),
+                        // A class not loaded yet: the autoloaders run
+                        // and this instruction again.
+                        Err(t @ Throw::Autoload(_)) => return Err(t),
+                        // Not callable: the call says so before any
+                        // argument is read (INIT_DYNAMIC_CALL fails first).
+                        Err(_) => {
+                            self.autoload_retry = retry;
+                            return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                        }
+                    }
+                }
+            };
+            let w = &mut regs[base..base + clo.code.nregs as usize];
+            self.send_vars(w, clo, vars, args, |cx, n| match &resolved {
+                Some(t) => cx.takes_ref(t, n),
+                None => Self::closure_takes_ref(&target, n).unwrap_or(false),
+            });
+        }
+        self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `f(...$args)` (the CallSpread at `at`: the callable in `callee`, the
+    /// array in `args`, the result to `dst`): the array's values placed
+    /// after the frame's registers (named ones by the target's parameters,
+    /// references kept for the parameters that take them), then the call.
+    /// `step` runs it, and the loop's CallSpread arm, with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    pub(crate) fn call_spread_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, callee, args): (Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let nregs = clo.code.nregs as usize;
+        let w = &regs[base..base + nregs];
+        let target = self.operand(w, clo, callee);
+        let spread = self.operand(w, clo, args);
+        // (What the callable is, once it was resolved for the list.)
+        let mut resolved = None;
+        let list: Vec<Value> = match spread.into_array() {
+            // Named arguments: placed by the target's parameters.
+            Ok(a) if a.iter().any(|(k, _)| matches!(k, p8_runtime::array::Key::Str(_))) => {
+                match self.resolve_callable(&target)? {
+                    // __call / __callStatic take the named ones
+                    // in their array, by name.
+                    callable::Target::Frame(mut m) if m.trampoline.is_some() => {
+                        let name = m.trampoline.take().unwrap_or_else(PhpStr::empty);
+                        let mut packed = PhpArray::new();
+                        for (k, v) in a.iter() {
+                            packed.insert(k.clone(), v.deref());
+                        }
+                        let at = base + nregs;
+                        if regs.len() < at + 3 {
+                            regs.resize(at + 3, Value::UNDEF);
+                        }
+                        regs[at] = Value::str(name);
+                        regs[at + 1] = Value::array(packed);
+                        return self.call_method(regs, m, at, 2, (base + dst as usize) as u32, pc);
+                    }
+                    t => {
+                        let list = self.place_args(&t, &a, true)?;
+                        resolved = Some(t);
+                        list
+                    }
+                }
+            }
+            // References (the arguments compiled as ones) kept
+            // for the parameters that take them.
+            Ok(a) if a.values().any(Value::is_reference) => {
+                let t = self.resolve_callable(&target)?;
+                let list = a.values().enumerate().map(|(n, v)| if v.is_reference() && self.takes_ref(&t, n) { v.clone() } else { v.deref() }).collect();
+                resolved = Some(t);
+                list
+            }
+            Ok(a) => a.values().map(Value::deref).collect(),
+            Err(_) => Vec::new(),
+        };
+        let at = base + nregs;
+        if regs.len() < at + list.len() + 1 {
+            regs.resize(at + list.len() + 1, Value::UNDEF);
+        }
+        let argc = list.len() as u8;
+        for (i, v) in list.into_iter().enumerate() {
+            regs[at + i] = v;
+        }
+        let ret = (base + dst as usize) as u32;
+        match resolved {
+            Some(t) => self.call_target(regs, t, at, argc, ret, pc),
+            None => self.call_value(regs, &target, at, argc, ret, pc),
+        }
+    }
+
+    /// The constructor call after `new` (the Construct at `at`, on the
+    /// object in `obj`, its `argc` arguments at `args`): a PHP
+    /// constructor's frame pushed on the arguments where they are (as
+    /// ZEND_NEW's call frame); a native one called (`call_method`, as a
+    /// generator's, one missing arguments: the error); none, the arguments
+    /// released. `step` runs it, and the loop's Construct arm for what it
+    /// does not take itself (a native constructor, a class `new` did not
+    /// leave a NewInfo for), with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn construct(&mut self, regs: &mut Vec<Value>, base: usize, at: usize, (obj, args, argc): (Reg, Reg, u8)) -> Result<Next, Throw> {
+        let pc = at + 1;
+        let object = regs[base + obj as usize].cloned_object().expect("Construct follows New");
+        object.destructed.set(false);
+        // The class's NewInfo: the one its `new` left, else looked up.
+        let info = match self.last_new.take() {
+            Some(info) if Rc::ptr_eq(&info.class, &object.class) => info,
+            _ => self.new_info(&object.class).0,
+        };
+        match &info.ctor {
+            Some(instances::Ctor { func: classes::Code::User(f), declaring, .. }) if !f.code.is_generator && argc as usize >= f.code.required => {
+                if let Some(caller) = self.frames.last_mut() {
+                    caller.pc = pc as u32;
+                }
+                self.frames.push(f, base + args as usize, argc as usize, NO_RET);
+                let frame = self.frames.last_mut().expect("the frame just pushed");
+                frame.this = Some(object);
+                frame.scope = Some(Rc::clone(declaring));
+                frame.called = Some(Rc::clone(&info.class));
+                enter(&mut self.frames, regs);
+                Ok(Next::Switch)
+            }
+            Some(ctor) => {
+                let m = ctor.frame(object, &info.class);
+                self.call_method(regs, m, base + args as usize, argc, NO_RET, pc)
+            }
+            None => {
+                let start = base + args as usize;
+                for r in &mut regs[start..start + argc as usize] {
+                    clear(r);
+                }
+                Ok(Next::Go(pc))
+            }
+        }
+    }
+
     /// `foreach` of an object (the IterInit at `at`, its source register
     /// holding one): its iterator (`iter_object`: a generator or Iterator
     /// rewound, an IteratorAggregate's, the visible properties) and
     /// position 0, or past the loop when there is nothing to go through.
     /// `step` runs it, and the loop runs it directly, with none of
     /// `step`'s dispatch.
-    #[inline(never)]
     fn iter_init_object(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
         let Instr::IterInit { src, iter, end } = clo.code.code[at] else { unreachable!("an IterInit") };
+        self.iter_init_object_ops(regs, clo, base, at, (src, iter, end))
+    }
+
+    /// `iter_init_object` on the operands (source, iterator, end) the
+    /// loop's IterInit arm decoded.
+    #[inline(never)]
+    pub(crate) fn iter_init_object_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (src, iter, end): (Reg, Reg, u32)) -> Result<Next, Throw> {
         let object = regs[base + src as usize].cloned_object().expect("an object");
         let it = self.iter_object(regs, object)?;
         let w = &mut regs[base..base + clo.code.nregs as usize];
@@ -3395,9 +3490,15 @@ impl Context<'_> {
     /// first) and asked (`iter_object_next`), the value (and key) assigned,
     /// or past the loop at the end. `step` runs it, and the loop runs it
     /// directly, with none of `step`'s dispatch.
-    #[inline(never)]
     fn iter_next_object(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
         let Instr::IterNext { iter, val, key, has_key, end } = clo.code.code[at] else { unreachable!("an IterNext") };
+        self.iter_next_object_ops(regs, clo, base, at, IterNextOps { iter, val, key, has_key, end })
+    }
+
+    /// `iter_next_object` on the operands the loop's IterNext arm decoded.
+    #[inline(never)]
+    pub(crate) fn iter_next_object_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: IterNextOps) -> Result<Next, Throw> {
+        let IterNextOps { iter, val, key, has_key, end } = ops;
         let (iter, nregs) = (iter as usize, clo.code.nregs as usize);
         let object = regs[base + iter].cloned_object().expect("an object");
         let first = regs[base + iter + 1].as_int() == Some(0);
