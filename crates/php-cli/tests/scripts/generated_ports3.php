@@ -283,3 +283,40 @@ for ($r = 0; $r < 2; $r++) {
     $gen = (function () { yield 1; yield 2; })();
     $p = new Point(...$gen);
 }
+
+echo "-- method calls: native methods, classes a site has not seen\n";
+interface Shape { function area(); }
+class Sq implements Shape { function __construct(public $s) {} function area() { return $this->s * $this->s; } }
+class Ci implements Shape { function area() { return 3; } private function hidden() { return 'h'; } }
+class Magic { function __call($name, $args) { return "$name(" . implode(',', $args) . ")"; } }
+class Sub extends ArrayObject { function count(): int { return 99; } }
+for ($r = 0; $r < 2; $r++) {
+    $t = 0;
+    foreach ([new Sq(2), new Ci, new Sq(3), new Ci] as $shape) {
+        $t += $shape->area();
+    }
+    var_dump($t);
+    foreach ([new ArrayObject([1, 2]), new ArrayIterator([1, 2, 3]), new Sub([1]), new SplStack] as $c) {
+        var_dump($c->count());
+    }
+    foreach ([new Magic, new Ci] as $m) {
+        try {
+            var_dump($m->hidden(1, 2));
+        } catch (Error $e) {
+            echo get_class($e), ': ', $e->getMessage(), "\n";
+        }
+        try {
+            var_dump($m->nope());
+        } catch (Error $e) {
+            echo get_class($e), ': ', $e->getMessage(), "\n";
+        }
+    }
+    $d = new DateTime('2020-01-02 03:04:05', new DateTimeZone('UTC'));
+    var_dump($d->format('Y-m-d'), $d->getTimestamp());
+    $none = null;
+    try {
+        $none->area();
+    } catch (Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+}

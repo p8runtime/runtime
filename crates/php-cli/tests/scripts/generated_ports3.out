@@ -463,3 +463,28 @@ ArgumentCountError: Too few arguments to function Needs::__construct(), 1 passed
 Error: Unknown named parameter $c
 bool(true)
 Point(1, 2) rest []
+-- method calls: native methods, classes a site has not seen
+int(19)
+int(2)
+int(3)
+int(99)
+int(0)
+string(11) "hidden(1,2)"
+string(6) "nope()"
+Error: Call to private method Ci::hidden() from global scope
+Error: Call to undefined method Ci::nope()
+string(10) "2020-01-02"
+int(1577934245)
+Error: Call to a member function area() on null
+int(19)
+int(2)
+int(3)
+int(99)
+int(0)
+string(11) "hidden(1,2)"
+string(6) "nope()"
+Error: Call to private method Ci::hidden() from global scope
+Error: Call to undefined method Ci::nope()
+string(10) "2020-01-02"
+int(1577934245)
+Error: Call to a member function area() on null
