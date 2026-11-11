@@ -449,6 +449,14 @@ impl Context<'_> {
         }
     }
 
+    /// `cached_takes_ref` out of line: for the loop's arms (MethodArgByRef,
+    /// SendVarMethod past its user-method test), where an inlined copy
+    /// would hold registers through the loop's other arms.
+    #[inline(never)]
+    pub(crate) fn cached_takes_ref_out(&self, site: &RefCell<Option<MethodSite>>, class: &Rc<Class>, n: usize) -> Option<bool> {
+        self.cached_takes_ref(site, class, n)
+    }
+
     /// The running code's class (its address; 0 outside one): what a
     /// private or protected property's cache entry is valid for.
     #[inline]
