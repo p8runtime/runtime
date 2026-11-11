@@ -85,7 +85,7 @@ impl Hx<'_> {
         if C::ID == NAMED {
             return Some(class as usize + 1);
         }
-        let c = if C::ID == STATIC { self.top.called.as_ref() } else { self.top.scope.as_ref() };
+        let c = if C::ID == STATIC { self.top.called_class() } else { self.top.scope.as_ref() };
         Some(Rc::as_ptr(c?) as usize)
     }
 
@@ -514,7 +514,7 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, s
             // (Through an alias, the class it names, and the name itself.)
             Some(o.class.is_a(&target.lower) || (target.lower != name.lower.as_bytes() &&o.class.is_a(name.lower.as_bytes())))
         } else {
-            let c = if S::Cls::ID == STATIC { hx.top.called.as_ref()? } else { hx.top.scope.as_ref()? };
+            let c = if S::Cls::ID == STATIC { hx.top.called_class()? } else { hx.top.scope.as_ref()? };
             Some(Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
         }
     };

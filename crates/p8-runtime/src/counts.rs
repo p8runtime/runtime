@@ -30,15 +30,29 @@ pub enum Count {
     /// of line, by `step` or by a generated instruction's cold method
     /// (p8-interp's `detour`).
     Slow = 6,
+    /// A call site's cached method code (a `Weak`) made a strong handle
+    /// for a call (p8-interp's `Frames::site_code`): not done when the
+    /// frame slot the call reuses already runs that code (#413).
+    CodeCounted = 7,
+    /// A method looked up by name for a call (p8-interp's `method_frame`).
+    MethodLookup = 8,
+    /// A builtin called with the registers lent to it, so that it can run
+    /// PHP code (p8-interp's `call_builtin`): not done for a call
+    /// `Call::quick` answers (a holding assert()).
+    BuiltinLent = 9,
+    /// An entry made for a running builtin, shown in traces (p8-interp's
+    /// `push_native`): only deeper than any so far, a finished one's entry
+    /// is used again.
+    NativeEntry = 10,
     /// A class's member found by a name given as bytes, through a hash of
     /// the name: a method or constant (`Names::find`), a property's slot
     /// (`Class::slot`'s table), a static property (by the interpreter).
-    MemberLookup = 7,
+    MemberLookup = 11,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 8] = const { [const { std::cell::Cell::new(0) }; 8] };
+    static COUNTS: [std::cell::Cell<u64>; 12] = const { [const { std::cell::Cell::new(0) }; 12] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

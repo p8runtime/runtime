@@ -369,6 +369,7 @@ impl Isolate {
             named_extra: None,
             class_defaults: HashMap::default(),
             new_infos: HashMap::default(),
+            iter_sites: HashMap::default(),
             last_new: None,
             const_cache: HashMap::default(),
             const_evaluating: Vec::new(),
@@ -390,8 +391,7 @@ impl Isolate {
             key_path: Vec::new(),
             dim_keys: Vec::new(),
             lambdas: HashMap::default(),
-            natives: Vec::new(),
-            native_args: Vec::new(),
+            natives: Natives::default(),
             running_builtin: None,
             statics: HashMap::default(),
             magic_guard: Vec::new(),
@@ -523,6 +523,11 @@ pub struct Context<'i> {
     /// How to make each class's objects, by the class's address
     /// (instances.rs): worked out at its first `new`.
     pub(crate) new_infos: HashMap<usize, Rc<instances::NewInfo>>,
+    /// foreach over an Iterator: the method each of `next`, `valid`,
+    /// `current` and `key` (`call_known`) called last, by the class's
+    /// address and the method's symbol, as a call site's cache keeps it
+    /// (PHP keeps the four in the class: `zend_class_iterator_funcs`).
+    pub(crate) iter_sites: HashMap<(usize, Sym), RefCell<Option<MethodSite>>>,
     /// The NewInfo the last `new` used: the Construct that follows finds
     /// its constructor there (unless a `new` in the arguments came between).
     pub(crate) last_new: Option<Rc<instances::NewInfo>>,
@@ -568,10 +573,7 @@ pub struct Context<'i> {
     /// The closure of each function a Closure object runs (by its code).
     pub(crate) lambdas: HashMap<usize, Rc<Closure>>,
     /// Builtins running that may call back into PHP, innermost last.
-    pub(crate) natives: Vec<NativeCall>,
-    /// Argument lists of finished `natives`, kept for the next ones (a
-    /// call then allocates nothing).
-    pub(crate) native_args: Vec<Vec<Value>>,
+    pub(crate) natives: Natives,
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
     /// `static` variables, by function (its code's address) and index.

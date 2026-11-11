@@ -444,11 +444,7 @@ impl Context<'_> {
     ///
     /// [`known`]: p8_runtime::symbol::known
     pub(crate) fn call_known(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<Value, Throw> {
-        self.call_method_key(regs, object, Some(sym), name)
-    }
-
-    fn call_method_key(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, key: Option<Sym>, name: &[u8]) -> Result<Value, Throw> {
-        let m = self.method_frame(&Value::object(Rc::clone(object)), key, name)?;
+        let m = self.iter_method(object, sym, name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
             std::mem::swap(&mut self.isolate.regs, regs);
@@ -457,6 +453,28 @@ impl Context<'_> {
             return r;
         }
         self.run_nested(regs, m, &mut [])
+    }
+
+    /// The frame for method `sym` of `object`, found as a call site finds
+    /// it (`cached_method`), from `iter_sites`: the lookup by name
+    /// (`method_frame`) runs only when the class or the scope is not the
+    /// one the entry was made for, and is remembered then as a call site
+    /// remembers it (`remember_method`), unless the method is deprecated
+    /// (its message is due at every call).
+    fn iter_method(&mut self, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<MethodFrame, Throw> {
+        let at = (Rc::as_ptr(&object.class) as usize, sym);
+        if let Some(m) = self.iter_sites.get(&at).and_then(|site| self.cached_method(site, object)) {
+            return Ok(m);
+        }
+        let m = self.method_frame(&Value::object(Rc::clone(object)), Some(sym), name)?;
+        if crate::classes::method_of(&object.class, Some(sym)).is_some_and(|f| f.deprecation.is_none()) {
+            let site = RefCell::new(None);
+            self.remember_method(&site, object, &m);
+            if site.borrow().is_some() {
+                self.iter_sites.insert(at, site);
+            }
+        }
+        Ok(m)
     }
 
     /// foreach over an object: what the iterator register holds, or None
