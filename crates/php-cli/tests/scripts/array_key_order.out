@@ -1,0 +1,7 @@
+plain: k1 v1 k2 v2 {"1":1,"2":2}
+ref: k1 k2 50 {"1":50,"2":6}
+refdim: k1 v5 v7 {"1":"set"} set
+list: k1 k2 one two
+listdim: k1 v10 k2 v20 {"10":"one","20":"two"}
+yield:k1 v1  [1=>1]k2 v2  [2=>2]
+variable key: {"2":20}
