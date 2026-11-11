@@ -1023,6 +1023,100 @@ impl Context<'_> {
                         }
                         pc += 1;
                     }
+                    // `$o->p[k0].. = v` on a declared property the name's
+                    // cache entry answers (`assign_prop_path`); anything
+                    // else is `step`'s.
+                    Op::AssignPropDim => {
+                        ops!(a, b, c, imm);
+                        let o = if imm & insn::PROP_PATH_THIS != 0 {
+                            let Some(o) = &top.this else { slow!() };
+                            o
+                        } else {
+                            let Some(o) = w[rx!(a)].as_object() else { slow!() };
+                            o
+                        };
+                        let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
+                        // (Its own handle: the window is written while it is used.)
+                        let o = Rc::clone(o);
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let unused = imm & insn::PATH_UNUSED != 0;
+                        let dst = rx!((imm >> 16) as u8);
+                        let n = (imm >> 24 & 0xf) as usize;
+                        let written = assign_prop_path(&mut w[..], &o, site.get(), scope, (rx!(b), n), rx!(c), (!unused).then_some(dst));
+                        drop(o);
+                        let Some(released) = written else { slow!() };
+                        if unused {
+                            // (What the skipped Free does: a stale value there goes now.)
+                            let released = released | clear(&mut w[dst]);
+                            let at = pc;
+                            pc += 2;
+                            if released && self.ids.has_pending() {
+                                pending_at!(pc, at);
+                            }
+                        } else {
+                            done!(released);
+                        }
+                    }
+                    // `C::m($v)`: an argument of the method the call site's
+                    // cache names for this class and scope, copied when it
+                    // takes it by value, the variable made a reference when
+                    // it takes it by reference (a class not resolved yet, a
+                    // miss, an undefined variable: `step`).
+                    Op::SendVarStatic => {
+                        ops!(a, b, c, imm);
+                        let (arg, var, n, method, class) = (a, b, usize::from(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
+                        let by_ref = self.static_target(clo, class).and_then(|t| self.cached_takes_ref(&clo.methods[method], &t, n));
+                        match by_ref {
+                            Some(false) => {
+                                let Some(v) = copied(&w[rx!(var)]) else { slow!() };
+                                done!(put(&mut w[rx!(arg)], v));
+                            }
+                            Some(true) => {
+                                let cell = make_ref(&mut w[..], Reg::from(var));
+                                done!(put(&mut w[rx!(arg)], Value::reference(cell)));
+                            }
+                            None => slow!(),
+                        }
+                    }
+                    // `global $name`: the cell at the global's index the
+                    // name's cache entry holds, while the main frame runs
+                    // the code it was found for and the entry there has the
+                    // name (ZEND_BIND_GLOBAL's cache slot and key test). A
+                    // miss, a global not set (`step` makes it null), a main
+                    // script's variable, a fiber running: `step`.
+                    Op::BindGlobal => {
+                        ops!(a, b, c, imm);
+                        let Some(sites) = clo.globals.get() else { slow!() };
+                        let site = sites[imm as usize].get();
+                        if !self.fibers.is_empty() || site.main != Arc::as_ptr(&self.frames.slots[0].func.code) as usize {
+                            slow!();
+                        }
+                        let Some((key, cell)) = self.globals.get_index(site.index) else { slow!() };
+                        if cst!(imm).as_str().is_none_or(|n| n.as_bytes() != key.as_slice()) || cell.borrow().is_undef() {
+                            slow!();
+                        }
+                        let cell = Rc::clone(cell);
+                        done!(put(&mut w[rx!(a)], Value::reference(cell)));
+                    }
+                    // `$a[k0][k1].. = v` through arrays (`assign_path`);
+                    // anything else on the way is `step`'s.
+                    Op::AssignDimPath => {
+                        ops!(a, b, c, imm);
+                        let unused = imm & insn::PATH_UNUSED != 0;
+                        let dst = rx!((imm >> 8) as u8);
+                        let Some(released) = assign_path(&mut w[..], rx!(a), rx!(b), (imm & 0xff) as usize, rx!(c), (!unused).then_some(dst)) else { slow!() };
+                        if unused {
+                            // (What the skipped Free does: a stale value there goes now.)
+                            let released = released | clear(&mut w[dst]);
+                            let at = pc;
+                            pc += 2;
+                            if released && self.ids.has_pending() {
+                                pending_at!(pc, at);
+                            }
+                        } else {
+                            done!(released);
+                        }
+                    }
                     // `return;` (`ret!`; the main frame's and a generator's:
                     // `step`).
                     Op::ReturnNull => {
@@ -1122,6 +1216,94 @@ fn unpack_array(to: &mut Value, from: &PhpArray) -> bool {
         }
     }
     true
+}
+
+/// `$var[k0]..[kn-1] = $val` (`Op::AssignDimPath`), `$var` an array, the
+/// keys the `n` registers from `keys`, each an int or a string: each level
+/// separated (copy-on-write) and written in place, a missing or null one
+/// made an empty array, as `update_path` walks it; the value (and, with a
+/// `dst`, the result) a copy. None, with nothing written, when a key is of
+/// another type (or is `$var` itself), the value is undefined, or a level
+/// is anything but an array or null (a reference, an object, a string,
+/// false: `step`'s, which may only find the levels before it separated).
+/// Else whether a write released memory.
+#[inline(never)]
+fn assign_path(w: &mut [Value], var: usize, keys: usize, n: usize, val: usize, dst: Option<usize>) -> Option<bool> {
+    let path = keys..keys + n;
+    if path.contains(&var) || !w[var].is_array() || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
+        return None;
+    }
+    let v = copied(&w[val])?;
+    // The root out of its register while it is written (nothing else
+    // reads it meanwhile), then back.
+    let mut root = std::mem::take(&mut w[var]);
+    let written = write_path(&mut root, &w[path], v.clone());
+    w[var] = root;
+    let released = written?;
+    Some(match dst {
+        Some(dst) => released | put(&mut w[dst], v),
+        None => released,
+    })
+}
+
+/// `$o->p[k0]..[kn-1] = $val` (`Op::AssignPropDim`), the keys the `n`
+/// registers from `keys.0`, each an int or a string: the declared slot
+/// the name's cache entry `site` holds for this class and `scope`
+/// (`cached_slot`: visible, the object not lazy), of a class with no
+/// hooked property, the property neither readonly nor of a narrower set
+/// visibility, holding an array (or null, when it is untyped), walked as
+/// `assign_path` walks a variable (`update_slot_dim`'s write). None, with
+/// nothing written but levels separated, for anything else (`step`'s).
+#[inline(never)]
+fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usize, keys: (usize, usize), val: usize, dst: Option<usize>) -> Option<bool> {
+    let slot = cached_slot(site, o, scope)?;
+    let p = &o.class.properties[slot];
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
+        return None;
+    }
+    let path = &w[keys.0..keys.0 + keys.1];
+    if !path.iter().all(|k| k.is_int() || k.is_str()) {
+        return None;
+    }
+    let v = copied(&w[val])?;
+    let cell = &o.slots()[slot];
+    let mut root = cell.replace(Value::UNDEF);
+    let written = if root.is_array() || (root.is_null() && p.ty.is_none()) { write_path(&mut root, path, v.clone()) } else { None };
+    p8_runtime::object::put_slot(cell, root);
+    let released = written?;
+    Some(match dst {
+        Some(dst) => released | put(&mut w[dst], v),
+        None => released,
+    })
+}
+
+/// `assign_path`'s walk below the root.
+fn write_path(root: &mut Value, keys: &[Value], v: Value) -> Option<bool> {
+    let key = |k: &Value| match k.as_int() {
+        Some(i) => Key::Int(i),
+        None => Key::from_string(k.cloned_str().expect("a string key")),
+    };
+    let (last, levels) = keys.split_last()?;
+    let mut cur = root;
+    for k in levels {
+        if cur.is_null() {
+            *cur = Value::array(PhpArray::new());
+        }
+        cur = cur.array_mut()?.slot_mut(&key(k));
+    }
+    if cur.is_null() {
+        *cur = Value::array(PhpArray::new());
+    }
+    let arr = cur.array_mut()?;
+    let key = key(last);
+    match arr.get_mut(&key) {
+        Some(e) if e.is_reference() => None,
+        Some(e) => Some(put(e, v)),
+        None => {
+            arr.insert(key, v);
+            Some(false)
+        }
+    }
 }
 
 /// A typed variadic's list (`CollectVariadic`'s), each element plainly of

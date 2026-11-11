@@ -1,0 +1,452 @@
+-- global in functions
+int(11)
+int(12)
+string(2) "w0"
+string(2) "w0"
+NULL
+bool(true)
+int(13)
+int(14)
+string(2) "w1"
+string(2) "w1"
+NULL
+bool(true)
+-- $GLOBALS writes, unset, rebinding
+string(4) "set0"
+NULL
+bool(false)
+bool(true)
+int(1)
+int(2)
+string(4) "set1"
+NULL
+bool(false)
+bool(true)
+int(1)
+int(2)
+-- by-reference globals
+string(2) "a+"
+string(2) "b+"
+string(2) "a+"
+string(3) "a++"
+string(2) "b+"
+string(3) "a++"
+-- global of a main script variable
+int(2)
+int(2)
+int(3)
+int(3)
+-- dimension paths
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    array(1) {
+      [0]=>
+      int(0)
+    }
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    string(7) "changed"
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    int(5)
+  }
+}
+string(4) "used"
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    array(1) {
+      [0]=>
+      int(1)
+    }
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(3) {
+  ["x"]=>
+  array(2) {
+    ["y"]=>
+    string(7) "changed"
+    ["z"]=>
+    string(3) "new"
+  }
+  ["n"]=>
+  array(1) {
+    ["m"]=>
+    int(2)
+  }
+  [5]=>
+  array(2) {
+    [6]=>
+    array(1) {
+      [7]=>
+      int(3)
+    }
+    ["k"]=>
+    int(4)
+  }
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    int(5)
+  }
+}
+string(4) "used"
+-- dimension paths: cold levels
+set k
+get k
+
+Notice: Indirect modification of overloaded element of AA has no effect in %s on line 111
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 112
+Error: Cannot use a scalar value as an array
+TypeError: Cannot access offset of type string on string
+Error: Cannot use string offset as an array
+array(2) {
+  ["q"]=>
+  string(7) "through"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  int(1)
+}
+string(3) "aZc"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 135
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 137
+array(2) {
+  [1]=>
+  string(4) "bool"
+  [""]=>
+  string(4) "null"
+}
+
+Warning: Undefined variable $nope in %s on line 140
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    NULL
+  }
+}
+
+Warning: Undefined variable $undefkey in %s on line 142
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 142
+array(1) {
+  [""]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+set k
+get k
+
+Notice: Indirect modification of overloaded element of AA has no effect in %s on line 111
+
+Deprecated: Automatic conversion of false to array is deprecated in %s on line 112
+Error: Cannot use a scalar value as an array
+TypeError: Cannot access offset of type string on string
+Error: Cannot use string offset as an array
+array(2) {
+  ["q"]=>
+  string(7) "through"
+  ["new"]=>
+  array(1) {
+    ["deep"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["k"]=>
+  int(1)
+}
+string(3) "aZc"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 135
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 137
+array(2) {
+  [1]=>
+  string(4) "bool"
+  [""]=>
+  string(4) "null"
+}
+
+Warning: Undefined variable $nope in %s on line 140
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    NULL
+  }
+}
+
+Warning: Undefined variable $undefkey in %s on line 142
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 142
+array(1) {
+  [""]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(1)
+  }
+}
+TypeError: Cannot access offset of type string on string
+-- property dimension paths
+array(1) {
+  ["h"]=>
+  array(1) {
+    [0]=>
+    bool(true)
+  }
+}
+array(3) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(1)
+    ["c"]=>
+    int(0)
+  }
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    array(1) {
+      ["z"]=>
+      string(4) "deep"
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  string(4) "made"
+}
+string(4) "used"
+array(2) {
+  ["b"]=>
+  string(3) "out"
+  ["c"]=>
+  int(0)
+}
+string(3) "out"
+string(5) "again"
+array(1) {
+  ["k"]=>
+  int(1)
+}
+TypeError: Cannot auto-initialize an array inside property Holder::$obj of type ?Holder
+Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot access private property Holder::$hidden
+TypeError: Cannot access offset of type string on string
+set k
+
+Deprecated: Creation of dynamic property Holder::$dyn is deprecated in %s on line 215
+array(1) {
+  ["through"]=>
+  string(3) "ref"
+}
+array(1) {
+  ["k"]=>
+  string(7) "dynamic"
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 221
+
+Warning: Undefined variable $undefk in %s on line 222
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 222
+array(2) {
+  [1]=>
+  array(1) {
+    ["k"]=>
+    string(9) "float key"
+  }
+  [""]=>
+  string(9) "undef key"
+}
+array(1) {
+  ["h"]=>
+  array(1) {
+    [1]=>
+    bool(true)
+  }
+}
+array(3) {
+  ["a"]=>
+  array(2) {
+    ["b"]=>
+    int(1)
+    ["c"]=>
+    int(1)
+  }
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    array(1) {
+      ["z"]=>
+      string(4) "deep"
+    }
+  }
+}
+array(1) {
+  ["k"]=>
+  string(4) "made"
+}
+string(4) "used"
+array(2) {
+  ["b"]=>
+  string(3) "out"
+  ["c"]=>
+  int(1)
+}
+string(3) "out"
+string(5) "again"
+array(1) {
+  ["k"]=>
+  int(1)
+}
+TypeError: Cannot auto-initialize an array inside property Holder::$obj of type ?Holder
+Error: Cannot indirectly modify readonly property Holder::$ro
+Error: Cannot access private property Holder::$hidden
+TypeError: Cannot access offset of type string on string
+set k
+
+Deprecated: Creation of dynamic property Holder::$dyn is deprecated in %s on line 215
+array(1) {
+  ["through"]=>
+  string(3) "ref"
+}
+array(1) {
+  ["k"]=>
+  string(7) "dynamic"
+}
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 221
+
+Warning: Undefined variable $undefk in %s on line 222
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 222
+array(2) {
+  [1]=>
+  array(1) {
+    ["k"]=>
+    string(9) "float key"
+  }
+  [""]=>
+  string(9) "undef key"
+}
+-- static calls choosing by-reference
+string(2) "a!"
+string(2) "a!"
+string(2) "b?"
+string(1) "b"
+string(2) "p!"
+string(2) "q#"
+string(2) "v?"
+string(1) "!"
+string(1) "!"
+string(2) "a!"
+string(2) "a!"
+string(2) "b?"
+string(1) "b"
+string(2) "p!"
+string(2) "q#"
+string(2) "v?"
+string(2) "!!"
+string(2) "!!"

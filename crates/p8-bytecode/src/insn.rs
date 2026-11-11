@@ -98,6 +98,16 @@ pub const VAL_CONST: u32 = 1 << 29;
 /// 256), not the register.
 pub const ARG_CONST: u32 = 1 << 30;
 
+/// The most keys `Op::AssignDimPath` writes through.
+pub const PATH_KEYS: u8 = 4;
+
+/// AssignDimPath's `imm` bit: the result is freed by the next instruction
+/// (none is written, and that Free is skipped).
+pub const PATH_UNUSED: u32 = 1 << 31;
+
+/// AssignPropDim's `imm` bit: the object is the frame's `$this`.
+pub const PROP_PATH_THIS: u32 = 1 << 29;
+
 /// The constant operand of a fused step (the `b` and `c` bytes).
 #[inline(always)]
 pub fn wide(insn: &Insn) -> usize {
@@ -495,6 +505,27 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::MakeClosure { dst, func, is_static } => i(Op::MakeClosure, dst, 0, 0, u32::from(func) | u32::from(is_static) << 16),
         Instr::CollectVariadic { var } => i(Op::CollectVariadic, var, 0, 0, 0),
         Instr::ArrayUnpack { arr, src } => i(Op::ArrayUnpack, arr, src, 0, 0),
+        // `$o->p[k0]..[kn-1] = v` (`$this->p[..]` with DIM_THIS): the
+        // keys from base + 2, a block in the window.
+        Instr::AssignPropDim { op: None, base, name, n, append: false, val, dst } if const_index(val).is_none() => {
+            let (this, n) = (n & crate::DIM_THIS != 0, n & !crate::DIM_THIS);
+            if !(1..=PATH_KEYS).contains(&n) {
+                return None;
+            }
+            let site = prop_site(name, nconsts).filter(|&s| s < 1 << 16)?;
+            block(base + 2, n)?;
+            let unused = if res(code, pc, dst) == Opnd::Flag(kinds::UNUSED) { PATH_UNUSED } else { 0 };
+            let obj = if this { 0 } else { base };
+            i(Op::AssignPropDim, obj, base + 2, val, site | u32::from(r(dst)?) << 16 | u32::from(n) << 24 | if this { PROP_PATH_THIS } else { 0 } | unused)
+        }
+        Instr::SendVarStatic { class, method, n, arg, var } => i(Op::SendVarStatic, arg, var, Reg::from(n), u32::from(method) | u32::from(class) << 16),
+        Instr::BindGlobal { var, name } if usize::from(name) < nconsts => i(Op::BindGlobal, var, 0, 0, u32::from(name)),
+        // (Keys and value registers: the keys a block in the window.)
+        Instr::AssignDim { var, keys, n: n @ 2..=PATH_KEYS, append: false, val, dst } if const_index(keys).is_none() && const_index(val).is_none() => {
+            block(keys, n)?;
+            let unused = if res(code, pc, dst) == Opnd::Flag(kinds::UNUSED) { PATH_UNUSED } else { 0 };
+            i(Op::AssignDimPath, var, keys, val, u32::from(n) | u32::from(r(dst)?) << 8 | unused)
+        }
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
         _ => None,
     }

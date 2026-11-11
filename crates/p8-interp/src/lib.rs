@@ -2076,13 +2076,18 @@ impl Context<'_> {
                     reg!(dst) = Value::str(PhpStr::new(bytes));
                     free_parts(w, start, n);
                 }
-                Instr::BindGlobal { var, name } => {
+                Instr::BindGlobal { var, name: k } => {
                     // The name's constant, shared (not copied).
-                    let name = clo.consts[name as usize].as_str().expect("BindGlobal names a constant string").as_bytes();
+                    let name = clo.consts[k as usize].as_str().expect("BindGlobal names a constant string").as_bytes();
                     // The main frame's window starts at 0: it is `w` when
                     // the main frame is running, else the start of `below`
                     // (or of the first task's registers, in a fiber).
                     let cell = if in_main { self.global_cell(w, name) } else { self.with_main(below, |cx, main| cx.global_cell(main, name)) };
+                    // In a function, outside a fiber: where the cell is,
+                    // for the loop's next `global` of this name.
+                    if !in_main && self.fibers.is_empty() {
+                        self.remember_global(clo, k, name);
+                    }
                     reg!(var) = Value::reference(cell);
                 }
                 Instr::MatchError { src } => {
@@ -4471,6 +4476,22 @@ impl Context<'_> {
         let cell = Rc::new(RefCell::new(made));
         self.globals.insert(name.to_vec(), Rc::clone(&cell));
         cell
+    }
+
+    /// `global $name` (constant `k` of `clo`) ran in a function: the
+    /// global's index in `globals`, for the loop (`Op::BindGlobal`), when
+    /// the main script has no variable of that name (that one is the main
+    /// frame's register: the loop does not reach it).
+    fn remember_global(&mut self, clo: &Closure, k: u16, name: &[u8]) {
+        if self.main_cv(name).is_some() {
+            return;
+        }
+        let (Some(main), Some(index)) = (self.frames.first(), self.globals.get_index_of(name)) else { return };
+        let site = GlobalSite { main: Arc::as_ptr(&main.func.code) as usize, index };
+        let sites = clo.globals.get_or_init(|| clo.consts.iter().map(|_| Cell::new(GlobalSite::default())).collect());
+        if let Some(entry) = sites.get(usize::from(k)) {
+            entry.set(site);
+        }
     }
 
     fn global_cell(&mut self, main: &mut [Value], name: &[u8]) -> Rc<RefCell<Value>> {
