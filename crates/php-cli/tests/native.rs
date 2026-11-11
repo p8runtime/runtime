@@ -164,6 +164,25 @@ fn what_native_code_does_not_handle_runs_on_the_interpreter_from_where_it_stoppe
     assert_eq!((guards, returns), (5, entries - 5));
 }
 
+/// A native function calling itself a million deep: each native call runs
+/// its callee nested, on the native stack, until nested runs reach their
+/// limit; then the interpreter makes the calls, its frames on the heap
+/// (#444). Without that, the thread's stack ran out (SIGBUS).
+#[test]
+fn a_deep_recursion_through_native_code_runs_as_on_the_interpreter() {
+    const DEEP: &str = "<?php\nfunction depth($n) { if ($n == 0) { return 0; } return depth($n - 1) + 1; }\ndepth(1);\nforeach ([1000, 50000, 200000, 1000000] as $n) { echo $n, \" => \", depth($n), \"\\n\"; }\n";
+    let (src, exe) = build("deep", &[("deep.php", DEEP)]);
+    let script = src.join("deep.php");
+    let want = "1000 => 1000\n50000 => 50000\n200000 => 200000\n1000000 => 1000000\n";
+    let plain = run(p8(), &[&script]);
+    assert_eq!(String::from_utf8_lossy(&plain.stdout), want);
+    let native = run(&exe, &[Path::new("--native-counts"), &script]);
+    assert!(native.status.success(), "{:?}: {}", native.status, String::from_utf8_lossy(&native.stderr));
+    assert_eq!(native.stdout, plain.stdout);
+    // (It ran natively: the depth function is native code.)
+    assert!(counts(&native).0 > 1000);
+}
+
 #[test]
 fn a_native_executable_runs_a_changed_file_from_its_source() {
     let (src, exe) = build("changed", &[("hot.php", HOT)]);
