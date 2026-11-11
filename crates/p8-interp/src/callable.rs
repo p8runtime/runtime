@@ -96,6 +96,15 @@ fn text(s: &[u8]) -> String {
 }
 
 impl Context<'_> {
+    /// Whether a nested run (a callback a builtin makes, a call native code
+    /// makes, #444) would take the native stack past `STACK_LIMIT` from
+    /// where this request's run started.
+    pub(crate) fn stack_exhausted(&self) -> bool {
+        let here = 0u8;
+        let depth = self.stack_base.saturating_sub(std::ptr::addr_of!(here) as usize);
+        self.stack_base != 0 && depth > STACK_LIMIT
+    }
+
     /// MakeClosure: a Closure of `func`, bound to the running frame's
     /// `$this` (unless static) and class.
     pub(crate) fn make_closure(&mut self, func: &Arc<Function>, is_static: bool) -> Rc<Object> {
@@ -594,9 +603,7 @@ impl Context<'_> {
             return self.run_nested_at(regs, m, &mut repacked, at);
         }
         // Each nested run takes native stack: stop before it runs out.
-        let here = 0u8;
-        let depth = self.stack_base.saturating_sub(std::ptr::addr_of!(here) as usize);
-        if self.stack_base != 0 && depth > STACK_LIMIT {
+        if self.stack_exhausted() {
             return Err(self.throw(
                 "Error",
                 format!("Maximum call stack size of {STACK_LIMIT} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"),
