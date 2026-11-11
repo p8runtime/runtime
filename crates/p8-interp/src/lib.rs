@@ -4070,12 +4070,25 @@ impl Context<'_> {
     #[inline(never)]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
-        // An object argument may need its __toString() (PHP code) to become
-        // a string parameter: that takes the path that can call back.
-        let objects = regs[start..start + argc as usize].iter().any(Value::is_object);
-        // Before the headers go out, output may run header_register_callback's callback.
-        let header_due = !self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback");
-        if !self.isolate.registry.reenters(i) && !objects && !header_due {
+        // Arguments that leave the builtin nothing to do (a holding
+        // assert()): its result, as the builtin would give it.
+        if let Some(quick) = self.isolate.registry.call(i).quick
+            && let Some(v) = quick(&regs[start..start + argc as usize])
+        {
+            for r in &mut regs[start..start + argc as usize] {
+                clear(r);
+            }
+            regs[base + dst as usize] = v;
+            return Ok(());
+        }
+        // A builtin that may run PHP code; an object argument, which may
+        // need its __toString() (PHP code) to become a string parameter;
+        // output before the headers, which may run
+        // header_register_callback's callback: the path that can call back.
+        let lent = self.isolate.registry.reenters(i)
+            || regs[start..start + argc as usize].iter().any(Value::is_object)
+            || (!self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback"));
+        if !lent {
             // The common case: the builtin works on the registers directly.
             let args = &mut regs[start..start + argc as usize];
             let r = self.run_builtin(i, args);
@@ -4085,6 +4098,7 @@ impl Context<'_> {
             regs[base + dst as usize] = r?;
             return Ok(());
         }
+        p8_runtime::counts::bump(p8_runtime::counts::Count::BuiltinLent);
         let mut buf = std::mem::take(&mut self.arg_buf);
         buf.extend(regs[start..start + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
         self.isolate.regs = std::mem::take(regs);

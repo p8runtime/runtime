@@ -36,11 +36,15 @@ pub enum Count {
     CodeCounted = 7,
     /// A method looked up by name for a call (p8-interp's `method_frame`).
     MethodLookup = 8,
+    /// A builtin called with the registers lent to it, so that it can run
+    /// PHP code (p8-interp's `call_builtin`): not done for a call
+    /// `Call::quick` answers (a holding assert()).
+    BuiltinLent = 9,
 }
 
 #[cfg(feature = "counts")]
 thread_local! {
-    static COUNTS: [std::cell::Cell<u64>; 9] = const { [const { std::cell::Cell::new(0) }; 9] };
+    static COUNTS: [std::cell::Cell<u64>; 10] = const { [const { std::cell::Cell::new(0) }; 10] };
 }
 
 /// One more of `c` on this thread (nothing without the feature).

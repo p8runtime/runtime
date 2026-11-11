@@ -57,6 +57,21 @@ fn a_method_called_again_from_the_same_depth_takes_no_count_of_its_code() {
     assert_eq!(out, "210 20 190");
 }
 
+/// assert() of an assertion that holds is answered from its argument:
+/// the registers are not lent to it (they are for one that fails, which
+/// may run assert.callback).
+#[test]
+fn a_holding_assert_is_not_lent_the_registers() {
+    let out = flat(
+        "$t = 0;
+         for ($i = 0; $i < $n; $i++) { assert($i >= 0); assert(true, 'holds'); $t += assert(1) ? 1 : 0; }
+         try { assert($n < 0); } catch (AssertionError $e) { echo get_class($e), ': ', $e->getMessage(), ' '; }
+         echo $t;",
+        Count::BuiltinLent,
+    );
+    assert_eq!(out, "AssertionError: assert($n < 0) 20");
+}
+
 /// foreach over an Iterator: `valid`, `current`, `key` and `next` are
 /// looked up by name once (then found as a call site finds them), not at
 /// every element; from a method of another class too.
