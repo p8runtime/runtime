@@ -526,7 +526,7 @@ fn dynamic_properties_references_and_cases_stay_in_the_loop() {
          $t = 0; $e = null; $vv = 'str'; $x0 = 0; $cb = 'strlen'; $ca = ['s' => 'abcd'];
          for ($i = 0; $i < $n; $i++) {
              $ob = (object) ['p' => 1];
-             $t += $ob->p + strlen($$vv) + (count($_SERVER) > 0 ? 1 : 0);
+             $t += $ob->p + strlen($$vv) + ($_SERVER === null || is_array($_SERVER) ? 1 : 0);
              $lit = [&$x0];
              $t += $cb($ca['s']);
              $t += $ps[$i % 2]->put($i % 4);
