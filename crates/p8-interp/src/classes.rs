@@ -76,7 +76,7 @@ pub(crate) fn method_of(class: &Class, key: Option<Sym>) -> Option<&Rc<Method>> 
 /// replace it (zend_std_get_method: the subclass's "changed" the private
 /// one). The one place this rule is written: a call (`pick_method`), a
 /// send before a call and a callable's description all ask here.
-#[inline]
+#[inline(always)]
 pub(crate) fn called_method<'c>(class: &'c Class, scope: Option<&'c Class>, key: Option<Sym>) -> Option<&'c Rc<Method>> {
     let method = method_of(class, key)?;
     Some(match scope {
@@ -110,6 +110,18 @@ fn text(s: &p8_runtime::string::StrHead) -> String {
     String::from_utf8_lossy(b.iter().position(|&c| c == 0).map_or(b, |i| &b[..i])).into_owned()
 }
 
+/// Whether method `m`, a builtin's or a builtin interface's abstract one
+/// (no code), takes argument `n` by reference: what its stub signature
+/// says, found by its name. Out of line and cold: it builds the name, and
+/// the methods a send asks about are nearly all PHP ones
+/// (`Context::param_by_ref`).
+#[cold]
+#[inline(never)]
+fn stub_param_by_ref(m: &Method, n: usize) -> bool {
+    let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
+    p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
+}
+
 impl Context<'_> {
     /// What method `m` runs.
     /// Whether method `lower` of `class` takes argument `n` by reference
@@ -120,22 +132,21 @@ impl Context<'_> {
     }
 
     /// Whether method `m` takes argument `n` by reference.
-    #[inline]
+    #[inline(always)]
     fn param_by_ref(&self, m: &Method, n: usize) -> bool {
         if m.native.is_none() && m.func != u32::MAX {
             return self.codes[m.func as usize].param_by_ref(n);
         }
-        // A builtin's method, or a builtin interface's abstract one (no code).
-        let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
-        p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
+        stub_param_by_ref(m, n)
     }
 
     /// The method `$obj->name(…)` runs when code of class `scope` calls it
     /// on an instance of `class`, and whether that code may call it (None:
     /// the class has no method of that name). `method_frame` and the sends
     /// before a call both ask here, so the method a send asks about is the
-    /// method the call runs.
-    #[inline]
+    /// method the call runs. Always inline: a send's miss is this and one
+    /// test more, and as a call it gave its answer back through memory.
+    #[inline(always)]
     pub(crate) fn pick_method<'c>(&self, class: &'c Rc<Class>, scope: Option<&'c Rc<Class>>, key: Option<Sym>) -> Option<Picked<'c>> {
         let method = called_method(class, scope.map(|s| &**s), key)?;
         // A public method needs no visibility test (the common case).
