@@ -136,9 +136,10 @@ fn mysqli_connects_to_a_relative_socket_in_the_request_s_directory() {
     // Not a server: it takes the connection and closes it, so a client that
     // reached it fails reading the greeting (2013), not finding it (2002).
     let listener = std::os::unix::net::UnixListener::bind(root.join("m.sock")).expect("a socket");
-    let server = std::thread::spawn(move || drop(listener.accept()));
+    listener.set_nonblocking(true).expect("non-blocking");
+    let server = std::thread::spawn(move || accept_for_a_while(|| listener.accept().map(drop)));
     let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::MYSQLI]);
-    let source = "<?php mysqli_report(MYSQLI_REPORT_OFF); $m = @mysqli_connect('localhost', 'u', 'p', '', 0, 'm.sock'); echo mysqli_connect_errno();";
+    let source = "<?php mysqli_report(MYSQLI_REPORT_OFF); $m =@mysqli_connect('localhost', 'u', 'p', '', 0, 'm.sock'); echo mysqli_connect_errno();";
     let (status, out) = run(&platform, source, Some(&root));
     server.join().expect("the socket's thread");
     assert_eq!(status, 0);
@@ -152,20 +153,37 @@ fn curl_reads_a_relative_ca_file_in_the_request_s_directory() {
     let root = scratch("curl");
     let system = ["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"].into_iter().find(|p| Path::new(p).is_file()).expect("a system CA bundle");
     std::fs::copy(system, root.join("ca.pem")).expect("ca.pem");
-    // Not a TLS server: it takes the connection and closes it. A CA file
-    // that loads makes that a handshake failure; one not found is
-    // CURLE_SSL_CACERT_BADFILE (77) before any connection.
+    // Not a TLS server: it takes connections and closes them. A CA file
+    // that loads makes that a handshake failure; one not found fails
+    // before any connection, with another error: so the file in the
+    // request's folder and a missing one must fail differently.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let port = listener.local_addr().expect("its address").port();
-    let server = std::thread::spawn(move || drop(listener.accept()));
+    listener.set_nonblocking(true).expect("non-blocking");
+    let server = std::thread::spawn(move || accept_for_a_while(|| listener.accept().map(drop)));
     let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::CURL]);
-    let source = format!("<?php $h = curl_init('https://127.0.0.1:{port}/'); curl_setopt($h, CURLOPT_CAINFO, 'ca.pem'); curl_setopt($h, CURLOPT_RETURNTRANSFER, true); curl_exec($h); echo curl_errno($h);");
+    let source = format!(
+        "<?php foreach (['ca.pem', 'missing.pem'] as $ca) {{ $h = curl_init('https://127.0.0.1:{port}/'); curl_setopt($h, CURLOPT_CAINFO, $ca); curl_setopt($h, CURLOPT_TIMEOUT, 5); curl_setopt($h, CURLOPT_RETURNTRANSFER, true); curl_exec($h); echo curl_errno($h), \"\\n\"; }}"
+    );
     let (status, out) = run(&platform, &source, Some(&root));
-    let _ = std::net::TcpStream::connect(("127.0.0.1", port));
     server.join().expect("the server's thread");
     assert_eq!(status, 0);
-    assert_ne!(out, "77", "the CA file was looked for elsewhere");
+    let codes: Vec<&str> = out.lines().collect();
+    assert_eq!(codes.len(), 2, "{out}");
+    assert_ne!(codes[0], codes[1], "ca.pem in the request's folder was not found: {out}");
     std::fs::remove_dir_all(&root).expect("the scratch folder removed");
+}
+
+/// A stand-in server's accept loop: takes what connects (and drops it)
+/// for 5 seconds, then stops, so a client that never connects ends the
+/// test instead of hanging it.
+fn accept_for_a_while(mut accept: impl FnMut() -> std::io::Result<()>) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < until {
+        if accept().is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
 /// PHP that waits until the file `flag` exists: a handshake between the two
