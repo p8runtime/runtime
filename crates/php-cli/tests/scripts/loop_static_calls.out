@@ -56,7 +56,9 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g0 g1 
+g0 g1
+not set [Undefined variable $undef3: $viaRef is NULL]
+0 '0'
 -- 1
 Base#1 Kid#1 Kid2#1 Kid#1 Base#1
 Base1 Kid1 Kid1 GrandKid1 GrandKid1
@@ -115,7 +117,9 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g1 g2 
+g1 g2
+not set [Undefined variable $undef3: $viaRef is NULL]
+1 '1'
 -- 2
 Base#2 Kid#2 Kid2#2 Kid#2 Base#2
 Base2 Kid2 Kid2 GrandKid2 GrandKid2
@@ -174,7 +178,9 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g2 g3 
+g2 g3
+not set [Undefined variable $undef3: $viaRef is NULL]
+2 '2'
 -- 3
 Base#3 Kid#3 Kid2#3 Kid#3 Base#3
 Base3 Kid3 Kid3 GrandKid3 GrandKid3
@@ -234,7 +240,9 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g3 g4 
+g3 g4
+not set [Undefined variable $undef3: $viaRef is NULL]
+3 '3'
 autoload Missing
 Error: Class "Missing" not found
 done

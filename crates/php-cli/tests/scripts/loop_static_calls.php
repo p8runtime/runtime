@@ -183,7 +183,15 @@ for ($i = 0; $i < 4; $i++) {
     }
     foreach (Args::gen($i) as $v) { echo "g$v "; }
     echo "\n";
-    unset($fresh, $made);
+    // A variable sent by reference before an undefined one sent by value:
+    // it is a reference already (set, null) when the warning is raised.
+    set_error_handler(function ($no, $message) {
+        echo "[", $message, ": \$viaRef is ", array_key_exists('viaRef', $GLOBALS) ? var_export($GLOBALS['viaRef'], true) : "not set", "]\n";
+        return true;
+    });
+    echo array_key_exists('viaRef', $GLOBALS) ? "set" : "not set", " ", Args::mixed($i, $viaRef, $undef3), " ", var_export($viaRef, true), "\n";
+    restore_error_handler();
+    unset($fresh, $made, $viaRef);
 }
 shown(fn () => Missing::m());
 echo "done\n";
