@@ -3217,7 +3217,7 @@ impl Context<'_> {
     /// The loop's CLASS_CONST arm's miss (ops.def `out=`): `class_const_ops`
     /// on the operands it decoded, the name its constant `site`.
     #[inline(never)]
-    pub(crate) fn class_const_out<S: p8_bytecode::insn::spec::ClassConst>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::ClassConst) -> Result<Next, Throw> {
+    pub(crate) fn class_const_out(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::ClassConst) -> Result<Next, Throw> {
         self.class_const_ops(regs, clo, base, at, (a.dst as Reg, a.class as u16, p8_bytecode::const_operand(a.site as usize)))
     }
 
@@ -3250,7 +3250,7 @@ impl Context<'_> {
     /// `fetch_static_prop_ops` on the operands it decoded, the name its
     /// constant `site`.
     #[inline(never)]
-    pub(crate) fn fetch_static_prop_out<S: p8_bytecode::insn::spec::FetchStaticProp>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::FetchStaticProp) -> Result<Next, Throw> {
+    pub(crate) fn fetch_static_prop_out(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::FetchStaticProp) -> Result<Next, Throw> {
         self.fetch_static_prop_ops(regs, clo, base, at, (a.dst as Reg, a.class as u16, p8_bytecode::const_operand(a.site as usize)))
     }
 
@@ -3326,13 +3326,20 @@ impl Context<'_> {
     }
 
     /// The loop's ASSIGN_DIM arm's miss (ops.def `out=`): `assign_dim_ops`
-    /// on the operands it decoded (one key; a literal key or value its
-    /// constant).
+    /// on the operands it decoded (one key; a literal value its constant).
+    /// A literal key is the instruction's own operand: lowering gives a
+    /// canonical integer string (`'5'`) the int's constant, which an
+    /// ArrayAccess object's `offsetSet` must not see.
     #[inline(never)]
     pub(crate) fn assign_dim_out<S: p8_bytecode::insn::spec::AssignDim>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::AssignDim) -> Result<Next, Throw> {
         use p8_bytecode::insn::kind::Kind as _;
         use p8_bytecode::insn::kinds::{K, REG};
-        let key = if S::Key::ID == REG { a.key as Reg } else { p8_bytecode::const_operand(a.key as usize) };
+        let key = if S::Key::ID == REG {
+            a.key as Reg
+        } else {
+            let Instr::AssignDim { keys, .. } = clo.code.code[at] else { unreachable!("ASSIGN_DIM lowers an AssignDim") };
+            keys
+        };
         let val = if S::Val::ID == K { p8_bytecode::const_operand(a.val as usize) } else { a.val as Reg };
         self.assign_dim_ops(regs, clo, base, at, (a.var as Reg, key, 1, false, val, a.dst as Reg))
     }
@@ -3493,7 +3500,7 @@ impl Context<'_> {
     /// The loop's INSTANCEOF arm's miss (ops.def `out=`): `instance_of_ops`
     /// on the operands it decoded.
     #[inline(never)]
-    pub(crate) fn instance_of_out<S: p8_bytecode::insn::spec::InstanceOf>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::InstanceOf) -> Result<Next, Throw> {
+    pub(crate) fn instance_of_out(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::InstanceOf) -> Result<Next, Throw> {
         self.instance_of_ops(regs, clo, base, at, (a.dst as Reg, a.src as Reg, a.class as u16))
     }
 

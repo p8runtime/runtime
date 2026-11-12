@@ -50,23 +50,23 @@ op ISSET_DIM isset_dim cold=cold_run dst=REG var=REG key=REG|KINT|KSTR
 /// The rest (an ArrayAccess object, a string offset, a conversion's
 /// warning) runs out of line on the operands (`assign_dim_out`; `step`
 /// runs the same code).
-op ASSIGN_DIM assign_dim out=assign_dim_out var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
+op ASSIGN_DIM assign_dim out=assign_dim_out::<S> var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
 drop key=KINT val=K
 drop key=KSTR val=K
 /// `var[] = val` (`AssignDim` appending); `dst` = the value when USED.
 /// The rest runs out of line on the operands (`append_dim_out`).
-op APPEND_DIM append_dim out=append_dim_out var=REG val=REG|K res=USED|UNUSED dst=REG
+op APPEND_DIM append_dim out=append_dim_out::<S> var=REG val=REG|K res=USED|UNUSED dst=REG
 /// `dst = obj->(property site)`, `obj` a register or `$this` (`FetchProp`):
 /// a read (R), or a quiet one (IS: `??`, `?->`). What the entry does not
 /// answer runs out of line on the operands (`fetch_prop_out`: a hook,
 /// `__get`, a lazy object, an unset or undeclared property, the entry
 /// filled; `step` runs the same code).
-op FETCH_PROP fetch_prop out=fetch_prop_out mode=R|IS dst=REG obj=REG|THIS site=IMM16
+op FETCH_PROP fetch_prop out=fetch_prop_out::<S> mode=R|IS dst=REG obj=REG|THIS site=IMM16
 /// `obj->(property site) = val` (`AssignProp`); `dst` = the value when USED.
 /// What the entry does not answer runs out of line on the operands
 /// (`assign_prop_out`: a hook, `__set`, a lazy object, a dynamic
 /// property, a typed one's coercion; `step` runs the same code).
-op ASSIGN_PROP assign_prop out=assign_prop_out obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
+op ASSIGN_PROP assign_prop out=assign_prop_out::<S> obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
 drop val=K mode=TAKE
 /// `return src` (`Return`): to the calling frame, or out of this run of
 /// the loop when the frame is its bottom one (a callback a builtin
@@ -96,7 +96,7 @@ op FETCH_STATIC_PROP fetch_static_prop out=fetch_static_prop_out cls=NAMED|STATI
 /// holds), `dst` = the value; C as INSTANCEOF's. A miss, an undefined
 /// value run out of line on the operands (`assign_static_prop_out`;
 /// `step` runs the same code).
-op ASSIGN_STATIC_PROP assign_static_prop out=assign_static_prop_out cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
+op ASSIGN_STATIC_PROP assign_static_prop out=assign_static_prop_out::<S> cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
 
 # ---- written by hand ---------------------------------------------------
 

@@ -39,7 +39,7 @@
 //!
 //! ```text
 //! hand <Name> [native=<template>]
-//! op <NAME> <handler> cold=<method>|out=<method> [native=<template>] <operand>=<KIND>|<KIND>...
+//! op <NAME> <handler> cold=<method>|out=<method>[::<S>] [native=<template>] <operand>=<KIND>|<KIND>...
 //! drop <operand>=<KIND> <operand>=<KIND>...
 //! ```
 //!
@@ -49,7 +49,8 @@
 //! out of line, as `step` runs it: the loop's slow path), or `out` the
 //! `Context` method they run on the operands the arm decoded (its
 //! `args::<Op>`), out of line but not on the slow path (`step` runs the
-//! same method). `native` names the native backend's template for the
+//! same method); `out=<method>::<S>` when the method also takes the
+//! specialisation's kinds (`spec::<Op>`), as the handler does. `native` names the native backend's template for the
 //! opcode (`p8-native-gen`'s `tpl`, see [`native`]); an opcode without
 //! one is never native code. A `drop` line removes the combinations of
 //! the `op` above it that have all the kinds it lists. The kinds:
@@ -126,6 +127,10 @@ pub struct Def {
     pub cold: String,
     /// `cold` is an `out=` method: it takes the decoded operands.
     pub out: bool,
+    /// ... and the specialisation's kinds (`out=<method>::<S>`), for an op
+    /// whose operands read by their kind (`$this` is a 0, a literal its
+    /// constant's index, a flag no field).
+    pub out_kinds: bool,
     /// The native backend's template (`native=`), if it has one.
     pub native: Option<String>,
     pub doc: Vec<String>,
@@ -203,19 +208,24 @@ pub fn parse(text: &str) -> Result<Defs, String> {
             Some("op") => {
                 let name = words.next().ok_or_else(|| err("op: no name"))?.to_string();
                 let handler = words.next().ok_or_else(|| err("op: no handler"))?.to_string();
-                let mut cold: Option<(String, bool)> = None;
+                let mut cold: Option<(String, bool, bool)> = None;
                 let mut native = None;
                 let mut operands = Vec::new();
                 for w in words {
                     let (k, v) = w.split_once('=').ok_or_else(|| err("expected name=KINDS"))?;
                     if k == "cold" || k == "out" {
+                        // (`out=m::<S>`: the method takes the kinds.)
+                        let (v, kinds) = match v.strip_suffix("::<S>") {
+                            Some(m) if k == "out" => (m, true),
+                            _ => (v, false),
+                        };
                         if !is_fn_name(v) {
                             return Err(err("cold= / out= names a method"));
                         }
                         if cold.is_some() {
                             return Err(err("op: one cold= or out="));
                         }
-                        cold = Some((v.to_string(), k == "out"));
+                        cold = Some((v.to_string(), k == "out", kinds));
                     } else if k == "native" {
                         if !is_fn_name(v) {
                             return Err(err("native= names a template"));
@@ -236,8 +246,8 @@ pub fn parse(text: &str) -> Result<Defs, String> {
                         operands.push(Operand { name: k.to_string(), kinds });
                     }
                 }
-                let (cold, out) = cold.ok_or_else(|| err("op: no cold= or out="))?;
-                defs.ops.push(Def { name, handler, cold, out, native, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
+                let (cold, out, out_kinds) = cold.ok_or_else(|| err("op: no cold= or out="))?;
+                defs.ops.push(Def { name, handler, cold, out, out_kinds, native, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
             }
             Some("drop") => {
                 let def = defs.ops.last_mut().ok_or_else(|| err("drop before any op"))?;
@@ -511,10 +521,10 @@ pub fn dispatch(defs: &Defs) -> String {
     for d in &defs.ops {
         for sp in specs(d) {
             if d.out {
-                // (The method takes the specialisation's kinds as the
-                // handler does: `$this` is a 0 in the operands.)
+                // (`out=m::<S>`: the method takes the specialisation's
+                // kinds as the handler does: `$this` is a 0 in the operands.)
                 let (func, args) = call_parts(&sp, &d.handler);
-                let generics = func.find("::<").map_or("", |i| &func[i..]);
+                let generics = if d.out_kinds { func.find("::<").map_or("", |i| &func[i..]) } else { "" };
                 let _ = writeln!(s, "            Op::{} => gen_out!({}{generics}, vmops::{func}, {args}),", sp.name(), d.cold);
             } else {
                 let _ = writeln!(s, "            Op::{} => gen_arm!({}, vmops::{}),", sp.name(), d.cold, call(&sp, &d.handler, "hx!()"));
@@ -623,10 +633,13 @@ mod tests {
     /// the instruction (`gen_out!`, which is not the slow path).
     #[test]
     fn an_out_method_takes_the_decoded_operands() {
-        let d = parse("hand Slow\nop CLASS_CONST class_const out=class_const_out cls=NAMED|STATIC dst=REG class=IMM16 site=IMM16").unwrap();
-        assert!(d.ops[0].out && d.ops[0].cold == "class_const_out");
+        let d = parse("hand Slow\nop CLASS_CONST class_const out=class_const_out cls=NAMED|STATIC dst=REG class=IMM16 site=IMM16\nop FETCH_PROP fetch_prop out=fetch_prop_out::<S> dst=REG obj=REG|THIS site=IMM16").unwrap();
+        assert!(d.ops[0].out && !d.ops[0].out_kinds && d.ops[0].cold == "class_const_out");
+        assert!(d.ops[1].out && d.ops[1].out_kinds && d.ops[1].cold == "fetch_prop_out");
         let i = dispatch(&d);
-        assert!(i.contains("Op::P8_CLASS_CONST_NAMED => gen_out!(class_const_out::<p8_bytecode::insn::spec::P8_CLASS_CONST_NAMED>, vmops::class_const::<p8_bytecode::insn::spec::P8_CLASS_CONST_NAMED>, p8_bytecode::insn::args::ClassConst { dst: u32::from(insn.a), class: insn.imm & 0xffff, site: insn.imm >> 16 }),"), "{i}");
+        assert!(i.contains("Op::P8_CLASS_CONST_NAMED => gen_out!(class_const_out, vmops::class_const::<p8_bytecode::insn::spec::P8_CLASS_CONST_NAMED>, p8_bytecode::insn::args::ClassConst { dst: u32::from(insn.a), class: insn.imm & 0xffff, site: insn.imm >> 16 }),"), "{i}");
+        // With `::<S>`, the kinds too (`$this` is a 0 in the operands).
+        assert!(i.contains("Op::P8_FETCH_PROP_THIS => gen_out!(fetch_prop_out::<p8_bytecode::insn::spec::P8_FETCH_PROP_THIS>, "), "{i}");
         assert!(!i.contains("gen_arm!"));
         assert!(bytecode(&d).contains("#[derive(Debug, Clone, Copy)]\n    pub struct ClassConst {"));
     }
