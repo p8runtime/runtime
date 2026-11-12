@@ -3876,8 +3876,24 @@ impl<'src> Compiler<'src> {
         Ok((first, args.len() as u8))
     }
 
-    /// The arguments of a StaticCall or CallValue when each is a variable
-    /// or a literal (nothing runs between them, so when a variable is read
+    /// The arguments of `$obj->method(args)` (site `site`): left for the
+    /// call to send when each is a variable or a literal (`deferred_args`),
+    /// an instruction each otherwise (`method_args`; `vars` is NO_VARS).
+    fn method_call_args(&mut self, f: &mut FnBuilder, obj: Reg, site: u16, args: &[p8_syntax::ast::Arg]) -> Result<(Reg, u8, u16)> {
+        if let Some(sent) = self.deferred_args(f, args)? {
+            return Ok(sent);
+        }
+        let (base, argc) = self.method_args(
+            f,
+            args,
+            |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
+            |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
+        )?;
+        Ok((base, argc, NO_VARS))
+    }
+
+    /// The arguments of a MethodCall, StaticCall or CallValue when each is
+    /// a variable or a literal (nothing runs between them, so when a variable is read
     /// makes no difference): the literals into their registers, the
     /// variables left for the call to send once its target is known
     /// (`Function::arg_vars`), with no instruction each. None, nothing
@@ -5274,16 +5290,11 @@ impl<'src> Compiler<'src> {
                     return self.call_pair(f, obj, m, args, hint, mark);
                 }
                 let site = self.method_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
-                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
-                )?;
+                let (base, argc, vars) = self.method_call_args(f, obj, site, args)?;
                 // Straight into where the value goes (as a function call's
                 // is): no copy left behind in the arguments' registers.
                 let dst = out(f, hint, mark);
-                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc, vars });
                 dst
             }
             // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
@@ -5584,13 +5595,8 @@ impl<'src> Compiler<'src> {
                 };
                 let text = self.text(*name);
                 let site = self.method_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
-                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
-                )?;
-                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                let (base, argc, vars) = self.method_call_args(f, obj, site, args)?;
+                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc, vars });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
                 f.emit(Instr::LoadNull { dst });

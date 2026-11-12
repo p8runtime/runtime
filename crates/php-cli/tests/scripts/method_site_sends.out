@@ -1,0 +1,58 @@
+Mix a b1 cx
+Mix a b11 cxx
+Plain a b11 cxx
+MixTwo a b11- cxx-
+Mix a b11-1 cxx-x
+Plain a b11-1 cxx-x
+Plain a b11-1 cxx-x
+MixTwo a b11-1- cxx-x-
+Error: Call to a member function closed() on null
+Error: Call to a member function absent() on null
+Error: Call to private method Shut::closed() from global scope
+Error: Call to undefined method Shut::absent()
+Error: Call to private method Shut::closed() from global scope
+Error: Call to undefined method Shut::absent()
+Error: Call to a member function closed() on int
+Error: Call to a member function absent() on int
+Error: Call to a member function closed() on null
+Error: Call to a member function absent() on null
+Keeper::touch v0+K | Child::touch v0 | Child::touch v0
+Other::touch v0 | OtherChild::touch v0+OC | OtherChild::touch v0+OC
+Keeper::touch v1+K | Child::touch v1 | Child::touch v1
+Other::touch v1 | OtherChild::touch v1+OC | OtherChild::touch v1+OC
+Keeper::touch v2+K | Child::touch v2 | Child::touch v2
+Other::touch v2 | OtherChild::touch v2+OC | OtherChild::touch v2+OC
+anything:v0?,0 v0 stat v00
+bound late 0
+anything:v1?,1 v1 stat v11
+bound late 1
+anything:v2?,2 v2 stat v22
+bound late 2
+2 1 1 1
+4 2 3 2
+6 3 6 3
+Swap replaced shared shared! kept!
+Swap replaced shared shared! kept!!
+Swap replaced shared shared! kept!!!
+ !
+NULL NULL v
+warning: Undefined variable $undefined_here
+'Swap' NULL !
+warning: Undefined variable $undefined_here
+'Swap' NULL !
+NULL NULL v
+caught: Undefined variable $not_set
+caught: Undefined variable $not_set
+caught: Undefined variable $not_set
+warning: Undefined variable $not_set
+First NULL
+warning: Undefined variable $not_set
+Second NULL
+ArgumentCountError: Too few arguments to function Few::two() v
+two v0  v0 none3
+ArgumentCountError: Too few arguments to function Few::two() v
+two v1 0 v10 none3
+ArgumentCountError: Too few arguments to function Few::two() v
+two v2 0,1 v201 none3
+Mix Mix Mix far111 near012 0 0 0
+done

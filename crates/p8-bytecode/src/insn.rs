@@ -617,7 +617,14 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
-        Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
+        Instr::MethodCall { dst, obj, method, base, argc, vars: crate::NO_VARS } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
+        // (The variables it sends are in the window too.)
+        Instr::MethodCall { dst, obj, method, base, argc, vars } => {
+            for &(_, var) in arg_vars.get(usize::from(vars))? {
+                r(var)?;
+            }
+            i(Op::MethodCallVars, dst, obj, base, u32::from(method) | u32::from(argc) << 16)
+        }
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
         Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
@@ -1029,6 +1036,11 @@ mod tests {
             // one whose variable is past the window.
             Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 0 },
             Instr::StaticCall { dst: 5, class: 1, method: 3, base: 10, argc: 1, vars: 1 },
+            // The same three of a method call: sending nothing itself,
+            // sending variable 1, and a variable past the window.
+            Instr::MethodCall { dst: 5, obj: 1, method: 3, base: 10, argc: 1, vars: crate::NO_VARS },
+            Instr::MethodCall { dst: 5, obj: 1, method: 3, base: 10, argc: 1, vars: 0 },
+            Instr::MethodCall { dst: 5, obj: 1, method: 3, base: 10, argc: 1, vars: 1 },
         ];
         let mut consts = consts();
         consts[11] = Frozen::Str("CLASS".into());
@@ -1043,6 +1055,9 @@ mod tests {
         assert_eq!(at(5).unwrap(), Insn { op: Op::ArrayUnpack, a: 5, b: 1, c: 0, imm: 0 });
         assert_eq!(at(6).unwrap(), Insn { op: Op::StaticCallVars, a: 5, b: 10, c: 1, imm: 3 | 1 << 16 });
         assert!(at(7).is_none());
+        assert_eq!(at(8).unwrap(), Insn { op: Op::MethodCall, a: 5, b: 1, c: 10, imm: 3 | 1 << 16 });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::MethodCallVars, a: 5, b: 1, c: 10, imm: 3 | 1 << 16 });
+        assert!(at(10).is_none());
     }
 
     #[test]

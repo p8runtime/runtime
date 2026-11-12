@@ -499,6 +499,98 @@ impl Context<'_> {
                         continue 'frame;
                     }};
                 }
+                // `$o->m()` of a user method the call site's plain record
+                // (`UserMethod`) names for this class and scope, on an
+                // object, with its required arguments, and no interrupt
+                // pending: its frame pushed here, after the variables
+                // `$vars` names (`Function::arg_vars`) are sent. Anything
+                // else is `method_call_ops`'s (out of line).
+                macro_rules! method_call {
+                    ($vars:expr) => {{
+                        ops!(a, b, c, imm);
+                        let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
+                        let vars: Option<u16> = $vars;
+                        // What the cached case does not take (a native
+                        // method, a class or scope the site has not seen:
+                        // the lookup by name, remembered; __call, a
+                        // generator, missing arguments, the errors, an
+                        // interrupt due): out of line on the arm's operands
+                        // (`method_call_ops`).
+                        macro_rules! uncached {
+                            () => {{
+                                let ops = MethodCallOps { dst: Reg::from(dst), obj: Reg::from(obj), args: Reg::from(args), argc: n as u8, method: method as u16, vars: vars.unwrap_or(p8_bytecode::NO_VARS) };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_ops(regs, clo, base, at, ops))
+                            }};
+                        }
+                        // (An object through a reference: `global $o; $o->m()`.)
+                        let held;
+                        let o = match w[rx!(obj)].as_object() {
+                            Some(o) => o,
+                            None => {
+                                held = ref_object(&w[rx!(obj)]);
+                                match &held {
+                                    Some(o) => o,
+                                    None => uncached!(),
+                                }
+                            }
+                        };
+                        // The site's plain record (`UserMethod`): the user
+                        // method found for this class and scope (their
+                        // numbers), as its index in `closures` (a function
+                        // call site's shape), its class this many parents
+                        // up. (The class is this request's, so the index
+                        // is of this request's table: `UserMethod`.)
+                        let q = clo.methods[method].user.get();
+                        if !q.is_for(&o.class, top.scope.as_ref()) {
+                            uncached!();
+                        }
+                        let Some(target) = self.closures.get(q.code as usize) else { uncached!() };
+                        let code = &target.code;
+                        if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            uncached!();
+                        }
+                        let mut declaring = &o.class;
+                        for _ in 0..q.up {
+                            let Some(parent) = &declaring.parent else { uncached!() };
+                            declaring = parent;
+                        }
+                        // (Held before the sends: one may make the
+                        // receiver's variable a reference, `$o->m($o)`.)
+                        let declaring = Rc::clone(declaring);
+                        let this = Rc::clone(o);
+                        if let Some(vars) = vars {
+                            let mut released = false;
+                            for &(k, var) in &clo.code.arg_vars[usize::from(vars)] {
+                                let v = if q.by_ref(usize::from(k)) {
+                                    Value::reference(make_ref(&mut w[..], var))
+                                } else {
+                                    // (Undefined, the warning: out of line,
+                                    // which sends them all again, the same
+                                    // values.)
+                                    let Some(v) = copied(&w[usize::from(var) & (WINDOW - 1)]) else { uncached!() };
+                                    v
+                                };
+                                released |= put(&mut w[rk!(rx!(args) + usize::from(k))], v);
+                            }
+                            // (A destructor the sends made due: the same.)
+                            if released && self.ids.has_pending() {
+                                uncached!();
+                            }
+                        }
+                        // A temporary (`(new A)->f()`) is released as it is used:
+                        // the call's `$this` holds the object.
+                        if is_temp(&clo.code, Reg::from(obj)) {
+                            clear(&mut w[rx!(obj)]);
+                        }
+                        // (No `called`: it is `$this`'s class, `called_class`.)
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.this = Some(this);
+                        frame.scope = Some(declaring);
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }};
+                }
                 // A foreach step over an array (`$key`: the key too). An
                 // object (a generator, an Iterator: its methods called)
                 // runs out of line on the arm's operands
@@ -1059,67 +1151,15 @@ impl Context<'_> {
                     // and scope, on an object, with its required arguments, and
                     // no interrupt pending: anything else is `method_call_ops`'s
                     // (out of line).
-                    Op::MethodCall => {
-                        ops!(a, b, c, imm);
-                        let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
-                        // What the cached case does not take (a native
-                        // method, a class or scope the site has not seen:
-                        // the lookup by name, remembered; __call, a
-                        // generator, missing arguments, the errors, an
-                        // interrupt due): out of line on the arm's operands
-                        // (`method_call_ops`).
-                        macro_rules! uncached {
-                            () => {{
-                                let ops = MethodCallOps { dst: Reg::from(dst), obj: Reg::from(obj), args: Reg::from(args), argc: n as u8, method: method as u16 };
-                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_ops(regs, clo, base, at, ops))
-                            }};
-                        }
-                        // (An object through a reference: `global $o; $o->m()`.)
-                        let held;
-                        let o = match w[rx!(obj)].as_object() {
-                            Some(o) => o,
-                            None => {
-                                held = ref_object(&w[rx!(obj)]);
-                                match &held {
-                                    Some(o) => o,
-                                    None => uncached!(),
-                                }
-                            }
-                        };
-                        // The site's plain record (`UserMethod`): the user
-                        // method found for this class and scope (their
-                        // numbers), as its index in `closures` (a function
-                        // call site's shape), its class this many parents
-                        // up. (The class is this request's, so the index
-                        // is of this request's table: `UserMethod`.)
-                        let q = clo.methods[method].user.get();
-                        if !q.is_for(&o.class, top.scope.as_ref()) {
-                            uncached!();
-                        }
-                        let Some(target) = self.closures.get(q.code as usize) else { uncached!() };
-                        let code = &target.code;
-                        if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-                            uncached!();
-                        }
-                        let mut declaring = &o.class;
-                        for _ in 0..q.up {
-                            let Some(parent) = &declaring.parent else { uncached!() };
-                            declaring = parent;
-                        }
-                        let declaring = Rc::clone(declaring);
-                        let this = Rc::clone(o);
-                        // A temporary (`(new A)->f()`) is released as it is used:
-                        // the call's `$this` holds the object.
-                        if is_temp(&clo.code, Reg::from(obj)) {
-                            clear(&mut w[rx!(obj)]);
-                        }
-                        // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
-                        frame.this = Some(this);
-                        frame.scope = Some(declaring);
-                        enter(&mut self.frames, regs);
-                        pc = 0;
-                        continue 'frame;
+                    Op::MethodCall => method_call!(None),
+                    // The same, with the variables the call sends itself
+                    // (`$o->m($x)`: the method decides by-reference, and it
+                    // is found here, once, so the compiler sends none): each
+                    // made a reference where the method takes one so, else
+                    // copied (an undefined one, the warning: out of line).
+                    Op::MethodCallVars => {
+                        let Instr::MethodCall { vars, .. } = clo.code.code[pc] else { unreachable!("lowered from a MethodCall") };
+                        method_call!(Some(vars))
                     }
                     // `new C` of a class the site's cache has, whose objects
                     // need only their slots (`make_plain`): anything else

@@ -1,0 +1,9 @@
+suspended in the handler: Undefined variable $undefined
+resumed with r0
+two 'v' NULL v
+suspended in the handler: Undefined variable $undefined
+resumed with r1
+two 'v' NULL v
+suspended in the handler: Undefined variable $undefined
+resumed with plain
+read NULL

@@ -262,6 +262,33 @@ fn later_method_call_error_first() {
     later("method_call_error_first");
 }
 
+/// A warning's handler that suspends the fiber it runs in (between a
+/// method call's sends, and in a plain read): PHP switches fibers there
+/// and goes on with the statement after the resume. p8 runs the handler
+/// as a nested run of the loop, which cannot switch.
+#[test]
+#[ignore = "#294: a user error handler cannot suspend the fiber it runs in (FiberError)"]
+fn later_method_call_handler_fiber() {
+    later("method_call_handler_fiber");
+}
+
+/// A literal where the method takes a reference: PHP's Error at that
+/// argument's send ("could not be passed by reference"), the method not
+/// run. p8 runs the method with a reference to a copy.
+#[test]
+#[ignore = "#429: a literal passed to a method's by-reference parameter is not PHP's Error"]
+fn later_method_call_literal_by_ref() {
+    later("method_call_literal_by_ref");
+}
+
+/// A spread array's element sent to a by-reference parameter: PHP sends a
+/// reference to the array's own element. p8 sends one to a copy.
+#[test]
+#[ignore = "#493: a spread array's element sent by reference is not written back to the array"]
+fn later_method_call_spread_by_ref() {
+    later("method_call_spread_by_ref");
+}
+
 /// `haystack` with every `from` replaced by `to`.
 fn replace(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(haystack.len());

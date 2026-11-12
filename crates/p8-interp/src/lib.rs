@@ -28,8 +28,9 @@ mod vmops;
 /// and the instruction's pc.
 type Run<C> = fn(&mut C, &mut Vec<Value>, &Closure, usize, usize, usize) -> Result<Next, Throw>;
 
-/// A MethodCall's operands (`Instr::MethodCall`'s, as the loop's arm
-/// decodes them from its `Insn`).
+/// A MethodCall's operands (`Instr::MethodCall`'s, as the loop's arms
+/// decode them from their `Insn`; `vars`, NO_VARS for a plain MethodCall,
+/// from the variables MethodCallVars names).
 #[derive(Clone, Copy)]
 pub(crate) struct MethodCallOps {
     pub(crate) dst: Reg,
@@ -37,6 +38,7 @@ pub(crate) struct MethodCallOps {
     pub(crate) args: Reg,
     pub(crate) argc: u8,
     pub(crate) method: u16,
+    pub(crate) vars: u16,
 }
 
 /// A StaticCall's operands (`Instr::StaticCall`'s, as the loop's arms
@@ -2715,8 +2717,8 @@ impl Context<'_> {
     /// native method, a class the site has not seen), with none of `step`'s
     /// dispatch.
     fn method_call(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
-        let Instr::MethodCall { dst, obj, method, base: args, argc } = clo.code.code[at] else { unreachable!("a MethodCall") };
-        self.method_call_ops(regs, clo, base, at, MethodCallOps { dst, obj, args, argc, method })
+        let Instr::MethodCall { dst, obj, method, base: args, argc, vars } = clo.code.code[at] else { unreachable!("a MethodCall") };
+        self.method_call_ops(regs, clo, base, at, MethodCallOps { dst, obj, args, argc, method, vars })
     }
 
     /// `method_call` on the operands the loop's MethodCall arm decoded
@@ -2726,7 +2728,7 @@ impl Context<'_> {
     /// dispatch.
     #[inline(never)]
     pub(crate) fn method_call_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: MethodCallOps) -> Result<Next, Throw> {
-        let MethodCallOps { dst, obj, args, argc, method } = ops;
+        let MethodCallOps { dst, obj, args, argc, method, vars } = ops;
         let pc = at + 1;
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let target = self.operand(w, clo, obj);
@@ -2735,16 +2737,42 @@ impl Context<'_> {
         if is_temp(&clo.code, obj) {
             clear(&mut w[obj as usize]);
         }
-        if let Some(o) = target.as_object()
-            && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
-        {
-            return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
-        }
+        let cache = &clo.methods[method as usize];
         let site = &clo.code.sites[method as usize];
-        let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
-        if let Some(o) = target.as_object() {
-            self.remember_method(&clo.methods[method as usize], o, &m);
-            self.remember_user_method(&clo.methods[method as usize], o, &m);
+        let m = match target.as_object().and_then(|o| self.cached_method(cache, o)) {
+            Some(m) => m,
+            None => {
+                let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
+                if let Some(o) = target.as_object() {
+                    self.remember_method(cache, o, &m);
+                    self.remember_user_method(cache, o, &m);
+                }
+                m
+            }
+        };
+        // The variables passed as they are: sent now the method is known
+        // (INIT_METHOD_CALL, then the sends), by reference where the method
+        // that will run takes one (a builtin's, as its stub says; __call
+        // takes them by value).
+        if vars != p8_bytecode::NO_VARS {
+            let user = match (&m.func, &m.trampoline) {
+                (classes::Code::User(f), None) => Some(Rc::clone(f)),
+                _ => None,
+            };
+            let native = match (&m.func, &m.trampoline, target.as_object()) {
+                (classes::Code::Native(..), None, Some(o)) => Some(Rc::clone(&o.class)),
+                _ => None,
+            };
+            let sym = site.sym;
+            // An undefined variable's warning reaches the error handler at
+            // that variable's send, in this frame (as a send's does): what
+            // the handler throws is this call's, and what it changes the
+            // later sends see.
+            self.send_vars_in_order(regs, base, clo, vars, args, |cx, n| match (&user, &native) {
+                (Some(f), _) => f.code.param_by_ref(n),
+                (None, Some(class)) => cx.cached_takes_ref(cache, class, n).unwrap_or_else(|| cx.method_takes_ref(class, Some(sym), n)),
+                (None, None) => false,
+            })?;
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }
@@ -5287,6 +5315,23 @@ impl Context<'_> {
             let v = if by_ref(self, n as usize) { Value::reference(make_ref(w, var)) } else { self.operand(w, clo, var) };
             w[args as usize + n as usize] = v;
         }
+    }
+
+    /// `send_vars` for a method call, in PHP's order: each undefined
+    /// variable's warning is handed to the error handler at its own send
+    /// (the sends before it done, the ones after it not yet). What the
+    /// handler changes, the later sends see; what it throws ends the call
+    /// before the method runs.
+    fn send_vars_in_order(&mut self, regs: &mut Vec<Value>, base: usize, clo: &Closure, vars: u16, args: Reg, by_ref: impl Fn(&Self, usize) -> bool) -> Result<(), Throw> {
+        for &(n, var) in &clo.code.arg_vars[vars as usize] {
+            let w = &mut regs[base..base + clo.code.nregs as usize];
+            let v = if by_ref(self, n as usize) { Value::reference(make_ref(w, var)) } else { self.operand(w, clo, var) };
+            w[args as usize + n as usize] = v;
+            if !self.pending_errors.is_empty() {
+                self.dispatch_errors(regs)?;
+            }
+        }
+        Ok(())
     }
 
     /// ArgumentCountError for a call passing fewer than `func.required`

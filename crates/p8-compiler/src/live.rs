@@ -276,10 +276,10 @@ impl Frame<'_> {
                 o.clean |= args;
                 def!(dst);
             }
-            MethodCall { dst, obj, base, argc, .. } => {
+            MethodCall { dst, obj, base, argc, vars, .. } => {
                 let args = self.range(base, argc as usize);
                 u!(obj);
-                o.uses |= args;
+                o.uses |= args | self.vars(vars);
                 o.clean |= args;
                 def!(dst);
             }

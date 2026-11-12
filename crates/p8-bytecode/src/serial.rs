@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 28;
+pub const FORMAT: u32 = 29;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -901,7 +901,7 @@ impl Code for Instr {
             Instr::AssignPropDim { op, base, name, n, append, val, dst } => { w.byte(96); op.put(w); base.put(w); name.put(w); n.put(w); append.put(w); val.put(w); dst.put(w); }
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
-            Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
+            Instr::MethodCall { dst, obj, method, base, argc, vars } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::StaticCall { dst, class, method, base, argc, vars } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::ClassConst { dst, class, name } => { w.byte(101); dst.put(w); class.put(w); name.put(w); }
             Instr::FetchStaticProp { dst, class, name } => { w.byte(102); dst.put(w); class.put(w); name.put(w); }
@@ -1014,7 +1014,7 @@ impl Code for Instr {
             96 => Instr::AssignPropDim { op: Code::get(r)?, base: Code::get(r)?, name: Code::get(r)?, n: Code::get(r)?, append: Code::get(r)?, val: Code::get(r)?, dst: Code::get(r)? },
             97 => Instr::IssetProp { dst: Code::get(r)?, obj: Code::get(r)?, name: Code::get(r)? },
             98 => Instr::UnsetProp { obj: Code::get(r)?, name: Code::get(r)? },
-            99 => Instr::MethodCall { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
+            99 => Instr::MethodCall { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             100 => Instr::StaticCall { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, vars: Code::get(r)? },
             101 => Instr::ClassConst { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },
             102 => Instr::FetchStaticProp { dst: Code::get(r)?, class: Code::get(r)?, name: Code::get(r)? },

@@ -1,0 +1,2 @@
+Error: T::valref(): Argument #2 ($b) could not be passed by reference | Error: T::refval(): Argument #1 ($a) could not be passed by reference | Error: T::refref(): Argument #2 ($b) could not be passed by reference | v
+Error: T::valref(): Argument #2 ($b) could not be passed by reference | Error: T::refval(): Argument #1 ($a) could not be passed by reference | Error: T::refref(): Argument #2 ($b) could not be passed by reference | v

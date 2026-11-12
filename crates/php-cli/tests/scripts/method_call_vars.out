@@ -1,0 +1,85 @@
+warning: Undefined variable $undefined
+warning: Undefined variable $undefined
+T NULL 'after' | T 'before' NULL
+warning: Undefined variable $undefined
+warning: Undefined variable $undefined
+T NULL 'after' | T 'before' NULL
+warning: Undefined variable $undefined
+warning: Undefined variable $undefined
+T NULL 'after' | T 'before' NULL
+caught Undefined variable $undefined 'v'
+caught Undefined variable $undefined 'v'
+caught Undefined variable $undefined 'v'
+warning: Undefined variable $undefined
+first NULL true
+warning: Undefined variable $undefined
+first NULL true
+warning: Undefined variable $undefined
+first NULL U
+warning: Undefined variable $undefined
+first NULL U
+xa xb xa | ya yb yb
+xa xb xa | ya yb yb
+xa xb xa | ya yb yb
+RV a1 b, VR a1 b2, RV a11 b2, VR a11 b22, VR a11 b222, RV a111 b222, RV a1111 b222, 
+VR a b2, RV a1 b2, VR a1 b22, 
+xy[xc]c xy[xc][xx]x x y[xc][xx] | pq[pr]r xy[xz]z jk[jc]c x y
+xy[xc]c xy[xc][xx]x x y[xc][xx] | pq[pr]r xy[xz]z jk[jc]c x y
+ref v+refa v+refb v+refa | global v+global | va vb vb | one two v+one+two
+ref v+refa v+refb v+refa | global v+global | va vb vb | one two v+one+two
+ghost made
+shared changed v+ghost+ghost changed
+proxy made
+shared changed v+real+real changed
+va literalb | 5a wb | T 'first' 'va' T 'wb' NULL | va wb
+va literalb | 5a wb | T 'first' 'va' T 'wb' NULL | va wb
+same same other 3 S replaced
+same same other 3 S replaced
+anything(v?,1) invoked invoked v23
+anything(v?,1) invoked invoked v23
+NULL NULL v
+warning: Undefined variable $undefined
+'safe' 'safe NULL \'v+safe\'' v+safe
+NULL NULL v
+warning: Undefined variable $undefined
+'safe' 'safe NULL \'v+safe\'' v+safe
+2 4 6 x.a.b.
+vw paused v<0> w
+vw paused v<1> w
+m a 'v'
+destructed a
+returned
+destructed b
+returned by b
+warning: Undefined variable $undefined
+m c NULL
+destructed c
+returned
+m d 'by b'
+destructed d
+after d
+destructed e
+Error: Call to undefined method D::absent()
+after e
+m a 'v'
+destructed a
+returned
+destructed b
+returned by b
+warning: Undefined variable $undefined
+m c NULL
+destructed c
+returned
+m d 'by b'
+destructed d
+after d
+destructed e
+Error: Call to undefined method D::absent()
+after e
+destructed f
+caught Undefined variable $undefined
+after f
+destructed f
+caught Undefined variable $undefined
+after f
+done

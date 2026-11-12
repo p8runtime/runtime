@@ -323,8 +323,9 @@ pub enum Instr {
     IssetProp { dst: Reg, obj: Reg, name: Reg },
     /// `unset($obj->name)`
     UnsetProp { obj: Reg, name: Reg },
-    /// `$obj->method(args)`: `method` names a site (its name)
-    MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
+    /// `$obj->method(args)`: `method` names a site (its name; `vars` as
+    /// CallValue's)
+    MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8, vars: u16 },
     /// `C::method(args)`, `parent::method(args)`, `static::…` (`vars` as
     /// CallValue's)
     StaticCall { dst: Reg, class: u16, method: u16, base: Reg, argc: u8, vars: u16 },
