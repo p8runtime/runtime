@@ -267,6 +267,13 @@ impl Conn {
         self.send_pending();
         let _ = self.out.flush();
     }
+
+    /// The request died (the hard memory limit): what is still buffered
+    /// here never goes out, and the connection is closed where it is, as a
+    /// web server sees it when a php-fpm child exits mid-request.
+    fn abandon(self) {
+        let (_connection, _unsent) = self.out.into_parts();
+    }
 }
 
 impl p8::Host for Conn {
@@ -542,9 +549,7 @@ struct Settings {
     ini: Vec<(String, String)>,
     limit: u64,
     /// `p8 serve`: each request's log line says how many files it
-    /// compiled from source (none, for a project served from its package),
-    /// and no request changes the process's working directory (it is the
-    /// project's folder, for every worker; see `Server::execute`).
+    /// compiled from source (none, for a project served from its package).
     project: bool,
 }
 
@@ -581,7 +586,7 @@ fn settings(config: &Config, host: String, port: u16, docroot: String) -> Settin
 fn worker(settings: &Settings) -> (Server, p8::Isolate) {
     let isolate = settings.platform.new_isolate();
     let watchdog = Watchdog::start(isolate.interrupt_handle());
-    (Server { s: settings.clone(), watchdog }, isolate)
+    (Server { s: settings.clone(), watchdog, died: false }, isolate)
 }
 
 /// `php -S` for one request read from stdin, as from a connection from
@@ -611,7 +616,8 @@ pub fn run_stdio(config: Config, client: String) -> i32 {
     };
     log(LOG_MESSAGE, &format!("{client} Accepted"));
     let (mut server, mut isolate) = worker(&settings(&config, host, port, docroot));
-    server.handle(&mut isolate, Incoming { stream: None, peer: client, request });
+    // (One request, and the process ends: nothing to replace.)
+    let _ = server.handle(&mut isolate, Incoming { stream: None, peer: client, request });
     0
 }
 
@@ -650,12 +656,6 @@ pub fn run(config: Config) -> i32 {
     }
 
     let settings = settings(&config, host, port, docroot);
-    // `p8 serve`: workers run requests side by side, and a process has one
-    // working directory, so it is the project's folder for every request
-    // (php -S, one request at a time, moves it to each script's folder).
-    if settings.project {
-        let _ = std::env::set_current_dir(&settings.docroot);
-    }
     let workers = if settings.project { config.workers.max(1) } else { 1 };
     let (tx, rx) = mpsc::channel::<Incoming>();
     let flight = Arc::new(Flight::default());
@@ -664,7 +664,8 @@ pub fn run(config: Config) -> i32 {
         // Counted out however the request ends (a panic included).
         let _landed = Landed(&done);
         let (server, isolate) = state;
-        server.handle(isolate, incoming);
+        // Past the hard limit the worker is replaced (pool.rs).
+        server.handle(isolate, incoming) == Handled::Died
     });
     let (stop, stopped) = mpsc::channel::<()>();
     // `p8 serve` stops cleanly on SIGINT or SIGTERM; php -S ends as PHP's does.
@@ -845,6 +846,9 @@ fn close(peer: &str) {
 struct Server {
     s: Settings,
     watchdog: Watchdog,
+    /// The request being handled went past the hard memory limit: this
+    /// worker is to be replaced (see `Server::handle`).
+    died: bool,
 }
 
 /// How a script run ended.
@@ -854,6 +858,15 @@ struct Ran {
     status: i64,
     /// " - message in file on line N" when it ended with a fatal error.
     fatal: Option<String>,
+}
+
+/// How a request's handling ended, for the worker that ran it.
+#[derive(PartialEq)]
+enum Handled {
+    /// Answered (or closed after a bad request): the worker goes on.
+    Done,
+    /// It went past the hard memory limit: the worker is replaced.
+    Died,
 }
 
 /// Why a script could not be run.
@@ -927,24 +940,35 @@ impl Server {
     /// Run a PHP file as a request of its own (the router, or the target).
     fn execute(&mut self, isolate: &mut p8::Isolate, conn: &mut Conn, file: &Path, request: &p8::Request, chdir: bool, carried: Option<p8::Carried>) -> Ran {
         let script = self.compile(file);
-        // php -S runs a script in its folder. `p8 serve` runs requests side
-        // by side in one process, whose working directory stays the
-        // project's (see `run`).
-        if chdir
-            && !self.s.project
-            && let Some(dir) = file.parent()
-        {
-            let _ = std::env::set_current_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
-        }
         self.watchdog.arm(self.s.limit);
         let mut context = isolate.new_context(conn);
+        // The request starts in its script's folder, as PHP's servers start
+        // it: php_execute_script changes to the primary script's directory
+        // (VCWD_CHDIR_FILE, main/main.c:2592-2599) unless the SAPI says not
+        // to, which php-fpm does not (fpm_main.c) and the CLI server does
+        // only for its router (php_cli_server.c:2332, "Don't chdir to the
+        // router script"), which then runs in the directory the server
+        // started in. The directory is the request's own (#459, PHP's
+        // virtual cwd): a chdir() in it is seen by no other request, on
+        // this worker or another, and the process's never moves.
+        if chdir && let Some(dir) = file.parent() {
+            context.set_working_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
+        }
         for (name, value) in &self.s.ini {
             context.set_ini(name, value);
         }
         context.serve(request, carried);
         match script {
             Ok(script) => {
-                context.run(&script);
+                let status = context.run(&script);
+                // Past the hard limit PHP writes its line to stderr and the
+                // process ends (zend_mm_hard_limit_error, Zend/zend_alloc.c:484,
+                // `_exit(137)`): the line goes out here, the same one `p8
+                // file.php` prints, and this worker dies (`Server::handle`).
+                if status == p8::HARD_LIMIT_STATUS && context.hard_limit_error().is_some() {
+                    php_cli::ended(&context, status);
+                    self.died = true;
+                }
             }
             Err(CompileFailure::Source(error)) => {
                 context.fail(&error);
@@ -960,14 +984,14 @@ impl Server {
         Ran { declined, status, fatal }
     }
 
-    fn handle(&mut self, isolate: &mut p8::Isolate, incoming: Incoming) {
+    fn handle(&mut self, isolate: &mut p8::Isolate, incoming: Incoming) -> Handled {
         let peer = incoming.peer.clone();
         let write_half: Box<dyn Write> = match &incoming.stream {
             Some(stream) => {
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
                 let Ok(write_half) = stream.try_clone() else {
                     close(&peer);
-                    return;
+                    return Handled::Done;
                 };
                 Box::new(write_half)
             }
@@ -984,7 +1008,23 @@ impl Server {
         };
         // A request that fails inside p8 (a panic) gets PHP's error page,
         // if nothing was sent yet; its worker is then replaced (pool.rs).
+        self.died = false;
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(isolate, &incoming, &mut conn))).err();
+        if self.died && failed.is_none() {
+            // As when a php-fpm child exits mid-request: nothing more is
+            // sent and the connection closes (a proxy in front answers
+            // 502); the master logs the exit and starts a new child in its
+            // place (fpm_children_bury, sapi/fpm/fpm/fpm_children.c:308,
+            // :344), the other children untouched. Here the worker thread
+            // drops its isolate (and with it the request's memory) and
+            // makes a new one from the same compiled code (pool.rs).
+            conn.abandon();
+            close(&peer);
+            if let Some(stream) = &incoming.stream {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            return Handled::Died;
+        }
         if failed.is_some() && !conn.sent {
             conn.pending = None;
             self.error_page(&incoming, &mut conn, 500);
@@ -1005,6 +1045,16 @@ impl Server {
         if let Some(stream) = &incoming.stream {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
+        Handled::Done
+    }
+
+    /// The log line of a request that went past the hard memory limit (its
+    /// worker is replaced), as php-fpm's master logs a child that exited
+    /// (fpm_children.c:308: "child N exited with code 137").
+    fn log_died(&self, incoming: &Incoming) {
+        let req = &incoming.request;
+        let uri = String::from_utf8_lossy(&req.request_uri);
+        log(LOG_ERROR, &format!("{} [-]: {} {} - past the hard memory limit: nothing is sent, the connection is closed and a new worker takes this one's place", incoming.peer, req.method, uri));
     }
 
     /// php_cli_server_log_response()
@@ -1040,6 +1090,10 @@ impl Server {
         if let Some(router) = self.s.router.clone() {
             let p8req = self.p8_request(incoming, &resolved, true);
             let ran = self.execute(isolate, conn, Path::new(&router), &p8req, false, None);
+            if self.died {
+                self.log_died(incoming);
+                return;
+            }
             if ran.declined.is_none() {
                 return;
             }
@@ -1060,6 +1114,10 @@ impl Server {
         }
         let p8req = self.p8_request(incoming, &resolved, false);
         let ran = self.execute(isolate, conn, &to_path(&path), &p8req, true, carried);
+        if self.died {
+            self.log_died(incoming);
+            return;
+        }
         let counted = self.s.project.then(|| match p8::compiled_on_this_thread() - compiled {
             1 => "1 file compiled from source".to_string(),
             n => format!("{n} files compiled from source"),

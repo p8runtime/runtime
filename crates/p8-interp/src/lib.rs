@@ -907,6 +907,25 @@ impl Context<'_> {
         result
     }
 
+    /// A fatal error's text, as php_error_cb shows it (main/main.c): shown
+    /// only under display_errors; when it is off, a response whose head has
+    /// not gone out and whose code is still 200 becomes a 500
+    /// ("HTTP/1.0 500 Internal Server Error", main/main.c:1502-1508), so a
+    /// web server's client sees the failure without the message.
+    fn show_fatal(&mut self, text: &str) {
+        // (display_errors=stderr is on for PHP: the message is shown, as p8
+        // showed it before, and no 500.)
+        let stderr = Ctx::ini_get(self, b"display_errors").and_then(|v| v.as_str().map(|s| s.as_bytes().eq_ignore_ascii_case(b"stderr"))).unwrap_or(false);
+        if self.display_errors || stderr {
+            self.write_out(text.as_bytes());
+            return;
+        }
+        let response = &mut self.out.response;
+        if !self.out.head_sent && response.status_line.is_none() && matches!(response.status, 0 | 200) {
+            response.status = 500;
+        }
+    }
+
     /// The exit status for how the code ended, with PHP's message for an
     /// error nothing caught.
     fn report_end(&mut self, result: Result<(), Throw>) -> i32 {
@@ -921,13 +940,13 @@ impl Context<'_> {
                 // With the stack trace it was raised with (8.5+).
                 let trace = self.fatal_trace.take();
                 let text = self.error_text_traced("Fatal error", &message, &file, line, true, trace.as_deref());
-                self.write_out(text.as_bytes());
+                self.show_fatal(&text);
                 self.last_error = Some((1, message, file.to_string(), line));
                 255
             }
             Err(Throw::Parse { message, file, line }) => {
                 let text = self.error_text("Parse error", &message, &file, line, true);
-                self.write_out(text.as_bytes());
+                self.show_fatal(&text);
                 self.last_error = Some((4, message, file.to_string(), line));
                 255
             }
@@ -947,13 +966,13 @@ impl Context<'_> {
                 let line = e.class.read(&e, b"line", root).to_int();
                 let file = String::from_utf8_lossy(file.as_bytes());
                 let text = self.error_text("Fatal error", &format!("Uncaught {shown}\n  thrown"), &file, line as u32, true);
-                self.write_out(text.as_bytes());
+                self.show_fatal(&text);
                 self.last_error = Some((1, format!("Uncaught {shown}\n  thrown"), file.to_string(), line as u32));
                 255
             }
             Err(Throw::Error { class, message, file, line, .. }) => {
                 let text = self.error_text("Fatal error", &format!("Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), &file, line, true);
-                self.write_out(text.as_bytes());
+                self.show_fatal(&text);
                 self.last_error = Some((1, format!("Uncaught {class}: {message} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), file.to_string(), line));
                 255
             }
@@ -961,7 +980,7 @@ impl Context<'_> {
                 let (file, line) = self.location();
                 let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
                 let text = self.error_text("Fatal error", &format!("Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), &file, line, true);
-                self.write_out(text.as_bytes());
+                self.show_fatal(&text);
                 self.last_error = Some((1, format!("Uncaught Error: Class \"{name}\" not found in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown"), file.to_string(), line));
                 255
             }
