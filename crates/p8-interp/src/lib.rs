@@ -845,11 +845,17 @@ impl Context<'_> {
         HARD_LIMIT_STATUS
     }
 
-    /// The request's variables go now (the isolate keeps the capacity),
-    /// and what reached the host is flushed.
+    /// The request's variables go now, and what reached the host is
+    /// flushed. The isolate keeps the register file's storage up to one VM
+    /// stack page (`isolate::KEPT_REGS`); a file a deep request grew past it
+    /// is let go, so the next request starts as on a fresh isolate, as PHP
+    /// starts each request with a new one-page VM stack.
     fn release_request(&mut self, mut regs: Vec<Value>) {
         self.ended_globals.clear();
         regs.clear();
+        if regs.capacity() > crate::isolate::KEPT_REGS {
+            regs = Vec::with_capacity(crate::isolate::FIRST_REGS);
+        }
         self.frames.clear();
         self.isolate.regs = regs;
         self.out.flush_all();
