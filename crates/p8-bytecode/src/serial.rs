@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 27;
+pub const FORMAT: u32 = 28;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).

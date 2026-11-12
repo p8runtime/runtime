@@ -42,10 +42,15 @@ op JUMP_CMP jump_cmp cold=cold_run native=jump_cmp cmp=LT|LE|GT|GE|EQ|ID when=T|
 drop cmp=GT b=REG
 drop cmp=GE b=REG
 /// `dst = arr[key]` (`FetchDim`): a read (R: a missing key warns), or a
-/// quiet one (IS: `??`, a missing key is null).
-op FETCH_DIM fetch_dim cold=cold_run mode=R|IS dst=REG arr=REG key=REG|KINT|KSTR
-/// `dst = isset(var[key])`, one dimension (`IssetDim`).
-op ISSET_DIM isset_dim cold=cold_run dst=REG var=REG key=REG|KINT|KSTR
+/// quiet one (IS: `??`, a missing key is null; EMPTY: empty()'s last
+/// dimension, which the handler reads as IS). The rest (an ArrayAccess
+/// object, a conversion, a warning) runs out of line on the operands
+/// (`fetch_dim_out`; `step` runs the same code).
+op FETCH_DIM fetch_dim out=fetch_dim_out::<S> mode=R|IS|EMPTY dst=REG arr=REG key=REG|KINT|KSTR
+/// `dst = isset(var[key])`, one dimension (`IssetDim`). The rest (an
+/// ArrayAccess object, a string's offset) runs out of line on the operands
+/// (`isset_dim_out`; `step` runs the same code).
+op ISSET_DIM isset_dim out=isset_dim_out::<S> dst=REG var=REG key=REG|KINT|KSTR
 /// `var[key] = val`, one dimension (`AssignDim`); `dst` = the value when USED.
 /// The rest (an ArrayAccess object, a string offset, a conversion's
 /// warning) runs out of line on the operands (`assign_dim_out`; `step`
@@ -321,6 +326,19 @@ hand Capture
 /// register b, the name `class`): an object's class name; a string naming
 /// a class (autoloaded), the error of anything else, out of line
 hand ClassName
+/// `echo` of the operand in imm (a register or a constant), out of line
+/// (`echo_ops`)
+hand Echo
+/// a = `clone` of the operand in imm, out of line (`clone_ops`)
+hand Clone
+/// `throw` of the operand in imm, out of line (`throw_ops`)
+hand Throw
+/// a catch's test: pc = imm when the exception in a is an instance of
+/// class reference b | c << 8, out of line (`catch_if_ops`)
+hand CatchIf
+/// a = isset(class reference imm's static property named by register b),
+/// out of line (`isset_static_ops`)
+hand IssetStatic
 
 # The constant forms: the same operations with one operand a literal,
 # read in place from the closure's constants (`Function::consts`), as

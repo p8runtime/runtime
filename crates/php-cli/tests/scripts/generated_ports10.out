@@ -1,0 +1,483 @@
+-- intrinsics
+5 5 2 7 array (
+  0 => false,
+  1 => false,
+  2 => false,
+  3 => false,
+  4 => true,
+  5 => true,
+  6 => true,
+) true
+5 true
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, int given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, Plain given
+TypeError: array_key_exists(): Argument #2 ($array) must be of type array, int given
+5 5 2 7 array (
+  0 => false,
+  1 => false,
+  2 => false,
+  3 => false,
+  4 => true,
+  5 => true,
+  6 => true,
+) true
+5 true
+TypeError: strlen(): Argument #1 ($string) must be of type string, array given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, int given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, Plain given
+TypeError: array_key_exists(): Argument #2 ($array) must be of type array, int given
+-- binary
+SS pS Sq S1
+[5,6] {"1":"a","0":5} 4 12 7.5 4
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 75
+1 64 1.5 7
+xArray
+
+Warning: Array to string conversion in %s on line 77
+aArray
+Error: Object of class NoStr could not be converted to string
+Error: Object of class NoStr could not be converted to string
+TypeError: Unsupported operand types: array + int
+TypeError: Unsupported operand types: int + array
+TypeError: Unsupported operand types: array - string
+TypeError: Unsupported operand types: string * array
+DivisionByZeroError: Division by zero
+DivisionByZeroError: Modulo by zero
+ArithmeticError: Bit shift by negative number
+TypeError: Unsupported operand types: string * string
+
+Warning: A non-numeric value encountered in %s on line 88
+11
+i:S:6:7.5
+
+Warning: Array to string conversion in %s on line 90
+a:Array
+Error: Object of class NoStr could not be converted to string
+SS pS Sq S1
+[5,6] {"1":"a","0":5} 4 12 7.5 4
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 75
+1 64 1.5 7
+xArray
+
+Warning: Array to string conversion in %s on line 77
+aArray
+Error: Object of class NoStr could not be converted to string
+Error: Object of class NoStr could not be converted to string
+TypeError: Unsupported operand types: array + int
+TypeError: Unsupported operand types: int + array
+TypeError: Unsupported operand types: array - string
+TypeError: Unsupported operand types: string * array
+DivisionByZeroError: Division by zero
+DivisionByZeroError: Modulo by zero
+ArithmeticError: Bit shift by negative number
+TypeError: Unsupported operand types: string * string
+
+Warning: A non-numeric value encountered in %s on line 88
+11
+i:S:6:7.5
+
+Warning: Array to string conversion in %s on line 90
+a:Array
+Error: Object of class NoStr could not be converted to string
+-- dynamic property names
+{"a":1,"p":2}
+set p
+get a
+1 get p
+3 isset none
+dflt
+1 quiet
+
+Warning: Undefined property: Plain::$none in %s on line 101
+
+
+Deprecated: Creation of dynamic property Plain::$a is deprecated in %s on line 102
+2
+int(5)
+TypeError: Cannot assign string to property Typed::$i of type int
+Error: Cannot modify readonly property Typed::$ro
+null-quiet
+
+Warning: Attempt to read property "p" on null in %s on line 108
+
+
+Warning: Attempt to read property "p" on int in %s on line 109
+
+Error: Attempt to assign property "p" on null
+Error: Attempt to assign property "p" on int
+{"a":1,"p":2}
+set p
+get a
+1 get p
+3 isset none
+dflt
+1 quiet
+
+Warning: Undefined property: Plain::$none in %s on line 101
+
+
+Deprecated: Creation of dynamic property Plain::$a is deprecated in %s on line 102
+2
+int(5)
+TypeError: Cannot assign string to property Typed::$i of type int
+Error: Cannot modify readonly property Typed::$ro
+null-quiet
+
+Warning: Attempt to read property "p" on null in %s on line 108
+
+
+Warning: Attempt to read property "p" on int in %s on line 109
+
+Error: Attempt to assign property "p" on null
+Error: Attempt to assign property "p" on int
+-- by-reference questions
+set set
+Error: Call to undefined function nope_fn()
+m:v r:v! m2:w r:w! r:v! v! r:v! v!
+by-ref by-ref
+Error: Class "Missing" not found
+
+Warning: Undefined variable $undefined in %s on line 124
+m:
+set set
+Error: Call to undefined function nope_fn()
+m:v r:v! m2:w r:w! r:v! v! r:v! v!
+by-ref by-ref
+Error: Class "Missing" not found
+
+Warning: Undefined variable $undefined in %s on line 124
+m:
+-- echo
+obj 1.5  1  -0
+printed
+
+Warning: Array to string conversion in %s on line 132
+Array
+Error: Object of class NoStr could not be converted to string
+inline short html
+obj 1.5  1  -0
+printed
+
+Warning: Array to string conversion in %s on line 132
+Array
+Error: Object of class NoStr could not be converted to string
+inline short html
+-- clone
+0 1 1 2
+1 2
+TypeError: clone(): Argument #1 ($object) must be of type object, string given
+Error: Call to private method PrivCl::__clone() from global scope
+Error: Trying to clone an uncloneable object of class Suit
+0 1 1 2
+1 2
+TypeError: clone(): Argument #1 ($object) must be of type object, string given
+Error: Call to private method PrivCl::__clone() from global scope
+Error: Trying to clone an uncloneable object of class Suit
+-- throw and catch
+E1 one Tagged|E2 E2 Tagged|E2 E3
+Exception: plain
+Error: Can only throw objects
+E1: expr
+E1 one Tagged|E2 E2 Tagged|E2 E3
+Exception: plain
+Error: Can only throw objects
+E1: expr
+-- isset of static properties
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => false,
+) array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+)
+Error: Class "Missing" not found
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => false,
+) array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+)
+Error: Class "Missing" not found
+-- ArrayAccess reads and isset, empty, offsets
+get '5'
+5 get 5
+5 get 'key'
+5 exists 'no'
+dflt
+exists '5'
+exists 'no'
+exists 'key'
+exists 'zero'
+get 'zero'
+exists 'key'
+get 'key'
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+  4 => false,
+)
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 179
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+  4 => true,
+  5 => true,
+  6 => false,
+  7 => true,
+)
+array (
+  0 => false,
+  1 => true,
+  2 => true,
+  3 => true,
+  4 => true,
+)
+oob int
+
+Warning: Uninitialized string offset 10 in %s on line 182
+
+
+Warning: Trying to access array offset on int in %s on line 183
+
+
+Warning: Trying to access array offset on null in %s on line 184
+
+TypeError: Cannot access offset of type string on string
+TypeError: Cannot access offset of type array on array
+get '5'
+5 get 5
+5 get 'key'
+5 exists 'no'
+dflt
+exists '5'
+exists 'no'
+exists 'key'
+exists 'zero'
+get 'zero'
+exists 'key'
+get 'key'
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+  4 => false,
+)
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 179
+array (
+  0 => true,
+  1 => false,
+  2 => true,
+  3 => true,
+  4 => true,
+  5 => true,
+  6 => false,
+  7 => true,
+)
+array (
+  0 => false,
+  1 => true,
+  2 => true,
+  3 => true,
+  4 => true,
+)
+oob int
+
+Warning: Uninitialized string offset 10 in %s on line 182
+
+
+Warning: Trying to access array offset on int in %s on line 183
+
+
+Warning: Trying to access array offset on null in %s on line 184
+
+TypeError: Cannot access offset of type string on string
+TypeError: Cannot access offset of type array on array
+-- foreach of what is not an array in a register
+12 p=1
+
+Warning: foreach() argument must be of type array|object, int given in %s on line 196
+
+Warning: foreach() argument must be of type array|object, null given in %s on line 197
+12 p=1
+
+Warning: foreach() argument must be of type array|object, int given in %s on line 196
+
+Warning: foreach() argument must be of type array|object, null given in %s on line 197
+-- steps of what is not an int
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 204
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 204
+
+Warning: Increment on type bool has no effect, this will change in the next major version of PHP in %s on line 204
+float(2.5)
+int(1)
+string(1) "b"
+string(2) "Ba"
+int(6)
+bool(true)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.5)
+int(5)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 208
+NULL
+
+Deprecated: Decrement on empty string is deprecated as non-numeric in %s on line 209
+int(-1)
+TypeError: Cannot increment array
+TypeError: Cannot decrement array
+TypeError: Cannot increment Plain
+
+Warning: Undefined variable $u in %s on line 214
+int(1)
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 204
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 204
+
+Warning: Increment on type bool has no effect, this will change in the next major version of PHP in %s on line 204
+float(2.5)
+int(1)
+string(1) "b"
+string(2) "Ba"
+int(6)
+bool(true)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.5)
+int(5)
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 208
+NULL
+
+Deprecated: Decrement on empty string is deprecated as non-numeric in %s on line 209
+int(-1)
+TypeError: Cannot increment array
+TypeError: Cannot decrement array
+TypeError: Cannot increment Plain
+
+Warning: Undefined variable $u in %s on line 214
+int(1)
+-- arguments of their types
+array (
+  0 => 5,
+  1 => 3.0,
+  2 => 
+  array (
+    0 => '7',
+    1 => '1.5',
+  ),
+)
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+TypeError: ints(): Argument #1 ($a) must be of type int, string given, called in %s on line 224
+TypeError: ints(): Argument #2 ($b) must be of type ?float, string given, called in %s on line 225
+TypeError: ints(): Argument #3 must be of type string, array given, called in %s on line 226
+TypeError: strict_obj(): Argument #1 ($p) must be of type Plain, stdClass given, called in %s on line 227
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 219
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+array (
+  0 => 5,
+  1 => 3.0,
+  2 => 
+  array (
+    0 => '7',
+    1 => '1.5',
+  ),
+)
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+TypeError: ints(): Argument #1 ($a) must be of type int, string given, called in %s on line 224
+TypeError: ints(): Argument #2 ($b) must be of type ?float, string given, called in %s on line 225
+TypeError: ints(): Argument #3 must be of type string, array given, called in %s on line 226
+TypeError: strict_obj(): Argument #1 ($p) must be of type Plain, stdClass given, called in %s on line 227
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 219
+array (
+  0 => 1,
+  1 => NULL,
+  2 => 
+  array (
+  ),
+)
+-- compound assignments of elements
+{"s":"xy","n":"12","arr":[1,6],"f":"set"}
+
+Warning: Undefined array key "missing" in %s on line 237
+z
+
+Warning: Undefined array key "k" in %s on line 238
+{"k":"n"}
+
+Warning: Array to string conversion in %s on line 239
+Arrayx
+DivisionByZeroError: Division by zero
+TypeError: Unsupported operand types: string - int
+get 's'
+Error: Cannot use assign-op operators with string offsets
+{"s":"xy","n":"12","arr":[1,6],"f":"set"}
+
+Warning: Undefined array key "missing" in %s on line 237
+z
+
+Warning: Undefined array key "k" in %s on line 238
+{"k":"n"}
+
+Warning: Array to string conversion in %s on line 239
+Arrayx
+DivisionByZeroError: Division by zero
+TypeError: Unsupported operand types: string - int
+get 's'
+Error: Cannot use assign-op operators with string offsets
