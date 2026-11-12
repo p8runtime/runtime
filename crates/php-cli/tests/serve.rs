@@ -508,6 +508,56 @@ fn a_worker_dying_past_the_hard_limit_leaves_the_others_running() {
     assert_eq!(count(&serve, "Hard memory limit of"), 1, "{:?}", serve.log());
 }
 
+/// A static call's site (`C::m()`, `self::`, `parent::`, `static::`)
+/// remembers the class it was answered for and the scope it ran in by
+/// their addresses, and that belongs to the request that made it. One
+/// worker answers request after request; each declares `Kid` (and once a
+/// `Mid` under it) another way under the same names, so the classes one
+/// request freed are where the next one's are made; and the same sites in
+/// lib.php, run four times a request so that three answer from the cache,
+/// call the request's own methods every time.
+#[test]
+fn a_static_calls_site_answers_for_its_own_requests_classes() {
+    let lib = "<?php
+class Base {
+    static function label($x) { return \"Base$x\"; }
+    static function make($x) { return static::label($x) . '/' . self::label($x); }
+}
+function calls() {
+    for ($i = 0; $i < 4; $i++) {
+        echo Kid::make($i), ' ', Kid::label($i), ' ', Kid::up($i), ' ', Base::make($i), \"\\n\";
+    }
+}
+";
+    let a = "<?php require __DIR__ . '/lib.php';
+class Kid extends Base {
+    static function label($x) { return \"KidA$x\"; }
+    static function up($x) { return parent::label($x); }
+}
+calls();";
+    let b = "<?php require __DIR__ . '/lib.php';
+class Mid extends Base { static function label($x) { return \"MidB$x\"; } }
+class Kid extends Mid { static function up($x) { return parent::label($x) . '+' . static::label($x); } }
+calls();";
+    let c = "<?php require __DIR__ . '/lib.php';
+class Kid extends Base { static function up($x) { return self::label($x); } }
+calls();";
+    fn rows(row: impl Fn(u32) -> String) -> String {
+        (0..4).map(|i| row(i) + "\n").collect()
+    }
+    let wanted = [
+        ("/a.php", rows(|i| format!("KidA{i}/Base{i} KidA{i} Base{i} Base{i}/Base{i}"))),
+        ("/b.php", rows(|i| format!("MidB{i}/Base{i} MidB{i} MidB{i}+MidB{i} Base{i}/Base{i}"))),
+        ("/c.php", rows(|i| format!("Base{i}/Base{i} Base{i} Base{i} Base{i}/Base{i}"))),
+    ];
+    let dir = site("static_sites", &[("lib.php", lib), ("a.php", a), ("b.php", b), ("c.php", c)]);
+    let serve = Serve::start_with(&dir, &["--workers", "1"]);
+    for n in [0, 1, 2, 0, 2, 1, 1, 0, 2, 2, 0, 1] {
+        let (path, body) = &wanted[n];
+        assert_eq!(fetch(serve.port, path).1, *body, "{path}");
+    }
+}
+
 /// The ordinary memory_limit fatal error ends the request, which is
 /// answered, and the worker goes on: with display_errors on (the default)
 /// the page shows the error; with it off, the response is a 500 and shows

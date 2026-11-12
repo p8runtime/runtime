@@ -478,25 +478,30 @@ impl Context<'_> {
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_call_ops(regs, clo, base, at, ops))
                             }};
                         }
-                        let Some(m) = self.cached_static_call(clo, class, method) else { uncached!() };
-                        // (Taken apart: the frame takes its parts, no copy.)
-                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { uncached!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        // (The frame takes the parts, no copy; the code is
+                        // the one at its index, as the cached MethodCall
+                        // takes it: `push_code` counts it only when the
+                        // frame slot the call reuses does not run it.)
+                        let Some(sites::StaticHit { code, this, scope, called }) = self.static_site(clo, class, method) else { uncached!() };
+                        let Some(target) = self.closures.get(code as usize) else { uncached!() };
+                        let callee = &target.code;
+                        if n < callee.required || callee.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
                         if let Some(vars) = vars {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
-                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), &target.code) {
+                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), callee) {
                                 Some(released) if !(released && self.ids.has_pending()) => {}
                                 _ => slow!(),
                             }
                         }
-                        let frame = self.frames.call(Some(&target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        // (No Closure object: the slot's `owner` is empty,
+                        // as `leave` left it.)
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
-                        frame.scope = scope;
-                        frame.called = called;
-                        frame.owner = closure;
+                        frame.scope = Some(scope);
+                        frame.called = Some(called);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -2097,18 +2102,15 @@ pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
 /// The variables a call sends itself (`vars`, its `Function::arg_vars`
 /// entry) into its argument registers from `args`, for `target`: a
 /// variable is made a reference where it takes the parameter by
-/// reference, else copied (`send_vars`). None, with nothing sent, when a
-/// copied one is undefined (the warning: `step`); else whether a write
-/// released memory.
+/// reference, else copied (`send_vars`). None when a copied one is
+/// undefined (the warning: `step`, which sends them all again: the ones
+/// before it were sent here, the same values it sends); else whether a
+/// write released memory.
 #[inline(never)]
 fn send_vars(w: &mut [Value], vars: &[(u8, Reg)], args: usize, target: &Function) -> Option<bool> {
-    let defined = |v: &Value| !v.is_undef() && v.as_reference().is_none_or(|c| !c.borrow().is_undef());
-    if vars.iter().any(|&(n, var)| !target.param_by_ref(usize::from(n)) && !defined(&w[usize::from(var)])) {
-        return None;
-    }
     let mut released = false;
     for &(n, var) in vars {
-        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)]).expect("defined") };
+        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)])? };
         released |= put(&mut w[(args + usize::from(n)) & (WINDOW - 1)], v);
     }
     Some(released)

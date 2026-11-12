@@ -2799,6 +2799,7 @@ impl Context<'_> {
                 let w = &regs[base..base + func.nregs as usize];
                 let m = self.static_frame(func, class, Some(site.sym), site.display.as_bytes(), w)?;
                 self.remember_static(cache, &target, &m);
+                self.remember_static_user(clo, method as usize, &target, &m);
                 m
             }
         };
