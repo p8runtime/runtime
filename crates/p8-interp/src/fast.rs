@@ -971,11 +971,11 @@ impl Context<'_> {
                         match clo.sites[imm as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
-                                if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                                if !direct(target.shape, &target.code, n) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     uncached!();
                                 }
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
-                                enter(&mut self.frames, regs);
+                                bind(&mut self.frames, regs, target.shape, base + args as usize, n as usize);
                                 pc = 0;
                                 continue 'frame;
                             }
@@ -1001,12 +1001,50 @@ impl Context<'_> {
                     // `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI
                     // reads its arguments from the variables (or constants)
                     // themselves, framelessly, and the Moves into the
-                    // argument registers are not run. Anything else runs the
-                    // first Move as `Op::Move` does, and goes on with the next.
+                    // argument registers are not run. A user function the Call
+                    // arm would call directly (`direct`) is called from
+                    // here: the Moves, each as `Op::Move` does it,
+                    // then the Call, with no instruction fetched between
+                    // them. Anything else runs the first Move as `Op::Move`
+                    // does, and goes on with the next.
                     Op::CallRegs => {
                         ops!(a, b, c, imm);
                         let (start, n) = (rx!(a), rx!(b));
-                        if let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() {
+                        let site = clo.sites[(imm & 0xffff) as usize].get();
+                        if let Some(&Callee::User(target)) = site {
+                            let target = &self.closures[target as usize];
+                            if direct(target.shape, &target.code, b) && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT {
+                                let args = rk!((imm >> 16) as usize);
+                                if imm & insn::ARG_CONST != 0 {
+                                    let v = cst!(start).clone();
+                                    if put(&mut w[args], v) && self.ids.has_pending() {
+                                        pc += 1;
+                                        pending!();
+                                    }
+                                } else {
+                                    for k in 0..n {
+                                        // (Stopped at a Move, the ones
+                                        // before it are done: on from it.)
+                                        let Some(v) = copied(&w[rk!(start + k)]) else {
+                                            pc += k;
+                                            slow!()
+                                        };
+                                        let _ = put(&mut w[rk!(args + k)], v);
+                                        if self.ids.has_pending() {
+                                            pc += k + 1;
+                                            pending!();
+                                        }
+                                    }
+                                }
+                                // (The Call is at pc + n: its result register
+                                // is this instruction's, and the caller goes
+                                // on after it.)
+                                self.frames.call(Some(target), pc + n + 1, base + args, n, (base + rx!(c)) as u32);
+                                bind(&mut self.frames, regs, target.shape, base + args, n);
+                                pc = 0;
+                                continue 'frame;
+                            }
+                        } else if let Some(&Callee::Builtin(i)) = site {
                             let call = self.isolate.registry.call(i);
                             if imm & insn::ARG_CONST != 0 {
                                 // `f('literal')`: the one argument is the
@@ -2655,31 +2693,60 @@ fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &
 /// its base, with its arguments already in the first registers.
 #[inline(always)]
 pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
-    let top = frames.len - 1;
+    let frame = &frames.slots[frames.len - 1];
+    let (shape, base, argc) = (frame.func.shape, frame.base as usize, frame.argc as usize);
+    bind(frames, regs, shape, base, argc);
+}
+
+/// Whether a call of a function with `n` arguments is entered where it is
+/// made (its frame pushed and bound there, by the loop's Call and CallRegs
+/// arms and a native frame's call): no required argument is missing, and
+/// its code is not a generator's. As many arguments as parameters says
+/// both in one test (`Shape::exact`), and most calls pass that many.
+#[inline(always)]
+pub(crate) fn direct(shape: Shape, code: &Function, n: u8) -> bool {
+    u32::from(n) == shape.exact || (usize::from(n) >= code.required && !code.is_generator)
+}
+
+/// `enter`, for a caller that has the frame's numbers in hand (the loop's
+/// Call arm): `shape` its closure's, `base` and `argc` as pushed. A call
+/// that passes as many arguments as there are parameters (most do) has
+/// nothing to put aside and no default to fill in: one test says so, and
+/// what is left is the variables after the parameters made undefined. The
+/// other calls do what they did, from the same numbers.
+#[inline(always)]
+pub(crate) fn bind(frames: &mut Frames, regs: &mut Vec<Value>, shape: Shape, base: usize, argc: usize) {
     // A window's worth at least: the loop's fixed window (WINDOW) must exist.
-    let need = {
-        let frame = &frames.slots[top];
-        frame.base as usize + usize::from(frame.func.code.nregs).max(WINDOW)
-    };
+    let need = base + shape.need as usize;
     if regs.len() < need {
         frames.grow_regs(regs, need);
     }
+    let (nparams, ncv) = (shape.nparams as usize, shape.ncv as usize);
+    if argc == nparams {
+        // The variables not passed are undefined (PHP initialises its
+        // CVs). Constants are read in place (`const_index`): none is
+        // copied in.
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        return;
+    }
+    // More arguments than parameters, or fewer: the extra ones put aside,
+    // the missing ones' constant defaults filled in.
     let (slots, spare) = (&mut frames.slots, &mut frames.spare);
-    let frame = &mut slots[top];
-    let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
-    let code = &*func.code;
-    let nparams = code.params.len();
+    let frame = &mut slots[frames.len - 1];
     if argc > nparams {
         frame.extra = take_extra(spare, regs, base, nparams, argc);
-    }
-    // The variables not passed are undefined (PHP initialises its CVs).
-    // Constants are read in place (`const_index`): none is copied in.
-    for r in &mut regs[base + argc.min(nparams)..base + code.ncv as usize] {
-        clear(r);
-    }
-    // Arguments not passed: their constant defaults.
-    if argc < nparams && !func.defaults.is_empty() {
-        fill_defaults(&func.defaults, &mut regs[base..base + nparams], argc);
+        for r in &mut regs[base + nparams..base + ncv] {
+            clear(r);
+        }
+    } else {
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        if !frame.func.defaults.is_empty() {
+            fill_defaults(&frame.func.defaults, &mut regs[base..base + nparams], argc);
+        }
     }
 }
 
