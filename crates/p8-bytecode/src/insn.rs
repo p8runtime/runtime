@@ -392,7 +392,10 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
 }
 
 /// The instruction at `pc` lowered; `classes` and `arg_vars` are the
-/// function's (`Function::classes`, `Function::arg_vars`).
+/// function's (`Function::classes`, `Function::arg_vars`). Inlined into
+/// `lower`'s loop, where it was before it took the two tables: a call per
+/// instruction is paid by every script that is compiled.
+#[inline(always)]
 fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef], arg_vars: &[Vec<(u8, Reg)>]) -> Option<Insn> {
     let nconsts = consts.len();
     let i = |op: Op, a: Reg, b: Reg, c: Reg, imm: u32| -> Option<Insn> { Some(Insn { op, a: r(a)?, b: r(b)?, c: r(c)?, imm }) };
