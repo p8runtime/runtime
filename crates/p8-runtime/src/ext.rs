@@ -166,6 +166,12 @@ pub trait Ctx {
     /// Where `include name` would find its file (include_path, then the
     /// running file's directory), as a canonical path.
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf>;
+    /// The request's working directory (getcwd()): what a relative path is
+    /// resolved against ([`crate::cwd::resolve`]). Never the process's,
+    /// which other requests share (#459).
+    fn cwd(&self) -> &std::path::Path;
+    /// chdir(): the request's working directory is now `dir` (absolute).
+    fn set_cwd(&mut self, dir: std::path::PathBuf);
     /// The name the running builtin was called by (an alias's own name:
     /// gzread, not fread), for its messages.
     fn builtin_name(&self) -> &'static str;

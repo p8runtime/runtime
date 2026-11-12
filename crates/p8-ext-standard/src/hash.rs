@@ -193,7 +193,7 @@ fn crc32(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 }
 
 fn read_file(ctx: &mut dyn Ctx, func: &str, path: &PhpStr) -> Option<Vec<u8>> {
-    match std::fs::read(String::from_utf8_lossy(path.as_bytes()).as_ref()) {
+    match std::fs::read(p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(path.as_bytes()).as_ref())) {
         Ok(b) => Some(b),
         Err(_) => {
             ctx.warn(&format!("{func}({}): Failed to open stream: No such file or directory", String::from_utf8_lossy(path.as_bytes())));

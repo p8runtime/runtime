@@ -641,7 +641,7 @@ fn parse_ini_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
     if path.is_empty() {
         return Err(ctx.throw("ValueError", "parse_ini_file(): Argument #1 ($filename) cannot be empty".into()));
     }
-    let Ok(text) = std::fs::read(&path) else { return Ok(Value::FALSE) };
+    let Ok(text) = std::fs::read(p8_runtime::cwd::resolve(ctx, &path)) else { return Ok(Value::FALSE) };
     let sections = args.len() > 1 && arg(args, 1).to_bool();
     let mode = if args.len() > 2 { arg(args, 2).to_int() } else { 0 };
     Ok(parse_ini(ctx, &text, sections, mode))

@@ -651,8 +651,9 @@ pub(crate) fn open_gz(ctx: &mut dyn Ctx, func: &str, path: &str, mode: &str) -> 
         ctx.warn(&format!("{func}({path}): Failed to open stream: Invalid argument"));
         return None;
     }
+    let os = p8_runtime::cwd::resolve(ctx, path);
     if kind == 'r' {
-        match std::fs::read(path) {
+        match std::fs::read(&os) {
             Ok(bytes) => {
                 let mut s = Stream::new(Target::Memory(gunzip_file(&bytes)), path, "rb");
                 s.zlib = true;
@@ -666,7 +667,7 @@ pub(crate) fn open_gz(ctx: &mut dyn Ctx, func: &str, path: &str, mode: &str) -> 
     } else {
         let level = mode.chars().find(|c| c.is_ascii_digit()).map_or(-1, |c| i64::from(c as u8 - b'0'));
         let append = kind == 'a';
-        let file = std::fs::OpenOptions::new().write(true).create(true).append(append).truncate(!append).open(path);
+        let file = std::fs::OpenOptions::new().write(true).create(true).append(append).truncate(!append).open(&os);
         match file {
             Ok(mut f) => {
                 let mut s = Stream::new(Target::Memory(Vec::new()), path, "wb");
@@ -701,7 +702,7 @@ fn gzopen(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// The inflated text of a gzip (or plain) file, with gzopen's warning.
 fn read_gz(ctx: &mut dyn Ctx, func: &str, path: &str) -> Option<Vec<u8>> {
-    match std::fs::read(path) {
+    match std::fs::read(p8_runtime::cwd::resolve(ctx, path)) {
         Ok(bytes) => Some(gunzip_file(&bytes)),
         Err(e) => {
             ctx.warn(&format!("{func}({path}): Failed to open stream: {}", crate::file::os_error(&e)));

@@ -426,31 +426,16 @@ fn warn_all(ctx: &mut dyn Ctx, warns: Vec<String>) {
 
 // ---- opening and closing ----
 
-/// The absolute form of a path (expand_filepath): joined to the working
-/// directory, `.` and `..` folded away.
-pub(crate) fn expand_path(path: &str) -> String {
-    let full = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        format!("{cwd}/{path}")
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    for p in full.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            p => parts.push(p),
-        }
-    }
-    format!("/{}", parts.join("/"))
+/// The absolute form of a path (expand_filepath): joined to the request's
+/// working directory `cwd` (Ctx::cwd), `.` and `..` folded away.
+/// One function with every other expansion: p8_runtime::cwd::expand.
+pub(crate) fn expand_path(cwd: &std::path::Path, path: &str) -> String {
+    p8_runtime::cwd::expand(cwd, std::path::Path::new(path)).to_string_lossy().into_owned()
 }
 
 /// zip_open(): the archive at `path`, or libzip's error code.
 pub(crate) fn open_archive(ctx: &mut dyn Ctx, func: &str, path: &str, flags: i64) -> Result<Zip, i32> {
-    let resolved = expand_path(path);
+    let resolved = expand_path(ctx.cwd(), path);
     let meta = std::fs::metadata(&resolved);
     let mut flags = flags;
     // An empty file is no archive to libzip 1.6+; PHP makes it a new one.
@@ -776,7 +761,7 @@ fn os_error(e: &std::io::Error) -> String {
 /// (0: to its end). None: it can not be a source (a warning said so, or
 /// libzip refuses the range).
 fn file_source(ctx: &mut dyn Ctx, func: &str, path: &[u8], start: i64, len: i64, flags: i64) -> Option<Source> {
-    let p = expand_path(&text(path));
+    let p = expand_path(ctx.cwd(), &text(path));
     let Ok(meta) = std::fs::metadata(&p) else {
         ctx.warn(&format!("{func}(): No such file or directory"));
         return None;
@@ -990,7 +975,8 @@ fn add_glob(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         None => return Ok(Value::array(PhpArray::new())),
     };
     if glob_flags & GLOB_ONLYDIR != 0 {
-        found.retain(|f| std::fs::metadata(text(f)).is_ok_and(|m| m.is_dir()));
+        let cwd = ctx.cwd().to_path_buf();
+        found.retain(|f| std::fs::metadata(p8_runtime::cwd::join(&cwd, std::path::Path::new(&text(f)))).is_ok_and(|m| m.is_dir()));
     }
     if found.is_empty() {
         return Ok(Value::array(PhpArray::new()));
@@ -1032,7 +1018,7 @@ fn add_pattern(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
             continue;
         }
         let full = [&path[..], b"/", &name[..]].concat();
-        match std::fs::metadata(text(&full)) {
+        match std::fs::metadata(p8_runtime::cwd::resolve(ctx, text(&full))) {
             Err(_) => ctx.warn(&format!("ZipArchive::addPattern(): Cannot read <{}>", text(&full))),
             Ok(m) if m.is_dir() => {}
             Ok(_) => found.push(full),
@@ -1576,7 +1562,10 @@ fn clean_entry_path(name: &[u8]) -> Option<String> {
     Some(out)
 }
 
-fn extract_file(z: &mut Zip, dest: &str, name: &[u8], idx: Option<usize>, warns: &mut Vec<String>) -> bool {
+/// `dest` (as given, for the warnings) is under `cwd`, the request's
+/// working directory, when relative.
+fn extract_file(z: &mut Zip, cwd: &std::path::Path, dest: &str, name: &[u8], idx: Option<usize>, warns: &mut Vec<String>) -> bool {
+    let os = |p: &str| p8_runtime::cwd::join(cwd, std::path::Path::new(p));
     let Some(i) = idx.or_else(|| z.a.locate(name, false, false, false)) else { return false };
     let Some(cleaned) = clean_entry_path(name) else { return false };
     if cleaned.len() >= MAXPATHLEN || z.a.stat(i, false).is_err() {
@@ -1585,7 +1574,7 @@ fn extract_file(z: &mut Zip, dest: &str, name: &[u8], idx: Option<usize>, warns:
     let dest = dest.trim_end_matches('/');
     if cleaned.len() > 1 && cleaned.ends_with('/') {
         let dir = format!("{dest}/{cleaned}");
-        return std::path::Path::new(&dir).is_dir() || std::fs::create_dir_all(&dir).is_ok();
+        return os(&dir).is_dir() || std::fs::create_dir_all(os(&dir)).is_ok();
     }
     let (dir_part, base) = match cleaned.rfind('/') {
         Some(p) => (Some(&cleaned[..p]), &cleaned[p + 1..]),
@@ -1595,8 +1584,8 @@ fn extract_file(z: &mut Zip, dest: &str, name: &[u8], idx: Option<usize>, warns:
         Some(d) => format!("{dest}/{d}"),
         None => dest.to_string(),
     };
-    if !std::path::Path::new(&dir).exists()
-        && let Err(e) = std::fs::create_dir_all(&dir) {
+    if !os(&dir).exists()
+        && let Err(e) = std::fs::create_dir_all(os(&dir)) {
             warns.push(format!("ZipArchive::extractTo(): {}", os_error(&e)));
             return false;
         }
@@ -1616,7 +1605,7 @@ fn extract_file(z: &mut Zip, dest: &str, name: &[u8], idx: Option<usize>, warns:
         }
     };
     let mtime = z.a.stat(i, false).map(|s| s.mtime).unwrap_or(0);
-    match std::fs::File::create(&full) {
+    match std::fs::File::create(os(&full)) {
         Ok(mut f) => {
             use std::io::Write;
             if f.write_all(&data).is_err() {
@@ -1639,16 +1628,18 @@ fn extract_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let dest = bytes(args, 0);
     let files = arg(args, 1);
     let mut warns = Vec::new();
+    let cwd = ctx.cwd().to_path_buf();
     let r = with_zip(ctx, this, |z, _| {
         if dest.is_empty() {
             return Ok(Value::FALSE);
         }
         let dest = text(&dest);
-        if !std::path::Path::new(&dest).exists() && std::fs::create_dir_all(&dest).is_err() {
+        let os = p8_runtime::cwd::join(&cwd, std::path::Path::new(&dest));
+        if !os.exists() && std::fs::create_dir_all(&os).is_err() {
             return Ok(Value::FALSE);
         }
         if let Some(s) = files.as_str() {
-            if !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
+            if !extract_file(z, &cwd, &dest, s.as_bytes(), None, &mut warns) {
                 return Ok(Value::FALSE);
             }
         } else if let Some(a) = files.as_array() {
@@ -1657,14 +1648,14 @@ fn extract_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
             }
             for v in a.values() {
                 if let Some(s) = v.deref().as_str()
-                    && !extract_file(z, &dest, s.as_bytes(), None, &mut warns) {
+                    && !extract_file(z, &cwd, &dest, s.as_bytes(), None, &mut warns) {
                         return Ok(Value::FALSE);
                     }
             }
         } else {
             for i in 0..z.a.count() {
                 let Ok(name) = z.a.name(i, true).map(<[u8]>::to_vec) else { return Ok(Value::FALSE) };
-                if !extract_file(z, &dest, &name, Some(i), &mut warns) {
+                if !extract_file(z, &cwd, &dest, &name, Some(i), &mut warns) {
                     return Ok(Value::FALSE);
                 }
             }

@@ -157,7 +157,7 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, func: &str, args: &[Value]) -
         .unwrap_or_default();
     let opts = Options { entries: &entries };
     let dsn_rest = String::from_utf8_lossy(&bytes[colon + 1..]).into_owned();
-    let conn = match driver.connect(&dsn_rest, user.as_ref().map(|u| u.as_bytes()), pass.as_ref().map(|p| p.as_bytes()), &opts) {
+    let conn = match driver.connect(&dsn_rest, user.as_ref().map(|u| u.as_bytes()), pass.as_ref().map(|p| p.as_bytes()), &opts, ctx.cwd()) {
         Ok(c) => c,
         Err(ConnectError { message, code, info }) => {
             let info = info.map(|e| PhpArray::from_list(vec![Value::str(e.sqlstate.as_str()), Value::int(e.code), Value::str(e.message.as_str())]));

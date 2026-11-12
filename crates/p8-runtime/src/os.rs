@@ -225,7 +225,9 @@ mod wasi {
     /// taken as the plain directory it must be. What the path names must
     /// exist.
     pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-        let start = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir()?.join(path) };
+        // Builtins give an absolute path (resolved against the request's
+        // directory, crate::cwd); a relative one is the process's.
+        let start = if path.is_absolute() { path.to_path_buf() } else { crate::cwd::process_dir().join(path) };
         let mut pending: Vec<std::ffi::OsString> = Vec::new();
         push_names(&start, &mut pending);
         let mut out = PathBuf::from("/");

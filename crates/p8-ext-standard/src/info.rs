@@ -66,7 +66,8 @@ fn stat_array(m: &std::fs::Metadata) -> Value {
 }
 
 fn stat_of(ctx: &mut dyn Ctx, func: &str, p: &str, follow: bool) -> Option<std::fs::Metadata> {
-    let m = if follow { std::fs::metadata(p) } else { std::fs::symlink_metadata(p) };
+    let os = p8_runtime::cwd::resolve(ctx, p);
+    let m = if follow { std::fs::metadata(&os) } else { std::fs::symlink_metadata(&os) };
     match m {
         Ok(m) => Some(m),
         Err(_) => {
@@ -141,7 +142,10 @@ fn os_error(e: &std::io::Error) -> String {
 
 fn symlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (target, link) = (path(args), String::from_utf8_lossy(str_arg(args, 1).as_bytes()).into_owned());
-    match p8_runtime::os::symlink(&target, &link) {
+    // The link's own path is the request's; its target is stored as given
+    // (php_sys_symlink(topath, source_p): a relative target is relative to
+    // the link).
+    match p8_runtime::os::symlink(&target, p8_runtime::cwd::resolve(ctx, &link)) {
         Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("symlink(): {}", os_error(&e)));
@@ -152,7 +156,7 @@ fn symlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let (target, link) = (path(args), String::from_utf8_lossy(str_arg(args, 1).as_bytes()).into_owned());
-    match std::fs::hard_link(&target, &link) {
+    match std::fs::hard_link(p8_runtime::cwd::resolve(ctx, &target), p8_runtime::cwd::resolve(ctx, &link)) {
         Ok(()) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("link(): {}", os_error(&e)));
@@ -163,7 +167,7 @@ fn link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 fn readlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path(args);
-    match std::fs::read_link(&p) {
+    match std::fs::read_link(p8_runtime::cwd::resolve(ctx, &p)) {
         Ok(t) => Ok(Value::str(PhpStr::from(t.to_string_lossy().into_owned()))),
         Err(e) => {
             let msg = if e.kind() == std::io::ErrorKind::InvalidInput { "Invalid argument".to_string() } else { os_error(&e) };
@@ -333,7 +337,8 @@ fn change_owner(ctx: &mut dyn Ctx, args: &mut [Value], func: &str, group: bool, 
     let id = if group { id_of(ctx, func, &arg(args, 1), "/etc/group", "gid") } else { id_of(ctx, func, &arg(args, 1), "/etc/passwd", "uid") };
     let Some(id) = id else { return Ok(Value::FALSE) };
     let (uid, gid) = if group { (None, Some(id)) } else { (Some(id), None) };
-    let r = if link { p8_runtime::os::lchown(&path, uid, gid) } else { p8_runtime::os::chown(&path, uid, gid) };
+    let os = p8_runtime::cwd::resolve(ctx, &path);
+    let r = if link { p8_runtime::os::lchown(&os, uid, gid) } else { p8_runtime::os::chown(&os, uid, gid) };
     match r {
         Ok(()) => Ok(Value::TRUE),
         Err(e) => {

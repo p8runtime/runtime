@@ -24,8 +24,9 @@ fn error(domain: i32, code: i32, level: i32, message: String) -> XmlError {
 const IN_MEMORY: &str = "in_memory_buffer";
 
 /// Compiles the schema in `data`; `file` is its full path when it was read
-/// from a file. The Err holds everything libxml2 would have reported.
-pub(crate) fn compile(data: Vec<u8>, file: Option<String>) -> Result<Schema, Vec<XmlError>> {
+/// from a file. The Err holds everything libxml2 would have reported. A
+/// relative location is under `cwd`, the request's working directory.
+pub(crate) fn compile(cwd: &std::path::Path, data: Vec<u8>, file: Option<String>) -> Result<Schema, Vec<XmlError>> {
     let name = file.clone().unwrap_or_else(|| IN_MEMORY.to_string());
     let mut doc = Doc::new(b"DOMDocument".to_vec());
     let parser = build::parse(&mut doc, data, file.clone(), 0);
@@ -40,9 +41,9 @@ pub(crate) fn compile(data: Vec<u8>, file: Option<String>) -> Result<Schema, Vec
     // a path loads, percent-escapes decoded; other schemes do not.
     let mut loader = |location: &str, base: &str| -> Option<(Doc, String)> {
         let url = if base == IN_MEMORY { location.to_string() } else { crate::uri::resolve(location, base) };
-        let path = PathBuf::from(crate::uri::local_path(&url)?);
+        let path = p8_runtime::cwd::absolute(cwd, &PathBuf::from(crate::uri::local_path(&url)?));
         let data = std::fs::read(&path).ok()?;
-        let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string_lossy().into_owned());
+        let full = path.to_string_lossy().into_owned();
         let mut sub = Doc::new(b"DOMDocument".to_vec());
         let p = build::parse(&mut sub, data, Some(full.clone()), 0);
         if !p.well_formed {

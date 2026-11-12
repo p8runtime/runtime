@@ -111,8 +111,10 @@ pub trait Driver: Send + Sync {
         None
     }
     /// Open a connection. `dsn` is what follows the first colon, `options`
-    /// the constructor's driver options by their integer key.
-    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options) -> Result<Box<dyn Connection>, ConnectError>;
+    /// the constructor's driver options by their integer key. A file the
+    /// DSN names relatively is under `cwd`, the request's working
+    /// directory (Ctx::cwd).
+    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options, cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError>;
     /// A driver method PHP lists on PDO (`pgsqlGetPid`), by name.
     fn pdo_method(&self, name: &str) -> Option<DriverMethod> {
         let _ = name;

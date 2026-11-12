@@ -49,8 +49,10 @@ fn attribute<'a>(set_cookie: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// CURLOPT_COOKIELIST: a command ("ALL", "SESS", "FLUSH", "RELOAD"), a
-/// Set-Cookie line, or a Netscape line.
-pub(crate) fn command(st: &mut State, cmd: &[u8]) {
+/// Set-Cookie line, or a Netscape line. A relative cookie file is under
+/// `cwd`, the request's working directory.
+pub(crate) fn command(st: &mut State, cmd: &[u8], cwd: &std::path::Path) {
+    let file = |p: &str| p8_runtime::cwd::join(cwd, std::path::Path::new(p)).to_string_lossy().into_owned();
     let cmd = lossy(cmd);
     let jar = jar(st);
     match cmd.as_str() {
@@ -63,12 +65,12 @@ pub(crate) fn command(st: &mut State, cmd: &[u8]) {
         }
         "FLUSH" => {
             if let Some(path) = st.opts.get(&c::CURLOPT_COOKIEJAR).map(|v| lossy(&crate::bytes_of(v))).filter(|p| !p.is_empty()) {
-                let _ = jar.borrow().save_netscape(&path);
+                let _ = jar.borrow().save_netscape(&file(&path));
             }
         }
         "RELOAD" => {
             if let Some(path) = st.opts.get(&c::CURLOPT_COOKIEFILE).map(|v| lossy(&crate::bytes_of(v))).filter(|p| !p.is_empty())
-                && let Ok(loaded) = CookieJar::load_netscape_or_empty(&path)
+                && let Ok(loaded) = CookieJar::load_netscape_or_empty(&file(&path))
             {
                 *jar.borrow_mut() = loaded;
             }

@@ -403,8 +403,9 @@ fn open_on(ctx: &mut dyn Ctx, this: &Rc<Object>, sink: Sink) -> Result<(), Throw
 }
 
 /// _xmlwriter_get_valid_file_path: a file path (or file:// URI) whose
-/// directory exists, made absolute.
-fn valid_file_path(uri: &[u8]) -> Option<std::path::PathBuf> {
+/// directory exists, made absolute against `cwd`, the request's working
+/// directory.
+fn valid_file_path(cwd: &std::path::Path, uri: &[u8]) -> Option<std::path::PathBuf> {
     let s = String::from_utf8_lossy(uri).into_owned();
     let lower = s.to_ascii_lowercase();
     let path = if lower.starts_with("file:///") {
@@ -427,7 +428,7 @@ fn valid_file_path(uri: &[u8]) -> Option<std::path::PathBuf> {
     if path.len() >= p8_runtime::stream::MAXPATHLEN {
         return None;
     }
-    let path = std::path::absolute(std::path::Path::new(&path)).ok()?;
+    let path = p8_runtime::cwd::absolute(cwd, std::path::Path::new(&path));
     let dir = path.parent()?;
     dir.is_dir().then_some(path)
 }
@@ -435,7 +436,7 @@ fn valid_file_path(uri: &[u8]) -> Option<std::path::PathBuf> {
 /// Open the sink `uri` names (a file, truncated; a php:// stream, through
 /// PHP's streams as libxml2 is given them), or the reason not.
 fn open_file(ctx: &mut dyn Ctx, uri: &[u8]) -> Result<Sink, &'static str> {
-    let path = valid_file_path(uri).ok_or("resolve")?;
+    let path = valid_file_path(ctx.cwd(), uri).ok_or("resolve")?;
     let text = path.to_string_lossy().into_owned();
     if let Some(rest) = text.to_ascii_lowercase().strip_prefix("php://") {
         use p8_runtime::stream::{Resource, Stream, Target};
