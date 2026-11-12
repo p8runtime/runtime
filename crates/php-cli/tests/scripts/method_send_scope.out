@@ -1,0 +1,34 @@
+Keeper::touch v+K1
+Child::touch v
+Keeper::touch {"k":"e+K1"}
+Child::touch {"k":"e"}
+Other::touch v
+OtherChild::touch v+OC1
+Other::touch {"k":"e"}
+OtherChild::touch {"k":"e+OC1"}
+Keeper::touch {"k":"+K2"}
+OtherChild::touch {"k":"+OC2"}
+
+Warning: Undefined array key "k" in %s on line 23
+Other::touch []
+Base::mark v+B1 | Sub::mark v
+Base::mark v+B2 | Sub::mark v
+Base::mark v+B3 | Sub::mark v
+
+Warning: Undefined array key "none" in %s on line 76
+__call secret v?,1 | __call guarded v?,1 | __call secret e?,1 | __call guarded ?,1 | v {"k":"e"}
+Hidden::secret Hidden::guarded v+secret1+guarded1
+Hidden::secret Hidden::guarded v+secret1+guarded1
+__call secret v?,1 Hidden::guarded v+guarded1
+__call secret v?,1 Hidden::guarded v+guarded1
+
+Warning: Undefined array key "none" in %s on line 76
+__call secret v?,2 | __call guarded v?,2 | __call secret e?,2 | __call guarded ?,2 | v {"k":"e"}
+Plain::f v Plain::g changed
+PlainChild::f child PlainChild::g w
+Plain::f v Plain::g changed
+Plain::f v Plain::g changed
+Plain::f v Plain::g changed
+__call secret v?,1 | __call guarded v?,2 | v
+__call secret v?,1 | __call guarded v?,2 | v
+__call secret v?,1 | __call guarded v?,2 | v

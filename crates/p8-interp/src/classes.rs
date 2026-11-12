@@ -86,22 +86,50 @@ impl Context<'_> {
     /// (no: a method it lacks, which __call or an error answers; a builtin
     /// method, when its stub signature says so).
     pub(crate) fn method_takes_ref(&self, class: &Class, key: Option<Sym>, n: usize) -> bool {
-        match method_of(class, key) {
-            Some(m) if m.native.is_none() && m.func != u32::MAX => self.codes[m.func as usize].param_by_ref(n),
-            // A builtin's method, or a builtin interface's abstract one (no code).
-            Some(m) => {
-                let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
-                p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
-            }
-            None => false,
-        }
+        method_of(class, key).is_some_and(|m| self.param_by_ref(m, n))
     }
 
-    /// `method_takes_ref` out of line, for the loop's sends on a site's
-    /// miss (SendVarMethod, MethodArgByRef: a class the site has not seen).
+    /// Whether method `m` takes argument `n` by reference.
+    fn param_by_ref(&self, m: &Method, n: usize) -> bool {
+        if m.native.is_none() && m.func != u32::MAX {
+            return self.codes[m.func as usize].param_by_ref(n);
+        }
+        // A builtin's method, or a builtin interface's abstract one (no code).
+        let stub = format!("{}::{}", text(&m.declaring_name), text(&m.name));
+        p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
+    }
+
+    /// Whether the method `$obj->name(…)` runs when the running code calls
+    /// it on an instance of `class` takes argument `n` by reference: the
+    /// method `method_frame` picks, not the class's method of that name.
+    /// The calling class's own private method comes before a subclass's
+    /// of the same name, and a method the caller may not see takes
+    /// nothing by reference (__call answers, by value, or the call is an
+    /// error). For a send on a site's miss (SendVarMethod, MethodArgByRef:
+    /// a class or scope the site has not seen).
+    pub(crate) fn call_takes_ref(&self, class: &Rc<Class>, key: Sym, n: usize) -> bool {
+        let Some(method) = method_of(class, Some(key)) else { return false };
+        let scope = self.scope().0;
+        let method = match &scope {
+            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match method_of(scope, Some(key)) {
+                Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => own,
+                _ => method,
+            },
+            _ => method,
+        };
+        if method.visibility != Visibility::Public {
+            let declaring = self.declaring(class, &method.declaring);
+            if !visible(method.visibility, &self.access_class(&declaring, method, Some(key)), scope.as_deref()) {
+                return false;
+            }
+        }
+        self.param_by_ref(method, n)
+    }
+
+    /// `call_takes_ref` out of line, for the loop's sends.
     #[inline(never)]
-    pub(crate) fn method_takes_ref_out(&self, class: &Class, key: Sym, n: usize) -> bool {
-        self.method_takes_ref(class, Some(key), n)
+    pub(crate) fn call_takes_ref_out(&self, class: &Rc<Class>, key: Sym, n: usize) -> bool {
+        self.call_takes_ref(class, key, n)
     }
 
     /// A call of a builtin method PHP deprecates (zend_deprecated_function).
@@ -839,7 +867,7 @@ impl Context<'_> {
     /// The class a method's protected access is checked against: the top
     /// of the classes declaring it (zend_get_function_root_class), so two
     /// subclasses of the class that first declared it may call each other's.
-    pub(crate) fn access_class(&mut self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
+    pub(crate) fn access_class(&self, declaring: &Rc<Class>, method: &Method, key: Option<Sym>) -> Rc<Class> {
         let mut root = Rc::clone(declaring);
         if method.visibility != Visibility::Protected {
             return root;
