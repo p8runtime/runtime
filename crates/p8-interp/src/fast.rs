@@ -966,11 +966,17 @@ impl Context<'_> {
                         match clo.sites[imm as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
-                                if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                                // As many arguments as parameters, to a
+                                // function that is not a generator
+                                // (`Shape::exact`): one test for both, and
+                                // for no required argument missing.
+                                if (u32::from(n) != target.shape.exact && ((n as usize) < target.code.required || target.code.is_generator))
+                                    || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                                {
                                     uncached!();
                                 }
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
-                                enter(&mut self.frames, regs);
+                                bind(&mut self.frames, regs, target.shape, base + args as usize, n as usize);
                                 pc = 0;
                                 continue 'frame;
                             }
@@ -2629,31 +2635,50 @@ fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &
 /// its base, with its arguments already in the first registers.
 #[inline(always)]
 pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
-    let top = frames.len - 1;
+    let frame = &frames.slots[frames.len - 1];
+    let (shape, base, argc) = (frame.func.shape, frame.base as usize, frame.argc as usize);
+    bind(frames, regs, shape, base, argc);
+}
+
+/// `enter`, for a caller that has the frame's numbers in hand (the loop's
+/// Call arm): `shape` its closure's, `base` and `argc` as pushed. A call
+/// that passes as many arguments as there are parameters (most do) has
+/// nothing to put aside and no default to fill in: one test says so, and
+/// what is left is the variables after the parameters made undefined. The
+/// other calls do what they did, from the same numbers.
+#[inline(always)]
+pub(crate) fn bind(frames: &mut Frames, regs: &mut Vec<Value>, shape: Shape, base: usize, argc: usize) {
     // A window's worth at least: the loop's fixed window (WINDOW) must exist.
-    let need = {
-        let frame = &frames.slots[top];
-        frame.base as usize + usize::from(frame.func.code.nregs).max(WINDOW)
-    };
+    let need = base + shape.need as usize;
     if regs.len() < need {
         frames.grow_regs(regs, need);
     }
+    let (nparams, ncv) = (shape.nparams as usize, shape.ncv as usize);
+    if argc == nparams {
+        // The variables not passed are undefined (PHP initialises its
+        // CVs). Constants are read in place (`const_index`): none is
+        // copied in.
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        return;
+    }
+    // More arguments than parameters, or fewer: the extra ones put aside,
+    // the missing ones' constant defaults filled in.
     let (slots, spare) = (&mut frames.slots, &mut frames.spare);
-    let frame = &mut slots[top];
-    let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
-    let code = &*func.code;
-    let nparams = code.params.len();
+    let frame = &mut slots[frames.len - 1];
     if argc > nparams {
         frame.extra = take_extra(spare, regs, base, nparams, argc);
-    }
-    // The variables not passed are undefined (PHP initialises its CVs).
-    // Constants are read in place (`const_index`): none is copied in.
-    for r in &mut regs[base + argc.min(nparams)..base + code.ncv as usize] {
-        clear(r);
-    }
-    // Arguments not passed: their constant defaults.
-    if argc < nparams && !func.defaults.is_empty() {
-        fill_defaults(&func.defaults, &mut regs[base..base + nparams], argc);
+        for r in &mut regs[base + nparams..base + ncv] {
+            clear(r);
+        }
+    } else {
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        if !frame.func.defaults.is_empty() {
+            fill_defaults(&frame.func.defaults, &mut regs[base..base + nparams], argc);
+        }
     }
 }
 

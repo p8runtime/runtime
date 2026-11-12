@@ -55,6 +55,35 @@ pub struct Closure {
     /// `global` the closure runs (none for the code that has none). PHP's
     /// runtime cache slot of ZEND_BIND_GLOBAL.
     pub(crate) globals: OnceCell<Box<[Cell<GlobalSite>]>>,
+    /// What entering a frame of this code needs to know (`fast::bind`),
+    /// worked out once, when the closure is made.
+    pub(crate) shape: Shape,
+}
+
+/// What a call of a closure binds (`Closure::shape`): the numbers
+/// `fast::bind` reads at every call, here beside the closure so that a
+/// call reads them without going through its code.
+#[derive(Clone, Copy)]
+pub(crate) struct Shape {
+    /// The registers a frame needs from its base: the code's, and the
+    /// loop's fixed window at least.
+    pub(crate) need: u32,
+    /// The parameters (the first compiled variables).
+    pub(crate) nparams: u32,
+    /// The compiled variables (`Function::ncv`).
+    pub(crate) ncv: u32,
+    /// The argument count of a call the loop makes with one test: the
+    /// parameter count (so no required argument is missing, none is
+    /// extra and no default is filled in), for code that is not a
+    /// generator's; no count (`u32::MAX`) for a generator's.
+    pub(crate) exact: u32,
+}
+
+impl Shape {
+    fn of(code: &Function) -> Shape {
+        let nparams = code.params.len() as u32;
+        Shape { need: u32::from(code.nregs).max(crate::fast::WINDOW as u32), nparams, ncv: u32::from(code.ncv), exact: if code.is_generator { u32::MAX } else { nparams } }
+    }
 }
 
 /// A `global $name` cache entry (`Closure::globals`): the global's index
@@ -174,7 +203,8 @@ impl Closure {
         };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
+        let shape = Shape::of(&code);
+        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new(), shape })
     }
 
     /// The stand-in for a declared function or method whose closure has not
