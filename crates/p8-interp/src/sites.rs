@@ -355,15 +355,22 @@ impl UserMethod {
 /// A method call site's cache: `user` for the loop's arms, and the full
 /// entry (any method, native ones and static-syntax calls too) for
 /// everything else, which this dereferences to.
+///
+/// The full entry first, in this order (`repr(C)`): the slot's address is
+/// the full entry's, so a reader of it (a static-syntax call's
+/// `cached_static_call`) adds nothing to reach it; the loop's arms read
+/// `user` at a fixed offset either way.
 #[derive(Default)]
+#[repr(C)]
 pub(crate) struct MethodSlot {
-    pub(crate) user: Cell<UserMethod>,
     site: RefCell<Option<MethodSite>>,
+    pub(crate) user: Cell<UserMethod>,
 }
 
 impl std::ops::Deref for MethodSlot {
     type Target = RefCell<Option<MethodSite>>;
 
+    #[inline(always)]
     fn deref(&self) -> &RefCell<Option<MethodSite>> {
         &self.site
     }
