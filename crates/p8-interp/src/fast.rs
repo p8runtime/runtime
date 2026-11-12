@@ -354,7 +354,7 @@ impl Context<'_> {
                         return Ok(());
                     }
                     leave(&mut self.frames, regs, value);
-                    pc = self.frames.last().expect("the caller's frame").pc as usize;
+                    pc = self.frames.top_mut().pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
                     }
