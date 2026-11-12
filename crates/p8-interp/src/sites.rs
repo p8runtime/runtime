@@ -17,7 +17,11 @@ pub struct Closure {
     pub(crate) props: Box<[Cell<PropSite>]>,
     /// What `$o->m()` called last, one entry per call site: PHP's cache
     /// slot of INIT_METHOD_CALL.
-    pub(crate) methods: Box<[RefCell<Option<MethodSite>>]>,
+    pub(crate) methods: Box<[MethodSlot]>,
+    /// Where this closure is in the context's `closures`, when it is a
+    /// declared function's or method's (`closure_at` made it); u32::MAX
+    /// for any other (a lambda, the main code).
+    pub(crate) index: Cell<u32>,
     /// What `new` of each class the code names made last: the class and
     /// how to make its objects (instances.rs).
     pub(crate) news: Box<[RefCell<crate::instances::NewSite>]>,
@@ -146,7 +150,7 @@ impl Closure {
         let consts = code.consts.iter().map(&thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
-        let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
+        let methods = code.sites.iter().map(|_| MethodSlot::default()).collect();
         let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let defaults = if code.params.iter().any(|p| p.default.is_some()) {
@@ -174,7 +178,7 @@ impl Closure {
         };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
+        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -241,6 +245,7 @@ impl Context<'_> {
         let slot = &mut self.closures[i as usize];
         if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
             *slot = Closure::new(Arc::clone(&self.codes[i as usize]), self.isolate);
+            slot.index.set(i);
         }
         Rc::clone(slot)
     }
@@ -267,6 +272,68 @@ pub(crate) struct MethodSite {
     pub(crate) code: MethodCode,
     pub(crate) declaring: std::rc::Weak<Class>,
     pub(crate) is_static: bool,
+}
+
+/// What `$o->m()` at one site ran last when that was a PHP method called
+/// on an object: plain numbers, read by the loop's arms (`MethodCall`,
+/// `SendVarMethod`) with no borrow and nothing to upgrade, as a function
+/// call site keeps its callee's index (`Callee::User`). An answer for one
+/// class and scope never changes (a class's methods are fixed once it is
+/// declared, and classes live as long as their context), so an entry is
+/// only ever replaced, never cleared.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UserMethod {
+    /// The receiver's class (its address; 0: nothing remembered) and the
+    /// calling code's class (its address; 0 outside one).
+    pub(crate) class: usize,
+    pub(crate) scope: usize,
+    /// The method's code: its index in the context's `closures`.
+    pub(crate) code: u32,
+    /// The class that declares the method: this many parents up from the
+    /// receiver's class (0: that class itself).
+    pub(crate) up: u32,
+    /// Bit n: parameter n is taken by reference (`by_ref`).
+    pub(crate) refs: u64,
+}
+
+impl UserMethod {
+    /// The most parameters a method may declare to be remembered here:
+    /// bit 63 then answers for every argument from the 64th on (they are
+    /// all past the parameters: the variadic one's mode).
+    const PARAMS: usize = 63;
+
+    /// Whether argument `n` goes by reference.
+    #[inline(always)]
+    pub(crate) fn by_ref(self, n: usize) -> bool {
+        self.refs >> n.min(Self::PARAMS) & 1 != 0
+    }
+
+    /// `code`'s parameters as `refs` has them; None for more than `PARAMS`.
+    fn refs_of(code: &Function) -> Option<u64> {
+        let n = code.params.len();
+        if n > Self::PARAMS {
+            return None;
+        }
+        let rest = if code.params.last().is_some_and(|p| p.variadic && p.by_ref) { !0u64 << n } else { 0 };
+        Some(code.params.iter().enumerate().fold(rest, |m, (i, p)| if p.by_ref { m | 1 << i } else { m }))
+    }
+}
+
+/// A method call site's cache: `user` for the loop's arms, and the full
+/// entry (any method, native ones and static-syntax calls too) for
+/// everything else, which this dereferences to.
+#[derive(Default)]
+pub(crate) struct MethodSlot {
+    pub(crate) user: Cell<UserMethod>,
+    site: RefCell<Option<MethodSite>>,
+}
+
+impl std::ops::Deref for MethodSlot {
+    type Target = RefCell<Option<MethodSite>>;
+
+    fn deref(&self) -> &RefCell<Option<MethodSite>> {
+        &self.site
+    }
 }
 
 pub(crate) enum MethodCode {
@@ -617,6 +684,32 @@ impl Context<'_> {
             declaring: Rc::downgrade(declaring),
             is_static: m.this.is_none(),
         });
+    }
+
+    /// After a full method lookup on object `o`: the same answer as plain
+    /// numbers for the loop's arms (`UserMethod`), when it is an ordinary
+    /// call of a PHP method with `$this` (what `remember_method` keeps,
+    /// less native and static methods, which the arms do not run).
+    pub(crate) fn remember_user_method(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+        let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
+        let on_this = m.this.as_ref().is_some_and(|t| Rc::ptr_eq(t, o));
+        if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
+            return;
+        }
+        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else { return };
+        // (Its index: only a declared method's closure has one, and the
+        // context's closure there is this one.)
+        let index = code.index.get();
+        if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
+            return;
+        }
+        let Some(refs) = UserMethod::refs_of(&code.code) else { return };
+        let (mut class, mut up) = (&o.class, 0);
+        while !Rc::ptr_eq(class, declaring) {
+            let Some(parent) = &class.parent else { return };
+            (class, up) = (parent, up + 1);
+        }
+        slot.user.set(UserMethod { class: Rc::as_ptr(&o.class) as usize, scope: self.scope_addr(), code: index, up, refs });
     }
 
     /// The frame of a static-syntax call (`C::m()`, `self::m()`,
