@@ -1007,12 +1007,54 @@ impl Context<'_> {
                     // `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI
                     // reads its arguments from the variables (or constants)
                     // themselves, framelessly, and the Moves into the
-                    // argument registers are not run. Anything else runs the
-                    // first Move as `Op::Move` does, and goes on with the next.
+                    // argument registers are not run. A user function the Call
+                    // arm would call directly (not a generator, no required
+                    // argument missing) is
+                    // called from here: the Moves, each as `Op::Move` does it,
+                    // then the Call, with no instruction fetched between
+                    // them. Anything else runs the first Move as `Op::Move`
+                    // does, and goes on with the next.
                     Op::CallRegs => {
                         ops!(a, b, c, imm);
                         let (start, n) = (rx!(a), rx!(b));
-                        if let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() {
+                        let site = clo.sites[(imm & 0xffff) as usize].get();
+                        if let Some(&Callee::User(target)) = site {
+                            let target = &self.closures[target as usize];
+                            // (The Call arm's test, the other way round.)
+                            if (n as u32 == target.shape.exact || (n >= target.code.required && !target.code.is_generator))
+                                && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT
+                            {
+                                let args = rk!((imm >> 16) as usize);
+                                if imm & insn::ARG_CONST != 0 {
+                                    let v = cst!(start).clone();
+                                    if put(&mut w[args], v) && self.ids.has_pending() {
+                                        pc += 1;
+                                        pending!();
+                                    }
+                                } else {
+                                    for k in 0..n {
+                                        // (Stopped at a Move, the ones
+                                        // before it are done: on from it.)
+                                        let Some(v) = copied(&w[rk!(start + k)]) else {
+                                            pc += k;
+                                            slow!()
+                                        };
+                                        let _ = put(&mut w[rk!(args + k)], v);
+                                        if self.ids.has_pending() {
+                                            pc += k + 1;
+                                            pending!();
+                                        }
+                                    }
+                                }
+                                // (The Call is at pc + n; the variable its
+                                // result goes to is in bits 24..30.)
+                                let ret = if imm & insn::RET_VAR != 0 { (base + ((imm >> 24) & 0x3f) as usize) as u32 | insn::RET_VAR } else { (base + rx!(c)) as u32 };
+                                self.frames.call(Some(target), pc + n + 1, base + args, n, ret);
+                                bind(&mut self.frames, regs, target.shape, base + args, n);
+                                pc = 0;
+                                continue 'frame;
+                            }
+                        } else if let Some(&Callee::Builtin(i)) = site {
                             let call = self.isolate.registry.call(i);
                             if imm & insn::ARG_CONST != 0 {
                                 // `f('literal')`: the one argument is the
