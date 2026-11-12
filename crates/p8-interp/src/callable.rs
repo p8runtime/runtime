@@ -988,20 +988,12 @@ impl Context<'_> {
             (None, None) => return Ok(Some(format!("function \"{}\" not found or invalid function name", text(name)))),
         };
         let key = self.method_key(method);
-        let found = if strict && method.eq_ignore_ascii_case(b"__construct") {
+        let found = if strict {
             crate::classes::method_of(&class, key).cloned()
         } else {
-            crate::classes::method_of(&class, key).cloned().map(|m| {
-                // Code of a class naming its own private method on one of
-                // its instances means that one (as `method_frame` does).
-                match self.frames.last().and_then(|f| f.scope.as_deref()) {
-                    Some(scope) if !strict && *m.declaring != *scope.lower && class.is_a(&scope.lower) => match crate::classes::method_of(scope, key) {
-                        Some(own) if own.visibility == p8_runtime::object::Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
-                        _ => m,
-                    },
-                    _ => m,
-                }
-            })
+            // Code of a class naming its own private method on one of its
+            // instances means that one: the method a call would run.
+            crate::classes::called_method(&class, self.frames.last().and_then(|f| f.scope.as_deref()), key).cloned()
         };
         // __call / __callStatic answer what is not there, or not visible.
         let magic = |c: &Class, object: bool| c.method(if object { b"__call" } else { b"__callstatic" }).is_some();
