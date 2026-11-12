@@ -893,7 +893,7 @@ impl Context<'_> {
         if !q.is_static_for(named, top.scope.as_ref()) {
             return None;
         }
-        let (this, kept) = static_receiver(Some(top), named, kind, q.is_static)?;
+        let Receiver { this, called: kept } = static_receiver(Some(top), named, kind, q.is_static)?;
         let mut declaring = named;
         for _ in 0..q.up {
             declaring = declaring.parent.as_ref()?;
@@ -932,7 +932,7 @@ impl Context<'_> {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
             MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
-        let (this, kept) = static_receiver(self.frames.last(), target, &func.classes[class as usize], s.is_static)?;
+        let Receiver { this, called: kept } = static_receiver(self.frames.last(), target, &func.classes[class as usize], s.is_static)?;
         Some(crate::classes::MethodFrame::method(code, this.cloned(), declaring, Rc::clone(kept.unwrap_or(target))))
     }
 
@@ -995,20 +995,26 @@ fn extends(class: &Rc<Class>, target: &Rc<Class>) -> bool {
 ///   kind, and its class as the called class; else None (the error, which
 ///   `static_frame` raises).
 ///
-/// The called class is None where it is `target` itself: the caller has
-/// that one in hand, to keep or to count as it needs.
 #[inline]
-fn static_receiver<'a>(top: Option<&'a Frame>, target: &Rc<Class>, kind: &p8_bytecode::ClassRef, is_static: bool) -> Option<(Option<&'a Rc<p8_runtime::object::Object>>, Option<&'a Rc<Class>>)> {
+fn static_receiver<'a>(top: Option<&'a Frame>, target: &Rc<Class>, kind: &p8_bytecode::ClassRef, is_static: bool) -> Option<Receiver<'a>> {
     use p8_bytecode::ClassRef;
     if is_static {
         if !matches!(kind, ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope) {
-            return Some((None, None));
+            return Some(Receiver { this: None, called: None });
         }
         let called = top.and_then(|f| f.called_class()).filter(|c| extends(c, target) || c.is_a(&target.lower));
-        return Some((None, called));
+        return Some(Receiver { this: None, called });
     }
     let this = top.and_then(|f| f.this.as_ref()).filter(|t| extends(&t.class, target) || t.class.is_a(&target.lower))?;
-    Some((Some(this), Some(&this.class)))
+    Some(Receiver { this: Some(this), called: Some(&this.class) })
+}
+
+/// What `static_receiver` answers, borrowed from the calling frame.
+struct Receiver<'a> {
+    this: Option<&'a Rc<p8_runtime::object::Object>>,
+    /// None where the called class is the target itself: the caller has
+    /// that one in hand, to keep or to count as it needs.
+    called: Option<&'a Rc<Class>>,
 }
 
 /// The frame a static-syntax call's site answers (`static_site`): what
