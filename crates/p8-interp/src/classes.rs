@@ -69,6 +69,36 @@ pub(crate) fn method_of(class: &Class, key: Option<Sym>) -> Option<&Rc<Method>> 
     class.methods.get_sym(key?)
 }
 
+/// The method named `key` that code of class `scope` (None: outside a
+/// class) means on an instance of `class`: the class's, unless the calling
+/// class has a private method of that name of its own and the instance is
+/// one of its instances, where a subclass's of the same name does not
+/// replace it (zend_std_get_method: the subclass's "changed" the private
+/// one). The one place this rule is written: a call (`pick_method`), a
+/// send before a call and a callable's description all ask here.
+#[inline]
+pub(crate) fn called_method<'c>(class: &'c Class, scope: Option<&'c Class>, key: Option<Sym>) -> Option<&'c Rc<Method>> {
+    let method = method_of(class, key)?;
+    Some(match scope {
+        Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match method_of(scope, key) {
+            Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => own,
+            _ => method,
+        },
+        _ => method,
+    })
+}
+
+/// What `Context::pick_method` answers: the method `$obj->name(…)` runs.
+pub(crate) struct Picked<'c> {
+    pub(crate) method: &'c Rc<Method>,
+    /// Whether the calling code may call it. When not, __call answers or
+    /// the call is an error.
+    pub(crate) visible: bool,
+    /// The class declaring it (as linked), where the visibility test
+    /// needed it: a method that is not public.
+    pub(crate) declaring: Option<Rc<Class>>,
+}
+
 /// A name operand's string to read (a literal's in place); "" for an
 /// array or an object with no string.
 fn name_view(name: &Value) -> p8_runtime::string::StrView<'_> {
@@ -90,6 +120,7 @@ impl Context<'_> {
     }
 
     /// Whether method `m` takes argument `n` by reference.
+    #[inline]
     fn param_by_ref(&self, m: &Method, n: usize) -> bool {
         if m.native.is_none() && m.func != u32::MAX {
             return self.codes[m.func as usize].param_by_ref(n);
@@ -99,31 +130,34 @@ impl Context<'_> {
         p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
     }
 
+    /// The method `$obj->name(…)` runs when code of class `scope` calls it
+    /// on an instance of `class`, and whether that code may call it (None:
+    /// the class has no method of that name). `method_frame` and the sends
+    /// before a call both ask here, so the method a send asks about is the
+    /// method the call runs.
+    #[inline]
+    pub(crate) fn pick_method<'c>(&self, class: &'c Rc<Class>, scope: Option<&'c Rc<Class>>, key: Option<Sym>) -> Option<Picked<'c>> {
+        let method = called_method(class, scope.map(|s| &**s), key)?;
+        // A public method needs no visibility test (the common case).
+        if method.visibility == Visibility::Public {
+            return Some(Picked { method, visible: true, declaring: None });
+        }
+        let declaring = self.declaring(class, &method.declaring);
+        let may_call = visible(method.visibility, &self.access_class(&declaring, method, key), scope.map(|s| &**s));
+        Some(Picked { method, visible: may_call, declaring: Some(declaring) })
+    }
+
     /// Whether the method `$obj->name(…)` runs when the running code calls
     /// it on an instance of `class` takes argument `n` by reference: the
-    /// method `method_frame` picks, not the class's method of that name.
-    /// The calling class's own private method comes before a subclass's
-    /// of the same name, and a method the caller may not see takes
-    /// nothing by reference (__call answers, by value, or the call is an
-    /// error). For a send on a site's miss (SendVarMethod, MethodArgByRef:
-    /// a class or scope the site has not seen).
+    /// method `method_frame` picks (`pick_method`), not the class's method
+    /// of that name. A method the caller may not see takes nothing by
+    /// reference (__call answers, by value, or the call is an error). For
+    /// a send on a site's miss (SendVarMethod, MethodArgByRef: a class or
+    /// scope the site has not seen).
     pub(crate) fn call_takes_ref(&self, class: &Rc<Class>, key: Sym, n: usize) -> bool {
-        let Some(method) = method_of(class, Some(key)) else { return false };
-        let scope = self.scope().0;
-        let method = match &scope {
-            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match method_of(scope, Some(key)) {
-                Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => own,
-                _ => method,
-            },
-            _ => method,
-        };
-        if method.visibility != Visibility::Public {
-            let declaring = self.declaring(class, &method.declaring);
-            if !visible(method.visibility, &self.access_class(&declaring, method, Some(key)), scope.as_deref()) {
-                return false;
-            }
-        }
-        self.param_by_ref(method, n)
+        // The frame's scope, borrowed where it is: a send takes no count of it.
+        let scope = self.frames.last().and_then(|f| f.scope.as_ref());
+        self.pick_method(class, scope, Some(key)).is_some_and(|p| p.visible && self.param_by_ref(p.method, n))
     }
 
     /// `call_takes_ref` out of line, for the loop's sends.
@@ -896,7 +930,8 @@ impl Context<'_> {
             ));
         };
         let class = Rc::clone(&object.class);
-        let Some(method) = method_of(&class, key).cloned() else {
+        let scope = self.scope().0;
+        let Some(Picked { method, visible, declaring }) = self.pick_method(&class, scope.as_ref(), key) else {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -913,19 +948,8 @@ impl Context<'_> {
                 format!("Call to undefined method {}::{}()", text(&class.name), String::from_utf8_lossy(display)),
             ));
         };
-        // Code of a class calling its own private method on one of its
-        // instances calls that method, even where a subclass declares one
-        // of the same name (zend_std_get_method: the subclass's "changed"
-        // the private one).
-        let method = match self.scope().0 {
-            Some(scope) if *method.declaring != *scope.lower && class.is_a(&scope.lower) => match method_of(&scope, key) {
-                Some(own) if own.visibility == Visibility::Private && *own.declaring == *scope.lower => Rc::clone(own),
-                _ => method,
-            },
-            _ => method,
-        };
-        let declaring = self.declaring(&class, &method.declaring);
-        if !visible(method.visibility, &self.access_class(&declaring, &method, key), self.scope().0.as_deref()) {
+        let declaring = declaring.unwrap_or_else(|| self.declaring(&class, &method.declaring));
+        if !visible {
             if let Some(m) = self.magic_call(&class, Some(Rc::clone(&object)), display, false) {
                 return Ok(m);
             }
@@ -937,8 +961,8 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
-        self.method_deprecated(&method);
-        let func = self.code_of(&method);
+        self.method_deprecated(method);
+        let func = self.code_of(method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame::method(func, this, declaring, class))
     }
