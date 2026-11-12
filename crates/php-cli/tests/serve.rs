@@ -365,3 +365,95 @@ fn sigterm_lets_requests_in_progress_finish() {
     serve.wait_for("p8 stopped", 1);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "nothing listens after it stopped");
 }
+
+/// Every byte the server sends for GET `path` before it closes the connection.
+fn raw(port: u16, path: &str) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(20))).expect("timeout");
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").expect("send");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("the connection closes within 20 s");
+    response
+}
+
+/// A recursion that never ends, under an 8M limit whose hard limit (twice
+/// it) its fatal error's trace runs past. (It prints nothing first: with
+/// implicit_flush on, as in PHP's CLI server, an echo goes to the client at
+/// once, and a request that dies after it closes its connection there.)
+const PAST_HARD: &str = "<?php ini_set('memory_limit', '8M'); function f($n) { return f($n + 1) + 1; } f(0);";
+
+/// A request that grows its call stack (100 calls) under a small limit:
+/// it runs only on a worker that holds none of an earlier request's memory.
+const SMALL: &str = "<?php ini_set('memory_limit', '8M'); function down($n) { return $n ? down($n - 1) + 1 : 0; } echo 'small ', down(100);";
+
+/// The lines of the server's stderr holding `wanted`.
+fn count(serve: &Serve, wanted: &str) -> usize {
+    serve.log().iter().filter(|l| l.contains(wanted)).count()
+}
+
+/// Past the hard memory limit, as under php-fpm when the child exits: PHP's
+/// line goes to stderr once, nothing is sent (not even what the script
+/// printed first) and the connection is closed, and the worker (the only
+/// one) is replaced: the next requests are answered by a fresh one.
+#[test]
+fn a_request_past_the_hard_limit_gets_no_response_and_its_worker_is_replaced() {
+    let dir = site("hard_limit", &[("hard.php", PAST_HARD), ("small.php", SMALL)]);
+    let serve = Serve::start_with(&dir, &["--workers", "1"]);
+    let response = raw(serve.port, "/hard.php");
+    assert!(response.is_empty(), "nothing is sent: {:?}", String::from_utf8_lossy(&response));
+    let line = serve.wait_for("Hard memory limit of 16777216 bytes exhausted (tried to allocate", 1);
+    assert!(line[0].starts_with("Hard memory limit of 16777216 bytes exhausted (tried to allocate ") && line[0].ends_with(&format!("in {}/hard.php on line 1", dir.display())), "{line:?}");
+    serve.wait_for("GET /hard.php - past the hard memory limit", 1);
+    for _ in 0..2 {
+        let (head, body, _) = fetch(serve.port, "/small.php");
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body == "small 100", "{head}{body}");
+    }
+    assert_eq!(count(&serve, "Hard memory limit of"), 1, "{:?}", serve.log());
+}
+
+/// With two workers: a request on the other worker, in flight while one
+/// dies past the hard limit, completes with its whole body; then the pool
+/// is two workers again (two slow requests run side by side).
+#[test]
+fn a_worker_dying_past_the_hard_limit_leaves_the_others_running() {
+    let slow = "<?php sleep(2); echo 'slow';";
+    let dir = site("hard_limit_two", &[("hard.php", PAST_HARD), ("slow.php", slow), ("small.php", SMALL)]);
+    let serve = Serve::start_with(&dir, &["--workers", "2"]);
+    let port = serve.port;
+    let in_flight = std::thread::spawn(move || fetch(port, "/slow.php"));
+    serve.wait_for("Accepted", 1);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(raw(port, "/hard.php").is_empty());
+    let (head, body, _) = in_flight.join().expect("the slow request");
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body == "slow", "{head}{body}");
+    let started = Instant::now();
+    let both: Vec<_> = (0..2).map(|_| std::thread::spawn(move || fetch(port, "/slow.php"))).collect();
+    for request in both {
+        let (head, body, _) = request.join().expect("a slow request");
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body == "slow", "{head}{body}");
+    }
+    assert!(started.elapsed() < Duration::from_millis(3500), "two workers again: the two ran side by side ({:?})", started.elapsed());
+    assert_eq!(fetch(port, "/small.php").1, "small 100");
+    assert_eq!(count(&serve, "Hard memory limit of"), 1, "{:?}", serve.log());
+}
+
+/// The ordinary memory_limit fatal error ends the request, which is
+/// answered, and the worker goes on: with display_errors on (the default)
+/// the page shows the error; with it off, the response is a 500 and shows
+/// nothing (php_error_cb). The server's log line holds the error either way.
+#[test]
+fn the_memory_limit_fatal_error_is_answered_and_its_worker_goes_on() {
+    let soft = "<?php ini_set('memory_hard_limit_percent', '100000'); ini_set('memory_limit', '4M'); function f($n) { return f($n + 1) + 1; } f(0);";
+    let dir = site("soft_limit", &[("soft.php", soft), ("small.php", SMALL)]);
+    let shown = Serve::start_with(&dir, &["--workers", "1"]);
+    let (head, body, _) = fetch(shown.port, "/soft.php");
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n") && body.contains("<b>Fatal error</b>:  Allowed memory size of 4194304 bytes exhausted"), "{head}{body}");
+    assert_eq!(fetch(shown.port, "/small.php").1, "small 100");
+    drop(shown);
+    let hidden = Serve::start_with(&dir, &["--workers", "1", "-d", "display_errors=0"]);
+    let (head, body, _) = fetch(hidden.port, "/soft.php");
+    assert!(head.starts_with("HTTP/1.1 500 Internal Server Error\r\n") && body.is_empty(), "{head}{body}");
+    let line = hidden.wait_for("[500]: GET /soft.php", 1);
+    assert!(line[0].contains("Allowed memory size of 4194304 bytes exhausted"), "{line:?}");
+    assert_eq!(fetch(hidden.port, "/small.php").1, "small 100");
+}
