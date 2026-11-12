@@ -578,3 +578,25 @@ fn the_memory_limit_fatal_error_is_answered_and_its_worker_goes_on() {
     assert!(line[0].contains("Allowed memory size of 4194304 bytes exhausted"), "{line:?}");
     assert_eq!(fetch(hidden.port, "/small.php").1, "small 100");
 }
+
+/// A method call site's cache is its request's: three pages run the same
+/// compiled function (lib.php's `run`, compiled once for the worker) on a
+/// class A of their own, one after another on one worker. Each request's
+/// A is another class (freed with its request) whose `m` differs in what
+/// it takes by reference and in who may call it; each page prints what
+/// PHP prints, whatever the requests before it ran at that site.
+#[test]
+fn a_method_call_site_starts_over_with_each_requests_classes() {
+    let lib = "<?php function run($o) { $out = ''; for ($i = 0; $i < 3; $i++) { $v = 'v'; $out .= $o->m($v) . \" $v \"; } return $out; }\n";
+    let one = "<?php require __DIR__ . '/lib.php'; class A { public function m(&$x) { $x .= '+one'; return 'one'; } } echo run(new A);";
+    let two = "<?php require __DIR__ . '/lib.php';
+class A { private function m(&$x) { $x .= '+hidden'; return 'hidden'; } public function __call($n, $a) { $a[0] .= '?'; return 'two'; } } echo run(new A);";
+    let three = "<?php require __DIR__ . '/lib.php'; class A { public function m($x) { $x .= '+three'; return 'three'; } } echo run(new A);";
+    let dir = site("method_sites", &[("lib.php", lib), ("one.php", one), ("two.php", two), ("three.php", three)]);
+    let serve = Serve::start_with(&dir, &["--workers", "1"]);
+    for _ in 0..4 {
+        assert_eq!(fetch(serve.port, "/one.php").1, "one v+one one v+one one v+one ");
+        assert_eq!(fetch(serve.port, "/two.php").1, "two v two v two v ");
+        assert_eq!(fetch(serve.port, "/three.php").1, "three v three v three v ");
+    }
+}

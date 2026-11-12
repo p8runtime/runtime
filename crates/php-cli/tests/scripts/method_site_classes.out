@@ -1,0 +1,62 @@
+ByVal v
+ByVal v
+ByRef v!
+ByRef v!!
+ByVal v!!
+ByRef v!!!
+ByRef v!!!!
+ByVal v!!!!
+ByRef v!!!!!
+Base::hidden(0) base secret Base Base Base
+Base::hidden(1) base secret Base Mid Mid
+Base::hidden(2) base secret Base Leaf Leaf
+Base::hidden(3) base secret Base Leaf Leafer
+Base::hidden(4) base secret Base Leaf Leafer
+Base::hidden(5) base secret Base Leaf Leaf
+Base::hidden(6) base secret Base Mid Mid
+Base::hidden(7) base secret Base Base Base
+Base::hidden(8) base secret Base Base Base
+Leaf::own Base::hidden(0) base secret Base Leaf Leaf
+Leaf::own Base::hidden(1) base secret Base Leaf Leafer
+Leaf::own Base::hidden(2) base secret Base Leaf Leafer
+Leaf::own Base::hidden(3) base secret Base Leaf Leaf
+opened with 0
+opened with 1
+Error: Call to private method Vault::open() from global scope
+opened with 3
+Error: Call to private method Vault::open() from global scope
+Error: Call to private method Vault::open() from global scope
+opened with 6
+Owner::pick(0) Heir::pick(0) Heir::pick(0) Owner::pick(0)
+Owner::pick(1) Heir::pick(1) Heir::pick(1) Owner::pick(1)
+Owner::pick(2) Heir::pick(2) Heir::pick(2) Owner::pick(2)
+hello 0 from English/English
+hello 1 from English/Loud
+hello 2 from English/Loud
+hello 3 from English/English
+suit Hearts
+suit Spades
+suit Spades
+0  missing(0,0)
+2 0 missing(1,1)
+4 0,1 missing(2,2)
+one: 0 2 0
+one: 0 0 2
+one: 1 2 0
+one: 1 1 2
+ArgumentCountError: Too few arguments to function NeedsThree::take()
+one: 3 2 0
+one: 3 3 2
+LogicException: no b
+ArgumentCountError: Too few arguments to function NeedsThree::take()
+one: 6 2 0
+one: 6 6 2
+Fact gone after 3
+6
+Fact gone after 4
+24
+Fact gone after 5
+120
+18 9
+Fact gone after 9
+done

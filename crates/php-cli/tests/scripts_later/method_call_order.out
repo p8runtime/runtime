@@ -1,0 +1,5 @@
+A::m v=v
+A::m v=v
+Call to a member function m() on null k=0
+Call to undefined method T::nope()
+Call to undefined method T::nope() k=0

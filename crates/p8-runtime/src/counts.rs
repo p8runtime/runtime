@@ -30,9 +30,9 @@ pub enum Count {
     /// of line, by `step` or by a generated instruction's cold method
     /// (p8-interp's `detour`).
     Slow = 6,
-    /// A call site's cached method code (a `Weak`) made a strong handle
-    /// for a call (p8-interp's `Frames::site_code`): not done when the
-    /// frame slot the call reuses already runs that code (#413).
+    /// A frame slot taking a count of the code a call runs (p8-interp's
+    /// `Frames::push_code`): not done when the slot the call reuses
+    /// already runs that code (#413).
     CodeCounted = 7,
     /// A method looked up by name for a call (p8-interp's `method_frame`).
     MethodLookup = 8,
