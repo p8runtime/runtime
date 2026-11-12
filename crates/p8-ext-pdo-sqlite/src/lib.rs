@@ -69,9 +69,12 @@ impl Driver for SqliteDriver {
         Some("Pdo\\Sqlite")
     }
 
-    fn connect(&self, dsn: &str, _user: Option<&[u8]>, _pass: Option<&[u8]>, options: &Options) -> Result<Box<dyn Connection>, ConnectError> {
+    fn connect(&self, dsn: &str, _user: Option<&[u8]>, _pass: Option<&[u8]>, options: &Options, cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError> {
         let flags = options.long(SQLITE_ATTR_OPEN_FLAGS, OPEN_READWRITE | OPEN_CREATE);
+        // make_filename_safe(): a file's name expanded against the
+        // request's working directory (expand_filepath).
         let path = filename(dsn);
+        let path = if path == ":memory:" { path } else { p8_runtime::cwd::join(cwd, std::path::Path::new(&path)).to_string_lossy().into_owned() };
         let engine = Engine::open(&path, flags & OPEN_READONLY != 0 && flags & OPEN_READWRITE == 0, flags & OPEN_CREATE != 0).map_err(|e| {
             let _ = e;
             // Turso words open failures by what its I/O layer hit; SQLite says this.

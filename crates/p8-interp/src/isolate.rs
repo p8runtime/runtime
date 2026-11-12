@@ -435,6 +435,7 @@ impl Isolate {
             disabled: std::collections::HashSet::new(),
             argv: None,
             started: std::time::Instant::now(),
+            cwd: p8_runtime::cwd::process_dir(),
         }
     }
 }
@@ -647,6 +648,10 @@ pub struct Context<'i> {
     pub(crate) argv: Option<Vec<String>>,
     /// When the request started.
     pub(crate) started: std::time::Instant,
+    /// The request's working directory (getcwd(), chdir()): where the
+    /// process's was when the request started, unless the host set it
+    /// (`set_cwd`). Relative paths resolve against it (p8_runtime::cwd).
+    pub(crate) cwd: std::path::PathBuf,
     /// The request arrays a web host gives ([`Context::serve`]).
     pub(crate) request: Option<RequestGlobals>,
     /// What the main script returned (a router script's answer).

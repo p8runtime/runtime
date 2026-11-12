@@ -9,6 +9,9 @@
 
 use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
+/// A path as the system is given it: relative ones under the request's
+/// working directory (#459).
+pub(crate) use p8_runtime::cwd::resolve as at;
 use p8_runtime::ext::{Builtin, ClassSpec, Constant, Ctx, Throw};
 use p8_runtime::object::{Native, Object, Visibility};
 use p8_runtime::stream::{Resource, Stream, Target, resource, resource_of};
@@ -380,11 +383,12 @@ fn open_builtin(ctx: &mut dyn Ctx, func: &str, p: String, mode: &str) -> Result<
             ));
         }
     };
-    if Path::new(&p).is_dir() && base != "r" {
+    let os = at(ctx, &p);
+    if os.is_dir() && base != "r" {
         ctx.warn(&format!("{func}({p}): Failed to open stream: Is a directory"));
         return Ok(None);
     }
-    match options.open(&p) {
+    match options.open(&os) {
         Ok(f) => Ok(Some(Stream::new(Target::File(f), &p, mode))),
         Err(e) => {
             ctx.warn(&format!("{func}({p}): Failed to open stream: {}", os_error(&e)));
@@ -744,11 +748,12 @@ fn read_builtin(ctx: &mut dyn Ctx, func: &str, p: String) -> Result<Option<Vec<u
         return Ok(open_wrapper(ctx, func, &p, "r").map(|mut s| s.read_all()));
     }
     let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
-    if Path::new(&p).is_dir() {
+    let os = at(ctx, &p);
+    if os.is_dir() {
         ctx.warn(&format!("{func}(): Read of 8192 bytes failed with errno=21 Is a directory"));
         return Ok(Some(Vec::new()));
     }
-    match std::fs::read(&p) {
+    match std::fs::read(&os) {
         Ok(b) => Ok(Some(b)),
         Err(e) => {
             ctx.warn(&format!("{func}({p}): Failed to open stream: {}", os_error(&e)));
@@ -943,11 +948,12 @@ fn unlink(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     user_stream::clear_stat_cache(ctx);
     // A symlink to a directory is unlinked (the link, not what it names).
-    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
+    let os = at(ctx, &p);
+    if std::fs::symlink_metadata(&os).is_ok_and(|m| m.is_dir()) {
         ctx.warn(&format!("unlink({p}): Is a directory"));
         return Ok(Value::FALSE);
     }
-    let r = std::fs::remove_file(&p);
+    let r = std::fs::remove_file(&os);
     Ok(done(ctx, "unlink", &p, r))
 }
 
@@ -961,14 +967,15 @@ fn mkdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Ok(done);
     }
     user_stream::clear_stat_cache(ctx);
+    let os = at(ctx, &p);
     let r = if recursive {
-        if Path::new(&p).exists() {
+        if os.exists() {
             Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
         } else {
-            std::fs::create_dir_all(&p)
+            std::fs::create_dir_all(&os)
         }
     } else {
-        std::fs::create_dir(&p)
+        std::fs::create_dir(&os)
     };
     // PHP names no path in mkdir's warnings.
     Ok(match r {
@@ -987,7 +994,7 @@ fn rmdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Ok(done);
     }
     user_stream::clear_stat_cache(ctx);
-    let r = std::fs::remove_dir(&p);
+    let r = std::fs::remove_dir(at(ctx, &p));
     Ok(done(ctx, "rmdir", &p, r))
 }
 
@@ -1011,7 +1018,7 @@ fn rename(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         _ => {}
     }
     user_stream::clear_stat_cache(ctx);
-    let r = std::fs::rename(&from, &to);
+    let r = std::fs::rename(at(ctx, &from), at(ctx, &to));
     Ok(done(ctx, "rename", &format!("{from},{to}"), r))
 }
 
@@ -1038,7 +1045,8 @@ fn move_uploaded_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Th
         return Ok(Value::FALSE);
     }
     let (from_text, to_text) = (text(&from), text(&to));
-    let moved = std::fs::rename(&from_text, &to_text).is_ok() || std::fs::copy(&from_text, &to_text).is_ok() && std::fs::remove_file(&from_text).is_ok();
+    let (from_os, to_os) = (at(ctx, &from_text), at(ctx, &to_text));
+    let moved = std::fs::rename(&from_os, &to_os).is_ok() || std::fs::copy(&from_os, &to_os).is_ok() && std::fs::remove_file(&from_os).is_ok();
     if !moved {
         ctx.warn(&format!("move_uploaded_file(): Unable to move \"{from_text}\" to \"{to_text}\""));
         return Ok(Value::FALSE);
@@ -1066,7 +1074,7 @@ fn copy(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         out.close();
         return Ok(Value::bool(ok));
     }
-    match std::fs::copy(&from, &to) {
+    match std::fs::copy(at(ctx, &from), at(ctx, &to)) {
         Ok(_) => Ok(Value::TRUE),
         Err(e) => {
             ctx.warn(&format!("copy({from}): Failed to open stream: {}", os_error(&e)));
@@ -1132,7 +1140,7 @@ fn touch(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Ok(done);
     }
     user_stream::clear_stat_cache(ctx);
-    let file = match std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+    let file = match std::fs::OpenOptions::new().create(true).append(true).open(at(ctx, &p)) {
         Ok(f) => f,
         Err(e) => {
             ctx.warn(&format!("touch(): Unable to create file {p} because {}", os_error(&e)));
@@ -1156,7 +1164,7 @@ fn is_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "is_file", &p, false, Stat::is_file)? {
         return Ok(v);
     }
-    Ok(Value::bool(Path::new(&p).is_file()))
+    Ok(Value::bool(at(ctx, &p).is_file()))
 }
 
 fn is_dir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1164,7 +1172,7 @@ fn is_dir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "is_dir", &p, false, Stat::is_dir)? {
         return Ok(v);
     }
-    Ok(Value::bool(Path::new(&p).is_dir()))
+    Ok(Value::bool(at(ctx, &p).is_dir()))
 }
 
 fn is_link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1172,7 +1180,7 @@ fn is_link(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "is_link", &p, true, Stat::is_link)? {
         return Ok(v);
     }
-    Ok(Value::bool(std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())))
+    Ok(Value::bool(std::fs::symlink_metadata(at(ctx, &p)).is_ok_and(|m| m.file_type().is_symlink())))
 }
 
 fn file_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1183,10 +1191,11 @@ fn file_exists(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "file_exists", &p, false, |_| true)? {
         return Ok(v);
     }
-    Ok(Value::bool(Path::new(&p).exists()))
+    Ok(Value::bool(at(ctx, &p).exists()))
 }
 
-pub(crate) fn mode_bits(p: &str) -> Option<u32> {
+/// A file's mode, `p` as the system is given it ([`at`]).
+pub(crate) fn mode_bits(p: &Path) -> Option<u32> {
     use p8_runtime::os::MetadataExt;
     std::fs::metadata(p).ok().map(|m| m.mode())
 }
@@ -1194,7 +1203,7 @@ pub(crate) fn mode_bits(p: &str) -> Option<u32> {
 /// Whether the file allows what `bits` of a mode say (0o444 reading,
 /// 0o222 writing, 0o111 executing): is_readable() and the like.
 #[cfg(unix)]
-pub(crate) fn access(p: &str, bits: u32) -> bool {
+pub(crate) fn access(p: &Path, bits: u32) -> bool {
     mode_bits(p).is_some_and(|m| m & bits != 0)
 }
 
@@ -1203,7 +1212,7 @@ pub(crate) fn access(p: &str, bits: u32) -> bool {
 /// or written when its directory's rights let it be opened so, and
 /// executing is never refused.
 #[cfg(target_os = "wasi")]
-pub(crate) fn access(p: &str, bits: u32) -> bool {
+pub(crate) fn access(p: &Path, bits: u32) -> bool {
     let Ok(m) = std::fs::metadata(p) else { return false };
     if bits & 0o222 != 0 {
         if m.is_dir() { !m.permissions().readonly() } else { std::fs::OpenOptions::new().write(true).open(p).is_ok() }
@@ -1219,7 +1228,7 @@ fn is_readable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, "is_readable", &p, false, |st| user_access(st, 0o400))? {
         return Ok(v);
     }
-    Ok(Value::bool(access(&p, 0o444)))
+    Ok(Value::bool(access(&at(ctx, &p), 0o444)))
 }
 
 fn is_writable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1228,7 +1237,7 @@ fn is_writable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_check(ctx, func, &p, false, |st| user_access(st, 0o200))? {
         return Ok(v);
     }
-    Ok(Value::bool(access(&p, 0o222)))
+    Ok(Value::bool(access(&at(ctx, &p), 0o222)))
 }
 
 fn is_executable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1236,12 +1245,13 @@ fn is_executable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
     if let Some(v) = user_check(ctx, "is_executable", &p, false, |st| user_access(st, 0o100))? {
         return Ok(v);
     }
-    Ok(Value::bool(Path::new(&p).is_file() && access(&p, 0o111)))
+    let os = at(ctx, &p);
+    Ok(Value::bool(os.is_file() && access(&os, 0o111)))
 }
 
 /// A stat of `p`, or PHP's "stat failed" warning.
 fn stat(ctx: &mut dyn Ctx, func: &str, p: &str) -> Option<std::fs::Metadata> {
-    match std::fs::metadata(p) {
+    match std::fs::metadata(at(ctx, p)) {
         Ok(m) => Some(m),
         Err(_) => {
             ctx.warn(&format!("{func}(): stat failed for {p}"));
@@ -1283,7 +1293,7 @@ fn fileperms(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if let Some(v) = user_field(ctx, "fileperms", &p, false, |st| Value::int(st.mode))? {
         return Ok(v);
     }
-    Ok(stat(ctx, "fileperms", &p).map_or(Value::FALSE, |_| Value::int(i64::from(mode_bits(&p).unwrap_or(0)))))
+    Ok(stat(ctx, "fileperms", &p).map_or(Value::FALSE, |_| Value::int(i64::from(mode_bits(&at(ctx, &p)).unwrap_or(0)))))
 }
 
 fn chmod(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
@@ -1294,7 +1304,7 @@ fn chmod(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     user_stream::clear_stat_cache(ctx);
     let mode = arg(args, 1).to_int() as u32;
-    let r = p8_runtime::os::set_mode(&p, mode);
+    let r = p8_runtime::os::set_mode(at(ctx, &p), mode);
     Ok(match r {
         Ok(()) => Value::TRUE,
         Err(e) => {
@@ -1322,13 +1332,21 @@ fn temp_dir() -> String {
 
 /// tempnam(string $directory, string $prefix): a new empty file's path.
 fn tempnam(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut dir = path_arg(args);
-    if dir.is_empty() || !Path::new(&dir).is_dir() {
-        if !dir.is_empty() {
-            ctx.report(8, "tempnam(): file created in the system's temporary directory");
+    let given = path_arg(args);
+    // php_do_open_temporary_file: the directory's real path (VCWD_REALPATH,
+    // against the request's working directory), never the name as given:
+    // one that does not resolve to a directory is the system's temporary
+    // directory, with the notice.
+    let real = if given.is_empty() { None } else { p8_runtime::os::canonicalize(at(ctx, &given)).ok().filter(|p| p.is_dir()) };
+    let dir = match real {
+        Some(real) => real.to_string_lossy().into_owned(),
+        None => {
+            if !given.is_empty() {
+                ctx.report(8, "tempnam(): file created in the system's temporary directory");
+            }
+            temp_dir()
         }
-        dir = temp_dir();
-    }
+    };
     let prefix: String = text(&str_arg(args, 1)).chars().take(63).collect();
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     for i in 0..1000u32 {
@@ -1344,26 +1362,33 @@ fn sys_get_temp_dir(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
     Ok(Value::str(PhpStr::from(temp_dir())))
 }
 
-fn getcwd(_: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    Ok(std::env::current_dir().map_or(Value::FALSE, |d| Value::str(PhpStr::from(d.to_string_lossy().into_owned()))))
+/// getcwd(): the request's working directory (VCWD_GETCWD), not the
+/// process's, which other requests share (#459).
+fn getcwd(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
+    let cwd = ctx.cwd();
+    Ok(if cwd.as_os_str().is_empty() { Value::FALSE } else { Value::str(PhpStr::from(cwd.to_string_lossy().into_owned())) })
 }
 
-/// chdir: changes the process's directory (the CLI's one request).
+/// chdir(): changes the request's working directory only (VCWD_CHDIR,
+/// virtual_chdir: the path resolved, links and all, and a directory).
 fn chdir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
-    match std::env::set_current_dir(&p) {
-        Ok(()) => Ok(Value::TRUE),
+    match p8_runtime::cwd::change_to(ctx.cwd(), Path::new(&p)) {
+        Ok(dir) => {
+            ctx.set_cwd(dir);
+            Ok(Value::TRUE)
+        }
         Err(e) => {
-            ctx.warn(&format!("chdir(): {} (errno 2)", os_error(&e)));
+            ctx.warn(&format!("chdir(): {} (errno {})", os_error(&e), p8_runtime::cwd::errno(&e)));
             Ok(Value::FALSE)
         }
     }
 }
 
-fn realpath(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn realpath(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let p = path_arg(args);
     let p = if p.is_empty() { ".".to_string() } else { p };
-    Ok(p8_runtime::os::canonicalize(&p).map_or(Value::FALSE, |d| Value::str(PhpStr::from(d.to_string_lossy().into_owned()))))
+    Ok(p8_runtime::os::canonicalize(at(ctx, &p)).map_or(Value::FALSE, |d| Value::str(PhpStr::from(d.to_string_lossy().into_owned()))))
 }
 
 const PATHINFO_DIRNAME: i64 = 1;
@@ -1417,8 +1442,8 @@ fn pathinfo(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// A directory's entries as the system lists them (readdir's order, which
 /// PHP keeps and code like WordPress's theme scan shows), "." and ".."
-/// first.
-pub(crate) fn entries(p: &str) -> std::io::Result<Vec<Vec<u8>>> {
+/// first. `p` is as the system is given it ([`at`]).
+pub(crate) fn entries(p: &Path) -> std::io::Result<Vec<Vec<u8>>> {
     use p8_runtime::os::OsStrExt;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     for e in std::fs::read_dir(p)? {
@@ -1449,7 +1474,7 @@ fn scandir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             }
         }
         Located::Disabled => Err("no suitable wrapper could be found".to_string()),
-        Located::Builtin => entries(&p).map_err(|e| os_error(&e)),
+        Located::Builtin => entries(&at(ctx, &p)).map_err(|e| os_error(&e)),
     };
     match listed {
         Ok(mut names) => {
@@ -1584,10 +1609,10 @@ fn fn_match(pattern: &[u8], name: &[u8], flags: i64, start: bool) -> bool {
 use p8_runtime::glob::{MARK as GLOB_MARK, ONLYDIR as GLOB_ONLYDIR};
 
 /// glob(string $pattern, int $flags = 0): the paths matching, sorted.
-fn glob(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+fn glob(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let pattern = path_arg(args);
     let flags = if args.len() > 1 { arg(args, 1).to_int() } else { 0 };
-    let out = glob_paths(&pattern, flags).into_iter().map(|p| Value::str(PhpStr::from(p))).collect();
+    let out = glob_paths(ctx.cwd(), &pattern, flags).into_iter().map(|p| Value::str(PhpStr::from(p))).collect();
     Ok(Value::array(PhpArray::from_list(out)))
 }
 
@@ -1619,14 +1644,17 @@ fn expand_braces(pattern: &str) -> Option<Vec<String>> {
     Some(cuts.windows(2).map(|w| format!("{head}{}{tail}", &pattern[w[0] + 1..w[1]])).collect())
 }
 
-/// The paths `pattern` matches, sorted (glob(), GlobIterator).
-pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
+/// The paths `pattern` matches, sorted (glob(), GlobIterator). A relative
+/// pattern is looked for under `cwd`, the request's working directory
+/// (glob's VCWD_OPENDIR), and its matches stay relative, as PHP's.
+pub(crate) fn glob_paths(cwd: &Path, pattern: &str, flags: i64) -> Vec<String> {
     use p8_runtime::glob::BRACE as GLOB_BRACE;
     if flags & GLOB_BRACE != 0
         && let Some(alternatives) = expand_braces(pattern)
     {
-        return alternatives.iter().flat_map(|p| glob_paths(p, flags)).collect();
+        return alternatives.iter().flat_map(|p| glob_paths(cwd, p, flags)).collect();
     }
+    let os = |p: &str| p8_runtime::cwd::join(cwd, Path::new(p));
     let absolute = pattern.starts_with('/');
     let mut found: Vec<String> = vec![if absolute { "/".into() } else { String::new() }];
     for part in pattern.split('/').filter(|s| !s.is_empty()) {
@@ -1636,12 +1664,12 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
             let join = |n: &str| if base.is_empty() { n.to_string() } else if base.ends_with('/') { format!("{base}{n}") } else { format!("{base}/{n}") };
             if !part.contains(['*', '?', '[']) {
                 let p = join(part);
-                if Path::new(&p).exists() {
+                if os(&p).exists() {
                     next.push(p);
                 }
                 continue;
             }
-            if let Ok(mut names) = entries(&dir) {
+            if let Ok(mut names) = entries(&os(&dir)) {
                 names.sort();
                 for n in names {
                     let n = String::from_utf8_lossy(&n).into_owned();
@@ -1658,7 +1686,7 @@ pub(crate) fn glob_paths(pattern: &str, flags: i64) -> Vec<String> {
     }
     let mut out = Vec::new();
     for p in found {
-        let dir = Path::new(&p).is_dir();
+        let dir = os(&p).is_dir();
         if flags & GLOB_ONLYDIR != 0 && !dir {
             continue;
         }
@@ -1723,7 +1751,7 @@ fn opendir(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         }
         Located::Builtin => {}
     }
-    match entries(&p) {
+    match entries(&at(ctx, &p)) {
         Ok(names) => {
             let mut data = Vec::new();
             for n in names {

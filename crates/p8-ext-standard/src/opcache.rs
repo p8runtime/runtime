@@ -66,8 +66,15 @@ fn opcache_reset(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
     Ok(Value::TRUE)
 }
 
-fn opcache_invalidate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+/// The script a call names, a relative one under the request's working
+/// directory (the cache knows scripts by their real paths).
+fn script_path(ctx: &dyn Ctx, args: &[Value]) -> String {
     let path = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
+    p8_runtime::cwd::resolve(ctx, &path).to_string_lossy().into_owned()
+}
+
+fn opcache_invalidate(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
+    let path = script_path(ctx, args);
     let force = args.len() > 1 && arg(args, 1).to_bool();
     if !api_allowed(ctx) || !enabled(ctx) {
         return Ok(Value::FALSE);
@@ -85,7 +92,7 @@ fn opcache_compile_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn opcache_is_script_cached(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let path = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
+    let path = script_path(ctx, args);
     if !api_allowed(ctx) || !enabled(ctx) {
         return Ok(Value::FALSE);
     }
@@ -93,7 +100,7 @@ fn opcache_is_script_cached(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 }
 
 fn opcache_is_script_cached_in_file_cache(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
-    let path = String::from_utf8_lossy(str_arg(args, 0).as_bytes()).into_owned();
+    let path = script_path(ctx, args);
     if !api_allowed(ctx) {
         return Ok(Value::FALSE);
     }

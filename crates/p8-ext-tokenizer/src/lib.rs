@@ -428,7 +428,7 @@ fn token_get_all(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> 
 /// comments, each run of whitespace one space (zend_strip).
 fn php_strip_whitespace(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let path = code_arg(args);
-    let src = match std::fs::read(String::from_utf8_lossy(path.as_bytes()).as_ref()) {
+    let src = match std::fs::read(p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(path.as_bytes()).as_ref())) {
         Ok(src) => src,
         Err(e) => {
             let reason = if e.kind() == std::io::ErrorKind::NotFound { "No such file or directory".to_string() } else { e.to_string() };

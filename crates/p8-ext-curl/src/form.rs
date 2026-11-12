@@ -95,7 +95,7 @@ pub(crate) fn build(ctx: &mut dyn Ctx, fields: &PhpArray) -> Result<Result<Form,
                 Some(m) if !m.is_empty() => m.as_bytes().to_vec(),
                 _ => path.as_bytes().to_vec(),
             };
-            let Ok(data) = std::fs::read(lossy(path.as_bytes())) else {
+            let Ok(data) = std::fs::read(p8_runtime::cwd::resolve(ctx, lossy(path.as_bytes()))) else {
                 return Ok(Err(CurlErr { code: 26, message: "Failed to open/read local data from file/application".into() }));
             };
             part(&mut body, &boundary, &name, Some(&postname), Some(&mime), &data);

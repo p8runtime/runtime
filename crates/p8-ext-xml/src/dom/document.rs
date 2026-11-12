@@ -113,9 +113,9 @@ pub fn load_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R 
         return Err(ctx.throw("ValueError", "DOMDocument::load(): Argument #1 ($filename) must not be empty".into()));
     }
     let path = String::from_utf8_lossy(&name).into_owned();
-    match std::fs::read(&path) {
+    match std::fs::read(p8_runtime::cwd::resolve(ctx, &path)) {
         Ok(data) => {
-            let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path);
+            let full = p8_runtime::cwd::absolute(ctx.cwd(), std::path::Path::new(&path)).to_string_lossy().into_owned();
             load(ctx, this, data, Some(full), arg(args, 1).to_int(), "DOMDocument::load")
         }
         Err(_) => {
@@ -172,7 +172,7 @@ pub fn load_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         return Err(ctx.throw("ValueError", "DOMDocument::loadHTMLFile(): Argument #1 ($filename) must not contain any null bytes".into()));
     }
     let path = String::from_utf8_lossy(&name).into_owned();
-    match std::fs::read(&path) {
+    match std::fs::read(p8_runtime::cwd::resolve(ctx, &path)) {
         Ok(data) => {
             load_html_data(ctx, this, data, Some(path), arg(args, 1).to_int(), "DOMDocument::loadHTMLFile")
         }
@@ -235,9 +235,9 @@ pub fn schema_validate(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value])
         ctx.warn("DOMDocument::schemaValidate(): Invalid Schema file source");
         return Ok(Value::FALSE);
     }
-    let full = std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
-    let schema = match std::fs::read(&path) {
-        Ok(data) => crate::xsd::compile(data, Some(full)),
+    let full = p8_runtime::cwd::absolute(ctx.cwd(), std::path::Path::new(&path)).to_string_lossy().into_owned();
+    let schema = match std::fs::read(&full) {
+        Ok(data) => crate::xsd::compile(ctx.cwd(), data, Some(full)),
         Err(_) => Err(crate::xsd::load_errors(&path)),
     };
     schema_run(ctx, this, schema, arg(args, 1).to_int(), "DOMDocument::schemaValidate")
@@ -248,7 +248,7 @@ pub fn schema_validate_source(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [
     if source.is_empty() {
         return Err(ctx.throw("ValueError", "DOMDocument::schemaValidateSource(): Argument #1 ($source) must not be empty".into()));
     }
-    let schema = crate::xsd::compile(source, None);
+    let schema = crate::xsd::compile(ctx.cwd(), source, None);
     schema_run(ctx, this, schema, arg(args, 1).to_int(), "DOMDocument::schemaValidateSource")
 }
 
@@ -325,7 +325,7 @@ pub fn save_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
 pub fn save_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let path = String::from_utf8_lossy(&bytes(&arg(args, 0))).into_owned();
     let Some(b) = save(ctx, this, None, arg(args, 1).to_int())? else { return Ok(Value::FALSE) };
-    match std::fs::write(&path, &b) {
+    match std::fs::write(p8_runtime::cwd::resolve(ctx, &path), &b) {
         Ok(()) => Ok(Value::int(b.len() as i64)),
         Err(_) => Ok(Value::FALSE),
     }
@@ -389,6 +389,7 @@ pub fn save_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
         return Err(ctx.throw("ValueError", "DOMDocument::saveHTMLFile(): Argument #1 ($filename) must not contain any null bytes".into()));
     }
     let path = String::from_utf8_lossy(&name).into_owned();
+    let os = p8_runtime::cwd::resolve(ctx, &path);
     let r = this_doc(this);
     let mut d = r.doc.borrow_mut();
     // htmlSaveFileFormat records the encoding in the document first.
@@ -398,7 +399,7 @@ pub fn save_html_file(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) 
     let mut out = HtmlOut::new(&d, format);
     out.dump(DOC);
     let (bytes, _) = html_out::encode_output(out.buf, encoding.as_deref());
-    Ok(match std::fs::write(&path, &bytes) {
+    Ok(match std::fs::write(&os, &bytes) {
         Ok(()) => Value::int(bytes.len() as i64),
         Err(e) => {
             let why = e.to_string();
@@ -589,7 +590,7 @@ pub fn xinclude(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
         return Ok(Value::FALSE);
     }
     let r = this_doc(this);
-    let (done, diags) = super::xinclude::run(&mut r.doc.borrow_mut(), flags);
+    let (done, diags) = super::xinclude::run(&mut r.doc.borrow_mut(), flags, ctx.cwd());
     for diag in &diags {
         crate::libxml::report(ctx, &diag.error, |ctx| {
             for line in &diag.warnings {
