@@ -62,22 +62,25 @@ impl Serve {
 
     /// `p8 serve <dir>` on a free port, with options `extra`.
     fn start_with(dir: &Path, extra: &[&str]) -> Serve {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_p8"))
-            .args(["serve", dir.to_str().expect("utf-8"), "--listen", "127.0.0.1:0"])
-            .args(extra)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("start p8 serve");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_p8"));
+        command.args(["serve", dir.to_str().expect("utf-8"), "--listen", "127.0.0.1:0"]).args(extra);
+        Serve::spawn(command)
+    }
+
+    /// `command` (a `p8 serve` or a `p8 -S` on port 0) started; its port
+    /// read from the line the server logs when it listens.
+    fn spawn(mut command: Command) -> Serve {
+        let mut child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().expect("start the server");
         let stderr = child.stderr.take().expect("stderr");
         let log = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel();
         let shared = Arc::clone(&log);
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Some(rest) = line.split(" at http://127.0.0.1:").nth(1) {
-                    let _ = tx.send(rest.trim().parse::<u16>().unwrap_or(0));
+                // `p8 serve`: "… at http://127.0.0.1:PORT"; `p8 -S`: "… (http://127.0.0.1:PORT) started".
+                let port = line.split(" at http://127.0.0.1:").nth(1).or_else(|| line.split("(http://127.0.0.1:").nth(1)).and_then(|rest| rest.trim().trim_end_matches(") started").parse::<u16>().ok());
+                if let Some(port) = port {
+                    let _ = tx.send(port);
                 }
                 shared.lock().expect("log").push(line);
             }
@@ -364,6 +367,74 @@ fn sigterm_lets_requests_in_progress_finish() {
     assert_eq!(status.code(), Some(0), "{:?}", serve.log());
     serve.wait_for("p8 stopped", 1);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "nothing listens after it stopped");
+}
+
+/// Folders `a`, `b` and `c` of a project, each with `data.txt` naming it;
+/// `a/move.php` reads its folder's file, moves to `b` and reads again
+/// (after a pause, so another request runs meanwhile); `*/read.php` read
+/// their own folder's file. Each prints its working directory's name.
+fn folders(name: &str) -> PathBuf {
+    let read = "<?php echo basename(getcwd()), ':', file_get_contents('data.txt');";
+    let dir = site(name, &[]);
+    for sub in ["a", "b", "c"] {
+        std::fs::create_dir(dir.join(sub)).expect("a folder");
+        std::fs::write(dir.join(sub).join("data.txt"), sub.to_uppercase()).expect("data.txt");
+        std::fs::write(dir.join(sub).join("read.php"), read).expect("read.php");
+    }
+    let mv = "<?php echo basename(getcwd()), ':', file_get_contents('data.txt'), ' '; chdir('../b'); usleep(800000); echo basename(getcwd()), ':', file_get_contents('data.txt');";
+    std::fs::write(dir.join("a/move.php"), mv).expect("move.php");
+    dir
+}
+
+/// Each request starts in its script's folder (as PHP's servers start it),
+/// and a chdir() is its own: with two workers, a request running at the
+/// same time on the other worker, and the next request on the same worker,
+/// each start in their own script's folder.
+#[test]
+fn each_request_starts_in_its_scripts_folder_and_its_chdir_is_its_own() {
+    let dir = folders("cwd_two");
+    let serve = Serve::start_with(&dir, &["--workers", "2"]);
+    let port = serve.port;
+    let moving = std::thread::spawn(move || fetch(port, "/a/move.php"));
+    std::thread::sleep(Duration::from_millis(300));
+    // On the other worker while the first has moved to b.
+    assert_eq!(fetch(port, "/c/read.php").1, "c:C");
+    assert_eq!(moving.join().expect("the moving request").1, "a:A b:B");
+    // Next requests, whichever worker takes them (the one that moved too).
+    for _ in 0..3 {
+        assert_eq!(fetch(port, "/a/read.php").1, "a:A");
+    }
+}
+
+/// The same with one worker: the request after a chdir() starts in its own
+/// script's folder, not where the last one moved.
+#[test]
+fn a_chdir_is_not_left_to_the_next_request_on_the_worker() {
+    let dir = folders("cwd_one");
+    let serve = Serve::start_with(&dir, &["--workers", "1"]);
+    assert_eq!(fetch(serve.port, "/a/move.php").1, "a:A b:B");
+    assert_eq!(fetch(serve.port, "/a/read.php").1, "a:A");
+    assert_eq!(fetch(serve.port, "/c/read.php").1, "c:C");
+}
+
+/// `p8 -S` with a router: the router runs in the directory the server
+/// started in (php_cli_server.c does not chdir for it), and a script's
+/// request in its own folder; no request moves the process's directory, so
+/// the router still sees the start directory after a script moved its own.
+#[test]
+fn the_cli_server_moves_no_process_directory() {
+    let dir = folders("cwd_cli");
+    let started = dir.join("started-here");
+    std::fs::create_dir(&started).expect("the start folder");
+    let router = dir.join("router.php");
+    std::fs::write(&router, "<?php if ($_SERVER['REQUEST_URI'] === '/cwd') { echo getcwd(); return true; } return false;").expect("router.php");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_p8"));
+    command.current_dir(&started).args(["-S", "127.0.0.1:0", "-t", dir.to_str().expect("utf-8"), router.to_str().expect("utf-8")]);
+    let serve = Serve::spawn(command);
+    assert_eq!(fetch(serve.port, "/cwd").1, started.display().to_string());
+    assert_eq!(fetch(serve.port, "/a/move.php").1, "a:A b:B");
+    assert_eq!(fetch(serve.port, "/cwd").1, started.display().to_string());
+    assert_eq!(fetch(serve.port, "/c/read.php").1, "c:C");
 }
 
 /// Every byte the server sends for GET `path` before it closes the connection.

@@ -29,7 +29,7 @@ cargo build --release --locked -p php-test --bin php-test
 cargo build --release --locked -p p8-native   # the native tests need libp8_native.a beside p8
 cargo test --release --locked -p php-cli --test scripts --test file_cache --test package --test serve --test server --test command --test native
 cargo test --release --locked -p php-cli --bin p8
-cargo test --release --locked -p p8 --lib --test copies --test hash_counts --test release_counts --test slow_counts --test call_counts --test package --test api --test safety
+cargo test --release --locked -p p8 --lib --test copies --test hash_counts --test release_counts --test slow_counts --test call_counts --test package --test api --test safety --test working_dir
 cargo test --release --locked -p p8-bytecode -p p8-vmgen -p p8-runtime -p p8-interp -p p8-native-gen -p p8-native -p p8-native-abi -p php-test
 cargo clippy --keep-going --locked --workspace --all-targets --all-features
 ```
