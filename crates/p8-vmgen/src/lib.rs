@@ -39,14 +39,18 @@
 //!
 //! ```text
 //! hand <Name> [native=<template>]
-//! op <NAME> <handler> cold=<method> [native=<template>] <operand>=<KIND>|<KIND>...
+//! op <NAME> <handler> cold=<method>|out=<method>[::<S>] [native=<template>] <operand>=<KIND>|<KIND>...
 //! drop <operand>=<KIND> <operand>=<KIND>...
 //! ```
 //!
 //! `hand` is an opcode whose arm is written by hand in the loop. `op` is a
 //! generated one: `handler` is the function in `p8-interp`'s `vmops`,
 //! `cold` the `Context` method its rare cases run (the instruction whole,
-//! out of line). `native` names the native backend's template for the
+//! out of line, as `step` runs it: the loop's slow path), or `out` the
+//! `Context` method they run on the operands the arm decoded (its
+//! `args::<Op>`), out of line but not on the slow path (`step` runs the
+//! same method); `out=<method>::<S>` when the method also takes the
+//! specialisation's kinds (`spec::<Op>`), as the handler does. `native` names the native backend's template for the
 //! opcode (`p8-native-gen`'s `tpl`, see [`native`]); an opcode without
 //! one is never native code. A `drop` line removes the combinations of
 //! the `op` above it that have all the kinds it lists. The kinds:
@@ -121,6 +125,12 @@ pub struct Def {
     pub name: String,
     pub handler: String,
     pub cold: String,
+    /// `cold` is an `out=` method: it takes the decoded operands.
+    pub out: bool,
+    /// ... and the specialisation's kinds (`out=<method>::<S>`), for an op
+    /// whose operands read by their kind (`$this` is a 0, a literal its
+    /// constant's index, a flag no field).
+    pub out_kinds: bool,
     /// The native backend's template (`native=`), if it has one.
     pub native: Option<String>,
     pub doc: Vec<String>,
@@ -198,16 +208,24 @@ pub fn parse(text: &str) -> Result<Defs, String> {
             Some("op") => {
                 let name = words.next().ok_or_else(|| err("op: no name"))?.to_string();
                 let handler = words.next().ok_or_else(|| err("op: no handler"))?.to_string();
-                let mut cold = None;
+                let mut cold: Option<(String, bool, bool)> = None;
                 let mut native = None;
                 let mut operands = Vec::new();
                 for w in words {
                     let (k, v) = w.split_once('=').ok_or_else(|| err("expected name=KINDS"))?;
-                    if k == "cold" {
+                    if k == "cold" || k == "out" {
+                        // (`out=m::<S>`: the method takes the kinds.)
+                        let (v, kinds) = match v.strip_suffix("::<S>") {
+                            Some(m) if k == "out" => (m, true),
+                            _ => (v, false),
+                        };
                         if !is_fn_name(v) {
-                            return Err(err("cold= names a method"));
+                            return Err(err("cold= / out= names a method"));
                         }
-                        cold = Some(v.to_string());
+                        if cold.is_some() {
+                            return Err(err("op: one cold= or out="));
+                        }
+                        cold = Some((v.to_string(), k == "out", kinds));
                     } else if k == "native" {
                         if !is_fn_name(v) {
                             return Err(err("native= names a template"));
@@ -228,8 +246,8 @@ pub fn parse(text: &str) -> Result<Defs, String> {
                         operands.push(Operand { name: k.to_string(), kinds });
                     }
                 }
-                let cold = cold.ok_or_else(|| err("op: no cold="))?;
-                defs.ops.push(Def { name, handler, cold, native, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
+                let (cold, out, out_kinds) = cold.ok_or_else(|| err("op: no cold= or out="))?;
+                defs.ops.push(Def { name, handler, cold, out, out_kinds, native, doc: std::mem::take(&mut doc), operands, drops: Vec::new() });
             }
             Some("drop") => {
                 let def = defs.ops.last_mut().ok_or_else(|| err("drop before any op"))?;
@@ -431,7 +449,7 @@ pub fn bytecode(defs: &Defs) -> String {
     s.push_str("/// Each instruction's handler signature, by operand name, so that a handler and `ops.def`\n/// are matched by name, never by position: `args::<Op>` holds the decoded operands (a\n/// register's window index, a literal's constant index, an immediate; `$this` 0), and the\n/// `spec::<Op>` trait the kind of each operand that has more than one (a flag's too) as an\n/// associated type, implemented by one type per specialisation (`spec::P8_FETCH_DIM_R_KSTR`).\npub mod args {\n");
     for d in &defs.ops {
         let fields: Vec<String> = d.operands.iter().filter(|o| !o.is_flag()).map(|o| format!("pub {}: u32", o.name)).collect();
-        let _ = writeln!(s, "    /// `{}`'s operands.\n    pub struct {} {{ {} }}", d.name, camel(&d.handler), fields.join(", "));
+        let _ = writeln!(s, "    /// `{}`'s operands.\n    #[derive(Debug, Clone, Copy)]\n    pub struct {} {{ {} }}", d.name, camel(&d.handler), fields.join(", "));
     }
     s.push_str("}\n\n/// See `args`.\npub mod spec {\n    #![allow(non_camel_case_types, reason = \"one type per opcode, named as the opcode\")]\n    use super::kind::{self, Kind};\n\n");
     for d in &defs.ops {
@@ -502,7 +520,15 @@ pub fn dispatch(defs: &Defs) -> String {
     );
     for d in &defs.ops {
         for sp in specs(d) {
-            let _ = writeln!(s, "            Op::{} => gen_arm!({}, vmops::{}),", sp.name(), d.cold, call(&sp, &d.handler, "hx!()"));
+            if d.out {
+                // (`out=m::<S>`: the method takes the specialisation's
+                // kinds as the handler does: `$this` is a 0 in the operands.)
+                let (func, args) = call_parts(&sp, &d.handler);
+                let generics = if d.out_kinds { func.find("::<").map_or("", |i| &func[i..]) } else { "" };
+                let _ = writeln!(s, "            Op::{} => gen_out!({}{generics}, vmops::{func}, {args}),", sp.name(), d.cold);
+            } else {
+                let _ = writeln!(s, "            Op::{} => gen_arm!({}, vmops::{}),", sp.name(), d.cold, call(&sp, &d.handler, "hx!()"));
+            }
         }
     }
     s.push_str("        }\n    }};\n}\n");
@@ -514,13 +540,21 @@ pub fn dispatch(defs: &Defs) -> String {
 /// `f::<spec::P8_..>(first, args::F { .. })`. One function for both, so
 /// the interpreter and the native backend read an instruction the same way.
 fn call(sp: &Spec, func: &str, first: &str) -> String {
+    let (func, args) = call_parts(sp, func);
+    format!("{func}({first}, {args})")
+}
+
+/// `call`'s two parts: `func` with the specialisation's kinds
+/// (`f::<spec::P8_..>`), and its operands decoded from `insn`
+/// (`args::F { .. }`), which an `out=` arm also hands its method.
+fn call_parts(sp: &Spec, func: &str) -> (String, String) {
     let d = sp.def;
     let varies = d.operands.iter().any(|o| o.kinds.len() > 1);
     let generics = if varies { format!("::<p8_bytecode::insn::spec::{}>", sp.name()) } else { String::new() };
     // Every operand but a flag is a field (`$this` a 0), so all of a
     // handler's specialisations take the same ones.
     let fields: Vec<String> = d.operands.iter().zip(&sp.slots).filter(|(o, _)| !o.is_flag()).map(|(o, sl)| format!("{}: {}", o.name, decode(*sl))).collect();
-    format!("{func}{generics}({first}, p8_bytecode::insn::args::{} {{ {} }})", camel(&d.handler), fields.join(", "))
+    (format!("{func}{generics}"), format!("p8_bytecode::insn::args::{} {{ {} }}", camel(&d.handler), fields.join(", ")))
 }
 
 /// The native backend's dispatch (#385): a `native_dispatch!(e, insn)`
@@ -592,6 +626,22 @@ mod tests {
         assert!(parse("drop a=K").is_err());
         assert!(parse("op X x cold=y a=TMP a=REG").unwrap_err().contains("once per op"));
         assert!(parse("op X x cold=y a=TMP|USED").unwrap_err().contains("a flag or not"));
+        assert!(parse("op X x cold=y out=z a=TMP").unwrap_err().contains("one cold= or out="));
+    }
+
+    /// An `out=` op's arm hands its method the operands it decoded, not
+    /// the instruction (`gen_out!`, which is not the slow path).
+    #[test]
+    fn an_out_method_takes_the_decoded_operands() {
+        let d = parse("hand Slow\nop CLASS_CONST class_const out=class_const_out cls=NAMED|STATIC dst=REG class=IMM16 site=IMM16\nop FETCH_PROP fetch_prop out=fetch_prop_out::<S> dst=REG obj=REG|THIS site=IMM16").unwrap();
+        assert!(d.ops[0].out && !d.ops[0].out_kinds && d.ops[0].cold == "class_const_out");
+        assert!(d.ops[1].out && d.ops[1].out_kinds && d.ops[1].cold == "fetch_prop_out");
+        let i = dispatch(&d);
+        assert!(i.contains("Op::P8_CLASS_CONST_NAMED => gen_out!(class_const_out, vmops::class_const::<p8_bytecode::insn::spec::P8_CLASS_CONST_NAMED>, p8_bytecode::insn::args::ClassConst { dst: u32::from(insn.a), class: insn.imm & 0xffff, site: insn.imm >> 16 }),"), "{i}");
+        // With `::<S>`, the kinds too (`$this` is a 0 in the operands).
+        assert!(i.contains("Op::P8_FETCH_PROP_THIS => gen_out!(fetch_prop_out::<p8_bytecode::insn::spec::P8_FETCH_PROP_THIS>, "), "{i}");
+        assert!(!i.contains("gen_arm!"));
+        assert!(bytecode(&d).contains("#[derive(Debug, Clone, Copy)]\n    pub struct ClassConst {"));
     }
 
     #[test]
