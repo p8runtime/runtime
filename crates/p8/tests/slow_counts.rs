@@ -687,8 +687,8 @@ fn misses_run_out_of_line_on_their_operands() {
 /// `$a + K` of arrays (a union, not symmetric), `-` and `*` of numeric
 /// strings (a literal on either side), `$o->$name = ` of a new
 /// object's dynamic property, `$o->$name` and `$o->$name ??` through
-/// `__get` / `__isset`, `static::m($v)` and `static::m($a['k'])` of a
-/// called class that alternates (the site's cache holds one), `echo`,
+/// `__get` / `__isset`, `static::m($a['k'])` of a called class that
+/// alternates (the site's cache holds one), `static::m($undefined)`, `echo`,
 /// `clone`, `throw` and the catches' tests, `isset(C::$s)`, ArrayAccess
 /// reads, `isset()` and `empty()` of an ArrayAccess element, `empty()` of a
 /// bool key, `foreach` of a reference, an argument coerced to its type,
@@ -699,7 +699,7 @@ fn the_tenth_batch_runs_out_of_line_on_its_operands() {
     let out = flat(
         "class Str { function __toString(): string { return 's'; } }
          class G { function __get($n) { return 2; } function __isset($n) { return true; } }
-         class A { public static $s = 1; static function go($v) { $a = ['k' => $v]; return static::m($v) + static::r($a['k']); } static function m($x) { return $x; } static function r($x) { return $x; } }
+         class A { public static $s = 1; static function go($v) { $a = ['k' => $v]; return static::m($v) + static::r($a['k']); } static function m($x) { return $x; } static function r($x) { return $x; } static function und() { $a = [0]; return @static::m($nope, $a[0]); } }
          class B extends A {}
          class E1 extends Exception {} class E2 extends Exception {}
          class Box implements ArrayAccess { function offsetExists($k): bool { return $k !== 'no'; } function offsetGet($k): mixed { return 3; } function offsetSet($k, $v): void {} function offsetUnset($k): void {} }
@@ -715,7 +715,7 @@ fn the_tenth_batch_runs_out_of_line_on_its_operands() {
              $t += count([5, 6] + $arr) + count($arr + [5, 6]) + ($num - '2') * $num;
              $o = new stdClass; $o->$name = $i; $t += $o->p;
              $t += $g->$name + ($g->$name ?? 0);
-             $t += A::go(1) + B::go(2);
+             $t += A::go(1) + B::go(2) + (A::und() ?? 0);
              ob_start(); echo $str, $i; $t += strlen(ob_get_clean());
              $c = clone $o; $t += $c->p;
              try { throw new E2('e'); } catch (E1 $e) { $t += 100; } catch (E2 $e) { $t += 1; }
