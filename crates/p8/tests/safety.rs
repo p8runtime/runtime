@@ -81,3 +81,81 @@ fn p8_links_no_c() {
     assert!(offenders.is_empty(), "p8 depends on C: {offenders:?}");
     assert!(tree.lines().any(|l| l.starts_with("p8-interp ")), "cargo tree output not understood:\n{tree}");
 }
+
+/// The one file that reads the process's working directory: where a
+/// request starts (`p8_runtime::cwd::process_dir`, #459).
+const PROCESS_DIR: &str = "p8-runtime/src/cwd.rs";
+
+/// What reads or moves the process's working directory, which requests
+/// running side by side share (#459): std's calls, and `path::absolute`,
+/// which joins to it. `Command::current_dir` (a child's directory) is a
+/// method, `.current_dir(`, and is not one of them.
+fn reads_process_dir(line: &str) -> Option<&'static str> {
+    let code = line.split("//").next().unwrap_or("");
+    if code.contains("set_current_dir") {
+        return Some("set_current_dir");
+    }
+    if code.contains("path::absolute") {
+        return Some("std::path::absolute");
+    }
+    let mut rest = code;
+    while let Some(at) = rest.find("current_dir") {
+        if !rest[..at].ends_with('.') {
+            return Some("current_dir");
+        }
+        rest = &rest[at + "current_dir".len()..];
+    }
+    None
+}
+
+fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("a source directory") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Each request has its own working directory: no engine crate reads or
+/// sets the process's but the one place a request's starts from.
+#[test]
+fn no_builtin_touches_the_process_working_directory() {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(crates_dir()).expect("crates/") {
+        let dir = entry.expect("entry").path();
+        let name = dir.file_name().expect("name").to_string_lossy().into_owned();
+        if name == "p8" || name.starts_with("p8-") {
+            rust_files(&dir.join("src"), &mut files);
+        }
+    }
+    assert!(files.len() > 100, "only {} source files found", files.len());
+    let mut offenders = Vec::new();
+    let mut exception_seen = false;
+    for file in &files {
+        let shown = file.strip_prefix(crates_dir()).expect("under crates/").to_string_lossy().into_owned();
+        let source = std::fs::read_to_string(file).expect("a source file");
+        for (i, line) in source.lines().enumerate() {
+            let Some(what) = reads_process_dir(line) else { continue };
+            if shown == PROCESS_DIR && what == "current_dir" {
+                exception_seen = true;
+                continue;
+            }
+            offenders.push(format!("{shown}:{}: {what}", i + 1));
+        }
+    }
+    assert!(exception_seen, "{PROCESS_DIR} no longer reads the process's directory: the check reads the wrong files");
+    assert!(offenders.is_empty(), "the process's working directory is read or set outside {PROCESS_DIR}:\n{}", offenders.join("\n"));
+}
+
+#[test]
+fn the_working_directory_check_sees_each_form() {
+    assert_eq!(reads_process_dir("let d = std::env::current_dir()?;"), Some("current_dir"));
+    assert_eq!(reads_process_dir("std::env::set_current_dir(&p)"), Some("set_current_dir"));
+    assert_eq!(reads_process_dir("let p = std::path::absolute(x);"), Some("std::path::absolute"));
+    assert_eq!(reads_process_dir("use std::env::current_dir;"), Some("current_dir"));
+    assert_eq!(reads_process_dir("cmd.current_dir(cwd);"), None);
+    assert_eq!(reads_process_dir("// std::env::current_dir() is the process's"), None);
+}

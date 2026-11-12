@@ -69,7 +69,7 @@ fn descriptor(ctx: &mut dyn Ctx, fd: i64, spec: &Value) -> Result<Option<(Stdio,
                 _ if fd == 0 => open.read(true),
                 _ => open.write(true).create(true),
             };
-            match open.open(&path) {
+            match open.open(p8_runtime::cwd::resolve(ctx, &path)) {
                 Ok(f) => (Stdio::from(f), false),
                 Err(_) => (Stdio::null(), false),
             }
@@ -89,6 +89,7 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
             };
             let mut c = Command::new(std::ffi::OsStr::from_bytes(program));
             c.args(rest.iter().map(|a| std::ffi::OsStr::from_bytes(a)));
+            crate::process::in_request_dir(ctx, &mut c);
             c
         }
         None => crate::process::shell(ctx, command.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()),
@@ -97,10 +98,12 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         Some(parts) => parts.values().map(text).collect::<Vec<_>>().join(" "),
         None => text(&command),
     };
+    // $cwd: the child's directory, itself relative to the request's (the
+    // default, as VCWD_GETCWD gives proc_open its cwd).
     if let Some(cwd) = args.get(3).map(Value::deref)
         && let Some(cwd) = cwd.as_str()
     {
-        cmd.current_dir(std::ffi::OsStr::from_bytes(cwd.as_bytes()));
+        cmd.current_dir(p8_runtime::cwd::resolve(ctx, std::ffi::OsStr::from_bytes(cwd.as_bytes())));
     }
     if let Some(env) = args.get(4).map(Value::deref)
         && let Some(env) = env.as_array()

@@ -292,13 +292,14 @@ fn open(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<(Option<Opened>
     let mut rules = None;
     if !db.is_empty() {
         let shown = lossy(&db);
-        let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+        // A relative database is the request's working directory's.
+        let cwd = ctx.cwd().display().to_string();
         let full_len = if shown.starts_with('/') { shown.len() } else { cwd.len() + 1 + shown.len() };
         if full_len >= 4096 {
             warns.push(format!("{func}(): File name is longer than the maximum allowed path length on this platform (4096): {shown}"));
             return Ok((None, warns));
         }
-        match p8_runtime::os::canonicalize(&shown) {
+        match p8_runtime::os::canonicalize(p8_runtime::cwd::resolve(ctx, &shown)) {
             Ok(p) => {
                 // libmagic only says so when MAGIC_CHECK (0x40) is among the flags
                 if !p.is_dir() && flags & 0x40 != 0 {
@@ -313,7 +314,7 @@ fn open(ctx: &mut dyn Ctx, func: &str, args: &[Value]) -> Result<(Option<Opened>
                 }
             }
             Err(e) => {
-                let full = if shown.starts_with('/') { shown.clone() } else { format!("{}/{shown}", std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default()) };
+                let full = if shown.starts_with('/') { shown.clone() } else { format!("{cwd}/{shown}") };
                 warns.push(format!("{func}({full}): Failed to open stream: {}", os_error(&e)));
                 warns.push(format!("{func}({full}): Failed to open stream: {}", os_error(&e)));
                 warns.push(format!("{func}(): Failed to load magic database at \"{full}\""));
@@ -446,7 +447,8 @@ fn read_source(ctx: &mut dyn Ctx, func: &str, path: &[u8]) -> Result<Option<Sour
         let r = ctx.call(&Value::str("file_get_contents"), &mut [Value::str(shown.as_str())])?;
         return Ok(r.as_str().map(|s| Source::Data(s.as_bytes().to_vec(), magic::Env::default())));
     }
-    let p = shown.strip_prefix("file://").unwrap_or(&shown);
+    let p = p8_runtime::cwd::resolve(ctx, shown.strip_prefix("file://").unwrap_or(&shown));
+    let p = &p;
     match std::fs::metadata(p) {
         Ok(m) if m.is_dir() => Ok(Some(Source::Dir)),
         _ => {
