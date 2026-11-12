@@ -56,6 +56,47 @@ pub fn const_operand(k: usize) -> Reg {
 /// `$this` is known to exist).
 pub const THIS: Reg = Reg::MAX;
 
+/// The word `InitMethod` leaves beside the receiver (an integer in a
+/// temporary): what the method call's sends and the call itself need of
+/// the method found, so neither asks the call site again.
+pub mod callee {
+    /// Bits 0..32: a PHP method's code, its index in the context's
+    /// closures (with USER).
+    pub const CODE: i64 = 0xffff_ffff;
+    /// Bits 32..36: the class declaring it is this many parents up from
+    /// the receiver's (with FAST).
+    pub const UP_SHIFT: u32 = 32;
+    pub const UP_MAX: u32 = 15;
+    /// The call may push the frame from this word alone: a PHP method run
+    /// with the receiver as `$this`, given its required arguments, not a
+    /// generator.
+    pub const FAST: i64 = 1 << 36;
+    /// CODE is a PHP method's (whether or not FAST).
+    pub const USER: i64 = 1 << 37;
+    /// Every argument past the bits goes by reference (a by-reference
+    /// variadic parameter), unless ASK.
+    pub const REST_REF: i64 = 1 << 38;
+    /// The method declares more parameters than the word has bits: an
+    /// argument past them asks the method itself.
+    pub const ASK: i64 = 1 << 39;
+    /// Bit REF_SHIFT + n: argument n goes by reference (n < REF_BITS).
+    pub const REF_SHIFT: u32 = 40;
+    pub const REF_BITS: u8 = 24;
+
+    /// Whether the word settles that argument `n` goes by reference
+    /// (None: past its bits and ASK).
+    #[inline(always)]
+    pub fn by_ref(word: i64, n: usize) -> Option<bool> {
+        if n < REF_BITS as usize {
+            Some(word >> (REF_SHIFT as usize + n) & 1 != 0)
+        } else if word & ASK != 0 {
+            None
+        } else {
+            Some(word & REST_REF != 0)
+        }
+    }
+}
+
 /// AssignPropDim's `n` with this bit set: the object is the running
 /// method's `$this` (as THIS), and `base` holds nothing (only its place
 /// in the block of name and keys).
@@ -192,15 +233,23 @@ pub enum Instr {
     /// Pass variable `var` as argument `n` of `site` into `arg`: by
     /// reference if the callee takes it so, else its value
     SendVar { site: u16, n: u8, arg: Reg, var: Reg },
-    /// The same for a method call on the object in `obj` (site `method`):
-    /// the method, looked up now, decides (PHP's SEND_VAR_EX).
-    SendVarMethod { obj: Reg, method: u16, n: u8, arg: Reg, var: Reg },
+    /// Start `$obj->method(argc arguments)` (PHP's INIT_METHOD_CALL): the
+    /// receiver is read now and kept in temporary `recv` (an argument
+    /// evaluated later cannot replace it; `obj` is THIS for the running
+    /// method's `$this`, and may be `recv` itself: a temporary captured in
+    /// place), the method is found now (the errors of finding it come
+    /// before any argument runs), and `recv + 1` gets the callee's word
+    /// (`callee`) for the sends and the call to read.
+    InitMethod { recv: Reg, obj: Reg, method: u16, argc: u8 },
+    /// The same for a method call: bit `n` of the callee's word in `word`
+    /// (InitMethod's) decides (PHP's SEND_VAR_EX).
+    SendVarMethod { word: Reg, n: u8, arg: Reg, var: Reg },
     /// The same for a static call on `class` (a class operand).
     SendVarStatic { class: u16, method: u16, n: u8, arg: Reg, var: Reg },
-    /// Whether method `method` of the object in `obj` takes argument `n` by
-    /// reference, into `dst` (an element or property argument is made a
-    /// reference only then).
-    MethodArgByRef { dst: Reg, obj: Reg, method: u16, n: u8 },
+    /// Whether the method whose word is in `word` (InitMethod's) takes
+    /// argument `n` by reference, into `dst` (an element or property
+    /// argument is made a reference only then).
+    MethodArgByRef { dst: Reg, word: Reg, n: u8 },
     /// The same for a static call on `class`.
     StaticArgByRef { dst: Reg, class: u16, method: u16, n: u8 },
     /// The same for call site `site`, a function not known when compiled.
@@ -323,7 +372,9 @@ pub enum Instr {
     IssetProp { dst: Reg, obj: Reg, name: Reg },
     /// `unset($obj->name)`
     UnsetProp { obj: Reg, name: Reg },
-    /// `$obj->method(args)`: `method` names a site (its name)
+    /// `$obj->method(args)`: `method` names a site (its name); `obj` is
+    /// the temporary InitMethod left the receiver in, and `obj + 1` the
+    /// callee's word
     MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
     /// `C::method(args)`, `parent::method(args)`, `static::…` (`vars` as
     /// CallValue's)

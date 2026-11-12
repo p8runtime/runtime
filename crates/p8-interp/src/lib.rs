@@ -1904,27 +1904,15 @@ impl Context<'_> {
                     }
                 }
                 Instr::SendVar { site, n, arg, var } => return self.send_var_ops(regs, clo, base, at, (site, n, arg, var)),
-                Instr::SendVarMethod { obj, method, n, arg, var } => {
-                    let site = &func.sites[method as usize];
-                    let by_ref = match reg!(obj).deref().as_object() {
-                        Some(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
-                            Some(by_ref) => by_ref,
-                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
-                        },
-                        None => false,
-                    };
+                Instr::InitMethod { recv, obj, method, argc } => return self.init_method_ops(regs, clo, base, at, (recv, obj, method, argc)),
+                Instr::SendVarMethod { word, n, arg, var } => {
+                    let by_ref = self.word_takes_ref(&reg!(word), n as usize);
                     reg!(arg) = if by_ref { Value::reference(make_ref(w, var)) } else { self.operand(w, clo, var) };
                 }
                 Instr::SendVarStatic { class, method, n, arg, var } => return self.send_var_static_ops(regs, clo, base, at, (class, method, n, arg, var)),
-                Instr::MethodArgByRef { dst, obj, method, n } => {
-                    let site = &func.sites[method as usize];
-                    reg!(dst) = Value::bool(match reg!(obj).deref().as_object() {
-                        Some(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
-                            Some(by_ref) => by_ref,
-                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
-                        },
-                        None => false,
-                    });
+                Instr::MethodArgByRef { dst, word, n } => {
+                    let by_ref = self.word_takes_ref(&reg!(word), n as usize);
+                    reg!(dst) = Value::bool(by_ref);
                 }
                 Instr::FuncArgByRef { dst, site, n } => return self.func_arg_by_ref_ops(regs, clo, base, at, (dst, site, n)),
                 Instr::StaticArgByRef { dst, class, method, n } => return self.static_arg_by_ref_ops(regs, clo, base, at, (dst, class, method, n)),
@@ -2701,21 +2689,20 @@ impl Context<'_> {
     }
 
     /// `method_call` on the operands the loop's MethodCall arm decoded
-    /// (the arm runs it for what its cached case does not take: a native
-    /// method, a class or scope the site has not seen, the lookup by
-    /// name on a miss, `__call`, the errors), with none of `step`'s
-    /// dispatch.
+    /// (the arm runs it for what the callee's word does not let it enter:
+    /// a native method, `__call`, a static method, a generator, missing
+    /// arguments), with none of `step`'s dispatch. The receiver is the one
+    /// InitMethod captured (in `obj`, a temporary this takes); the method
+    /// is the site's for its class and this scope, else looked up by name
+    /// again (and remembered), where what PHP reports as a call is made
+    /// (a builtin method's deprecation) is reported.
     #[inline(never)]
     pub(crate) fn method_call_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: MethodCallOps) -> Result<Next, Throw> {
         let MethodCallOps { dst, obj, args, argc, method } = ops;
         let pc = at + 1;
         let w = &mut regs[base..base + clo.code.nregs as usize];
-        let target = self.operand(w, clo, obj);
-        // A temporary (`(new A)->f()`) is released as it is used: the
-        // call's `$this` holds the object.
-        if is_temp(&clo.code, obj) {
-            clear(&mut w[obj as usize]);
-        }
+        // The call's `$this` holds the object from here.
+        let target = std::mem::take(&mut w[obj as usize]);
         if let Some(o) = target.as_object()
             && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
         {
@@ -2725,9 +2712,51 @@ impl Context<'_> {
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
         if let Some(o) = target.as_object() {
             self.remember_method(&clo.methods[method as usize], o, &m);
-            self.remember_user_method(&clo.methods[method as usize], o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `$obj->m(` (the InitMethod at `at`), every case: the receiver read
+    /// now (`$this` from the frame when `obj` is THIS; an undefined
+    /// variable warns) and kept in `recv`, so no argument can replace it;
+    /// the method found for its class from this scope, the site's answer
+    /// or the lookup by name, whose errors (not an object, no such method,
+    /// not visible from here) are raised before any argument runs; the
+    /// callee's word left in `recv + 1` for the sends and the call. `step`
+    /// runs it, and the loop's InitMethod arm on a class or scope its site
+    /// has not seen.
+    #[inline(never)]
+    pub(crate) fn init_method_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (recv, obj, method, argc): (Reg, Reg, u16, u8)) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let target = self.prop_target(w, clo, obj)?;
+        let slot = &clo.methods[method as usize];
+        let known = target.as_object().and_then(|o| slot.user.get().hit(&o.class, self.scope_addr()));
+        let word = match known {
+            Some(word) => word,
+            None => {
+                let site = &clo.code.sites[method as usize];
+                let m = self.method_lookup(&target, Some(site.sym), site.display.as_bytes(), false)?;
+                match target.as_object() {
+                    Some(o) => self.callee_word(slot, o, &m, argc as usize),
+                    None => 0,
+                }
+            }
+        };
+        w[recv as usize] = target;
+        w[recv as usize + 1] = Value::int(word);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// Whether the callee of the word InitMethod left takes argument `n`
+    /// by reference: its bit; past the bits, a PHP method with more
+    /// parameters than bits is asked.
+    #[inline]
+    fn word_takes_ref(&self, word: &Value, n: usize) -> bool {
+        let word = word.as_int().unwrap_or(0);
+        match p8_bytecode::callee::by_ref(word, n) {
+            Some(by_ref) => by_ref,
+            None => self.closures.get((word & p8_bytecode::callee::CODE) as usize).is_some_and(|c| c.code.param_by_ref(n)),
+        }
     }
 
     /// `C::m(args)` (the StaticCall at `at`), every case: a hook's

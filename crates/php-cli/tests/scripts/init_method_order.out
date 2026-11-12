@@ -1,0 +1,40 @@
+A::m v=v B
+A::m v=v B
+B::m v=changed A
+Call to a member function m() on null k=0
+Call to undefined method T::nope()
+Call to private method T::hidden() from global scope
+Call to protected method T::guarded() from global scope
+Call to a member function m() on null
+Call to undefined method T::nope()
+Call to private method T::hidden() from global scope
+
+Warning: Undefined variable $missing in %s on line 38
+Call to a member function m() on null
+Call to a member function m() on string
+A::m v=v B
+A::m v=v B
+B::m v=changed A
+Call to a member function m() on null k=0
+Call to undefined method T::nope()
+Call to private method T::hidden() from global scope
+Call to a member function m() on null
+Call to undefined method T::nope()
+
+Warning: Undefined variable $missing in %s on line 58
+Call to a member function m() on null
+A::m v=v B
+A::m v=v B
+B::m v=changed A
+Call to a member function m() on null k=0
+Call to undefined method T::nope()
+Call to private method T::hidden() from global scope
+Call to a member function m() on null
+Call to undefined method T::nope()
+
+Warning: Undefined variable $missing in %s on line 58
+Call to a member function m() on null
+make eff eff A::m
+A::m v=v B
+A::m v=v B
+A::m v=v w=changed

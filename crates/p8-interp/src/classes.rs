@@ -97,13 +97,6 @@ impl Context<'_> {
         }
     }
 
-    /// `method_takes_ref` out of line, for the loop's sends on a site's
-    /// miss (SendVarMethod, MethodArgByRef: a class the site has not seen).
-    #[inline(never)]
-    pub(crate) fn method_takes_ref_out(&self, class: &Class, key: Sym, n: usize) -> bool {
-        self.method_takes_ref(class, Some(key), n)
-    }
-
     /// A call of a builtin method PHP deprecates (zend_deprecated_function).
     #[inline]
     pub(crate) fn method_deprecated(&mut self, m: &Method) {
@@ -855,11 +848,19 @@ impl Context<'_> {
 
     /// `$obj->method(args)`: the frame to push.
     pub(crate) fn method_frame(&mut self, target: &Value, key: Option<Sym>, display: &[u8]) -> Result<MethodFrame, Throw> {
+        self.method_lookup(target, key, display, true)
+    }
+
+    /// `method_frame`, for the call itself (`call`) or for the start of
+    /// one (InitMethod: the method found and its errors raised before the
+    /// arguments run; what PHP reports as the call is made, a builtin
+    /// method's deprecation, is left to the call).
+    pub(crate) fn method_lookup(&mut self, target: &Value, key: Option<Sym>, display: &[u8], call: bool) -> Result<MethodFrame, Throw> {
         p8_runtime::counts::bump(p8_runtime::counts::Count::MethodLookup);
         let object = if let Some(o) = target.as_object() {
             Rc::clone(o)
         } else if let Some(cell) = target.as_reference() {
-            return self.method_frame(&cell.borrow().clone(), key, display);
+            return self.method_lookup(&cell.borrow().clone(), key, display, call);
         } else {
             return Err(self.throw(
                 "Error",
@@ -877,7 +878,7 @@ impl Context<'_> {
                 && let Some(inner) = forward(&object)
                 && answers(&inner, key)
             {
-                return self.method_frame(&Value::object(inner), key, display);
+                return self.method_lookup(&Value::object(inner), key, display, call);
             }
             return Err(self.throw(
                 "Error",
@@ -908,7 +909,9 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
-        self.method_deprecated(&method);
+        if call {
+            self.method_deprecated(&method);
+        }
         let func = self.code_of(&method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame::method(func, this, declaring, class))

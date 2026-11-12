@@ -33,8 +33,9 @@ here.
   nor an object.
 - `truth!` (Not, ToBool), 1: NAN or an undefined variable (the warning).
 - `Op::Slow`, 1: every instruction lowered to Slow (below).
-- SendVarMethod, 2: the receiver neither an object nor a reference to
-  one; an undefined variable sent by value.
+- SendVarMethod, 2: no callee word in the register InitMethod fills
+  (lowering's promise: cannot happen); an undefined variable sent by
+  value.
 - Jump, 1: a backward jump with an interrupt due.
 - IncDec, 2: an int's overflow; neither an int nor a reference to one.
 - CallRegs, 1: an argument undefined.

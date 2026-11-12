@@ -274,54 +274,51 @@ pub(crate) struct MethodSite {
     pub(crate) is_static: bool,
 }
 
-/// What `$o->m()` at one site ran last when that was a PHP method called
-/// on an object: plain numbers, read by the loop's arms (`MethodCall`,
-/// `SendVarMethod`) with no borrow and nothing to upgrade, as a function
-/// call site keeps its callee's index (`Callee::User`). An answer for one
-/// class and scope never changes (a class's methods are fixed once it is
-/// declared, and classes live as long as their context), so an entry is
-/// only ever replaced, never cleared.
+/// What `$o->m(..)` at one site found last (InitMethod): the callee's
+/// word (`p8_bytecode::callee`) for the receiver's class and the calling
+/// scope, plain numbers read by the loop's InitMethod arm with no borrow
+/// and nothing to upgrade, as a function call site keeps its callee's
+/// index (`Callee::User`). A site has one argument count, so the word's
+/// "enough arguments" is the site's too. An answer for one class and
+/// scope never changes (a class's methods are fixed once it is declared,
+/// and classes live as long as their context), so an entry is only ever
+/// replaced, never cleared.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct UserMethod {
     /// The receiver's class (its address; 0: nothing remembered) and the
     /// calling code's class (its address; 0 outside one).
-    pub(crate) class: usize,
-    pub(crate) scope: usize,
-    /// The method's code: its index in the context's `closures`.
-    pub(crate) code: u32,
-    /// The class that declares the method: this many parents up from the
-    /// receiver's class (0: that class itself).
-    pub(crate) up: u32,
-    /// Bit n: parameter n is taken by reference (`by_ref`).
-    pub(crate) refs: u64,
+    class: usize,
+    scope: usize,
+    word: i64,
 }
 
 impl UserMethod {
-    /// The most parameters a method may declare to be remembered here:
-    /// bit 63 then answers for every argument from the 64th on (they are
-    /// all past the parameters: the variadic one's mode).
-    const PARAMS: usize = 63;
-
-    /// Whether argument `n` goes by reference.
+    /// The word remembered for a receiver of `class` called from `scope`
+    /// (its address; 0 outside a class). The one place that says what
+    /// keys a site's answer.
     #[inline(always)]
-    pub(crate) fn by_ref(self, n: usize) -> bool {
-        self.refs >> n.min(Self::PARAMS) & 1 != 0
+    pub(crate) fn hit(self, class: &Rc<Class>, scope: usize) -> Option<i64> {
+        (self.class == Rc::as_ptr(class) as usize && self.scope == scope).then_some(self.word)
     }
 
-    /// `code`'s parameters as `refs` has them; None for more than `PARAMS`.
-    fn refs_of(code: &Function) -> Option<u64> {
-        let n = code.params.len();
-        if n > Self::PARAMS {
-            return None;
-        }
-        let rest = if code.params.last().is_some_and(|p| p.variadic && p.by_ref) { !0u64 << n } else { 0 };
-        Some(code.params.iter().enumerate().fold(rest, |m, (i, p)| if p.by_ref { m | 1 << i } else { m }))
+    /// The same answer, to remember.
+    fn keyed(class: &Rc<Class>, scope: usize, word: i64) -> UserMethod {
+        UserMethod { class: Rc::as_ptr(class) as usize, scope, word }
     }
 }
 
-/// A method call site's cache: `user` for the loop's arms, and the full
-/// entry (any method, native ones and static-syntax calls too) for
-/// everything else, which this dereferences to.
+/// The by-reference part of a callee's word for a method whose parameter
+/// `n` is by reference when `by_ref(n)`, of `params` declared parameters,
+/// the last a by-reference variadic one when `rest`.
+fn word_refs(params: usize, rest: bool, by_ref: impl Fn(usize) -> bool) -> i64 {
+    use p8_bytecode::callee::{ASK, REF_BITS, REF_SHIFT, REST_REF};
+    let bits = (0..REF_BITS as usize).filter(|&n| by_ref(n)).fold(0i64, |m, n| m | 1 << (REF_SHIFT as usize + n));
+    bits | if rest { REST_REF } else { 0 } | if params > REF_BITS as usize { ASK } else { 0 }
+}
+
+/// A method call site's cache: `user` for the loop's InitMethod arm, and
+/// the full entry (any method, native ones and static-syntax calls too)
+/// for everything else, which this dereferences to.
 #[derive(Default)]
 pub(crate) struct MethodSlot {
     pub(crate) user: Cell<UserMethod>,
@@ -351,6 +348,14 @@ pub(crate) enum MethodCode {
 fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
     let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
     p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| s.params.iter().take(64).enumerate().filter(|(_, p)| p.by_ref).fold(0, |m, (i, _)| m | 1 << i))
+}
+
+/// The callee's word of builtin method `name` declared by `declaring`:
+/// what its stub signature takes by reference.
+fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
+    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
+    // (No builtin method has a parameter past the word's bits to ask about.)
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| word_refs(0, false, |n| s.params.get(n).is_some_and(|p| p.by_ref)))
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -622,17 +627,11 @@ impl Context<'_> {
         }
     }
 
-    /// `cached_takes_ref` out of line: for the loop's arms (MethodArgByRef,
-    /// SendVarMethod past its user-method test), where an inlined copy
-    /// would hold registers through the loop's other arms.
-    #[inline(never)]
-    pub(crate) fn cached_takes_ref_out(&self, site: &RefCell<Option<MethodSite>>, class: &Rc<Class>, n: usize) -> Option<bool> {
-        self.cached_takes_ref(site, class, n)
-    }
-
-    /// The same for a static-syntax call (`C::m($a['k'])`, StaticArgByRef):
-    /// the class known without a lookup (`static_target`), the method the
-    /// site's cache has for it. Out of line, as `cached_takes_ref_out`.
+    /// Whether a static-syntax call's method takes its `n`th argument by
+    /// reference (`C::m($a['k'])`, StaticArgByRef): the class known without
+    /// a lookup (`static_target`), the method the site's cache has for it.
+    /// Out of line: an inlined copy would hold registers through the
+    /// loop's other arms.
     #[inline(never)]
     pub(crate) fn static_takes_ref_out(&self, clo: &Closure, class: u16, method: usize, n: usize) -> Option<bool> {
         let target = self.static_target(clo, class)?;
@@ -686,30 +685,62 @@ impl Context<'_> {
         });
     }
 
-    /// After a full method lookup on object `o`: the same answer as plain
-    /// numbers for the loop's arms (`UserMethod`), when it is an ordinary
-    /// call of a PHP method with `$this` (what `remember_method` keeps,
-    /// less native and static methods, which the arms do not run).
-    pub(crate) fn remember_user_method(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+    /// The callee's word (`p8_bytecode::callee`) for method `m`, found on
+    /// object `o` for a call with `argc` arguments, remembered at the site
+    /// when the receiver's class and the calling scope decide it (not a
+    /// call an inner iterator takes, nor a Closure's: those are found
+    /// again each time).
+    pub(crate) fn callee_word(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame, argc: usize) -> i64 {
+        use p8_bytecode::callee::{FAST, UP_MAX, UP_SHIFT, USER};
         let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
-        let on_this = m.this.as_ref().is_some_and(|t| Rc::ptr_eq(t, o));
-        if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
-            return;
+        let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
+        // `$closure->__invoke($x)`: the builtin method hands its arguments
+        // to the closure's own code, so what that takes by reference is
+        // what the call sends by reference (one per Closure object, never
+        // the site's to keep).
+        if let crate::classes::Code::Native(_, name) = &m.func
+            && name.as_bytes().eq_ignore_ascii_case(b"__invoke")
+            && let Some(f) = crate::callable::closure_data(o).and_then(|d| d.func.user())
+        {
+            let f = &*f.code;
+            return word_refs(0, f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
         }
-        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else { return };
-        // (Its index: only a declared method's closure has one, and the
-        // context's closure there is this one.)
-        let index = code.index.get();
-        if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
-            return;
+        let settled = own_class && on_this && m.closure.is_none();
+        let word = match (&m.func, &m.scope) {
+            // __call takes (name, [arguments]): everything by value.
+            _ if m.trampoline.is_some() => 0,
+            (crate::classes::Code::User(code), declaring) => {
+                let f = &*code.code;
+                let refs = word_refs(f.params.len(), f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
+                // (Its index: only a declared method's closure has one,
+                // and the context's closure there is this one.)
+                let index = code.index.get();
+                if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
+                    // No index to name it by: nothing kept, and nothing
+                    // to ask past the bits.
+                    return refs & !p8_bytecode::callee::ASK;
+                }
+                // The class declaring it, as parents up from the receiver's.
+                let up = declaring.as_ref().and_then(|d| {
+                    let (mut class, mut up) = (&o.class, 0u32);
+                    while !Rc::ptr_eq(class, d) {
+                        (class, up) = (class.parent.as_ref()?, up + 1);
+                    }
+                    (up <= UP_MAX).then_some(up)
+                });
+                let fast = settled && m.this.is_some() && argc >= f.required && !f.is_generator;
+                match up {
+                    Some(up) if fast => refs | USER | FAST | i64::from(up) << UP_SHIFT | i64::from(index),
+                    _ => refs | USER | i64::from(index),
+                }
+            }
+            (crate::classes::Code::Native(_, name), Some(declaring)) => native_word(declaring, name),
+            (crate::classes::Code::Native(..), None) => 0,
+        };
+        if settled {
+            slot.user.set(UserMethod::keyed(&o.class, self.scope_addr(), word));
         }
-        let Some(refs) = UserMethod::refs_of(&code.code) else { return };
-        let (mut class, mut up) = (&o.class, 0);
-        while !Rc::ptr_eq(class, declaring) {
-            let Some(parent) = &class.parent else { return };
-            (class, up) = (parent, up + 1);
-        }
-        slot.user.set(UserMethod { class: Rc::as_ptr(&o.class) as usize, scope: self.scope_addr(), code: index, up, refs });
+        word
     }
 
     /// The frame of a static-syntax call (`C::m()`, `self::m()`,

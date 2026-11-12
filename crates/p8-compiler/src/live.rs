@@ -276,12 +276,21 @@ impl Frame<'_> {
                 o.clean |= args;
                 def!(dst);
             }
+            // (The receiver InitMethod captured goes into the call's frame
+            // or is released by the call; the word beside it is plain.)
             MethodCall { dst, obj, base, argc, .. } => {
                 let args = self.range(base, argc as usize);
-                u!(obj);
-                o.uses |= args;
-                o.clean |= args;
+                let held = self.range(obj, 2);
+                o.uses |= args | held;
+                o.clean |= args | held;
                 def!(dst);
+            }
+            InitMethod { recv, obj, .. } => {
+                if obj != p8_bytecode::THIS {
+                    u!(obj);
+                }
+                def!(recv);
+                defp!(recv + 1);
             }
             StaticCall { dst, class, base, argc, vars, .. } => {
                 let args = self.range(base, argc as usize);
@@ -309,8 +318,8 @@ impl Frame<'_> {
                 w!(var);
                 def!(arg);
             }
-            SendVarMethod { obj, arg, var, .. } => {
-                u!(obj, var);
+            SendVarMethod { word, arg, var, .. } => {
+                u!(word, var);
                 w!(var);
                 def!(arg);
             }
@@ -320,8 +329,8 @@ impl Frame<'_> {
                 w!(var);
                 def!(arg);
             }
-            MethodArgByRef { dst, obj, .. } => {
-                u!(obj);
+            MethodArgByRef { dst, word, .. } => {
+                u!(word);
                 defp!(dst);
             }
             StaticArgByRef { dst, class, .. } => {

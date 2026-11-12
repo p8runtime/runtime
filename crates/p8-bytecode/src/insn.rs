@@ -546,7 +546,15 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let kind = INTRINSICS.iter().position(|&k| k == op)? as u32;
             i(Op::Intrinsic, a, b, c, u32::from(class) | kind << 16)
         }
-        Instr::SendVarMethod { obj, method, n, arg, var } => i(Op::SendVarMethod, obj, arg, var, u32::from(method) | u32::from(n) << 16),
+        // (An argument past the word's bits: `step`'s.)
+        Instr::SendVarMethod { word, n, arg, var } if n < crate::callee::REF_BITS => i(Op::SendVarMethod, word, arg, var, u32::from(n)),
+        // (The word's register, the one after the receiver's, is in the
+        // window too.)
+        Instr::InitMethod { recv, obj, method, argc } => {
+            r(recv + 1)?;
+            let this = obj == THIS;
+            i(Op::InitMethod, recv, if this { 0 } else { obj }, Reg::from(this), u32::from(method) | u32::from(argc) << 16)
+        }
         Instr::Jump { target } => i(Op::Jump, 0, 0, 0, target),
         Instr::Compare { cmp, dst, a, b } => match cmp_c(cmp, a, b) {
             Some((cmp, a, kk)) => i(Op::CompareC, dst, a, 0, cmp_imm(cmp) | kk << 8),
@@ -617,7 +625,12 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
         Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
-        Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
+        // (The callee's word, in the register after the receiver's, is in
+        // the window too.)
+        Instr::MethodCall { dst, obj, method, base, argc } => {
+            r(obj + 1)?;
+            i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16)
+        }
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
         Instr::StaticCall { dst, class, method, base, argc, vars: crate::NO_VARS } => i(Op::StaticCall, dst, base, Reg::from(argc), u32::from(method) | u32::from(class) << 16),
@@ -688,7 +701,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let flags = if inc { PROP_INC } else { 0 } | if post { PROP_POST } else { 0 } | if this { PROP_PATH_THIS } else { 0 };
             i(Op::PropIncDec, if this { 0 } else { obj }, dst, 0, site | flags)
         }
-        Instr::MethodArgByRef { dst, obj, method, n } => i(Op::MethodArgByRef, dst, obj, Reg::from(n), u32::from(method)),
+        Instr::MethodArgByRef { dst, word, n } if n < crate::callee::REF_BITS => i(Op::MethodArgByRef, dst, word, Reg::from(n), 0),
         // `&$o->p` (the name a constant: its cache entry).
         Instr::Rare { op: Rare::PropRef, a, b, c, .. } => i(Op::PropRef, a, b, 0, prop_site(c, nconsts)?),
         Instr::StaticArgByRef { dst, class, method, n } => i(Op::StaticArgByRef, dst, 0, Reg::from(n), u32::from(method) | u32::from(class) << 16),
@@ -1098,7 +1111,15 @@ mod tests {
             Instr::PropIncDec { obj: 20, name: c(4), dst: 6, inc: false, post: true },
             // A name that is no constant: not inline.
             Instr::PropIncDec { obj: 20, name: 3, dst: 6, inc: true, post: true },
-            Instr::MethodArgByRef { dst: 6, obj: 20, method: 5, n: 2 },
+            Instr::MethodArgByRef { dst: 6, word: 20, n: 2 },
+            // An argument past the callee word's bits: not inline.
+            Instr::MethodArgByRef { dst: 6, word: 20, n: crate::callee::REF_BITS },
+            Instr::SendVarMethod { word: 20, n: 1, arg: 22, var: 1 },
+            Instr::SendVarMethod { word: 20, n: crate::callee::REF_BITS, arg: 22, var: 1 },
+            Instr::InitMethod { recv: 19, obj: 1, method: 5, argc: 2 },
+            Instr::InitMethod { recv: 19, obj: THIS, method: 5, argc: 2 },
+            // The word's register past the window: not inline.
+            Instr::InitMethod { recv: 255, obj: 1, method: 5, argc: 2 },
         ];
         let consts = consts();
         let at = |pc| lower_at(&code, pc, &consts, 2);
@@ -1111,7 +1132,13 @@ mod tests {
         assert_eq!(at(6).unwrap(), Insn { op: Op::PropIncDec, a: 0, b: 6, c: 0, imm: 4 | PROP_INC | PROP_PATH_THIS });
         assert_eq!(at(7).unwrap(), Insn { op: Op::PropIncDec, a: 20, b: 6, c: 0, imm: 4 | PROP_POST });
         assert!(at(8).is_none());
-        assert_eq!(at(9).unwrap(), Insn { op: Op::MethodArgByRef, a: 6, b: 20, c: 2, imm: 5 });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::MethodArgByRef, a: 6, b: 20, c: 2, imm: 0 });
+        assert!(at(10).is_none());
+        assert_eq!(at(11).unwrap(), Insn { op: Op::SendVarMethod, a: 20, b: 22, c: 1, imm: 1 });
+        assert!(at(12).is_none());
+        assert_eq!(at(13).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 1, c: 0, imm: 5 | 2 << 16 });
+        assert_eq!(at(14).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 0, c: 1, imm: 5 | 2 << 16 });
+        assert!(at(15).is_none());
     }
 
     #[test]
