@@ -180,6 +180,9 @@ pub const PATH_VAL_K: u32 = 1 << 16;
 /// AssignPropDim's `imm` bit: the object is the frame's `$this`.
 pub const PROP_PATH_THIS: u32 = 1 << 29;
 
+/// FetchPropDyn's `imm` bit: a quiet read (`??`, `?->`: no warning).
+pub const PROP_QUIET: u32 = 1;
+
 /// AssignDimPath's and AssignPropDim's `imm` bit: a `[]` after the keys
 /// (the value appended there).
 pub const PATH_APPEND: u32 = 1 << 30;
@@ -449,7 +452,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
                 enc::fetch_prop(enc::FetchProp { mode, dst: o(dst)?, obj: if obj == THIS { Opnd::This } else { o(obj)? }, site: Opnd::Imm(site) })
             }
             // `$o->$name`: the name in a register (a hand arm).
-            None => i(Op::FetchPropDyn, dst, if obj == THIS { 0 } else { obj }, name, if obj == THIS { PROP_PATH_THIS } else { 0 }),
+            None => i(Op::FetchPropDyn, dst, if obj == THIS { 0 } else { obj }, name, if obj == THIS { PROP_PATH_THIS } else { 0 } | if quiet { PROP_QUIET } else { 0 }),
         },
         Instr::AssignProp { obj, name, val, dst, take: t } => match prop_site(name, nconsts) {
             Some(site) => {
@@ -513,11 +516,18 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         }
         Instr::JumpIf { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::T), cond: o(cond)?, target: Opnd::Imm(target) }),
         Instr::JumpIfNot { cond, target } => enc::jump_cond(enc::JumpCond { when: Opnd::Flag(kinds::F), cond: o(cond)?, target: Opnd::Imm(target) }),
-        // (empty()'s last dimension is IS too: on an array, null, a string's
-        // int offset, a miss is null as for `??`; an ArrayAccess object,
-        // where the two differ, is cold either way.)
-        Instr::FetchDim { dst, arr, key, quiet, .. } => {
-            let mode = Opnd::Flag(if quiet { kinds::IS } else { kinds::R });
+        // (empty()'s last dimension, EMPTY, the handler reads as IS: on an
+        // array, null, a string's int offset, a miss is null as for `??`;
+        // an ArrayAccess object, where the two differ, and empty()'s key
+        // conversions are out of line, which tells them apart.)
+        Instr::FetchDim { dst, arr, key, quiet, empty } => {
+            let mode = Opnd::Flag(if empty {
+                kinds::EMPTY
+            } else if quiet {
+                kinds::IS
+            } else {
+                kinds::R
+            });
             enc::fetch_dim(enc::FetchDim { mode, dst: o(dst)?, arr: o(arr)?, key: ko(key)? })
         }
         Instr::AssignDim { var, n: 0, append: true, val, dst, .. } => {
@@ -810,6 +820,14 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::IterNextRef, iter, val, if has_key { key } else { 0 }, end | if has_key { ITER_KEY } else { 0 })
         }
         Instr::ReturnNull => i(Op::ReturnNull, 0, 0, 0, 0),
+        // Out of line on their operands, whole (an operand that may be a
+        // literal kept in imm as the `Instr` has it).
+        Instr::Echo { src } => i(Op::Echo, 0, 0, 0, u32::from(src)),
+        Instr::Clone { dst, src } => i(Op::Clone, dst, 0, 0, u32::from(src)),
+        Instr::Throw { src } => i(Op::Throw, 0, 0, 0, u32::from(src)),
+        // (The class reference in b | c << 8.)
+        Instr::CatchIf { src, class, target } => Some(Insn { op: Op::CatchIf, a: r(src)?, b: class as u8, c: (class >> 8) as u8, imm: target }),
+        Instr::Rare { op: Rare::IssetStatic, a, b, class, .. } => i(Op::IssetStatic, a, b, 0, u32::from(class)),
         _ => None,
     }
 }
@@ -999,7 +1017,7 @@ mod tests {
     fn the_second_batch_lowers_to_the_loop() {
         use crate::const_operand as c;
         let code = [
-            // `empty($a['k'])`: IS, as `??`.
+            // `empty($a['k'])`: EMPTY, which the handler reads as `??`'s IS.
             Instr::FetchDim { dst: 5, arr: 1, key: c(7), quiet: true, empty: true },
             // `$o::class` (class 0 is Dynamic(3)); `$o::K` is not CLASS_NAME.
             Instr::ClassConst { dst: 5, class: 0, name: c(11) },
@@ -1017,7 +1035,7 @@ mod tests {
         let classes = [ClassRef::Dynamic(3), ClassRef::Static];
         let arg_vars = [vec![(0, 1)], vec![(0, 300)]];
         let at = |pc| lower_in(&code, pc, &consts, 2, &classes, &arg_vars);
-        assert_eq!(at(0).unwrap().op, Op::P8_FETCH_DIM_IS_KSTR);
+        assert_eq!(at(0).unwrap().op, Op::P8_FETCH_DIM_EMPTY_KSTR);
         assert_eq!(at(1).unwrap(), Insn { op: Op::ClassName, a: 5, b: 3, c: 0, imm: 0 });
         assert!(at(2).is_none());
         assert_eq!(at(3).unwrap(), Insn { op: Op::MakeClosure, a: 5, b: 0, c: 0, imm: 2 | 1 << 16 });
@@ -1261,6 +1279,39 @@ mod tests {
         assert_eq!(at(5).unwrap(), Insn { op: Op::VerifyReturn, a: 5, b: 1, c: 0, imm: 0 });
         assert!(at(6).is_none());
         assert_eq!(at(7).unwrap(), Insn { op: Op::CompareC, a: 5, b: 4, c: 0, imm: cmp_imm(Cmp::Gt) | 1 << 8 });
+    }
+
+    #[test]
+    fn the_tenth_batch_lowers_to_the_loop() {
+        use crate::const_operand as c;
+        let code = [
+            // `echo`, `clone`, `throw` of a register and of a literal.
+            Instr::Echo { src: 4 },
+            Instr::Echo { src: c(7) },
+            Instr::Clone { dst: 5, src: 4 },
+            Instr::Throw { src: 4 },
+            // A catch's test: class reference 300 (past a byte).
+            Instr::CatchIf { src: 4, class: 300, target: 9 },
+            Instr::Rare { op: Rare::IssetStatic, a: 5, b: 4, c: 0, class: 2 },
+            // empty()'s last dimension: EMPTY, not IS.
+            Instr::FetchDim { dst: 5, arr: 1, key: 2, quiet: true, empty: true },
+            Instr::FetchDim { dst: 5, arr: 1, key: 2, quiet: true, empty: false },
+            // `$o->$name ?? ..`: the quiet bit.
+            Instr::FetchProp { dst: 5, obj: 4, name: 3, quiet: true },
+            Instr::FetchProp { dst: 5, obj: THIS, name: 3, quiet: false },
+        ];
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 2);
+        assert_eq!(at(0).unwrap(), Insn { op: Op::Echo, a: 0, b: 0, c: 0, imm: 4 });
+        assert_eq!(at(1).unwrap(), Insn { op: Op::Echo, a: 0, b: 0, c: 0, imm: u32::from(c(7)) });
+        assert_eq!(at(2).unwrap(), Insn { op: Op::Clone, a: 5, b: 0, c: 0, imm: 4 });
+        assert_eq!(at(3).unwrap(), Insn { op: Op::Throw, a: 0, b: 0, c: 0, imm: 4 });
+        assert_eq!(at(4).unwrap(), Insn { op: Op::CatchIf, a: 4, b: 300u16 as u8, c: (300u16 >> 8) as u8, imm: 9 });
+        assert_eq!(at(5).unwrap(), Insn { op: Op::IssetStatic, a: 5, b: 4, c: 0, imm: 2 });
+        assert_eq!(at(6).unwrap().op, Op::P8_FETCH_DIM_EMPTY_REG);
+        assert_eq!(at(7).unwrap().op, Op::P8_FETCH_DIM_IS_REG);
+        assert_eq!(at(8).unwrap(), Insn { op: Op::FetchPropDyn, a: 5, b: 4, c: 3, imm: PROP_QUIET });
+        assert_eq!(at(9).unwrap(), Insn { op: Op::FetchPropDyn, a: 5, b: 0, c: 3, imm: PROP_PATH_THIS });
     }
 
     #[test]

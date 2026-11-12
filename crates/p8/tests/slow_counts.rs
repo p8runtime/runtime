@@ -681,3 +681,71 @@ fn misses_run_out_of_line_on_their_operands() {
     );
     assert_eq!(out, "910 20 40 20 20 0");
 }
+
+/// The tenth batch (#376), each iteration: `.` of a Stringable (both
+/// sides, a literal on either) and in an interpolated string, `K + $a` and
+/// `$a + K` of arrays (a union, not symmetric), `-` and `*` of numeric
+/// strings (a literal on either side), `$o->$name = ` of a new
+/// object's dynamic property, `$o->$name` and `$o->$name ??` through
+/// `__get` / `__isset`, `static::m($a['k'])` of a called class that
+/// alternates (the site's cache holds one), `static::m($undefined)`, `echo`,
+/// `clone`, `throw` and the catches' tests, `isset(C::$s)`, ArrayAccess
+/// reads, `isset()` and `empty()` of an ArrayAccess element, `empty()` of a
+/// bool key, `foreach` of a reference, an argument coerced to its type,
+/// `.=` of an element, `++` and `--` of a float, `$a[$k]++` of a float,
+/// a variadic taking a named argument: out of line on the arms'
+/// operands, not the detour.
+#[test]
+fn the_tenth_batch_runs_out_of_line_on_its_operands() {
+    let out = flat(
+        "class Str { function __toString(): string { return 's'; } }
+         class G { function __get($n) { return 2; } function __isset($n) { return true; } }
+         class A { public static $s = 1; static function go($v) { $a = ['k' => $v]; return static::m($v) + static::r($a['k']); } static function m($x) { return $x; } static function r($x) { return $x; } static function und() { $a = [0]; return @static::m($nope, $a[0]); } }
+         class B extends A {}
+         class E1 extends Exception {} class E2 extends Exception {}
+         class Box implements ArrayAccess { function offsetExists($k): bool { return $k !== 'no'; } function offsetGet($k): mixed { return 3; } function offsetSet($k, $v): void {} function offsetUnset($k): void {} }
+         function typed(int $x) { return $x; }
+         function vari(...$r) { return count($r); }
+         $str = new Str; $g = new G; $box = new Box; $name = 'p'; $arr = [1 => 1]; $flags = [1 => 0]; $t = 0; $cat = ''; $num = '6'; $ref = &$arr; $fl = 1.5; $kk = 'k'; $ab = 'ab'; $yes = true;
+         for ($i = 0; $i < $n; $i++) {
+             foreach ($ref as $v) { $t += $v; }
+             $t += typed('5');
+             $sa = ['k' => '']; $sa[$kk] .= $ab; $t += strlen($sa['k']);
+             $fl++; $fl--; $t += $fl * 2;
+             $t += strlen(\"{$str}-{$i}\") + 2 * $num;
+             $dm = ['k' => 0.5]; $dm[$kk]++; $t += $dm['k'] * 2 + vari(1, x: 2);
+             $cat = $str . $str . 'x' . $str . ('p' . $str);
+             $t += count([5, 6] + $arr) + count($arr + [5, 6]) + ($num - '2') * $num;
+             $o = new stdClass; $o->$name = $i; $t += $o->p;
+             $t += $g->$name + ($g->$name ?? 0);
+             $t += A::go(1) + B::go(2) + (A::und() ?? 0);
+             ob_start(); echo $str, $i; $t += strlen(ob_get_clean());
+             $c = clone $o; $t += $c->p;
+             try { throw new E2('e'); } catch (E1 $e) { $t += 100; } catch (E2 $e) { $t += 1; }
+             $t += isset(A::$s) ? 1 : 0;
+             $t += $box[$i] + (isset($box[$i]) ? 1 : 0) + (isset($box['no']) ? 10 : 0) + (empty($box[$i]) ? 10 : 0) + (empty($flags[$yes]) ? 1 : 0);
+         }
+         echo $t, ' ', $cat;",
+    );
+    assert_eq!(out, "1960 ssxsps");
+}
+
+/// The first run of an intrinsic's call site (`strlen`, `count`, the type
+/// tests, `array_key_exists`) and of a function's by-reference question
+/// (`f($a['k'])` of a function declared where the code runs): out of line
+/// on the arm's operands, which resolve the site, not the detour; compared
+/// with an empty script, as `a_first_call_sends_its_variable_in_the_loop`.
+#[test]
+fn first_runs_of_intrinsics_and_by_reference_questions_stay_in_the_loop() {
+    let (_, empty) = run("", 1);
+    let (out, slow) = run(
+        "if ($n > 0) { function late3(&$x) { $x = 1; } }
+         $a = ['k' => 0]; $s = 'abc'; $r = [1, 2];
+         late3($a['k']);
+         $t = strlen($s) + count($r) + (is_null($s) ? 1 : 0) + (is_bool($s) ? 1 : 0) + (is_int($s) ? 1 : 0) + (is_float($s) ? 1 : 0)
+             + (is_string($s) ? 1 : 0) + (is_array($r) ? 1 : 0) + (is_object($r) ? 1 : 0) + (array_key_exists(0, $r) ? 1 : 0) + $a['k'];
+         if ($t !== 9) { throw new Exception((string) $t); }",
+        1,
+    );
+    assert_eq!((out.as_str(), slow), ("", empty));
+}
