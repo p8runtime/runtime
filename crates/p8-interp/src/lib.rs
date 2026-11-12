@@ -1928,7 +1928,7 @@ impl Context<'_> {
                     let by_ref = match reg!(obj).deref().as_object() {
                         Some(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
                             Some(by_ref) => by_ref,
-                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                            None => self.call_takes_ref(&o.class, site.sym, n as usize),
                         },
                         None => false,
                     };
@@ -1940,7 +1940,7 @@ impl Context<'_> {
                     reg!(dst) = Value::bool(match reg!(obj).deref().as_object() {
                         Some(o) => match self.cached_takes_ref(&clo.methods[method as usize], &o.class, n as usize) {
                             Some(by_ref) => by_ref,
-                            None => self.method_takes_ref(&o.class, Some(site.sym), n as usize),
+                            None => self.call_takes_ref(&o.class, site.sym, n as usize),
                         },
                         None => false,
                     });
