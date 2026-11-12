@@ -17,7 +17,11 @@ pub struct Closure {
     pub(crate) props: Box<[Cell<PropSite>]>,
     /// What `$o->m()` called last, one entry per call site: PHP's cache
     /// slot of INIT_METHOD_CALL.
-    pub(crate) methods: Box<[RefCell<Option<MethodSite>>]>,
+    pub(crate) methods: Box<[MethodSlot]>,
+    /// Where this closure is in the context's `closures`, when it is a
+    /// declared function's or method's (`closure_at` made it); u32::MAX
+    /// for any other (a lambda, the main code).
+    pub(crate) index: Cell<u32>,
     /// What `new` of each class the code names made last: the class and
     /// how to make its objects (instances.rs).
     pub(crate) news: Box<[RefCell<crate::instances::NewSite>]>,
@@ -146,7 +150,7 @@ impl Closure {
         let consts = code.consts.iter().map(&thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
         let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
-        let methods = code.sites.iter().map(|_| RefCell::new(None)).collect();
+        let methods = code.sites.iter().map(|_| MethodSlot::default()).collect();
         let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
         let defaults = if code.params.iter().any(|p| p.default.is_some()) {
@@ -174,7 +178,7 @@ impl Closure {
         };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
-        Rc::new(Closure { code, consts, sites, props, methods, news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
+        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new() })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -222,6 +226,54 @@ impl Closure {
     }
 }
 
+/// The context's tables of declared code (`Context::codes`,
+/// `Context::closures`): a table that only grows. A call site keeps an
+/// index into one (`Callee::User`, `UserMethod::code`), so nothing may
+/// remove, move or replace the entry an index names, and this type has no
+/// way to: it reads as a slice (no `DerefMut`), and its vector is private
+/// to this module, so the two methods here are every write there is.
+mod grow {
+    use std::rc::Rc;
+
+    pub(crate) struct GrowOnly<T>(Vec<T>);
+
+    impl<T> GrowOnly<T> {
+        pub(crate) const fn new() -> Self {
+            GrowOnly(Vec::new())
+        }
+
+        /// One more entry, at the end.
+        #[inline]
+        pub(crate) fn push(&mut self, entry: T) {
+            self.0.push(entry);
+        }
+    }
+
+    impl<T> GrowOnly<Rc<T>> {
+        /// The entry at `i`, made first (`make`) if it is still `stand_in`,
+        /// what an entry not made yet is pushed as: the one replacement
+        /// there is, once per entry. A made entry stays what it is.
+        #[inline]
+        pub(crate) fn made_at(&mut self, i: usize, stand_in: &Rc<T>, make: impl FnOnce() -> Rc<T>) -> &Rc<T> {
+            let slot = &mut self.0[i];
+            if Rc::ptr_eq(slot, stand_in) {
+                *slot = make();
+            }
+            slot
+        }
+    }
+
+    impl<T> std::ops::Deref for GrowOnly<T> {
+        type Target = [T];
+
+        #[inline(always)]
+        fn deref(&self) -> &[T] {
+            &self.0
+        }
+    }
+}
+pub(crate) use grow::GrowOnly;
+
 impl Context<'_> {
     /// Register a declared function's or method's code: its closure is
     /// made when it is first resolved, not now (most of a large
@@ -238,11 +290,13 @@ impl Context<'_> {
     /// frame, a callable) goes through here, so `fast` only ever finds
     /// made ones at the indices its call sites cached.
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
-        let slot = &mut self.closures[i as usize];
-        if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            *slot = Closure::new(Arc::clone(&self.codes[i as usize]), self.isolate);
-        }
-        Rc::clone(slot)
+        let (codes, isolate) = (&self.codes, &*self.isolate);
+        let made = self.closures.made_at(i as usize, &isolate.unbuilt, || {
+            let made = Closure::new(Arc::clone(&codes[i as usize]), isolate);
+            made.index.set(i);
+            made
+        });
+        Rc::clone(made)
     }
 }
 
@@ -267,6 +321,109 @@ pub(crate) struct MethodSite {
     pub(crate) code: MethodCode,
     pub(crate) declaring: std::rc::Weak<Class>,
     pub(crate) is_static: bool,
+}
+
+/// What `$o->m()` at one site ran last when that was a PHP method called
+/// on an object: plain numbers, read by the loop's arms (`MethodCall`,
+/// `SendVarMethod`) with no borrow and nothing to upgrade, as a function
+/// call site keeps its callee's index (`Callee::User`).
+///
+/// What makes a kept record safe to use with nothing but two compares:
+///
+/// - The classes are kept as their numbers (`ClassId`), never as
+///   addresses: a number is never given twice, so a record can only match
+///   the very class object it was made for, and that object is then alive
+///   (the receiver holds it). A class made later where a freed one was
+///   does not match.
+/// - An answer for one class and scope never changes: a class's methods
+///   are fixed once it is linked.
+/// - `code` is an index in the running context's `closures`. A class with
+///   PHP methods is linked in one context (its `Method::func` are indices
+///   in that context's table, as `method_frame` uses them), so matching
+///   the class is being in that context; and the table only grows: its
+///   type (`GrowOnly`) can push an entry (`add_code`) and replace the
+///   not-yet-made stand-in once (`closure_at`), nothing else, so nothing
+///   removes or moves an entry. A record is only made of a made entry
+///   (`remember_user_method`).
+///
+/// So an entry is only ever replaced, never cleared.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UserMethod {
+    /// The receiver's class (its number; 0: nothing remembered) and the
+    /// calling code's class (its number; 0 outside one).
+    class: u64,
+    scope: u64,
+    /// Bit n: parameter n (of the first 64) is taken by reference.
+    refs: u64,
+    /// The method's code: its index in the context's `closures`.
+    pub(crate) code: u32,
+    /// The class that declares the method: this many parents up from the
+    /// receiver's class (0: that class itself).
+    pub(crate) up: u16,
+    /// The last parameter is a by-reference variadic one (`&...$rest`):
+    /// every argument past the declared parameters goes by reference,
+    /// however many there are (`Function::param_by_ref`).
+    rest_by_ref: bool,
+}
+
+impl UserMethod {
+    /// How many parameters `refs` has a bit for. A method that declares
+    /// more is not remembered here.
+    const PARAMS: usize = 64;
+
+    /// The record of `code` (at `index` in `closures`) as the method of
+    /// `class` called from `scope`, declared `up` parents up; None when it
+    /// does not fit (more than `PARAMS` parameters, deeper than `up` holds).
+    fn new(class: &Class, scope: Option<&Rc<Class>>, index: u32, up: usize, code: &Function) -> Option<UserMethod> {
+        let declared = code.params.len();
+        if declared > Self::PARAMS {
+            return None;
+        }
+        let rest_by_ref = code.params.last().is_some_and(|p| p.variadic && p.by_ref);
+        // (The bits past the declared parameters, for the arguments
+        // below 64: the rest's mode too.)
+        let rest = if rest_by_ref && declared < Self::PARAMS { !0u64 << declared } else { 0 };
+        let refs = code.params.iter().enumerate().fold(rest, |m, (i, p)| if p.by_ref { m | 1 << i } else { m });
+        Some(UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), refs, code: index, up: u16::try_from(up).ok()?, rest_by_ref })
+    }
+
+    /// Whether this is the record of a call on an object of `class` from
+    /// code of `scope`.
+    #[inline(always)]
+    pub(crate) fn is_for(self, class: &Class, scope: Option<&Rc<Class>>) -> bool {
+        self.class == class.id.get() && self.scope == scope.map_or(0, |c| c.id.get())
+    }
+
+    /// Whether argument `n` goes by reference
+    /// (`Function::param_by_ref(n)` of the method's code).
+    #[inline(always)]
+    pub(crate) fn by_ref(self, n: usize) -> bool {
+        if n < Self::PARAMS { self.refs >> n & 1 != 0 } else { self.rest_by_ref }
+    }
+}
+
+/// A method call site's cache: `user` for the loop's arms, and the full
+/// entry (any method, native ones and static-syntax calls too) for
+/// everything else, which this dereferences to.
+///
+/// The full entry first, in this order (`repr(C)`): the slot's address is
+/// the full entry's, so a reader of it (a static-syntax call's
+/// `cached_static_call`) adds nothing to reach it; the loop's arms read
+/// `user` at a fixed offset either way.
+#[derive(Default)]
+#[repr(C)]
+pub(crate) struct MethodSlot {
+    site: RefCell<Option<MethodSite>>,
+    pub(crate) user: Cell<UserMethod>,
+}
+
+impl std::ops::Deref for MethodSlot {
+    type Target = RefCell<Option<MethodSite>>;
+
+    #[inline(always)]
+    fn deref(&self) -> &RefCell<Option<MethodSite>> {
+        &self.site
+    }
 }
 
 pub(crate) enum MethodCode {
@@ -619,6 +776,34 @@ impl Context<'_> {
         });
     }
 
+    /// After a full method lookup on object `o`: the same answer as plain
+    /// numbers for the loop's arms (`UserMethod`), when it is an ordinary
+    /// call of a PHP method with `$this` (what `remember_method` keeps,
+    /// less native and static methods, which the arms do not run).
+    pub(crate) fn remember_user_method(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+        let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
+        let on_this = m.this.as_ref().is_some_and(|t| Rc::ptr_eq(t, o));
+        if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
+            return;
+        }
+        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else { return };
+        // (Its index: only a declared method's closure has one, and the
+        // context's closure there is this one.)
+        let index = code.index.get();
+        if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
+            return;
+        }
+        let (mut class, mut up) = (&o.class, 0);
+        while !Rc::ptr_eq(class, declaring) {
+            let Some(parent) = &class.parent else { return };
+            (class, up) = (parent, up + 1);
+        }
+        let scope = self.frames.last().and_then(|f| f.scope.as_ref());
+        if let Some(user) = UserMethod::new(&o.class, scope, index, up, &code.code) {
+            slot.user.set(user);
+        }
+    }
+
     /// The frame of a static-syntax call (`C::m()`, `self::m()`,
     /// `parent::m()`, `static::m()`) the site's cache answers: the method
     /// `static_frame` found for this target class from this scope, with
@@ -743,6 +928,26 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    /// The code tables' one replacement (`GrowOnly::made_at`) is of the
+    /// stand-in, once: a made entry is what every later ask gets, and
+    /// nothing is made in its place (a call site kept its index).
+    #[test]
+    fn a_made_entry_of_a_code_table_is_never_replaced() {
+        let stand_in = Rc::new("not made");
+        let mut table = super::GrowOnly::new();
+        table.push(Rc::clone(&stand_in));
+        table.push(Rc::clone(&stand_in));
+        let first = Rc::clone(table.made_at(1, &stand_in, || Rc::new("made")));
+        assert!(!Rc::ptr_eq(&first, &stand_in) && *first == "made");
+        let again = Rc::clone(table.made_at(1, &stand_in, || panic!("a made entry is not made again")));
+        assert!(Rc::ptr_eq(&first, &again), "the entry is the one made first");
+        // Naming something else as the stand-in replaces nothing either.
+        let other = Rc::new("other");
+        let still = Rc::clone(table.made_at(1, &other, || panic!("only the stand-in is replaced")));
+        assert!(Rc::ptr_eq(&first, &still));
+        assert!(Rc::ptr_eq(&table[0], &stand_in) && table.len() == 2, "the other entry is as pushed");
+    }
+
     /// A declared function or method gets its closure when something first
     /// runs it (a call site, a method call, a callable, recursion), never
     /// when it is declared: what is only declared keeps the shared
@@ -786,6 +991,84 @@ mod tests {
         }
         for name in ["never_called", "unused"] {
             assert!(!made(name), "{name} never ran: no closure made");
+        }
+    }
+
+    /// A method call site's record (`UserMethod`) keeps its class as the
+    /// class's number, and a number is never given twice. One request
+    /// runs a call site and ends: its class A is freed. The next request
+    /// on the isolate runs the same compiled code and links another class
+    /// A (where the allocator likes: often where the freed one was). The
+    /// first request's record is not a record of the second's class; the
+    /// second request's site made its own.
+    #[test]
+    fn a_method_record_misses_a_class_made_after_its_own_was_freed() {
+        let registry = Arc::new(Registry::default());
+        let source = "<?php
+            class A { public function m(&$x) { $x++; return $x; } }
+            function run($o) { $v = 0; for ($i = 0; $i < 3; $i++) { $o->m($v); } return $v; }
+            if (run(new A) !== 3) { exit(3); }";
+        // One request: the record run()'s site made, its class A's number,
+        // and the class (held weakly).
+        fn request(isolate: &mut Isolate, program: &p8_compiler::Program) -> (super::UserMethod, u64, std::rc::Weak<p8_runtime::object::Class>) {
+            let mut host = Sink;
+            let mut cx = isolate.new_context(&mut host);
+            for f in &program.functions {
+                cx.declare(Arc::clone(f)).expect("declares");
+            }
+            cx.declare_classes(&program.classes);
+            assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+            let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
+            let run = cx.closures.iter().find(|c| c.code.name.as_bytes() == b"run").expect("run declared");
+            let records: Vec<_> = run.methods.iter().map(|m| m.user.get()).filter(|r| r.class != 0).collect();
+            assert_eq!(records.len(), 1, "run()'s one method call site remembered its method");
+            assert!(records[0].is_for(&class, None), "the site's record is of this request's A");
+            assert!(records[0].by_ref(0) && !records[0].by_ref(1));
+            (records[0], class.id.get(), Rc::downgrade(&class))
+        }
+        let program = compile(source, &registry);
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        let request = |isolate: &mut Isolate| request(isolate, &program);
+        let (first, first_id, first_class) = request(&mut isolate);
+        assert!(first_class.upgrade().is_none(), "the first request's class A is freed with the request");
+        let (second, second_id, _) = request(&mut isolate);
+        assert_ne!(first_id, second_id, "the second request's A has a number of its own");
+        assert!(second_id > first_id, "numbers only go up");
+        assert_ne!(first.class, second.class, "each request's site kept its own class's number");
+        // Any class made from now on: never the first record's.
+        for _ in 0..64 {
+            let (later, later_id, _) = request(&mut isolate);
+            assert!(later_id > second_id && later.class == later_id && first.class != later_id);
+        }
+    }
+
+    /// The record's by-reference answer is `Function::param_by_ref`'s for
+    /// every argument number, past the 64 bits too: a by-reference
+    /// variadic last parameter has its own flag. A method with more
+    /// declared parameters than bits is not remembered.
+    #[test]
+    fn a_method_record_answers_by_reference_as_the_code_does() {
+        let registry = Arc::new(Registry::default());
+        let params = |n: usize, last: &str| (0..n).map(|i| if i % 3 == 1 { format!("&$p{i}") } else { format!("$p{i}") }).chain([last.to_string()]).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(", ");
+        let shapes = [params(0, ""), params(0, "&...$rest"), params(2, "...$rest"), params(2, "&...$rest"), params(62, "&...$rest"), params(63, "&...$rest"), params(63, "...$rest"), params(64, ""), params(64, "&...$rest"), params(64, "&$last")];
+        let mut isolate = Isolate::new(Arc::clone(&registry));
+        for shape in &shapes {
+            let program = compile(&format!("<?php class A {{}} function f({shape}) {{}} new A;"), &registry);
+            let code = program.functions.iter().find(|f| f.name.as_bytes() == b"f").expect("f compiled");
+            let mut host = Sink;
+            let mut cx = isolate.new_context(&mut host);
+            cx.declare_classes(&program.classes);
+            assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
+            let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
+            let record = super::UserMethod::new(&class, None, 0, 0, code);
+            if code.params.len() > 64 {
+                assert!(record.is_none(), "f({shape}): more parameters than bits, not remembered");
+                continue;
+            }
+            let record = record.unwrap_or_else(|| panic!("f({shape}) remembered"));
+            for n in 0..200 {
+                assert_eq!(record.by_ref(n), code.param_by_ref(n), "argument {n} of f({shape})");
+            }
         }
     }
 }

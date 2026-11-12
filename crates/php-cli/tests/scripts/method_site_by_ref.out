@@ -1,0 +1,35 @@
+mixed p qb r sd
+rest3 p qbr rr sdr
+restVal3 pa qbr rr sdr
+extra4 paa qbr rr sdr
+typed 1 paa
+mixed p qb r sd
+rest3 p qbr rr sdr
+restVal3 pa qbr rr sdr
+extra4 paa qbr rr sdr
+typed 2 paa
+mixed p qb r sd
+rest3 p qbr rr sdr
+restVal3 pa qbr rr sdr
+extra4 paa qbr rr sdr
+typed 3 paa
+4 2
+1 [0]
+6 3
+2 [0,1]
+8 4
+3 [0,1,2]
+warning: Undefined variable $undefined
+mixed qb sd
+warning: Undefined variable $undefined
+mixed qb sd
+wide a b+ c d+ e f+ 0
+edge66 a b+ c d e f 0
+tail5 a b+ c+ d+ e+ f+ 0
+wide a b+ c d+ e f+ 0
+edge66 a b+ c d e f 0
+tail5 a b+ c+ d+ e+ f+ 0
+wide a b+ c d+ e f+ 0
+edge66 a b+ c d e f 0
+tail5 a b+ c+ d+ e+ f+ 0
+done
