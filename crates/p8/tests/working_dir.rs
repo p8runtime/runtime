@@ -163,7 +163,7 @@ fn curl_reads_a_relative_ca_file_in_the_request_s_directory() {
     let server = std::thread::spawn(move || accept_for_a_while(|| listener.accept().map(drop)));
     let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::CURL]);
     let source = format!(
-        "<?php foreach (['ca.pem', 'missing.pem'] as $ca) {{ $h = curl_init('https://127.0.0.1:{port}/'); curl_setopt($h, CURLOPT_CAINFO, $ca); curl_setopt($h, CURLOPT_TIMEOUT, 5); curl_setopt($h, CURLOPT_RETURNTRANSFER, true); curl_exec($h); echo curl_errno($h), \"\\n\"; }}"
+        "<?php foreach (['ca.pem', 'missing.pem'] as $ca) {{ $h = curl_init('https://127.0.0.1:{port}/'); curl_setopt($h, CURLOPT_CAINFO, $ca); curl_setopt($h, CURLOPT_TIMEOUT, 5); curl_setopt($h, CURLOPT_RETURNTRANSFER, true); curl_exec($h); echo curl_errno($h), ' ', curl_error($h), \"\\n\"; }}"
     );
     let (status, out) = run(&platform, &source, Some(&root));
     server.join().expect("the server's thread");
