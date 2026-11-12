@@ -7,4 +7,6 @@ fn main() {
     let defs = p8_vmgen::parse(&text).unwrap_or_else(|e| panic!("{e}"));
     let out = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("dispatch.rs");
     std::fs::write(out, p8_vmgen::dispatch(&defs)).expect("write dispatch.rs");
+    let out = std::path::Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("gen_ops.rs");
+    std::fs::write(out, p8_vmgen::ops_list(&defs)).expect("write gen_ops.rs");
 }

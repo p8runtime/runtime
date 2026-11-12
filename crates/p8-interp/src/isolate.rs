@@ -413,6 +413,7 @@ impl Isolate {
             fiber_suspended: None,
             fiber_throw: None,
             fiber_exit: None,
+            ret_slot: std::cell::Cell::new(Value::UNDEF),
             gc_runs: 0,
             gc_collected: 0,
             cfg: Vec::new(),
@@ -618,6 +619,10 @@ pub struct Context<'i> {
     pub(crate) fiber_throw: Option<Rc<Object>>,
     /// The exit unwinding a fiber being destroyed (no catch matches it).
     pub(crate) fiber_exit: Option<Rc<Object>>,
+    /// The prototype loops (#352, `fast/loops.rs`): a return's value, from
+    /// the handler that took it to the loop that leaves the frame (a
+    /// handler's result is one word, never a `Value`).
+    pub(crate) ret_slot: std::cell::Cell<Value>,
     /// gc_status(): collections run, values they freed.
     pub(crate) gc_runs: i64,
     pub(crate) gc_collected: i64,
