@@ -200,7 +200,7 @@ pub(crate) fn log_err(ctx: &mut dyn Ctx, message: &[u8]) {
         line.extend_from_slice(message);
         line.push(b'\n');
         let path = String::from_utf8_lossy(file.as_bytes()).into_owned();
-        let opened = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+        let opened = std::fs::OpenOptions::new().create(true).append(true).open(p8_runtime::cwd::resolve(ctx, &path));
         if let Ok(mut f) = opened {
             use std::io::Write;
             let _ = f.write_all(&line);
@@ -220,7 +220,7 @@ fn append_log(ctx: &mut dyn Ctx, path: &str, message: &[u8]) -> bool {
             ctx.write_stdout(message);
             true
         }
-        _ => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        _ => match std::fs::OpenOptions::new().create(true).append(true).open(p8_runtime::cwd::resolve(ctx, path)) {
             Ok(mut f) => f.write_all(message).is_ok(),
             Err(e) => {
                 let reason = match e.kind() {

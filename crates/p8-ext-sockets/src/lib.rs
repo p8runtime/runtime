@@ -158,6 +158,54 @@ struct Sock {
     error: Cell<i64>,
     nonblocking: Cell<bool>,
     options: RefCell<HashMap<(i64, i64), Value>>,
+    /// An AF_UNIX address as the script wrote it, and whether it names the
+    /// peer (socket_connect) or this socket (socket_bind): what
+    /// getpeername/getsockname give back, as PHP gives back what the
+    /// system was given, not the path p8 resolved it to.
+    unix_name: RefCell<Option<(String, bool)>>,
+}
+
+/// sun_path's size, its terminating NUL included (sys/un.h).
+#[cfg(target_os = "macos")]
+const SUN_PATH: usize = 104;
+#[cfg(not(target_os = "macos"))]
+const SUN_PATH: usize = 108;
+
+/// A link that makes a long socket path short, removed when dropped.
+struct ShortLink(std::path::PathBuf);
+
+impl Drop for ShortLink {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The AF_UNIX address the system is given for `address`: a relative name
+/// is the request's working directory's (`cwd`), as PHP's bind(2) and
+/// connect(2) take it against the working directory. A name that fits
+/// sun_path only relative (a short name under a long directory) is reached
+/// through a short link to its directory in the temporary directory, for
+/// as long as the call takes: the socket itself is made in, or found in,
+/// the directory the name is relative to. An abstract name (a leading NUL)
+/// and an absolute one are as written.
+fn unix_address(cwd: &std::path::Path, address: &str) -> (std::path::PathBuf, Option<ShortLink>) {
+    let path = std::path::Path::new(address);
+    if address.starts_with('\0') || path.is_absolute() {
+        return (path.to_path_buf(), None);
+    }
+    let joined = p8_runtime::cwd::join(cwd, path);
+    if joined.as_os_str().len() < SUN_PATH || address.len() >= SUN_PATH {
+        return (joined, None);
+    }
+    let (Some(dir), Some(name)) = (joined.parent(), joined.file_name()) else { return (joined, None) };
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let link = p8_runtime::os::temp_dir().join(format!("p8-sock-{}-{n}", std::process::id()));
+    if p8_runtime::os::symlink(dir, &link).is_err() {
+        return (joined, None);
+    }
+    let short = link.join(name);
+    (short, Some(ShortLink(link)))
 }
 
 // ---- helpers ----
@@ -259,7 +307,12 @@ fn socket_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = sock(&o);
     let address = text(&arg(args, 1));
     let bound = if s.domain.get() == AF_UNIX {
-        UnixListener::bind(&address).map(State::UnixListener)
+        let (path, _link) = unix_address(ctx.cwd(), &address);
+        let bound = UnixListener::bind(&path).map(State::UnixListener);
+        if bound.is_ok() {
+            *s.unix_name.borrow_mut() = Some((address.clone(), false));
+        }
+        bound
     } else {
         inet_addr(&address, if args.len() > 2 { arg(args, 2).to_int() } else { 0 }).and_then(TcpListener::bind).map(State::TcpListener)
     };
@@ -305,7 +358,12 @@ fn socket_connect(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let s = sock(&o);
     let address = text(&arg(args, 1));
     let connected = if s.domain.get() == AF_UNIX {
-        UnixStream::connect(&address).map(State::Unix)
+        let (path, _link) = unix_address(ctx.cwd(), &address);
+        let connected = UnixStream::connect(&path).map(State::Unix);
+        if connected.is_ok() {
+            *s.unix_name.borrow_mut() = Some((address.clone(), true));
+        }
+        connected
     } else {
         if args.len() < 3 || arg(args, 2).is_null() {
             return Err(ctx.throw("ValueError", "socket_connect(): Argument #3 ($port) cannot be null when the socket type is AF_INET".into()));
@@ -328,7 +386,9 @@ fn name_of(ctx: &mut dyn Ctx, args: &[Value], func: &str, peer: bool) -> R {
     let o = sock_arg(ctx, func, args, 0)?;
     let s = sock(&o);
     let inet = |a: std::io::Result<SocketAddr>| a.map(|a| (a.ip().to_string(), Some(i64::from(a.port()))));
+    let written = s.unix_name.borrow().clone().filter(|(_, of_peer)| *of_peer == peer).map(|(name, _)| name);
     let found = match &*s.state.borrow() {
+        State::UnixListener(_) | State::Unix(_) if written.is_some() => Ok((written.unwrap_or_default(), None)),
         State::TcpListener(l) if !peer => inet(l.local_addr()),
         State::Tcp(t) => inet(if peer { t.peer_addr() } else { t.local_addr() }),
         State::UnixListener(l) if !peer => l.local_addr().map(|a| (a.as_pathname().map(|p| p.display().to_string()).unwrap_or_default(), None)),

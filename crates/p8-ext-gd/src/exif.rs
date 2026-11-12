@@ -616,14 +616,15 @@ fn read_file(ctx: &mut dyn Ctx, args: &[Value]) -> Result<Option<Read>, p8_runti
                 }
             }
         } else {
-            match std::fs::metadata(&p) {
+            let os = p8_runtime::cwd::resolve(ctx, &p);
+            match std::fs::metadata(&os) {
                 Ok(m) if !m.is_file() => {
                     ctx.warn(&format!("exif_read_data({}): Not a file", basename(&p)));
                     return Ok(None);
                 }
                 Ok(m) => {
                     let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
-                    match std::fs::read(&p) {
+                    match std::fs::read(&os) {
                         Ok(d) => (d, t),
                         Err(e) => {
                             let _ = e;
@@ -922,7 +923,7 @@ fn exif_imagetype(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
             None => return Ok(Value::FALSE),
         }
     } else {
-        match std::fs::read(p) {
+        match std::fs::read(p8_runtime::cwd::resolve(ctx, p)) {
             Ok(d) => d,
             Err(e) => {
                 ctx.warn(&format!("exif_imagetype({shown}): Failed to open stream: {}", os_error(&e)));

@@ -388,6 +388,18 @@ impl Context<'_> {
         self.argv = Some(argv);
     }
 
+    /// The request's working directory is `dir` (a relative one is taken
+    /// against the directory it had): the host's choice of where a request
+    /// starts, as a server's chdir to the script's folder before it runs.
+    pub fn set_working_dir(&mut self, dir: &std::path::Path) {
+        self.cwd = p8_runtime::cwd::join(&self.cwd, dir);
+    }
+
+    /// The request's working directory (getcwd()).
+    pub fn working_dir(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
     /// Make this a web request: the response head is built for the host
     /// ([`Host::head`]), starting at `status` with `headers`, and the
     /// script sees the request arrays `globals` instead of a command line.
@@ -752,7 +764,7 @@ impl Context<'_> {
 
     /// Run a file's top-level code; returns the exit status.
     pub fn run_main(&mut self, main: Arc<Function>) -> i32 {
-        if let Ok(path) = p8_runtime::os::canonicalize(&*main.file) {
+        if let Ok(path) = p8_runtime::os::canonicalize(p8_runtime::cwd::join(&self.cwd, std::path::Path::new(&*main.file))) {
             self.included_order.push(path.to_string_lossy().into_owned());
             self.included.insert(path);
         }
@@ -6037,6 +6049,14 @@ impl Ctx for Context<'_> {
 
     fn resolve_include(&self, name: &str) -> Option<std::path::PathBuf> {
         self.resolve_include_path(name)
+    }
+
+    fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    fn set_cwd(&mut self, dir: std::path::PathBuf) {
+        self.cwd = dir;
     }
 
     fn function_exists(&self, name: &[u8]) -> bool {

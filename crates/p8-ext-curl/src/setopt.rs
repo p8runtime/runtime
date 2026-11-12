@@ -76,7 +76,7 @@ pub(crate) fn set(ctx: &mut dyn Ctx, o: &Rc<Object>, option: i64, value: &Value,
     };
     if option == c::CURLOPT_COOKIELIST {
         let cmd = to_str(ctx, value)?;
-        crate::cookie::command(&mut h.st.borrow_mut(), cmd.as_bytes());
+        crate::cookie::command(&mut h.st.borrow_mut(), cmd.as_bytes(), ctx.cwd());
         h.st.borrow_mut().errno = 0;
         return Ok(true);
     }

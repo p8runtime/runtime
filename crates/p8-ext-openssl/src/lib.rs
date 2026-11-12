@@ -327,7 +327,7 @@ fn openssl_error_string(ctx: &mut dyn Ctx, _: &mut [Value]) -> R {
 fn data_or_file(ctx: &mut dyn Ctx, v: &[u8]) -> Option<Vec<u8>> {
     if v.len() > 7 && v.starts_with(b"file://") {
         let path = String::from_utf8_lossy(&v[7..]).into_owned();
-        match std::fs::read(&path) {
+        match std::fs::read(p8_runtime::cwd::resolve(ctx, &path)) {
             Ok(d) => Some(d),
             Err(_) => {
                 push_error(ctx, "error:80000002:system library::No such file or directory");
@@ -343,8 +343,7 @@ fn data_or_file(ctx: &mut dyn Ctx, v: &[u8]) -> Option<Vec<u8>> {
 /// php_openssl_check_path for a file written: the absolute path, or None
 /// when it is not one (PHP warns, naming the parameter).
 fn output_path(ctx: &mut dyn Ctx, p: &[u8], param: &str) -> Option<std::path::PathBuf> {
-    let p = std::path::PathBuf::from(String::from_utf8_lossy(p).into_owned());
-    let full = if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) };
+    let full = p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(p).as_ref());
     // expand_filepath fails past MAXPATHLEN
     if full.as_os_str().len() >= 4096 {
         let name = ctx.builtin_name();
@@ -468,7 +467,7 @@ fn openssl_x509_checkpurpose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mut trusted: Vec<Cert> = Vec::new();
     if let Ok(list) = arg(args, 2).into_array() {
         for v in list.values() {
-            let path = std::path::PathBuf::from(String::from_utf8_lossy(v.deref().to_php_string().unwrap_or_default().as_bytes()).into_owned());
+            let path = p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(v.deref().to_php_string().unwrap_or_default().as_bytes()).as_ref());
             let files: Vec<std::path::PathBuf> = if path.is_dir() {
                 std::fs::read_dir(&path).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default()
             } else {
@@ -484,7 +483,7 @@ fn openssl_x509_checkpurpose(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let mut untrusted: Vec<Cert> = Vec::new();
     if given(args, 3) {
         let path = String::from_utf8_lossy(&bytes(args, 3)).into_owned();
-        if let Ok(text) = std::fs::read(&path) {
+        if let Ok(text) = std::fs::read(p8_runtime::cwd::resolve(ctx, &path)) {
             untrusted.extend(der::pem_blocks(&text).into_iter().filter(|p| p.label == "CERTIFICATE").filter_map(|p| Cert::from_der(&p.der)));
         }
     }

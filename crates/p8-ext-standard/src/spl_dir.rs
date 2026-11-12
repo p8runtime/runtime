@@ -50,6 +50,10 @@ struct State {
 struct Dir {
     /// The directory as opened (a glob's pattern, for re-listing).
     source: Vec<u8>,
+    /// The request's working directory when it was opened (a relative
+    /// source is listed again from there, as PHP rewinds the handle it
+    /// opened then).
+    cwd: std::path::PathBuf,
     glob: bool,
     entries: Vec<Vec<u8>>,
     /// The entry the iterator is on (entries.len(): none left).
@@ -146,7 +150,7 @@ impl State {
         let skip = self.flags & SKIP_DOTS != 0;
         self.file_name = None;
         if let Some(d) = &mut self.dir {
-            if let Ok(entries) = list(&d.source, d.glob) {
+            if let Ok(entries) = list(&d.cwd, &d.source, d.glob) {
                 d.entries = entries;
             }
             d.index = 0;
@@ -179,16 +183,17 @@ fn set_filename(st: &mut State, path: &[u8]) {
 }
 
 /// A directory's entries, or a glob's matches' names.
-fn list(source: &[u8], glob: bool) -> std::io::Result<Vec<Vec<u8>>> {
+/// A relative source is under `cwd`, the request's working directory.
+fn list(cwd: &std::path::Path, source: &[u8], glob: bool) -> std::io::Result<Vec<Vec<u8>>> {
     if glob {
         let pattern = s(source);
         let pattern = pattern.strip_prefix("glob://").unwrap_or(&pattern);
-        return Ok(crate::file::glob_paths(pattern, 0)
+        return Ok(crate::file::glob_paths(cwd, pattern, 0)
             .into_iter()
             .map(|p| p.rsplit('/').next().unwrap_or(&p).as_bytes().to_vec())
             .collect());
     }
-    crate::file::entries(&s(source))
+    crate::file::entries(&p8_runtime::cwd::join(cwd, std::path::Path::new(&s(source))))
 }
 
 /// The directory a glob's matches are in (php_glob_stream_get_path): the
@@ -290,7 +295,8 @@ fn stat_name(ctx: &mut dyn Ctx, this: &Object) -> Result<String, Throw> {
 /// (php_stat's warning, thrown).
 fn stat_for(ctx: &mut dyn Ctx, this: &Object, method: &str, link: bool) -> Result<std::fs::Metadata, Throw> {
     let name = stat_name(ctx, this)?;
-    let m = if link { std::fs::symlink_metadata(&name) } else { std::fs::metadata(&name) };
+    let os = crate::file::at(ctx, &name);
+    let m = if link { std::fs::symlink_metadata(&os) } else { std::fs::metadata(&os) };
     m.map_err(|_| {
         let what = if link { "Lstat" } else { "stat" };
         ctx.throw("RuntimeException", format!("SplFileInfo::{method}(): {what} failed for {name}"))
@@ -339,13 +345,14 @@ fn file_type(m: &std::fs::Metadata) -> &'static str {
 }
 
 /// The is*() checks: false (and no exception) for a file that is not there.
-fn check(ctx: &mut dyn Ctx, this: &Object, f: impl Fn(&str) -> bool) -> R {
+/// `f` is given the name as the system is given it (crate::file::at).
+fn check(ctx: &mut dyn Ctx, this: &Object, f: impl Fn(&std::path::Path) -> bool) -> R {
     let name = stat_name(ctx, this)?;
-    Ok(Value::bool(f(&name)))
+    Ok(Value::bool(f(&crate::file::at(ctx, &name))))
 }
 
 /// The access checks, as is_readable() and the like make them.
-fn mode_has(name: &str, bits: u32) -> bool {
+fn mode_has(name: &std::path::Path, bits: u32) -> bool {
     crate::file::access(name, bits)
 }
 
@@ -375,7 +382,7 @@ fn is_link(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
 
 fn get_link_target(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let name = stat_name(ctx, this)?;
-    match std::fs::read_link(&name) {
+    match std::fs::read_link(crate::file::at(ctx, &name)) {
         Ok(t) => Ok(string(t.into_os_string().into_encoded_bytes())),
         Err(e) => Err(ctx.throw("RuntimeException", format!("Unable to read link {name}, error: {}", errno_text(&e)))),
     }
@@ -389,14 +396,14 @@ fn errno_text(e: &std::io::Error) -> String {
     }
 }
 
-fn get_real_path(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
+fn get_real_path(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> R {
     let name = state(this).borrow_mut().pathname();
     let name = match name {
         Some(n) => n,
         None => return Ok(Value::FALSE),
     };
     let name = if name.is_empty() { b".".to_vec() } else { name };
-    Ok(match p8_runtime::os::canonicalize(s(&name)) {
+    Ok(match p8_runtime::os::canonicalize(crate::file::at(ctx, s(&name))) {
         Ok(p) => string(p.into_os_string().into_encoded_bytes()),
         Err(_) => Value::FALSE,
     })
@@ -550,7 +557,8 @@ fn open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], flags: i64, glob: 
     }
     let source = if glob && !path.starts_with(b"glob://") { [b"glob://".as_slice(), &path].concat() } else { path.clone() };
     let is_glob = source.starts_with(b"glob://");
-    let entries = match list(&source, is_glob) {
+    let cwd = ctx.cwd().to_path_buf();
+    let entries = match list(&cwd, &source, is_glob) {
         Ok(e) => e,
         Err(e) => {
             return Err(ctx.throw("UnexpectedValueException", format!("{class}::__construct({}): Failed to open directory: {}", s(&path), crate::file::os_error(&e))));
@@ -566,7 +574,7 @@ fn open(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], flags: i64, glob: 
     let mut st = state(this).borrow_mut();
     st.flags = flags;
     st.path = Some(dir_path.unwrap_or_default());
-    st.dir = Some(Dir { source, glob: is_glob, entries, at: 0, index: 0, sub_path: None });
+    st.dir = Some(Dir { source, cwd, glob: is_glob, entries, at: 0, index: 0, sub_path: None });
     st.file_name = None;
     if flags & SKIP_DOTS != 0 {
         let d = st.dir.as_mut().expect("just set");
@@ -712,14 +720,14 @@ fn fsi_set_flags(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     Ok(Value::NULL)
 }
 
-fn rdi_has_children(_: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
+fn rdi_has_children(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let allow_links = arg(args, 0).to_bool();
     let mut st = state(this).borrow_mut();
     let entry = st.entry();
     if entry.is_empty() || is_dot(&entry) {
         return Ok(Value::FALSE);
     }
-    let name = s(&st.file_name().unwrap_or_default());
+    let name = crate::file::at(ctx, s(&st.file_name().unwrap_or_default()));
     let Ok(m) = std::fs::symlink_metadata(&name) else { return Ok(Value::FALSE) };
     if !m.file_type().is_symlink() {
         return Ok(Value::bool(m.is_dir()));

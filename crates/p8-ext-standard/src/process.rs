@@ -88,11 +88,23 @@ fn run(ctx: &mut dyn Ctx, command: &[u8]) -> Option<(Vec<u8>, i64)> {
     Some((out.stdout, i64::from(status)))
 }
 
-/// `/bin/sh -c command`, in the environment this request sees (putenv's
+/// A child process starts in the request's working directory, not the
+/// process's (VCWD_POPEN's `cd '<cwd>' ; command`, proc_open's default
+/// cwd).
+pub(crate) fn in_request_dir(ctx: &dyn Ctx, cmd: &mut std::process::Command) {
+    let cwd = ctx.cwd();
+    if !cwd.as_os_str().is_empty() {
+        cmd.current_dir(cwd);
+    }
+}
+
+/// `/bin/sh -c command`, in the request's working directory and the
+/// environment this request sees (putenv's
 /// changes applied).
 pub(crate) fn shell(ctx: &mut dyn Ctx, command: &[u8]) -> std::process::Command {
     let mut cmd = std::process::Command::new("/bin/sh");
     cmd.arg("-c").arg(std::ffi::OsStr::from_bytes(command));
+    in_request_dir(ctx, &mut cmd);
     if let Some(changed) = ctx.state(ENV).cloned_array() {
         for (k, v) in changed.iter() {
             let name = std::ffi::OsString::from_vec(k.into_value().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes().to_vec());

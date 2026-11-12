@@ -72,7 +72,7 @@ impl Context<'_> {
                 Located::User(wrapper, local) => {
                     // A plain path the include_path finds goes to a file://
                     // wrapper resolved, as PHP resolves it before opening.
-                    let local = if local.contains("://") { local } else { resolve(&local, &include_path, current).map_or(local, |p| p.to_string_lossy().into_owned()) };
+                    let local = if local.contains("://") { local } else { resolve(&local, &include_path, current, &self.cwd).map_or(local, |p| p.to_string_lossy().into_owned()) };
                     return self.load_user_include(&wrapper, &local, &shown, kind, &include_path);
                 }
                 Located::Disabled => {
@@ -83,7 +83,7 @@ impl Context<'_> {
                 Located::Builtin => {}
             }
         }
-        let found = if name.is_empty() { None } else { resolve(&shown, &include_path, current) };
+        let found = if name.is_empty() { None } else { resolve(&shown, &include_path, current, &self.cwd) };
         // A file the loader vouches for unread (a package checking files
         // by size and time, or trusting itself) is not read.
         if let Some(path) = &found
@@ -128,7 +128,7 @@ impl Context<'_> {
         let shown = String::from_utf8_lossy(name).into_owned();
         let include_path = self.include_path();
         let current = self.location().0;
-        let found = if name.is_empty() { None } else { resolve(&shown, &include_path, &current) };
+        let found = if name.is_empty() { None } else { resolve(&shown, &include_path, &current, &self.cwd) };
         let Some((path, source)) = found.and_then(|p| std::fs::read(&p).ok().map(|s| (p, s))) else {
             self.warn("opcache_compile_file(): Failed to open stream: No such file or directory");
             self.warn(format!("opcache_compile_file(): Failed opening '{shown}' for inclusion (include_path='{include_path}')"));
@@ -256,7 +256,7 @@ impl Context<'_> {
             c.extend(Path::new(&*current).parent().map(|d| d.join(name)));
             c
         };
-        candidates.into_iter().find_map(|p| p8_runtime::os::canonicalize(p).ok())
+        candidates.into_iter().find_map(|p| p8_runtime::os::canonicalize(p8_runtime::cwd::join(&self.cwd, &p)).ok())
     }
 
     /// eval(): the code compiled, its functions and classes declared. A
@@ -287,17 +287,20 @@ impl Context<'_> {
 /// php_resolve_path: a path that is absolute or starts with ./ or ../ is
 /// taken from the working directory; any other is looked for in each
 /// include_path directory, then in the including file's directory.
-fn resolve(name: &str, include_path: &str, current: &str) -> Option<PathBuf> {
+/// Relative paths (`./x`, an include_path entry of `.`) are the request's
+/// working directory's, `cwd` (p8_runtime::cwd, #459).
+fn resolve(name: &str, include_path: &str, current: &str, cwd: &Path) -> Option<PathBuf> {
     let path = Path::new(name);
     if path.is_absolute() || name.starts_with("./") || name.starts_with("../") {
-        return path.is_file().then(|| path.to_path_buf());
+        let path = p8_runtime::cwd::join(cwd, path);
+        return path.is_file().then_some(path);
     }
     for dir in include_path.split(':').filter(|d| !d.is_empty()) {
-        let candidate = Path::new(dir).join(name);
+        let candidate = p8_runtime::cwd::join(cwd, &Path::new(dir).join(name));
         if candidate.is_file() {
             return Some(candidate);
         }
     }
-    let beside = Path::new(current).parent()?.join(name);
+    let beside = p8_runtime::cwd::join(cwd, &Path::new(current).parent()?.join(name));
     beside.is_file().then_some(beside)
 }

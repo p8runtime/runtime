@@ -989,7 +989,7 @@ fn as_xml(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     match opt_bytes(&arg(args, 0)) {
         Some(file) => {
             let path = String::from_utf8_lossy(&file).into_owned();
-            Ok(Value::bool(std::fs::write(path, &buf).is_ok()))
+            Ok(Value::bool(std::fs::write(p8_runtime::cwd::resolve(ctx, &path), &buf).is_ok()))
         }
         None => Ok(str(&buf)),
     }
@@ -1367,7 +1367,7 @@ fn load_string(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
 fn load_file(ctx: &mut dyn Ctx, args: &mut [Value]) -> R {
     let name = String::from_utf8_lossy(&bytes(&arg(args, 0))).into_owned();
     let class = element_class(ctx, "simplexml_load_file", &arg(args, 1))?;
-    let Ok(data) = std::fs::read(&name) else {
+    let Ok(data) = std::fs::read(p8_runtime::cwd::resolve(ctx, &name)) else {
         ctx.warn(&format!("simplexml_load_file(): I/O warning : failed to load external entity \"{name}\""));
         return Ok(Value::FALSE);
     };
@@ -1381,7 +1381,7 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> R {
     let is_url = arg(args, 2).to_bool();
     let (data, filename) = if is_url {
         let name = String::from_utf8_lossy(&data).into_owned();
-        match std::fs::read(&name) {
+        match std::fs::read(p8_runtime::cwd::resolve(ctx, &name)) {
             Ok(d) => (d, Some(name)),
             Err(_) => {
                 ctx.warn(&format!("SimpleXMLElement::__construct(): I/O warning : failed to load external entity \"{name}\""));

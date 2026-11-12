@@ -519,7 +519,7 @@ fn getimagesize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     }
     let shown = String::from_utf8_lossy(path.as_bytes()).into_owned();
     let p = shown.strip_prefix("file://").unwrap_or(&shown).to_string();
-    let data = match std::fs::read(&p) {
+    let data = match std::fs::read(p8_runtime::cwd::resolve(ctx, &p)) {
         Ok(d) => d,
         Err(e) => {
             if args.len() > 1

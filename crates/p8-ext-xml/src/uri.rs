@@ -151,9 +151,10 @@ pub(crate) fn relative(uri: &str, base: &str) -> String {
 }
 
 /// The bytes a URL names: a local file (plain path, file:, or PHP's
-/// compress.zlib: wrapper), None for what libxml2 could not load.
-pub(crate) fn read_url(url: &str) -> Option<Vec<u8>> {
-    std::fs::read(local_path(url)?).ok()
+/// compress.zlib: wrapper), None for what libxml2 could not load. A
+/// relative one is under `cwd`, the request's working directory.
+pub(crate) fn read_url(cwd: &std::path::Path, url: &str) -> Option<Vec<u8>> {
+    std::fs::read(p8_runtime::cwd::join(cwd, std::path::Path::new(&local_path(url)?))).ok()
 }
 
 /// The local file a URL names: a plain path, a file: URI (percent-decoded,

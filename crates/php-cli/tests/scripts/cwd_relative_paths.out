@@ -1,0 +1,107 @@
+-- files
+int(8)
+string(8) "one
+two
+"
+array(2) {
+  [0]=>
+  string(3) "one"
+  [1]=>
+  string(3) "two"
+}
+bool(true)
+bool(false)
+bool(true)
+int(8)
+bool(true)
+bool(true)
+string(4) "one
+"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+-- directories
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+array(4) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(1) "e"
+  [3]=>
+  string(5) "x.php"
+}
+array(4) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(1) "e"
+  [3]=>
+  string(5) "x.php"
+}
+array(4) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(1) "f"
+  [3]=>
+  string(5) "y.txt"
+}
+array(3) {
+  [0]=>
+  string(5) "a.txt"
+  [1]=>
+  string(5) "c.txt"
+  [2]=>
+  string(5) "t.txt"
+}
+array(2) {
+  [0]=>
+  string(3) "d/e"
+  [1]=>
+  string(7) "d/x.php"
+}
+array(1) {
+  [0]=>
+  string(9) "d/e/y.txt"
+}
+-- include
+included d/x.php
+int(7)
+included d/x.php
+int(7)
+included d/x.php
+int(7)
+bool(true)
+bool(true)
+bool(false)
+-- removing
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+array(2) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+}
+bool(true)
