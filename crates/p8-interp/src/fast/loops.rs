@@ -89,6 +89,8 @@ const F_CALL_REGS: usize = (K_CALL_REGS as usize) << KIND;
 
 type P = fn(&Context<'_>, &mut [Value; WINDOW], &Frame, &Closure, usize, &Insn) -> usize;
 type C = fn(&mut Context<'_>, &mut Vec<Value>, usize) -> Result<Flow, Throw>;
+#[cfg(p8_proto_tail)]
+type T = extern "rust-preserve-none" fn(&Context<'_>, &mut [Value; WINDOW], &Frame, &Closure, usize, &Insn) -> usize;
 
 /// An opcode with no P handler: `run`'s arm.
 fn p_defer(_: &Context<'_>, _: &mut [Value; WINDOW], _: &Frame, _: &Closure, pc: usize, _: &Insn) -> usize {
@@ -133,13 +135,18 @@ static P_TABLE: [P; 256] = {
 /// The tail-call loop's table: an opcode's P handler, then the next
 /// instruction's entry by a tail call (`become`), so no handler returns to
 /// a loop until a word is not a pc of the code. A ceiling to measure, not
-/// a proposal: `become` is a nightly feature.
+/// a proposal: `become` is a nightly feature, and so is the calling
+/// convention that keeps a handler from saving and restoring the registers
+/// the loop does not use (without it each handler pushes and pops seven).
 #[cfg(p8_proto_tail)]
-static T_TABLE: [P; 256] = {
-    let mut t: [P; 256] = [p_defer; 256];
+static T_TABLE: [T; 256] = {
+    extern "rust-preserve-none" fn defer(_: &Context<'_>, _: &mut [Value; WINDOW], _: &Frame, _: &Closure, pc: usize, _: &Insn) -> usize {
+        DEFER | pc
+    }
+    let mut t: [T; 256] = [defer; 256];
     macro_rules! entry {
         ($op:ident) => {{
-            fn e(cx: &Context<'_>, w: &mut [Value; WINDOW], top: &Frame, clo: &Closure, pc: usize, insn: &Insn) -> usize {
+            extern "rust-preserve-none" fn e(cx: &Context<'_>, w: &mut [Value; WINDOW], top: &Frame, clo: &Closure, pc: usize, insn: &Insn) -> usize {
                 let next = cx.p_arm(&mut *w, top, clo, pc, insn, Op::$op);
                 match clo.code.insns.get(next) {
                     Some(insn) => become T_TABLE[insn.op as u8 as usize](cx, w, top, clo, next, insn),
