@@ -42,8 +42,11 @@ impl Context<'_> {
         'frame: loop {
             // A frame starting at its first instruction whose code the
             // executable has machine code for (native.rs) runs that, until
-            // it hands the frame back: every call path comes here.
+            // it hands the frame back: every call path comes here. (An
+            // executable with no native code tests that alone, not each
+            // frame's function.)
             if pc == 0
+                && self.isolate.native.is_some()
                 && handed_back != self.frames.len()
                 && let Some(id) = self.frames.last().expect("a frame").func.code.native
             {
@@ -475,25 +478,30 @@ impl Context<'_> {
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_call_ops(regs, clo, base, at, ops))
                             }};
                         }
-                        let Some(m) = self.cached_static_call(clo, class, method) else { uncached!() };
-                        // (Taken apart: the frame takes its parts, no copy.)
-                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { uncached!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        // (The frame takes the parts, no copy; the code is
+                        // the one at its index, as the cached MethodCall
+                        // takes it: `push_code` counts it only when the
+                        // frame slot the call reuses does not run it.)
+                        let Some(sites::StaticHit { code, this, scope, called }) = self.static_site(clo, class, method) else { uncached!() };
+                        let Some(target) = self.closures.get(code as usize) else { uncached!() };
+                        let callee = &target.code;
+                        if n < callee.required || callee.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
                         if let Some(vars) = vars {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
-                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), &target.code) {
+                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), callee) {
                                 Some(released) if !(released && self.ids.has_pending()) => {}
                                 _ => slow!(),
                             }
                         }
-                        let frame = self.frames.call(Some(&target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        // (No Closure object: the slot's `owner` is empty,
+                        // as `leave` left it.)
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
-                        frame.scope = scope;
-                        frame.called = called;
-                        frame.owner = closure;
+                        frame.scope = Some(scope);
+                        frame.called = Some(called);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -936,11 +944,11 @@ impl Context<'_> {
                         match clo.sites[imm as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
-                                if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                                if !direct(target.shape, &target.code, n) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     uncached!();
                                 }
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
-                                enter(&mut self.frames, regs);
+                                bind(&mut self.frames, regs, target.shape, base + args as usize, n as usize);
                                 pc = 0;
                                 continue 'frame;
                             }
@@ -966,12 +974,50 @@ impl Context<'_> {
                     // `f($x)` (`Op::CallRegs`): a builtin on the borrowed ABI
                     // reads its arguments from the variables (or constants)
                     // themselves, framelessly, and the Moves into the
-                    // argument registers are not run. Anything else runs the
-                    // first Move as `Op::Move` does, and goes on with the next.
+                    // argument registers are not run. A user function the Call
+                    // arm would call directly (`direct`) is called from
+                    // here: the Moves, each as `Op::Move` does it,
+                    // then the Call, with no instruction fetched between
+                    // them. Anything else runs the first Move as `Op::Move`
+                    // does, and goes on with the next.
                     Op::CallRegs => {
                         ops!(a, b, c, imm);
                         let (start, n) = (rx!(a), rx!(b));
-                        if let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() {
+                        let site = clo.sites[(imm & 0xffff) as usize].get();
+                        if let Some(&Callee::User(target)) = site {
+                            let target = &self.closures[target as usize];
+                            if direct(target.shape, &target.code, b) && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT {
+                                let args = rk!((imm >> 16) as usize);
+                                if imm & insn::ARG_CONST != 0 {
+                                    let v = cst!(start).clone();
+                                    if put(&mut w[args], v) && self.ids.has_pending() {
+                                        pc += 1;
+                                        pending!();
+                                    }
+                                } else {
+                                    for k in 0..n {
+                                        // (Stopped at a Move, the ones
+                                        // before it are done: on from it.)
+                                        let Some(v) = copied(&w[rk!(start + k)]) else {
+                                            pc += k;
+                                            slow!()
+                                        };
+                                        let _ = put(&mut w[rk!(args + k)], v);
+                                        if self.ids.has_pending() {
+                                            pc += k + 1;
+                                            pending!();
+                                        }
+                                    }
+                                }
+                                // (The Call is at pc + n: its result register
+                                // is this instruction's, and the caller goes
+                                // on after it.)
+                                self.frames.call(Some(target), pc + n + 1, base + args, n, (base + rx!(c)) as u32);
+                                bind(&mut self.frames, regs, target.shape, base + args, n);
+                                pc = 0;
+                                continue 'frame;
+                            }
+                        } else if let Some(&Callee::Builtin(i)) = site {
                             let call = self.isolate.registry.call(i);
                             if imm & insn::ARG_CONST != 0 {
                                 // `f('literal')`: the one argument is the
@@ -1029,11 +1075,13 @@ impl Context<'_> {
                         }
                     }
                     // The call InitMethod started: its word (in b + 1) says
-                    // whether the method is a PHP one this arm may enter (FAST:
-                    // on the receiver as `$this`, with its required arguments,
-                    // not a generator), its code and how far up its class is.
-                    // No site is asked. Anything else, or an interrupt
-                    // pending, is `method_call_ops`'s (out of line).
+                    // whether the method is a PHP one this arm may enter
+                    // (FAST: on the receiver as `$this`), its code and how
+                    // far up its class is; the code says whether these
+                    // arguments enter it where it is made (`direct`: none
+                    // required missing, not a generator). No site is asked.
+                    // Anything else, or an interrupt pending, is
+                    // `method_call_ops`'s (out of line).
                     Op::MethodCall => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
@@ -1052,10 +1100,10 @@ impl Context<'_> {
                             Some(word) if word & p8_bytecode::callee::FAST != 0 => word,
                             _ => uncached!(),
                         };
-                        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        let target = &self.closures[(word & p8_bytecode::callee::CODE) as usize];
+                        if !direct(target.shape, &target.code, n as u8) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
-                        let target = &self.closures[(word & p8_bytecode::callee::CODE) as usize];
                         let Some(o) = w[rx!(obj)].as_object() else { uncached!() };
                         let mut declaring = &o.class;
                         for _ in 0..(word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX {
@@ -1077,12 +1125,13 @@ impl Context<'_> {
                     // InitMethod and MethodCall in one, for a call no
                     // argument of which runs anything (none, or literals
                     // already at c): the receiver read here (`$this` from
-                    // the frame when imm >> 24), the word the site keeps
+                    // the frame when imm >> 24), the record the site keeps
                     // for its class from this scope, and the frame entered
-                    // when the word says FAST. Anything else (a class or
-                    // scope the site has not seen, a method the word does
-                    // not let this enter, the errors, an interrupt due) is
-                    // `method_call_now_ops`'s, out of line.
+                    // when that is of a PHP method these arguments enter
+                    // (`direct`). Anything else (a class or scope the site
+                    // has not seen, a method the loop does not enter, the
+                    // errors, an interrupt due) is `method_call_now_ops`'s,
+                    // out of line.
                     Op::MethodCallNow => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16 & 0xff) as usize);
@@ -1116,17 +1165,24 @@ impl Context<'_> {
                                 }
                             }
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let word = match clo.methods[method].user.get().hit(&o.class, scope) {
-                            Some(word) if word & p8_bytecode::callee::FAST != 0 => word,
-                            _ => uncached!(),
-                        };
-                        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        // The site's plain record (`UserMethod`): the user
+                        // method found for this class and scope (their
+                        // numbers), as its index in `closures` (a function
+                        // call site's shape), its class this many parents
+                        // up. (The class is this request's, so the index
+                        // is of this request's table: `UserMethod`.) A
+                        // record of a method the loop does not enter
+                        // (`UserMethod::unentered`) names no code.
+                        let q = clo.methods[method].user.get();
+                        if !q.is_for(&o.class, top.scope.as_ref()) {
                             uncached!();
                         }
-                        let target = &self.closures[(word & p8_bytecode::callee::CODE) as usize];
+                        let Some(target) = self.closures.get(q.code as usize) else { uncached!() };
+                        if !direct(target.shape, &target.code, n as u8) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            uncached!();
+                        }
                         let mut declaring = &o.class;
-                        for _ in 0..(word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX {
+                        for _ in 0..q.up {
                             let Some(parent) = &declaring.parent else { uncached!() };
                             declaring = parent;
                         }
@@ -1495,27 +1551,35 @@ impl Context<'_> {
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.init_method_ops(regs, clo, base, at, ops))
                             }};
                         }
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        // The site's plain record (`UserMethod`), keyed by
+                        // the class's and the scope's numbers: its word is
+                        // the answer.
                         let q = clo.methods[(imm & 0xffff) as usize].user.get();
-                        let (this, word) = if c != 0 {
+                        let this = if c != 0 {
                             let Some(this) = &top.this else { unseen!() };
-                            let Some(word) = q.hit(&this.class, scope) else { unseen!() };
-                            (Some(Rc::clone(this)), word)
+                            if !q.is_for(&this.class, top.scope.as_ref()) {
+                                unseen!();
+                            }
+                            Some(Rc::clone(this))
                         } else {
                             match w[rx!(b)].as_object() {
                                 Some(o) => {
-                                    let Some(word) = q.hit(&o.class, scope) else { unseen!() };
+                                    if !q.is_for(&o.class, top.scope.as_ref()) {
+                                        unseen!();
+                                    }
                                     // (A temporary captured in place stays.)
-                                    ((rx!(b) != recv).then(|| Rc::clone(o)), word)
+                                    (rx!(b) != recv).then(|| Rc::clone(o))
                                 }
                                 None => {
                                     let Some(o) = ref_object(&w[rx!(b)]) else { unseen!() };
-                                    let Some(word) = q.hit(&o.class, scope) else { unseen!() };
-                                    (Some(o), word)
+                                    if !q.is_for(&o.class, top.scope.as_ref()) {
+                                        unseen!();
+                                    }
+                                    Some(o)
                                 }
                             }
                         };
-                        let released = put(&mut w[rk!(recv + 1)], Value::int(word));
+                        let released = put(&mut w[rk!(recv + 1)], Value::int(q.word));
                         match this {
                             Some(this) => done!(put(&mut w[recv], Value::object(this)) | released),
                             None => done!(released),
@@ -2139,18 +2203,15 @@ pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
 /// The variables a call sends itself (`vars`, its `Function::arg_vars`
 /// entry) into its argument registers from `args`, for `target`: a
 /// variable is made a reference where it takes the parameter by
-/// reference, else copied (`send_vars`). None, with nothing sent, when a
-/// copied one is undefined (the warning: `step`); else whether a write
-/// released memory.
+/// reference, else copied (`send_vars`). None when a copied one is
+/// undefined (the warning: `step`, which sends them all again: the ones
+/// before it were sent here, the same values it sends); else whether a
+/// write released memory.
 #[inline(never)]
 fn send_vars(w: &mut [Value], vars: &[(u8, Reg)], args: usize, target: &Function) -> Option<bool> {
-    let defined = |v: &Value| !v.is_undef() && v.as_reference().is_none_or(|c| !c.borrow().is_undef());
-    if vars.iter().any(|&(n, var)| !target.param_by_ref(usize::from(n)) && !defined(&w[usize::from(var)])) {
-        return None;
-    }
     let mut released = false;
     for &(n, var) in vars {
-        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)]).expect("defined") };
+        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)])? };
         released |= put(&mut w[(args + usize::from(n)) & (WINDOW - 1)], v);
     }
     Some(released)
@@ -2599,6 +2660,27 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
         return None;
     }
     let cell = &o.slots()[slot];
+    // Two integers added, subtracted or multiplied with no overflow: no
+    // conversion and nothing to report, so `ops::binary` has nothing to
+    // add (an overflow is its: the result is a float).
+    if let Some(b) = y.as_int()
+        && let Some(new) = cell.peek(|v| {
+            let a = v.as_int()?;
+            match op {
+                BinOp::Add => a.checked_add(b),
+                BinOp::Sub => a.checked_sub(b),
+                BinOp::Mul => a.checked_mul(b),
+                _ => None,
+            }
+        })
+    {
+        let new = Value::int(new);
+        if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+            return None;
+        }
+        cell.assign(new.clone());
+        return Some(new);
+    }
     let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
     let mut diags = Vec::new();
     let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;
@@ -2674,31 +2756,60 @@ fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &
 /// its base, with its arguments already in the first registers.
 #[inline(always)]
 pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
-    let top = frames.len - 1;
+    let frame = &frames.slots[frames.len - 1];
+    let (shape, base, argc) = (frame.func.shape, frame.base as usize, frame.argc as usize);
+    bind(frames, regs, shape, base, argc);
+}
+
+/// Whether a call of a function with `n` arguments is entered where it is
+/// made (its frame pushed and bound there, by the loop's Call and CallRegs
+/// arms and a native frame's call): no required argument is missing, and
+/// its code is not a generator's. As many arguments as parameters says
+/// both in one test (`Shape::exact`), and most calls pass that many.
+#[inline(always)]
+pub(crate) fn direct(shape: Shape, code: &Function, n: u8) -> bool {
+    u32::from(n) == shape.exact || (usize::from(n) >= code.required && !code.is_generator)
+}
+
+/// `enter`, for a caller that has the frame's numbers in hand (the loop's
+/// Call arm): `shape` its closure's, `base` and `argc` as pushed. A call
+/// that passes as many arguments as there are parameters (most do) has
+/// nothing to put aside and no default to fill in: one test says so, and
+/// what is left is the variables after the parameters made undefined. The
+/// other calls do what they did, from the same numbers.
+#[inline(always)]
+pub(crate) fn bind(frames: &mut Frames, regs: &mut Vec<Value>, shape: Shape, base: usize, argc: usize) {
     // A window's worth at least: the loop's fixed window (WINDOW) must exist.
-    let need = {
-        let frame = &frames.slots[top];
-        frame.base as usize + usize::from(frame.func.code.nregs).max(WINDOW)
-    };
+    let need = base + shape.need as usize;
     if regs.len() < need {
         frames.grow_regs(regs, need);
     }
+    let (nparams, ncv) = (shape.nparams as usize, shape.ncv as usize);
+    if argc == nparams {
+        // The variables not passed are undefined (PHP initialises its
+        // CVs). Constants are read in place (`const_index`): none is
+        // copied in.
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        return;
+    }
+    // More arguments than parameters, or fewer: the extra ones put aside,
+    // the missing ones' constant defaults filled in.
     let (slots, spare) = (&mut frames.slots, &mut frames.spare);
-    let frame = &mut slots[top];
-    let (func, base, argc) = (&frame.func, frame.base as usize, frame.argc as usize);
-    let code = &*func.code;
-    let nparams = code.params.len();
+    let frame = &mut slots[frames.len - 1];
     if argc > nparams {
         frame.extra = take_extra(spare, regs, base, nparams, argc);
-    }
-    // The variables not passed are undefined (PHP initialises its CVs).
-    // Constants are read in place (`const_index`): none is copied in.
-    for r in &mut regs[base + argc.min(nparams)..base + code.ncv as usize] {
-        clear(r);
-    }
-    // Arguments not passed: their constant defaults.
-    if argc < nparams && !func.defaults.is_empty() {
-        fill_defaults(&func.defaults, &mut regs[base..base + nparams], argc);
+        for r in &mut regs[base + nparams..base + ncv] {
+            clear(r);
+        }
+    } else {
+        for r in &mut regs[base + argc..base + ncv] {
+            clear(r);
+        }
+        if !frame.func.defaults.is_empty() {
+            fill_defaults(&frame.func.defaults, &mut regs[base..base + nparams], argc);
+        }
     }
 }
 

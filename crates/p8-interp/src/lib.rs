@@ -2734,6 +2734,7 @@ impl Context<'_> {
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
         if let Some(o) = target.as_object() {
             self.remember_method(&clo.methods[method as usize], o, &m);
+            self.remember_user_method(&clo.methods[method as usize], o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }
@@ -2765,7 +2766,7 @@ impl Context<'_> {
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
         if let Some(o) = target.as_object() {
             self.remember_method(slot, o, &m);
-            self.callee_word(slot, o, &m, argc as usize);
+            self.remember_user_method(slot, o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }
@@ -2780,18 +2781,25 @@ impl Context<'_> {
     /// runs it, and the loop's InitMethod arm on a class or scope its site
     /// has not seen.
     #[inline(never)]
-    pub(crate) fn init_method_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (recv, obj, method, argc): (Reg, Reg, u16, u8)) -> Result<Next, Throw> {
+    pub(crate) fn init_method_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (recv, obj, method, _argc): (Reg, Reg, u16, u8)) -> Result<Next, Throw> {
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let target = self.prop_target(w, clo, obj)?;
         let slot = &clo.methods[method as usize];
-        let known = target.as_object().and_then(|o| slot.user.get().hit(&o.class, self.scope_addr()));
+        // The site's plain record, as the loop's arm reads it.
+        let known = target.as_object().and_then(|o| {
+            let q = slot.user.get();
+            q.is_for(&o.class, self.frames.last().and_then(|f| f.scope.as_ref())).then_some(q.word)
+        });
         let word = match known {
             Some(word) => word,
             None => {
                 let site = &clo.code.sites[method as usize];
                 let m = self.method_lookup(&target, Some(site.sym), site.display.as_bytes(), false)?;
                 match target.as_object() {
-                    Some(o) => self.callee_word(slot, o, &m, argc as usize),
+                    // (The site's full entry is the call's to leave,
+                    // `method_call_ops`: what PHP reports as the call is
+                    // made is reported there the first time.)
+                    Some(o) => self.callee_word(slot, o, &m),
                     None => 0,
                 }
             }
@@ -2863,6 +2871,7 @@ impl Context<'_> {
                 let w = &regs[base..base + func.nregs as usize];
                 let m = self.static_frame(func, class, Some(site.sym), site.display.as_bytes(), w)?;
                 self.remember_static(cache, &target, &m);
+                self.remember_static_user(clo, method as usize, &target, &m);
                 m
             }
         };
@@ -4993,6 +5002,7 @@ impl Context<'_> {
             .entry((resource.kind, user))
             .or_insert_with(|| {
                 Rc::new(Class {
+                    id: p8_runtime::object::ClassId::fresh(),
                     name: PhpStr::from(resource.kind),
                     lower: resource.kind.as_bytes().to_vec(),
                     flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL | if user { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 },

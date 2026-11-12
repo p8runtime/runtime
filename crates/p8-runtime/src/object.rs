@@ -353,9 +353,35 @@ pub struct Constant {
 /// redeclare it), its visibility, and the declaring class (lowercase).
 pub type Static = (Rc<RefCell<Value>>, Visibility, Vec<u8>);
 
+/// A class's number: no two classes of the process ever have the same
+/// one, so a number that was kept (a call site's cache) can only ever
+/// match the class it was taken from, never a later class, not even one
+/// that the allocator put where a freed class was. It cannot be copied:
+/// the only way to have one is to take a new one (`ClassId::fresh`), and
+/// `Class` is not `Clone`.
+#[derive(Debug)]
+pub struct ClassId(u64);
+
+impl ClassId {
+    /// The next number, from 1 (0 is no class). The counter is the
+    /// process's and only goes up (64 bits: it does not come round).
+    pub fn fresh() -> ClassId {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        ClassId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The number (never 0).
+    #[inline(always)]
+    pub fn get(&self) -> u64 {
+        self.0
+    }
+}
+
 /// A class as linked for one request.
 #[derive(Debug)]
 pub struct Class {
+    /// Its number, unlike any other class's (`ClassId`).
+    pub id: ClassId,
     /// As declared.
     pub name: PhpStr,
     pub lower: Vec<u8>,
@@ -427,6 +453,7 @@ impl Class {
     pub(crate) fn stub(name: &str) -> Class {
         let symbols = Rc::new(SymbolCache::new(&Arc::new(crate::symbol::Symbols::default())));
         Class {
+            id: ClassId::fresh(),
             name: PhpStr::from(name),
             lower: name.to_ascii_lowercase().into_bytes(),
             flags: 0,

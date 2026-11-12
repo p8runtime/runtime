@@ -115,6 +115,7 @@ fn declare(
         );
     }
     let class = Class {
+        id: p8_runtime::object::ClassId::fresh(),
         name: PhpStr::from(name),
         lower: lower.clone(),
         flags: flags | p8_runtime::object::CLASS_INTERNAL,

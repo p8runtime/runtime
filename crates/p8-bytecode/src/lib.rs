@@ -67,9 +67,9 @@ pub mod callee {
     /// the receiver's (with FAST).
     pub const UP_SHIFT: u32 = 32;
     pub const UP_MAX: u32 = 15;
-    /// The call may push the frame from this word alone: a PHP method run
-    /// with the receiver as `$this`, given its required arguments, not a
-    /// generator.
+    /// The call may push the frame from this word and its argument count:
+    /// a PHP method run with the receiver as `$this` (the call tests that
+    /// no required argument is missing and the code is not a generator's).
     pub const FAST: i64 = 1 << 36;
     /// CODE is a PHP method's (whether or not FAST).
     pub const USER: i64 = 1 << 37;
