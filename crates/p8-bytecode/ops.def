@@ -47,15 +47,26 @@ op FETCH_DIM fetch_dim cold=cold_run mode=R|IS dst=REG arr=REG key=REG|KINT|KSTR
 /// `dst = isset(var[key])`, one dimension (`IssetDim`).
 op ISSET_DIM isset_dim cold=cold_run dst=REG var=REG key=REG|KINT|KSTR
 /// `var[key] = val`, one dimension (`AssignDim`); `dst` = the value when USED.
-op ASSIGN_DIM assign_dim cold=cold_run var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
+/// The rest (an ArrayAccess object, a string offset, a conversion's
+/// warning) runs out of line on the operands (`assign_dim_out`; `step`
+/// runs the same code).
+op ASSIGN_DIM assign_dim out=assign_dim_out::<S> var=REG key=REG|KINT|KSTR val=REG|K res=USED|UNUSED dst=REG
 drop key=KINT val=K
 drop key=KSTR val=K
 /// `var[] = val` (`AssignDim` appending); `dst` = the value when USED.
-op APPEND_DIM append_dim cold=cold_run var=REG val=REG|K res=USED|UNUSED dst=REG
-/// `dst = obj->(property site)`, `obj` a register or `$this` (`FetchProp`).
-op FETCH_PROP fetch_prop cold=cold_run dst=REG obj=REG|THIS site=IMM16
+/// The rest runs out of line on the operands (`append_dim_out`).
+op APPEND_DIM append_dim out=append_dim_out::<S> var=REG val=REG|K res=USED|UNUSED dst=REG
+/// `dst = obj->(property site)`, `obj` a register or `$this` (`FetchProp`):
+/// a read (R), or a quiet one (IS: `??`, `?->`). What the entry does not
+/// answer runs out of line on the operands (`fetch_prop_out`: a hook,
+/// `__get`, a lazy object, an unset or undeclared property, the entry
+/// filled; `step` runs the same code).
+op FETCH_PROP fetch_prop out=fetch_prop_out::<S> mode=R|IS dst=REG obj=REG|THIS site=IMM16
 /// `obj->(property site) = val` (`AssignProp`); `dst` = the value when USED.
-op ASSIGN_PROP assign_prop cold=cold_run obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
+/// What the entry does not answer runs out of line on the operands
+/// (`assign_prop_out`: a hook, `__set`, a lazy object, a dynamic
+/// property, a typed one's coercion; `step` runs the same code).
+op ASSIGN_PROP assign_prop out=assign_prop_out::<S> obj=REG|THIS val=REG|K mode=COPY|TAKE res=USED|UNUSED dst=REG site=IMM16
 drop val=K mode=TAKE
 /// `return src` (`Return`): to the calling frame, or out of this run of
 /// the loop when the frame is its bottom one (a callback a builtin
@@ -63,29 +74,38 @@ drop val=K mode=TAKE
 op RETURN ret cold=step native=ret src=TMP|CV|K
 /// `dst = src instanceof C` (`InstanceOf`), C a class the code names
 /// (NAMED: `C`, and `self`/`parent` in a class), the called class
-/// (STATIC: `static`) or the class using a trait (SCOPE: `self` in one).
-op INSTANCEOF instance_of cold=step cls=NAMED|STATIC|SCOPE dst=REG src=REG class=IMM16
+/// (STATIC: `static`) or the class using a trait (SCOPE: `self` in one);
+/// OTHER (a class in a register, `parent` in a trait) and what the arm
+/// does not answer run out of line on the operands (`instance_of_out`;
+/// `step` runs the same code).
+op INSTANCEOF instance_of out=instance_of_out cls=NAMED|STATIC|SCOPE|OTHER dst=REG src=REG class=IMM16
 /// `dst = C::NAME` (`ClassConst`): the value the name's cache entry
 /// (`site`, the name's constant) holds for the class, C as INSTANCEOF's;
-/// a miss is cold (`step`, which fills the entry).
-op CLASS_CONST class_const cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
+/// a miss (a first read) runs out of line on the operands
+/// (`class_const_out`: the class resolved, a pending constant computed,
+/// the entry filled; `step` runs the same code).
+op CLASS_CONST class_const out=class_const_out cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
 /// `dst = C::$name` (`FetchStaticProp`): the property's cell the name's
 /// cache entry (`site`, the name's constant) holds for the class and the
-/// code's scope, C as INSTANCEOF's; a miss is cold (`step`, which fills
-/// the entry).
-op FETCH_STATIC_PROP fetch_static_prop cold=step cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
+/// code's scope, C as INSTANCEOF's; a miss runs out of line on the
+/// operands (`fetch_static_prop_out`, which fills the entry; `step` runs
+/// the same code).
+op FETCH_STATIC_PROP fetch_static_prop out=fetch_static_prop_out cls=NAMED|STATIC|SCOPE dst=REG class=IMM16 site=IMM16
 /// `C::$name = val` (`AssignStaticProp`): stored in the property's cell
 /// FETCH_STATIC_PROP's cache entry holds (through a reference the cell
 /// holds), `dst` = the value; C as INSTANCEOF's. A miss, an undefined
-/// value are cold (`step`, which fills the entry).
-op ASSIGN_STATIC_PROP assign_static_prop cold=step cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
+/// value run out of line on the operands (`assign_static_prop_out`;
+/// `step` runs the same code).
+op ASSIGN_STATIC_PROP assign_static_prop out=assign_static_prop_out::<S> cls=NAMED|STATIC|SCOPE val=REG|K dst=REG class=IMM16 site=IMM16
 
 # ---- written by hand ---------------------------------------------------
 
 /// Not run by the loop: `step` runs the `Instr` at this pc.
 hand Slow
 hand VerifyArgs native=verify_args
-/// a: the value returned
+/// a: the value returned; b: 1 when none was (`return;`, the end), for
+/// the TypeError's text. A value the quick test does not pass runs out of
+/// line (`verify_return_ops`: a coercion, a Stringable, the error)
 hand VerifyReturn
 /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
 hand Intrinsic
@@ -242,6 +262,11 @@ hand ToObject
 hand CallableArgByRef
 /// a = $$b (imm: bit 0 quiet, bit 1 a global's)
 hand VarGet
+/// a = a reference to $$b (imm 1: a global's), out of line (`var_ref_ops`)
+hand VarRef
+/// unset($a->{name}), the name operand in imm (a constant or a register),
+/// out of line (`unset_prop_ops`)
+hand UnsetProp
 /// a = a reference to the superglobal named b
 hand AutoGlobal
 /// `[&$b]`: a reference to b appended to the array literal in a
@@ -286,6 +311,9 @@ hand Silence
 hand Unsilence
 /// a = -b
 hand Neg
+/// a = ~b: an int's inline; anything else (a float's, a string's, the
+/// TypeError) out of line (`bit_not_ops`)
+hand BitNot
 /// closure a captures variable b (`use ($b)`; imm: CAPTURE_REF `use (&$b)`,
 /// CAPTURE_QUIET no warning for an undefined one)
 hand Capture

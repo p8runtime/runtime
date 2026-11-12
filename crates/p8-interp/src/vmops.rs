@@ -664,6 +664,11 @@ pub(crate) fn ret<S: spec::Ret>(hx: Hx, args::Ret { src }: args::Ret) -> Ctl {
 /// variable (the warning) are cold.
 #[inline(always)]
 pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, src, class }: args::InstanceOf) -> Ctl {
+    // A class in a register (its errors, a string's class), `parent` in a
+    // trait: out of line, whatever `src` is.
+    if S::Cls::ID == OTHER {
+        return Ctl::Cold;
+    }
     let is = |o: &Object| -> Option<bool> {
         if S::Cls::ID == NAMED {
             let (p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name)) = &hx.clo.code.classes[class as usize] else { return None };

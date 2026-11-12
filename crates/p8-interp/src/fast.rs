@@ -150,8 +150,10 @@ impl Context<'_> {
             }
             // `var op= src`: two ints inline, the rest (floats, references,
             // `.=` on strings) through `assign_op`; `$b` a `Src` as `arith!`'s.
+            // (`$y` the right operand, a register or a constant operand, for
+            // the rest: out of line on the arm's operands, `assign_op_ops`.)
             macro_rules! assign_op {
-                ($op:expr, $var:expr, $b:expr) => {{
+                ($op:expr, $var:expr, $b:expr, $y:expr) => {{
                     let b: Src = $b;
                     let released = if let (Some(x), Some(y)) = (w[rx!($var)].as_int(), src(&w[..], b).as_int())
                         && let Some(n) = int_op($op, x, y)
@@ -160,28 +162,31 @@ impl Context<'_> {
                     } else if assign_op(&mut w[..], $op, Reg::from($var), b) {
                         true
                     } else {
-                        slow!()
+                        out!(($op, Reg::from($var), $y), |cx, regs, clo, base, _, at, ops| cx.assign_op_ops(regs, clo, base, at, ops))
                     };
                     done!(released);
                 }};
             }
-            // `dst = a cmp b` (`<=>` is `step`'s): two ints inline, the rest
-            // through `test`; `$y` the right operand's value.
+            // `dst = a cmp b`: two ints inline, the rest through `test`;
+            // `$y` the right operand's value.
+            // (`$b` the right operand, a register or a constant operand,
+            // for the rest: `<=>`, arrays, objects, the conversions' warnings,
+            // out of line on the arm's operands, `compare_ops`.)
             macro_rules! compare {
-                ($cmp:expr, $dst:expr, $a:expr, $y:expr) => {{
+                ($cmp:expr, $dst:expr, $a:expr, $b:expr, $y:expr) => {{
                     let cmp: Cmp = $cmp;
                     let (x, y): (&Value, &Value) = (&w[rx!($a)], $y);
                     let t = if let (Some(x), Some(y)) = (x.as_int(), y.as_int())
                         && cmp != Cmp::Spaceship
                     {
-                        int_test(cmp, x, y)
+                        Some(int_test(cmp, x, y))
                     } else if cmp == Cmp::Spaceship {
-                        slow!()
+                        None
                     } else {
-                        match test(cmp, x, y) {
-                            Some(t) => t,
-                            None => slow!(),
-                        }
+                        test(cmp, x, y)
+                    };
+                    let Some(t) = t else {
+                        out!((cmp, Reg::from($dst), Reg::from($a), $b), |cx, regs, clo, base, _, at, ops| cx.compare_ops(regs, clo, base, at, ops))
                     };
                     done!(put_var(&mut w[rx!($dst)], Value::bool(t)));
                 }};
@@ -381,6 +386,33 @@ impl Context<'_> {
                     }
                 }};
             }
+            // An `out=` op's arm (ops.def): as `gen_arm!`, but what the
+            // handler does not take runs its method `$m` out of line on
+            // the operands `$args` it decoded (`out!`, not the slow path).
+            macro_rules! gen_out {
+                ($m:ident $(::<$s:path>)?, $h:path, $args:expr) => {{
+                    let args = $args;
+                    match $h(hx!(), args) {
+                        Ctl::Next(released) => done!(released),
+                        Ctl::Skip(released) => {
+                            let at = pc;
+                            pc += 2;
+                            if released && self.ids.has_pending() {
+                                pending_at!(pc, at);
+                            }
+                        }
+                        Ctl::Jump(target) => {
+                            if back!(target) {
+                                // (`out_of_line` raises the interrupt.)
+                                out!(args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args));
+                            }
+                            pc = target as usize;
+                        }
+                        Ctl::Return(value) => ret!(value),
+                        Ctl::Cold => out!(args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args)),
+                    }
+                }};
+            }
             loop {
                 let insn: &Insn = &code[pc];
                 let op = insn.op;
@@ -502,7 +534,10 @@ impl Context<'_> {
                                 || !(ClassMemo::quick(clo.type_memo.last(), ty, &w[rx!(insn.a)])
                                     || w[rx!(insn.a)].as_reference().is_some_and(|c| quick_ref(clo.type_memo.last(), ty, c))) =>
                         {
-                            slow!()
+                            // A coercion, a Stringable, the error (a
+                            // generator's: nothing): out of line on the
+                            // arm's operands (`verify_return_ops`).
+                            out!((Reg::from(insn.a), insn.b != 0), |cx, regs, clo, base, _, at, ops| cx.verify_return_ops(regs, clo, base, at, ops))
                         }
                         _ => pc += 1,
                     },
@@ -622,11 +657,11 @@ impl Context<'_> {
                     // rest through `test`.
                     Op::Compare => {
                         ops!(a, b, c, imm);
-                        compare!(insn::cmp(imm), a, b, &w[rx!(c)]);
+                        compare!(insn::cmp(imm), a, b, Reg::from(c), &w[rx!(c)]);
                     }
                     Op::CompareC => {
                         ops!(a, b, c, imm);
-                        compare!(insn::cmp(imm), a, b, cst!(imm >> 8));
+                        compare!(insn::cmp(imm), a, b, p8_bytecode::const_operand((imm >> 8) as usize), cst!(imm >> 8));
                     }
                     Op::IncVar => {
                         let r = &mut w[rx!(insn.a)];
@@ -718,12 +753,12 @@ impl Context<'_> {
                     // the rest through `assign_op`); $str .= string
                     Op::AssignOp => {
                         ops!(a, b, c, imm);
-                        assign_op!(insn::binop(imm), a, reg_src!(b));
+                        assign_op!(insn::binop(imm), a, reg_src!(b), Reg::from(b));
                     }
                     // `$s .= 'literal'`, `$n += 1`.
                     Op::AssignOpC => {
                         ops!(a, b, c, imm);
-                        assign_op!(insn::binop(imm), a, cst_src!(imm >> 8));
+                        assign_op!(insn::binop(imm), a, cst_src!(imm >> 8), p8_bytecode::const_operand((imm >> 8) as usize));
                     }
                     // $i++ / ++$i (and --) whose value is used, on an int
                     // (through a reference too: a static or global variable)
@@ -807,7 +842,11 @@ impl Context<'_> {
                     // cached: it warns on every fetch).
                     Op::FetchConst => {
                         ops!(a, b, c, imm);
-                        let Some(Callee::Constant(v)) = clo.sites[imm as usize].get() else { slow!() };
+                        // A first read, a deprecated or undefined constant:
+                        // out of line on the arm's operands (`fetch_const_ops`).
+                        let Some(Callee::Constant(v)) = clo.sites[imm as usize].get() else {
+                            out!((Reg::from(a), imm as u16), |cx, regs, clo, base, _, at, ops| cx.fetch_const_ops(regs, clo, base, at, ops))
+                        };
                         let v = v.clone();
                         done!(put(&mut w[rx!(a)], v));
                     }
@@ -1605,6 +1644,14 @@ impl Context<'_> {
                         ops!(a, b, c, imm);
                         out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.auto_global_ops(regs, clo, base, at, ops));
                     }
+                    Op::VarRef => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b), imm == 1), |cx, regs, clo, base, _, at, ops| cx.var_ref_ops(regs, clo, base, at, ops));
+                    }
+                    Op::UnsetProp => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.unset_prop_ops(regs, clo, base, at, ops));
+                    }
                     // `[&$x]`: x made a reference, appended to the literal
                     // (as `step` appends it).
                     Op::ArrayPushRef => {
@@ -1853,6 +1900,15 @@ impl Context<'_> {
                             slow!()
                         };
                         done!(put(&mut w[rx!(a)], v));
+                    }
+                    // `~$x` of an int; anything else out of line on the
+                    // arm's operands (`bit_not_ops`).
+                    Op::BitNot => {
+                        ops!(a, b, c, imm);
+                        let Some(n) = w[rx!(b)].as_int() else {
+                            out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.bit_not_ops(regs, clo, base, at, ops))
+                        };
+                        done!(put(&mut w[rx!(a)], Value::int(!n)));
                     }
                     // `use ($x)` / `use (&$x)` of the closure just made (in
                     // a): the variable's value (defined), or the variable
