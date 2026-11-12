@@ -1,0 +1,224 @@
+-- class constants
+base kid base kid 42 iface late-x
+base-default kid h given kid h Spades private protected trait
+Error: Cannot access private constant Base::P
+Error: Cannot access protected constant Base::R
+Error: Undefined constant Base::NOPE
+Error: Cannot declare self-referencing constant self::A
+Error: Class "Missing" not found
+Error: Cannot access private constant Base::P
+Error: Cannot access protected constant Base::R
+Error: Cannot access trait constant T::TC directly
+Error: Undefined constant Base::NOPE
+Error: Cannot declare self-referencing constant self::A
+Error: Class "Missing" not found
+Error: Cannot access "self" when no class scope is active
+Error: Cannot use "static" in the global scope
+base kid base kid 42 iface late-x
+base-default kid h given kid h Spades private protected trait
+Error: Cannot access private constant Base::P
+Error: Cannot access protected constant Base::R
+Error: Undefined constant Base::NOPE
+Error: Cannot declare self-referencing constant self::A
+Error: Class "Missing" not found
+Error: Cannot access private constant Base::P
+Error: Cannot access protected constant Base::R
+Error: Cannot access trait constant T::TC directly
+Error: Undefined constant Base::NOPE
+Error: Cannot declare self-referencing constant self::A
+Error: Class "Missing" not found
+Error: Cannot access "self" when no class scope is active
+Error: Cannot use "static" in the global scope
+-- property reads
+__get(a) 1 __get(b) NULL __isset(a) __get(a) 1 __isset(b) dflt plain 42
+NULL null-dflt chain
+'gone'
+
+Warning: Undefined property: Plain::$p in %s on line 82
+NULL
+
+Warning: Attempt to read property "p" on null in %s on line 83
+NULL 
+Warning: Attempt to read property "p" on int in %s on line 83
+NULL
+
+Warning: Undefined property: Plain::$undeclared in %s on line 84
+NULL
+Error: Typed property Magic::$typed must not be accessed before initialization
+__get(secret) 
+X,Y
+__get(a) 1 __get(b) NULL __isset(a) __get(a) 1 __isset(b) dflt plain 42
+NULL null-dflt chain
+'gone'
+
+Warning: Undefined property: Plain::$p in %s on line 82
+NULL
+
+Warning: Attempt to read property "p" on null in %s on line 83
+NULL 
+Warning: Attempt to read property "p" on int in %s on line 83
+NULL
+
+Warning: Undefined property: Plain::$undeclared in %s on line 84
+NULL
+Error: Typed property Magic::$typed must not be accessed before initialization
+__get(secret) 
+X,Y
+-- property writes
+{"a":1,"b":[2],"c":"three"}
+
+Deprecated: Creation of dynamic property Kid::$dyn is deprecated in %s on line 94
+dynamic
+__set(x, [1]) __set(y, "two") 
+12 3
+Error: Cannot modify readonly property Plain::$ro
+TypeError: Cannot assign string to property Plain::$i of type int
+TypeError: Cannot assign string to property Plain::$next of type ?Plain
+Error: Attempt to assign property "p" on null
+Error: Attempt to assign property "p" on string
+99 used
+{"a":1,"b":[2],"c":"three"}
+
+Deprecated: Creation of dynamic property Kid::$dyn is deprecated in %s on line 94
+dynamic
+__set(x, [1]) __set(y, "two") 
+12 3
+Error: Cannot modify readonly property Plain::$ro
+TypeError: Cannot assign string to property Plain::$i of type int
+TypeError: Cannot assign string to property Plain::$next of type ?Plain
+Error: Attempt to assign property "p" on null
+Error: Attempt to assign property "p" on string
+99 used
+-- global constants
+8 late pi
+
+Deprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in %s on line 112
+2048
+Error: Undefined constant "NOPE_CONST"
+now
+8 late pi
+
+Deprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in %s on line 112
+2048
+Error: Undefined constant "NOPE_CONST"
+now
+-- instanceof a class in a register
+Base=true Kid=true HasK=true Other=false NoSuchClass=false kid=true true false false false
+Base=true Kid=true HasK=true Other=false NoSuchClass=false kid=true true false false false
+-- static properties
+base-static kid-static late-s b0 k0 b0 k0
+Error: Access to undeclared static property Base::$nope
+Error: Cannot access private property Base::$hidden
+Error: Cannot access private property Base::$hidden
+Error: Class "Missing" not found
+b0 k0 late-s b1 k1 b1 k1
+Error: Access to undeclared static property Base::$nope
+Error: Cannot access private property Base::$hidden
+Error: Cannot access private property Base::$hidden
+Error: Class "Missing" not found
+-- return types
+5 7 1 '12' stringable 3.0 NULL
+TypeError: ret_int(): Return value must be of type int, string returned
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 136
+TypeError: ret_str(): Return value must be of type string, array returned
+TypeError: ret_none(): Return value must be of type int, none returned
+5 7 1 '12' stringable 3.0 NULL
+TypeError: ret_int(): Return value must be of type int, string returned
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 136
+TypeError: ret_str(): Return value must be of type string, array returned
+TypeError: ret_none(): Return value must be of type int, none returned
+-- comparisons
+true true -1 1 1 -1 1 -1 -1
+false false false true 0 true true true
+true true -1 1 1 -1 1 -1 -1
+false false false true 0 true true true
+-- bitwise not
+-6 0 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 159
+-2 9e9d -9223372036854775808
+TypeError: Cannot perform bitwise not on array
+TypeError: Cannot perform bitwise not on null
+TypeError: Cannot perform bitwise not on Plain
+
+Warning: The float 1.0E+30 is not representable as an int, cast occurred in %s on line 164
+int(-5076964154930102273)
+-6 0 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 159
+-2 9e9d -9223372036854775808
+TypeError: Cannot perform bitwise not on array
+TypeError: Cannot perform bitwise not on null
+TypeError: Cannot perform bitwise not on Plain
+
+Warning: The float 1.0E+30 is not representable as an int, cast occurred in %s on line 164
+int(-5076964154930102273)
+-- array writes
+set('a') set(2) set(NULL) set('b') used {"a":1,"2":"two","3":"pushed","b":"used"}
+Jello  !|
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 178
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 178
+{"1":"t","":"n"}
+TypeError: Cannot access offset of type array on array
+Error: Cannot use a scalar value as an array
+Error: Cannot use a scalar value as an array
+Error: [] operator not supported for strings
+["from-null"]
+set('a') set(2) set(NULL) set('b') used {"a":1,"2":"two","3":"pushed","b":"used"}
+Jello  !|
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 178
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 178
+{"1":"t","":"n"}
+TypeError: Cannot access offset of type array on array
+Error: Cannot use a scalar value as an array
+Error: Cannot use a scalar value as an array
+Error: [] operator not supported for strings
+["from-null"]
+-- compound assignments
+astringable stringable! [1,6] 1.5 12
+x51.51
+
+Warning: A non-numeric value encountered in %s on line 192
+6
+TypeError: Unsupported operand types: array - int
+DivisionByZeroError: Division by zero
+DivisionByZeroError: Modulo by zero
+Error: Object of class Plain could not be converted to string
+
+Warning: Undefined variable $u in %s on line 197
+2
+astringable stringable! [1,6] 1.5 12
+x51.51
+
+Warning: A non-numeric value encountered in %s on line 192
+6
+TypeError: Unsupported operand types: array - int
+DivisionByZeroError: Division by zero
+DivisionByZeroError: Modulo by zero
+Error: Object of class Plain could not be converted to string
+
+Warning: Undefined variable $u in %s on line 197
+2
+-- unset of properties, variables by name
+{}
+__unset(a) __unset(b) 
+Error: Cannot unset readonly property Plain::$ro
+Error: Cannot unset hooked property Magic::$hooked
+Error: Cannot access private property Magic::$secret
+non-objects
+set-local set-local local set-fresh
+v0!
+main-0
+{}
+__unset(a) __unset(b) 
+Error: Cannot unset readonly property Plain::$ro
+Error: Cannot unset hooked property Magic::$hooked
+Error: Cannot access private property Magic::$secret
+non-objects
+set-local set-local local set-fresh
+v1!
+main-1
