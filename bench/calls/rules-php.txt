@@ -1,0 +1,39 @@
+# lines.py --rules for PHP 8.6's execute_ex (the hybrid VM), with
+# --arms zend_vm_execute.h=<arms.sh php output>.
+# phase<TAB>regex on "arm | instruction | callgrind function | inline chain"; first match wins.
+#
+# Dispatch: the jump to the next handler and the step of the instruction
+# pointer before it (`opline++`), whichever handler they close.
+9 dispatch between instructions	\| jmp \*
+9 dispatch between instructions	\| (add \$0x20,%r15|lea 0x20\(%r15\),%r15) \|
+9 dispatch between instructions	^ZEND_INIT_FCALL_SPEC_CONST \| mov %r15,%rax \|
+# Argument sends.
+1 argument sends	^ZEND_SEND_
+# INIT_FCALL: the callee is read from the call site's cache slot; the rest
+# of the handler pushes and fills the frame.
+2 finding the callee	^ZEND_INIT_FCALL\w* \| .*ZEND_INIT_FCALL\w*_HANDLER@Zend/zend_vm_execute.h:(4208|4209)
+3 building the frame	^ZEND_INIT_FCALL
+# INIT_METHOD_CALL: object operand, its class against the call site's
+# cache, the method's static flag; then $this is counted and the frame
+# pushed and filled.
+3 building the frame	^ZEND_INIT_(STATIC_)?METHOD_CALL\w* \| .*(zend_gc_addref|zend_vm_calc_used_stack|zend_vm_stack_push_call_frame|zend_vm_init_call_frame)
+3 building the frame	^ZEND_INIT_METHOD_CALL\w* \| .*_HANDLER@Zend/zend_vm_execute.h:(4412[0-9])
+2 finding the callee	^ZEND_INIT_(STATIC_)?METHOD_CALL
+# DO_UCALL / DO_FCALL: i_init_func_execute_data's argument-count test and
+# the skip over the RECV opcodes are the parameter binding; the rest
+# links and enters the frame.
+4 binding and verifying parameters	^ZEND_DO_[UF]CALL\w* \| .*i_init_func_execute_data@Zend/zend_execute.c:(4485|4486|4493)
+4 binding and verifying parameters	^ZEND_RECV
+3 building the frame	^ZEND_DO_[UF]CALL
+# The callee's body.
+5 the body	^ZEND_(ADD|ASSIGN_OBJ_OP|FETCH_OBJ_R)_
+5 the body	^(zend_std_get_property_ptr_ptr|add_function)
+# RETURN and zend_leave_helper; inside the helper, freeing the callee's
+# variables and its $this is the release.
+7 releasing the callee's registers and $this	^zend_leave_helper_SPEC \| .*(i_free_compiled_variables|i_zval_ptr_dtor|zend_gc_delref|zend_object_release)
+7 releasing the callee's registers and $this	^zend_leave_helper_SPEC \| .*execute_ex@Zend/zend_vm_execute.h:(110739|110740|110741)
+6 the return	^(ZEND_RETURN_|zend_leave_helper_SPEC)
+# The caller's `$s = <result>`.
+8 storing the result	ZEND_ASSIGN_SPEC_CV_TMP
+# The loop's own two instructions: $i++ and the fused `$i < $n` jump.
+0 the loop itself ($i++, $i < $n)	^ZEND_(PRE_INC|IS_SMALLER)

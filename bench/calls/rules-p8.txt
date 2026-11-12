@@ -1,0 +1,56 @@
+# lines.py --rules for p8's `Context::execute` (crates/p8-interp/src/fast.rs
+# at 536b1398), with --arms p8-interp/src/fast.rs=<arms.sh p8>,out/dispatch.rs=<arms.sh p8-dispatch>.
+# phase<TAB>regex on "arm | instruction | callgrind function | inline chain | address"; first match wins.
+# The phases are rules-php.txt's. `X` below is `execute@p8-interp/src/fast.rs`.
+#
+# Dispatch: stepping pc (`done!`, fast.rs:105, and the generated arms'
+# step), the bounds check and address of `code[pc]` (437), the load of
+# the op (438), the jump table (dispatch.rs:7), and what the compiler
+# put between them with no line (pc and the code pointer kept in, and
+# read back from, the stack).
+9 dispatch between instructions	execute@p8-interp/src/fast.rs:105 \|
+9 dispatch between instructions	^\(loop head\)~? \|
+9 dispatch between instructions	^\(dispatch\)~? \|
+# The frame head runs once after the call (the callee's frame is entered)
+# and once after the return (the caller's is entered again).
+3 building the frame / 6 the return	^\(frame head\)~? \|
+# The return: `ret!` (345-358) with `leave` inlined at 353. In `leave`
+# the variables cleared and $this dropped are the release, the value put
+# in the caller's register is the result stored, the rest is the return.
+7 releasing the callee's registers and $this	leave@p8-interp/src/fast.rs:26(4[0-9]|5[0-9]|60) .*execute@p8-interp/src/fast.rs:353 \|
+8 storing the result	leave@p8-interp/src/fast.rs:266[1-9] .*execute@p8-interp/src/fast.rs:353 \|
+6 the return	execute@p8-interp/src/fast.rs:3(4[4-9]|5[0-9]) \|
+6 the return	^\(ret!\)~? \|
+6 the return	^Op::(P8_RETURN_\w+|Return\w*)~? \|
+# Argument sends: CallRegs moves the first argument, a move per further one;
+# a method call's are SendVarMethod / SendVar.
+1 argument sends	^Op::(CallRegs|P8_MOVE_REG|P8_MOVE_K|SendVarMethod|SendVar|SendValMethod|SendVal)~? \|
+# Call: the call site's cache slot and the closure it names.
+2 finding the callee	^Op::Call~? \| .*execute@p8-interp/src/fast.rs:(939|940) \|
+# ... the argument count against the required parameters, the generator
+# flag and the interrupt flag, one line.
+4 binding and verifying parameters	^Op::Call~? \| .*execute@p8-interp/src/fast.rs:942 \|
+# ... `enter`: the registers the frame needs (2542-2550) are the frame;
+# the argument count against the parameters, the variables not passed
+# set undefined, the defaults are the binding.
+4 binding and verifying parameters	^Op::(Call|MethodCall)~? \| .*enter@p8-interp/src/fast.rs:25[5-6][0-9]
+3 building the frame	^Op::(Call|MethodCall)~? \| .*enter@
+3 building the frame	^Op::Call~? \|
+# MethodCall: the receiver, its class against the call site's cache and
+# the cached method are finding the callee; the argument count, generator
+# and interrupt test (1080) the verifying; $this counted, Frames::call and
+# what it stores in the frame ($this, the scope) are the frame.
+4 binding and verifying parameters	^Op::MethodCall~? \| .*execute@p8-interp/src/fast.rs:1080 \|
+3 building the frame	^Op::MethodCall~? \| .*Frames::(call|push_code|top_mut)@
+3 building the frame	^Op::MethodCall~? \| .*execute@p8-interp/src/fast.rs:(108[3-9]|109[0-5]) \|
+2 finding the callee	^Op::MethodCall~? \|
+2 finding the callee	^core::option::Option<T>::zip~? \|
+# The caller's `$s = <result>`.
+8 storing the result	^Op::P8_ASSIGN_\w+~? \|
+# The loop's own instruction: `$i++; if ($i < $n) goto` fused.
+0 the loop itself ($i++, $i < $n)	^Op::IncJumpLt~? \|
+0 the loop itself ($i++, $i < $n)	^\((step_jump|back)!\)~? \|
+# The callee's body: its arms and what they call out of line.
+5 the body	^Op::(Add|AddC|AssignPropOp|P8_FETCH_PROP\w+|P8_FREE)~? \|
+5 the body	^\((arith|reg_src|cst_src|gen_arm|gen_out)!\)~? \|
+5 the body	^(p8_interp::fast::prop_op|p8_runtime::ops::\w+|p8_interp::sites::cached_prop|core::ptr::drop_in_place<alloc::vec::Vec<p8_runtime::ops::Diag>>)

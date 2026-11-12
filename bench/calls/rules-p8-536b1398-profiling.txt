@@ -1,0 +1,20 @@
+# lines.py --rules, read before rules-p8.txt, for ONE binary: main at
+# 536b1398 built `--profile profiling` on addis (bin/main-prof). These are
+# the instructions that carry no source line and that the neighbour rule
+# of lines.py places wrongly or not at all; each was placed by reading
+# the disassembly around it. Addresses are the file's.
+#
+# The frame head's window (`w`, fast.rs:131): the compiler put it after
+# the entry copy of the loop head's bounds check, so its neighbour is
+# the loop head. Runs once per frame entry, as the frame head does.
+3 building the frame / 6 the return	 \| 0xfbfb(4e|57|5c|60|68|6c|70|75|7d)$
+# Add's result stored (tag, then the shared second half of the store).
+5 the body	 \| 0x(fc70d5|fc70dc|fbfb9a|fbfb9e)$
+# pc read back from the stack before it is stepped (the head keeps it
+# there: `mov %rax,0x30(%rsp)` on every dispatch).
+9 dispatch between instructions	 \| mov 0x30\(%rsp\),%(rbp|r8) \|
+# P8_ASSIGN_TAKE's tail: the value stored, then the pending-destructor
+# test after a write.
+8 storing the result	 \| 0xfd01(a4|a7|b4|bc|bf|c6)$
+# `ret!`: reloads between its lines.
+6 the return	 \| 0x(fdf676|fdf695|fe032c|fe151f|fe1546)$
