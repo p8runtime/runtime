@@ -106,7 +106,7 @@ hand VerifyArgs native=verify_args
 /// a: the value returned; b: 1 when none was (`return;`, the end), for
 /// the TypeError's text. A value the quick test does not pass runs out of
 /// line (`verify_return_ops`: a coercion, a Stringable, the error)
-hand VerifyReturn
+hand VerifyReturn native=verify_return
 /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
 hand Intrinsic
 /// pass b's variable c as argument imm >> 16 of method site imm & 0xffff on the object in a

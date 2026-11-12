@@ -2,23 +2,29 @@
 //! function as machine code, in safe Rust.
 //!
 //! A p8-built executable (`p8 compile [dir] --native <exe>`) carries
-//! machine code for some of its package's functions. The machine code is
+//! machine code for the functions of its package. The machine code is
 //! called through the one crate allowed `unsafe` (`p8-native`), which
 //! implements [`NativeCode`]; this module is what that crate is given:
-//! the frame to run on ([`NativeFrame`]), and the calls the machine code
-//! makes back into the interpreter. Nothing here is `unsafe`.
+//! the frame to run on ([`NativeFrame`]), and the one way the machine
+//! code calls back into the interpreter ([`NativeFrame::help`]). Nothing
+//! here is `unsafe`.
 //!
-//! The contract: a native function runs the top frame from its first
-//! instruction, on the frame's own registers (the window), and hands the
-//! frame back to the interpreter at a pc ([`Exit`]): at a return (the
-//! interpreter's return runs it), or at an instruction whose operands it
-//! has no code for (a string where it compiled for ints, an overflow to
-//! float, a reference), with the registers as they were before that
-//! instruction. The interpreter goes on from there, so whatever the
-//! native code does not take runs exactly as without it (#388). A
-//! function is entered natively by a user call the loop makes (`Op::Call`)
-//! and by the calls native code makes ([`NativeFrame::call`]); any other
-//! call runs it on the interpreter.
+//! The contract: a native function runs the top frame, from its first
+//! instruction, on the frame's own registers (the window). An instruction
+//! its code has no inline form for, or whose operands its inline form does
+//! not take (a string where it compiled for ints, an overflow to float, a
+//! value holding memory), it has the interpreter run, here, as the loop's
+//! `slow` runs it (`step`, with everything `step`'s caller does after:
+//! unwinding to a handler, errors, destructors), then goes on wherever
+//! that left the frame. So every case the inline code does not take keeps
+//! one copy of its semantics, the interpreter's (#388). It hands the frame
+//! back ([`Exit`]) at a return, and when what the interpreter ran left the
+//! frame (an exception out of it, the end of the run).
+//!
+//! A function with native code is entered wherever the loop starts a
+//! frame at its first instruction (`execute`'s frame head): every call
+//! path, first calls, methods, static calls, closures and callbacks
+//! included.
 
 use super::*;
 use p8_bytecode::Op;
@@ -26,8 +32,8 @@ use p8_bytecode::Op;
 /// Machine code for some of the program's functions: what the boundary
 /// crate implements. One per process (it is the executable's).
 pub trait NativeCode: Sync {
-    /// Run native function `id` on the top frame (just entered, its
-    /// arguments in its first registers), until it hands the frame back.
+    /// Run native function `id` on the top frame from its first
+    /// instruction, until it hands the frame back.
     fn run(&self, id: u32, frame: &mut NativeFrame<'_, '_>) -> Exit;
 }
 
@@ -37,41 +43,46 @@ pub enum Exit {
     /// Go on at this pc (a return, or an instruction the native code
     /// leaves to the interpreter), the registers as before it.
     At(u32),
-    /// The call at this pc ran, and left an error or a destructor due:
-    /// they run, then the frame goes on after the call.
-    Pending(u32),
-    /// The call at this pc threw ([`NativeFrame::call`] kept what): the
-    /// exception is raised there.
-    Threw(u32),
+    /// What a [`NativeFrame::help`] ran left the frame: the interpreter
+    /// goes on from what it gave (kept in the frame).
+    Left,
 }
 
-/// What [`NativeFrame::call`] did.
+/// What [`NativeFrame::help`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallDone {
-    /// The call ran; its result is in its register.
-    Done,
-    /// Nothing ran: the call is not one native code makes (not a user
-    /// function the site resolved, too few arguments, a generator, an
-    /// interrupt due). The interpreter is to run it.
-    NotTaken,
-    /// The call ran and left something due (`Exit::Pending`).
-    Pending,
-    /// The call threw (`Exit::Threw`).
-    Threw,
+pub enum Help {
+    /// The instruction ran; the frame goes on at this pc.
+    Next(u32),
+    /// The instruction ran and the interpreter is to go on from what it
+    /// gave (`Exit::Left`): it left the frame (an exception out of it, the
+    /// end of the run, a fiber suspended), or pushed a callee it did not
+    /// run nested.
+    Left,
+}
+
+/// What [`NativeFrame::help`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpOp {
+    /// An `Op::Call`: a user function the site resolved is called directly,
+    /// anything else as `Step`.
+    Call,
+    /// Any instruction, as the loop's `slow` runs it.
+    Step,
 }
 
 /// The frame native code runs on, and the interpreter it calls back.
 pub struct NativeFrame<'a, 'c> {
     cx: &'a mut Context<'c>,
     regs: &'a mut Vec<Value>,
-    thrown: Option<Throw>,
+    /// What a help that left the frame gave (`Exit::Left`).
+    left: Option<Result<Flow, Throw>>,
 }
 
 impl NativeFrame<'_, '_> {
     /// The top frame's registers: its window of `WINDOW` values from its
     /// base (every register operand of its code is inside it). What a
-    /// call does may move the register file: this is to be asked again
-    /// after every call.
+    /// help does may move the register file: this is to be asked again
+    /// after every help.
     pub fn window(&mut self) -> &mut [Value] {
         let base = self.cx.frames.last().expect("a frame").base as usize;
         &mut self.regs[base..base + fast::WINDOW]
@@ -79,86 +90,122 @@ impl NativeFrame<'_, '_> {
 
     /// The isolate's interrupt word: not 0 when the run is to stop (a
     /// time limit), which native code tests at each backward jump, as the
-    /// loop does, and hands the frame back there.
+    /// loop does, and has the interpreter run that jump (which raises it).
     pub fn interrupt(&self) -> &AtomicU64 {
         &self.cx.stop
     }
 
-    /// The `Op::Call` at `pc` of the top frame, run whole, as the loop's
-    /// arm runs it: a user function the site has resolved, called with
-    /// its required arguments, entered natively when it has native code,
-    /// and run on the interpreter from wherever that hands it back. The
-    /// result lands in the call's register. Anything else is not taken,
-    /// and so is any call once nested runs reach their stack limit.
-    pub fn call(&mut self, pc: u32) -> CallDone {
+    /// Run the instruction at `pc` of the top frame on the interpreter
+    /// (`op`), and say where the frame goes on. A call it makes runs its
+    /// callee nested, as a callback a builtin makes does, natively when
+    /// the callee has native code (`execute`'s frame head enters it).
+    pub fn help(&mut self, op: HelpOp, pc: u32) -> Help {
+        // A callee runs nested only while that is sound: below the stack
+        // limit nested runs keep to (#444), and outside a fiber (a fiber
+        // suspends only from its own run of the loop, whose Rust frames are
+        // all it has). Else a call pushes its callee's frame and the frame
+        // is left to the interpreter, which runs the callee on its own
+        // frames, then the rest of this function.
+        let nest = !self.cx.stack_exhausted() && self.cx.fibers.is_empty();
+        let depth = self.cx.frames.len();
+        if nest
+            && op == HelpOp::Call
+            && let Some(r) = self.call(pc)
+        {
+            return self.settle(depth, r);
+        }
+        let ran = self.cx.slow(self.regs, pc as usize);
+        let r = match ran {
+            // A call pushed its callee's frame: run it to its return.
+            Ok(Flow::Go(next)) if nest && self.cx.frames.len() > depth => {
+                self.cx.frames.last_mut().expect("the callee").pc = next as u32;
+                let ran = self.nested();
+                self.after(ran, pc as usize)
+            }
+            r => r,
+        };
+        self.settle(depth, r)
+    }
+
+    /// The loop's Call arm, for a user function the site resolved (None
+    /// for anything else, which `step` runs).
+    fn call(&mut self, pc: u32) -> Option<Result<Flow, Throw>> {
         let cx = &mut *self.cx;
         let top = cx.frames.last().expect("a frame");
         let base = top.base as usize;
-        let Some(&insn) = top.func.code.insns.get(pc as usize) else { return CallDone::NotTaken };
+        let insn = *top.func.code.insns.get(pc as usize)?;
         if insn.op != Op::Call {
-            return CallDone::NotTaken;
+            return None;
         }
         let (args, n, dst) = (usize::from(insn.a), usize::from(insn.b), usize::from(insn.c));
-        let Some(&Callee::User(t)) = top.func.sites.get(insn.imm as usize).and_then(|s| s.get()) else { return CallDone::NotTaken };
+        let Some(&Callee::User(t)) = top.func.sites.get(insn.imm as usize).and_then(|s| s.get()) else { return None };
         let target = &cx.closures[t as usize];
         // (The loop's Call arm's conditions.)
         if n < target.code.required || target.code.is_generator || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
-            return CallDone::NotTaken;
+            return None;
         }
-        // The callee runs nested, on the native stack: past the limit
-        // nested runs keep to, the interpreter makes the call, its frames
-        // on the heap, and a deep recursion goes on as without native
-        // code (#444).
-        if cx.stack_exhausted() {
-            return CallDone::NotTaken;
-        }
-        let native = target.code.native;
         cx.frames.call(Some(target), pc as usize + 1, base + args, n, (base + dst) as u32);
         fast::enter(&mut cx.frames, self.regs);
-        // The callee runs as the bottom frame of a run of its own, as a
-        // callback a builtin makes does (`run_nested_at`): its return
-        // ends the run, its result in the call's register.
+        let ran = self.nested();
+        Some(self.after(ran, pc as usize))
+    }
+
+    /// Run the frame just pushed (at its pc) to its return, as the bottom
+    /// frame of a run of its own (`run_nested_at`'s way): its return ends
+    /// the run, its result in the call's register. `execute`'s frame head
+    /// enters its native code.
+    fn nested(&mut self) -> Result<(), Throw> {
+        let cx = &mut *self.cx;
         let (saved_pc, saved_floor) = (cx.pc, cx.frames.floor);
         cx.frames.floor = cx.frames.len() - 1;
-        let ran = cx.run_entered(self.regs, native);
+        let ran = cx.execute(self.regs);
         cx.frames.floor = saved_floor;
         cx.pc = saved_pc;
+        ran
+    }
+
+    /// After a nested call made by the instruction at `at`: the caller
+    /// goes on where the call left it, after the errors and destructors it
+    /// made due; an exception out of the callee is raised at the call.
+    fn after(&mut self, ran: Result<(), Throw>, at: usize) -> Result<Flow, Throw> {
+        let cx = &mut *self.cx;
         match ran {
-            Ok(()) if cx.ids.has_pending() || !cx.pending_errors.is_empty() => CallDone::Pending,
-            Ok(()) => CallDone::Done,
-            Err(t) => {
-                self.thrown = Some(t);
-                CallDone::Threw
+            // The callee suspended its fiber: its frames stay as they are.
+            Ok(()) if cx.fiber_suspended.is_some() => Ok(Flow::Done),
+            Ok(()) => {
+                let next = cx.frames.last().expect("the caller").pc as usize;
+                if cx.ids.has_pending() || !cx.pending_errors.is_empty() { cx.after_errors(self.regs, next, at).map(Flow::Go) } else { Ok(Flow::Go(next)) }
+            }
+            Err(t) => cx.unwind(self.regs, t, at).map(Flow::Go),
+        }
+    }
+
+    /// The frame goes on at the pc `r` gives, if it is still the top one
+    /// (as deep as before); else it left. A fiber suspended by what ran
+    /// (in a callee run nested, too: its frames stay where they are, as
+    /// the fiber left them) ends this run of the loop, as `went` ends it.
+    fn settle(&mut self, depth: usize, r: Result<Flow, Throw>) -> Help {
+        let r = if self.cx.fiber_suspended.is_some() && r.is_ok() { Ok(Flow::Done) } else { r };
+        match r {
+            Ok(Flow::Go(next)) if self.cx.frames.len() == depth => Help::Next(next as u32),
+            r => {
+                self.left = Some(r);
+                Help::Left
             }
         }
     }
 }
 
 impl Context<'_> {
-    /// Enter native function `id` on the frame just pushed (pc 0): where
-    /// the interpreter goes on in it.
-    pub(crate) fn native_entry(&mut self, regs: &mut Vec<Value>, id: u32) -> Result<usize, Throw> {
-        let Some(code) = self.isolate.native else { return Ok(0) };
-        let mut frame = NativeFrame { cx: self, regs, thrown: None };
-        let exit = code.run(id, &mut frame);
-        let thrown = frame.thrown.take();
-        match exit {
-            Exit::At(pc) => Ok(pc as usize),
-            Exit::Pending(pc) => self.after_errors(regs, pc as usize + 1, pc as usize),
-            Exit::Threw(pc) => self.unwind(regs, thrown.expect("the call kept what it threw"), pc as usize),
+    /// Enter native function `id` on the top frame at pc 0: where the
+    /// interpreter goes on.
+    pub(crate) fn native_entry(&mut self, regs: &mut Vec<Value>, id: u32) -> Result<Flow, Throw> {
+        let Some(code) = self.isolate.native else { return Ok(Flow::Go(0)) };
+        let mut frame = NativeFrame { cx: self, regs, left: None };
+        match code.run(id, &mut frame) {
+            Exit::At(pc) => Ok(Flow::Go(pc as usize)),
+            Exit::Left => frame.left.take().expect("the help that left kept what it gave"),
         }
-    }
-
-    /// Run the frame just pushed to its return: natively first when it
-    /// has native code, then on the interpreter from where that hands it
-    /// back.
-    fn run_entered(&mut self, regs: &mut Vec<Value>, native: Option<u32>) -> Result<(), Throw> {
-        let start = match native {
-            Some(id) => self.native_entry(regs, id)?,
-            None => 0,
-        };
-        self.frames.last_mut().expect("the frame").pc = start as u32;
-        self.execute(regs)
     }
 }
 
