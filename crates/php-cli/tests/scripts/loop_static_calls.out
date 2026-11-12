@@ -1,0 +1,248 @@
+-- 0
+Base#0 Kid#0 Kid2#0 Kid#0 Base#0
+Base0 Kid0 Kid0 GrandKid0 GrandKid0
+Base0 Kid0 Kid0 Base Kid
+Kid0 Kid0 Kid#0 GrandKid0 GrandKid0 Kid#0 Kid2#0 Base0 
+inst Q Q q-a0 0
+inst Q2 Q2 q-b0 0
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q Q q-e0 0
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+describe Q q-u0 0 + inst Q Q q-u0 0 + inst Q Q q-u0 0
+describe Q2 q-v0 0 + inst Q2 Q2 q-v0 0 + inst Q2 Q2 q-v0 0
+inst Q Q q-w0 0
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q2 Q2 q-y0 0
+inst Q2 Q2 q-z0 0
+callStatic nothing(0,a) call nothing(0) call nothing2(0) call nothing3(0) callStatic nothing(0) call nothing(0) call nothing2(0) call nothing3(0)
+callStatic maybe(0) MagicKid::maybe 0 callStatic maybe(0)
+secret 0 guarded 0 Vault | secret 0 guarded 0 VaultKid | guarded 0 VaultKid
+Error: Call to private method Vault::secret() from scope VaultKid
+Error: Call to private method Vault::secret() from global scope
+Error: Call to protected method Vault::guarded() from global scope
+secret 0
+guarded 0 Vault
+Error: Call to private method Vault::secret() from scope VaultKid
+guarded 0 Vault
+secret 0
+guarded 0 Vault
+Error: Call to private method Vault::secret() from scope Base
+Error: Call to protected method Vault::guarded() from scope Base
+secret 0
+guarded 0 Vault
+Base0 Base#0 Kid0 Kid#0 GrandKid0 Kid#0 Kid20 Kid2#0 Base0 Base#0 
+circle 0 Error: Cannot call abstract method Shape::name()
+Error: Cannot call abstract method Shape::name()
+circle 0 circle 0
+Error: Cannot call abstract method Shape::name()
+Hearts Spades Hearts0 Spades s
+Error: Cannot call abstract method HasFallback::fallback()
+100 1 102
+autoload Late
+late 0
+autoload Later
+Error: Class "Later" not found
+1 1 1 1
+
+Warning: Undefined variable $undef in %s on line 175
+NULL/dflt 0/0 array (
+  0 => 0,
+)/dflt
+0m 0m 
+Warning: Undefined variable $undef2 in %s on line 176
+n n
+ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
+ArgumentCountError
+g0 g1 
+not set [Undefined variable $undef3: $viaRef is NULL]
+0 '0'
+-- 1
+Base#1 Kid#1 Kid2#1 Kid#1 Base#1
+Base1 Kid1 Kid1 GrandKid1 GrandKid1
+Base1 Kid1 Kid1 Base Kid
+Kid1 Kid1 Kid#1 GrandKid1 GrandKid1 Kid#1 Kid2#1 Base1 
+inst Q Q q-a1 1
+inst Q2 Q2 q-b1 1
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q Q q-e1 1
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+describe Q q-u1 1 + inst Q Q q-u1 1 + inst Q Q q-u1 1
+describe Q2 q-v1 1 + inst Q2 Q2 q-v1 1 + inst Q2 Q2 q-v1 1
+inst Q Q q-w1 1
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q2 Q2 q-y1 1
+inst Q2 Q2 q-z1 1
+callStatic nothing(1,a) call nothing(1) call nothing2(1) call nothing3(1) callStatic nothing(1) call nothing(1) call nothing2(1) call nothing3(1)
+callStatic maybe(1) MagicKid::maybe 1 callStatic maybe(1)
+secret 1 guarded 1 Vault | secret 1 guarded 1 VaultKid | guarded 1 VaultKid
+Error: Call to private method Vault::secret() from scope VaultKid
+Error: Call to private method Vault::secret() from global scope
+Error: Call to protected method Vault::guarded() from global scope
+secret 1
+guarded 1 Vault
+Error: Call to private method Vault::secret() from scope VaultKid
+guarded 1 Vault
+secret 1
+guarded 1 Vault
+Error: Call to private method Vault::secret() from scope Base
+Error: Call to protected method Vault::guarded() from scope Base
+secret 1
+guarded 1 Vault
+Base1 Base#1 Kid1 Kid#1 GrandKid1 Kid#1 Kid21 Kid2#1 Base1 Base#1 
+circle 1 Error: Cannot call abstract method Shape::name()
+Error: Cannot call abstract method Shape::name()
+circle 1 circle 1
+Error: Cannot call abstract method Shape::name()
+Hearts Spades Hearts1 Spades s
+Error: Cannot call abstract method HasFallback::fallback()
+100 1 122
+late 1
+autoload Later
+Error: Class "Later" not found
+2 1 2 1
+
+Warning: Undefined variable $undef in %s on line 175
+NULL/dflt 1/1 array (
+  0 => 0,
+  1 => 1,
+)/dflt
+1m 1m 
+Warning: Undefined variable $undef2 in %s on line 176
+n n
+ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
+ArgumentCountError
+g1 g2 
+not set [Undefined variable $undef3: $viaRef is NULL]
+1 '1'
+-- 2
+Base#2 Kid#2 Kid2#2 Kid#2 Base#2
+Base2 Kid2 Kid2 GrandKid2 GrandKid2
+Base2 Kid2 Kid2 Base Kid
+Kid2 Kid2 Kid#2 GrandKid2 GrandKid2 Kid#2 Kid2#2 Base2 
+inst Q Q q-a2 2
+inst Q2 Q2 q-b2 2
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q Q q-e2 2
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+describe Q q-u2 2 + inst Q Q q-u2 2 + inst Q Q q-u2 2
+describe Q2 q-v2 2 + inst Q2 Q2 q-v2 2 + inst Q2 Q2 q-v2 2
+inst Q Q q-w2 2
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q2 Q2 q-y2 2
+inst Q2 Q2 q-z2 2
+callStatic nothing(2,a) call nothing(2) call nothing2(2) call nothing3(2) callStatic nothing(2) call nothing(2) call nothing2(2) call nothing3(2)
+callStatic maybe(2) MagicKid::maybe 2 callStatic maybe(2)
+secret 2 guarded 2 Vault | secret 2 guarded 2 VaultKid | guarded 2 VaultKid
+Error: Call to private method Vault::secret() from scope VaultKid
+Error: Call to private method Vault::secret() from global scope
+Error: Call to protected method Vault::guarded() from global scope
+secret 2
+guarded 2 Vault
+Error: Call to private method Vault::secret() from scope VaultKid
+guarded 2 Vault
+secret 2
+guarded 2 Vault
+Error: Call to private method Vault::secret() from scope Base
+Error: Call to protected method Vault::guarded() from scope Base
+secret 2
+guarded 2 Vault
+Base2 Base#2 Kid2 Kid#2 GrandKid2 Kid#2 Kid22 Kid2#2 Base2 Base#2 
+circle 2 Error: Cannot call abstract method Shape::name()
+Error: Cannot call abstract method Shape::name()
+circle 2 circle 2
+Error: Cannot call abstract method Shape::name()
+Hearts Spades Hearts2 Spades s
+Error: Cannot call abstract method HasFallback::fallback()
+100 1 142
+late 2
+later 2
+3 1 3 1
+
+Warning: Undefined variable $undef in %s on line 175
+NULL/dflt 2/2 array (
+  0 => 0,
+  1 => 1,
+  2 => 2,
+)/dflt
+2m 2m 
+Warning: Undefined variable $undef2 in %s on line 176
+n n
+ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
+ArgumentCountError
+g2 g3 
+not set [Undefined variable $undef3: $viaRef is NULL]
+2 '2'
+-- 3
+Base#3 Kid#3 Kid2#3 Kid#3 Base#3
+Base3 Kid3 Kid3 GrandKid3 GrandKid3
+Base3 Kid3 Kid3 Base Kid
+Kid3 Kid3 Kid#3 GrandKid3 GrandKid3 Kid#3 Kid2#3 Base3 
+inst Q Q q-a3 3
+inst Q2 Q2 q-b3 3
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q Q q-e3 3
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+describe Q q-u3 3 + inst Q Q q-u3 3 + inst Q Q q-u3 3
+describe Q2 q-v3 3 + inst Q2 Q2 q-v3 3 + inst Q2 Q2 q-v3 3
+inst Q Q q-w3 3
+Error: Non-static method Q::inst() cannot be called statically
+Error: Non-static method Q::inst() cannot be called statically
+inst Q2 Q2 q-y3 3
+inst Q2 Q2 q-z3 3
+callStatic nothing(3,a) call nothing(3) call nothing2(3) call nothing3(3) callStatic nothing(3) call nothing(3) call nothing2(3) call nothing3(3)
+callStatic maybe(3) MagicKid::maybe 3 callStatic maybe(3)
+secret 3 guarded 3 Vault | secret 3 guarded 3 VaultKid | guarded 3 VaultKid
+Error: Call to private method Vault::secret() from scope VaultKid
+Error: Call to private method Vault::secret() from global scope
+Error: Call to protected method Vault::guarded() from global scope
+secret 3
+guarded 3 Vault
+Error: Call to private method Vault::secret() from scope VaultKid
+guarded 3 Vault
+secret 3
+guarded 3 Vault
+Error: Call to private method Vault::secret() from scope Base
+Error: Call to protected method Vault::guarded() from scope Base
+secret 3
+guarded 3 Vault
+Base3 Base#3 Kid3 Kid#3 GrandKid3 Kid#3 Kid23 Kid2#3 Base3 Base#3 
+circle 3 Error: Cannot call abstract method Shape::name()
+Error: Cannot call abstract method Shape::name()
+circle 3 circle 3
+Error: Cannot call abstract method Shape::name()
+Hearts Spades Hearts3 Spades s
+Error: Cannot call abstract method HasFallback::fallback()
+100 1 162
+late 3
+later 3
+4 1 4 1
+
+Warning: Undefined variable $undef in %s on line 175
+NULL/dflt 3/3 array (
+  0 => 0,
+  1 => 1,
+  2 => 2,
+  3 => 3,
+)/dflt
+3m 3m 
+Warning: Undefined variable $undef2 in %s on line 176
+n n
+ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
+ArgumentCountError
+g3 g4 
+not set [Undefined variable $undef3: $viaRef is NULL]
+3 '3'
+autoload Missing
+Error: Class "Missing" not found
+done
