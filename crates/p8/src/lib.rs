@@ -102,6 +102,7 @@ impl Platform {
             compiler: Arc::new(Compiler {
                 registry: Arc::new(Registry::new(extensions)),
                 cache: None,
+                loading: Mutex::default(),
                 files: None,
                 package: None,
                 compiled: AtomicUsize::new(0),
@@ -307,10 +308,25 @@ impl Platform {
     }
 }
 
+thread_local! {
+    /// Files compiled from source on this thread, by any Platform.
+    static COMPILED_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many files have been compiled from their source on the calling
+/// thread, by any Platform (a server's worker counts what its own
+/// requests compiled; [`Platform::compiled_files`] counts every thread's).
+pub fn compiled_on_this_thread() -> usize {
+    COMPILED_HERE.with(|n| n.get())
+}
+
 /// What compiles a script and the files it includes.
 struct Compiler {
     registry: Arc<Registry>,
     cache: Option<Mutex<HashMap<String, Kept>>>,
+    /// The files being loaded now, each with the lock its loader holds
+    /// (see `Compiler::file`).
+    loading: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Where compiled files are kept on disk, if anywhere.
     files: Option<Arc<file_cache::FileCache>>,
     /// The project's files compiled ahead of time, if there are.
@@ -364,9 +380,45 @@ impl Source {
     }
 }
 
+/// `Compiler::loading`'s entry for a file, taken out when its loader is done.
+struct Leave<'a> {
+    loading: &'a Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    file: &'a str,
+    gate: &'a Arc<Mutex<()>>,
+}
+
+impl Drop for Leave<'_> {
+    fn drop(&mut self) {
+        let mut loading = self.loading.lock().unwrap_or_else(|e| e.into_inner());
+        if loading.get(self.file).is_some_and(|g| Arc::ptr_eq(g, self.gate)) {
+            loading.remove(self.file);
+        }
+    }
+}
+
 impl Compiler {
     fn file(&self, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
         let Some(cache) = &self.cache else { return self.load(source, file).map(|(program, _)| program) };
+        if let Some(program) = self.kept(cache, source, file) {
+            return Ok(program);
+        }
+        // Isolates on other threads may want the same file now: one loads
+        // it, the others wait for it and take what it kept (APS 13 §1:
+        // built once per file version), while other files load alongside.
+        let gate = Arc::clone(self.loading.lock().unwrap_or_else(|e| e.into_inner()).entry(file.to_string()).or_default());
+        // The gate leaves the table when this call ends, a panic included,
+        // and only if it is still this call's (a later call may have put a
+        // new one there for a changed file).
+        let _leave = Leave { loading: &self.loading, file, gate: &gate };
+        let _held = gate.lock().unwrap_or_else(|e| e.into_inner());
+        match self.kept(cache, source, file) {
+            Some(program) => Ok(program),
+            None => self.load_and_keep(cache, source, file),
+        }
+    }
+
+    /// What `cache` keeps of `file` for this source, if it is still valid.
+    fn kept(&self, cache: &Mutex<HashMap<String, Kept>>, source: &[u8], file: &str) -> Option<Arc<p8_bytecode::Program>> {
         // While OPcache runs, a file it caches is checked by its rules (so,
         // as in PHP, a changed file can run as it was until revalidated);
         // anything else p8 keeps is used again only while its source is
@@ -394,11 +446,18 @@ impl Compiler {
                     if let Some(o) = opcache.filter(|_| entry.stats.opcache) {
                         o.hit(&mut entry.stats);
                     }
-                    return Ok(Arc::clone(&entry.program));
+                    return Some(Arc::clone(&entry.program));
                 }
                 kept.remove(file);
             }
         }
+        None
+    }
+
+    /// `file` loaded (from the package, the file cache, or compiled), and
+    /// kept in `cache`.
+    fn load_and_keep(&self, cache: &Mutex<HashMap<String, Kept>>, source: &[u8], file: &str) -> Result<Arc<p8_bytecode::Program>, Error> {
+        let opcache = self.opcache.as_ref().filter(|o| o.active());
         let (program, packaged) = self.load(source, file)?;
         let stats = match opcache {
             Some(o) => match o.refusal(file, source.len()) {
@@ -479,6 +538,7 @@ impl Compiler {
             return Ok((Arc::new(program), None));
         }
         self.compiled.fetch_add(1, Ordering::Relaxed);
+        COMPILED_HERE.with(|n| n.set(n.get() + 1));
         let program = compile(&self.registry, source, file, false)?;
         if let Some(files) = &self.files {
             files.store(source, file, &program, symbols);
