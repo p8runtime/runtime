@@ -619,21 +619,70 @@ impl Context<'_> {
         });
     }
 
-    /// The frame of a static-syntax call (`C::m()`, `self::m()`,
-    /// `parent::m()`, `static::m()`) the site's cache answers: the method
-    /// `static_frame` found for this target class from this scope, with
-    /// `$this` and the called class worked out as it does.
-    /// For the loop's StaticCall: the method the site's cache has for
-    /// class reference `class` from this scope, the class known without
-    /// a lookup (a named one its cache has, `self`, `parent`, `static`).
-    /// None for anything else, and for a hook's `parent::$p::get()` site.
-    #[inline]
-    pub(crate) fn cached_static_call(&self, clo: &Closure, class: u16, method: usize) -> Option<crate::classes::MethodFrame> {
-        if clo.code.sites[method].display.as_bytes().first() == Some(&b'$') {
+    /// For the loop's StaticCall: the PHP method the site's cache has for
+    /// class reference `class` from this scope, as the parts of the frame
+    /// the call pushes (`StaticHit`), with `$this` and the called class
+    /// worked out as `static_frame` does (`cached_static` answers `step`
+    /// the same call as a MethodFrame). The class is the one the site
+    /// names where that is known without a lookup (`static_target`'s
+    /// cases: a named one resolved before, `self`, `parent`, `static`),
+    /// read where it is: only what the frame keeps is counted, and the
+    /// code not at all when the frame slot the call reuses runs it
+    /// (`site_code`). None for anything else: no entry, a native method,
+    /// another class or scope, an instance method with no `$this` of the
+    /// class's kind (the error), a hook's `parent::$p::get()` site.
+    #[inline(never)]
+    pub(crate) fn static_site(&self, clo: &Closure, class: u16, method: usize) -> Option<StaticHit> {
+        use p8_bytecode::ClassRef;
+        let site = clo.methods[method].borrow();
+        let s = site.as_ref()?;
+        let MethodCode::User(code) = &s.code else { return None };
+        let top = self.frames.last()?;
+        if s.scope != top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize) {
             return None;
         }
-        let target = self.static_target(clo, class)?;
-        self.cached_static(&clo.methods[method], &target, &clo.code, class)
+        let kind = &clo.code.classes[class as usize];
+        let target = match kind {
+            ClassRef::Named(..) | ClassRef::Forward(..) => SiteClass::Named(clo.class_refs[class as usize].borrow()),
+            ClassRef::Scope => SiteClass::There(top.scope.as_ref()?),
+            ClassRef::ParentScope => SiteClass::There(top.scope.as_ref()?.parent.as_ref()?),
+            ClassRef::Static => SiteClass::There(top.called_class()?),
+            ClassRef::Dynamic(_) => return None,
+        };
+        if target.addr() != s.class {
+            return None;
+        }
+        let (this, called) = if s.is_static {
+            // `self::`, `parent::` and `static::` keep the caller's called
+            // class when it is of the target's kind; else the target is
+            // the called class.
+            let forward = !matches!(kind, ClassRef::Named(..));
+            match top.called_class() {
+                Some(c) if forward && extends_addr(c, s.class) => (None, Rc::clone(c)),
+                c => {
+                    let target = target.counted()?;
+                    match c {
+                        Some(c) if forward && c.is_a(&target.lower) => (None, Rc::clone(c)),
+                        _ => (None, target),
+                    }
+                }
+            }
+        } else {
+            // An instance method: `$this` of the target's kind, or
+            // `static_frame` raises the error. (A hook is an instance
+            // method: its `parent::$p::get()` site is `static_call_ops`'s.)
+            if clo.code.sites[method].display.as_bytes().first() == Some(&b'$') {
+                return None;
+            }
+            let this = top.this.as_ref()?;
+            if !extends_addr(&this.class, s.class) && !this.class.is_a(&target.counted()?.lower) {
+                return None;
+            }
+            (Some(Rc::clone(this)), Rc::clone(&this.class))
+        };
+        let scope = s.declaring.upgrade()?;
+        let code = self.frames.site_code(code)?;
+        Some(StaticHit { code, this, scope, called })
     }
 
     /// The class a static-syntax site's class reference names, when it is
@@ -722,6 +771,59 @@ fn extends(class: &Rc<Class>, target: &Rc<Class>) -> bool {
         c = k.parent.as_ref();
     }
     false
+}
+
+/// `extends`, of a target known by its address (a site's cache entry's).
+#[inline]
+fn extends_addr(class: &Rc<Class>, target: usize) -> bool {
+    let mut c = Some(class);
+    while let Some(k) = c {
+        if Rc::as_ptr(k) as usize == target {
+            return true;
+        }
+        c = k.parent.as_ref();
+    }
+    false
+}
+
+/// The frame a static-syntax call's site answers (`static_site`): what
+/// the loop's StaticCall pushes, each part moved into the frame.
+pub(crate) struct StaticHit {
+    /// The method's code as `Frames::site_code` gives it: None when the
+    /// frame slot the call reuses runs it already.
+    pub(crate) code: Option<Rc<Closure>>,
+    pub(crate) this: Option<Rc<p8_runtime::object::Object>>,
+    /// The class that declares the method.
+    pub(crate) scope: Rc<Class>,
+    pub(crate) called: Rc<Class>,
+}
+
+/// The class a static-syntax site names, where `static_site` finds it: a
+/// named class in the site's own weak handle, or one a frame holds.
+enum SiteClass<'a> {
+    Named(std::cell::Ref<'a, std::rc::Weak<Class>>),
+    There(&'a Rc<Class>),
+}
+
+impl SiteClass<'_> {
+    /// Its address: what a cache entry is keyed by. (A handle of no class
+    /// has an address no class has.)
+    #[inline(always)]
+    fn addr(&self) -> usize {
+        match self {
+            SiteClass::Named(known) => known.as_ptr() as usize,
+            SiteClass::There(class) => Rc::as_ptr(class) as usize,
+        }
+    }
+
+    /// The class itself, for a frame to keep; None when it is gone.
+    #[inline(always)]
+    fn counted(&self) -> Option<Rc<Class>> {
+        match self {
+            SiteClass::Named(known) => known.upgrade(),
+            SiteClass::There(class) => Some(Rc::clone(class)),
+        }
+    }
 }
 
 /// What a call site or constant fetch resolved to, in one context.

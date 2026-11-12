@@ -475,25 +475,28 @@ impl Context<'_> {
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_call_ops(regs, clo, base, at, ops))
                             }};
                         }
-                        let Some(m) = self.cached_static_call(clo, class, method) else { uncached!() };
-                        // (Taken apart: the frame takes its parts, no copy.)
-                        let classes::MethodFrame { func: classes::Code::User(target), this, scope, called, closure, .. } = m else { uncached!() };
-                        if n < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        // (The frame takes the parts, no copy; the code is
+                        // not counted when the frame slot the call reuses
+                        // runs it already.)
+                        let Some(sites::StaticHit { code: target, this, scope, called }) = self.static_site(clo, class, method) else { uncached!() };
+                        let callee = &self.frames.next_code(target.as_ref()).code;
+                        if n < callee.required || callee.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
                         if let Some(vars) = vars {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
-                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), &target.code) {
+                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), callee) {
                                 Some(released) if !(released && self.ids.has_pending()) => {}
                                 _ => slow!(),
                             }
                         }
-                        let frame = self.frames.call(Some(&target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        // (No Closure object: the slot's `owner` is empty,
+                        // as `leave` left it.)
+                        let frame = self.frames.call(target.as_ref(), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
-                        frame.scope = scope;
-                        frame.called = called;
-                        frame.owner = closure;
+                        frame.scope = Some(scope);
+                        frame.called = Some(called);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
