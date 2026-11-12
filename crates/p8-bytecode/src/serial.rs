@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 29;
+pub const FORMAT: u32 = 30;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -903,6 +903,7 @@ impl Code for Instr {
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
             Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
+            Instr::MethodCallNow { dst, obj, method, base, argc } => { w.byte(110); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
             Instr::StaticCall { dst, class, method, base, argc, vars } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::ClassConst { dst, class, name } => { w.byte(101); dst.put(w); class.put(w); name.put(w); }
             Instr::FetchStaticProp { dst, class, name } => { w.byte(102); dst.put(w); class.put(w); name.put(w); }
@@ -1026,6 +1027,7 @@ impl Code for Instr {
             107 => Instr::Rare { op: Code::get(r)?, a: Code::get(r)?, b: Code::get(r)?, c: Code::get(r)?, class: Code::get(r)? },
             108 => Instr::LoadConst { dst: Code::get(r)?, k: Code::get(r)? },
             109 => Instr::InitMethod { recv: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, argc: Code::get(r)? },
+            110 => Instr::MethodCallNow { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
             _ => return Err(Bad),
         })
     }

@@ -285,6 +285,17 @@ impl Frame<'_> {
                 o.clean |= args | held;
                 def!(dst);
             }
+            // (A temporary receiver is released as the call takes it.)
+            MethodCallNow { dst, obj, base, argc, .. } => {
+                let args = self.range(base, argc as usize);
+                if obj != p8_bytecode::THIS {
+                    u!(obj);
+                    o.clean |= b(obj);
+                }
+                o.uses |= args;
+                o.clean |= args;
+                def!(dst);
+            }
             InitMethod { recv, obj, .. } => {
                 if obj != p8_bytecode::THIS {
                     u!(obj);

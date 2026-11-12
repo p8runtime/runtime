@@ -2580,6 +2580,9 @@ impl Context<'_> {
                 Instr::IssetProp { dst, obj, name } => return self.isset_prop_ops(regs, clo, base, at, (dst, obj, name)),
                 Instr::UnsetProp { obj, name } => return self.unset_prop_ops(regs, clo, base, at, (obj, name)),
                 Instr::MethodCall { .. } => return self.method_call(regs, clo, base, argc, at),
+                Instr::MethodCallNow { dst, obj, method, base: args, argc } => {
+                    return self.method_call_now_ops(regs, clo, base, at, MethodCallOps { dst, obj, args, argc, method });
+                }
                 Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
                     return self.static_call_ops(regs, clo, base, at, StaticCallOps { dst, class, method, args, argc, vars });
                 }
@@ -2712,6 +2715,38 @@ impl Context<'_> {
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
         if let Some(o) = target.as_object() {
             self.remember_method(&clo.methods[method as usize], o, &m);
+        }
+        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+    }
+
+    /// `$obj->m(literals)` in one instruction (the MethodCallNow at `at`),
+    /// every case: the receiver read now (`$this` from the frame when
+    /// `obj` is THIS; an undefined variable warns), a temporary released
+    /// as the call takes it; the method the site's cache has for this
+    /// class and scope, else looked up by name (remembered, and its word
+    /// kept for the loop's arm); a native method's call; the errors.
+    /// `step` runs it, and the loop's MethodCallNow arm for what the
+    /// site's word does not let it enter.
+    #[inline(never)]
+    pub(crate) fn method_call_now_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, ops: MethodCallOps) -> Result<Next, Throw> {
+        let MethodCallOps { dst, obj, args, argc, method } = ops;
+        let pc = at + 1;
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let target = self.prop_target(w, clo, obj)?;
+        if obj != p8_bytecode::THIS && is_temp(&clo.code, obj) {
+            clear(&mut w[obj as usize]);
+        }
+        let slot = &clo.methods[method as usize];
+        if let Some(o) = target.as_object()
+            && let Some(m) = self.cached_method(slot, o)
+        {
+            return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+        }
+        let site = &clo.code.sites[method as usize];
+        let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
+        if let Some(o) = target.as_object() {
+            self.remember_method(slot, o, &m);
+            self.callee_word(slot, o, &m, argc as usize);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }

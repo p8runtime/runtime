@@ -376,6 +376,12 @@ pub enum Instr {
     /// the temporary InitMethod left the receiver in, and `obj + 1` the
     /// callee's word
     MethodCall { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
+    /// `$obj->method()` or `$obj->method(literals)` in one instruction:
+    /// no argument is evaluated, so nothing can happen between finding
+    /// the method and calling it, and InitMethod and MethodCall are done
+    /// together. `obj` is the receiver as written (THIS for the running
+    /// method's `$this`; a temporary is released as the call takes it).
+    MethodCallNow { dst: Reg, obj: Reg, method: u16, base: Reg, argc: u8 },
     /// `C::method(args)`, `parent::method(args)`, `static::…` (`vars` as
     /// CallValue's)
     StaticCall { dst: Reg, class: u16, method: u16, base: Reg, argc: u8, vars: u16 },

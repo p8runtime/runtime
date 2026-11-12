@@ -295,7 +295,7 @@ impl Context<'_> {
 /// called Fiber::suspend() goes on).
 fn call_dst(code: &[Instr], pc: usize) -> Option<p8_bytecode::Reg> {
     match code.get(pc.checked_sub(1)?)? {
-        Instr::StaticCall { dst, .. } | Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } => Some(*dst),
+        Instr::StaticCall { dst, .. } | Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::MethodCallNow { dst, .. } => Some(*dst),
         _ => None,
     }
 }

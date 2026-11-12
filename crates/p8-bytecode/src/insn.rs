@@ -436,7 +436,11 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
     match code[pc] {
         Instr::Rare { op, b, c, .. } if op.is_intrinsic() => block(b, u8::try_from(c).ok()?)?,
         Instr::ConcatN { start, n, .. } => block(start, n)?,
-        Instr::Call { base, argc, .. } | Instr::MethodCall { base, argc, .. } | Instr::Construct { base, argc, .. } | Instr::StaticCall { base, argc, .. } => block(base, argc)?,
+        Instr::Call { base, argc, .. }
+        | Instr::MethodCall { base, argc, .. }
+        | Instr::MethodCallNow { base, argc, .. }
+        | Instr::Construct { base, argc, .. }
+        | Instr::StaticCall { base, argc, .. } => block(base, argc)?,
         // (The position is the register after the iterator's.)
         Instr::IterNext { iter, .. } => block(iter, 2)?,
         _ => {}
@@ -630,6 +634,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::MethodCall { dst, obj, method, base, argc } => {
             r(obj + 1)?;
             i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16)
+        }
+        Instr::MethodCallNow { dst, obj, method, base, argc } => {
+            let this = obj == THIS;
+            i(Op::MethodCallNow, dst, if this { 0 } else { obj }, base, u32::from(method) | u32::from(argc) << 16 | u32::from(this) << 24)
         }
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
@@ -1120,6 +1128,8 @@ mod tests {
             Instr::InitMethod { recv: 19, obj: THIS, method: 5, argc: 2 },
             // The word's register past the window: not inline.
             Instr::InitMethod { recv: 255, obj: 1, method: 5, argc: 2 },
+            Instr::MethodCallNow { dst: 6, obj: 1, method: 5, base: 20, argc: 2 },
+            Instr::MethodCallNow { dst: 6, obj: THIS, method: 5, base: 20, argc: 0 },
         ];
         let consts = consts();
         let at = |pc| lower_at(&code, pc, &consts, 2);
@@ -1139,6 +1149,8 @@ mod tests {
         assert_eq!(at(13).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 1, c: 0, imm: 5 | 2 << 16 });
         assert_eq!(at(14).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 0, c: 1, imm: 5 | 2 << 16 });
         assert!(at(15).is_none());
+        assert_eq!(at(16).unwrap(), Insn { op: Op::MethodCallNow, a: 6, b: 1, c: 20, imm: 5 | 2 << 16 });
+        assert_eq!(at(17).unwrap(), Insn { op: Op::MethodCallNow, a: 6, b: 0, c: 20, imm: 5 | 1 << 24 });
     }
 
     #[test]

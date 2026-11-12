@@ -1074,6 +1074,77 @@ impl Context<'_> {
                         pc = 0;
                         continue 'frame;
                     }
+                    // InitMethod and MethodCall in one, for a call no
+                    // argument of which runs anything (none, or literals
+                    // already at c): the receiver read here (`$this` from
+                    // the frame when imm >> 24), the word the site keeps
+                    // for its class from this scope, and the frame entered
+                    // when the word says FAST. Anything else (a class or
+                    // scope the site has not seen, a method the word does
+                    // not let this enter, the errors, an interrupt due) is
+                    // `method_call_now_ops`'s, out of line.
+                    Op::MethodCallNow => {
+                        ops!(a, b, c, imm);
+                        let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16 & 0xff) as usize);
+                        let on_this = imm >> 24 != 0;
+                        macro_rules! uncached {
+                            () => {{
+                                let ops = MethodCallOps {
+                                    dst: Reg::from(dst),
+                                    obj: if on_this { p8_bytecode::THIS } else { Reg::from(obj) },
+                                    args: Reg::from(args),
+                                    argc: n as u8,
+                                    method: method as u16,
+                                };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_now_ops(regs, clo, base, at, ops))
+                            }};
+                        }
+                        // (An object through a reference: `global $o; $o->m()`.)
+                        let held;
+                        let o = if on_this {
+                            let Some(this) = &top.this else { uncached!() };
+                            this
+                        } else {
+                            match w[rx!(obj)].as_object() {
+                                Some(o) => o,
+                                None => {
+                                    held = ref_object(&w[rx!(obj)]);
+                                    match &held {
+                                        Some(o) => o,
+                                        None => uncached!(),
+                                    }
+                                }
+                            }
+                        };
+                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let word = match clo.methods[method].user.get().hit(&o.class, scope) {
+                            Some(word) if word & p8_bytecode::callee::FAST != 0 => word,
+                            _ => uncached!(),
+                        };
+                        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            uncached!();
+                        }
+                        let target = &self.closures[(word & p8_bytecode::callee::CODE) as usize];
+                        let mut declaring = &o.class;
+                        for _ in 0..(word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX {
+                            let Some(parent) = &declaring.parent else { uncached!() };
+                            declaring = parent;
+                        }
+                        let declaring = Rc::clone(declaring);
+                        let this = Rc::clone(o);
+                        // A temporary (`(new A)->f()`) is released as it is used:
+                        // the call's `$this` holds the object.
+                        if !on_this && is_temp(&clo.code, Reg::from(obj)) {
+                            clear(&mut w[rx!(obj)]);
+                        }
+                        // (No `called`: it is `$this`'s class, `called_class`.)
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.this = Some(this);
+                        frame.scope = Some(declaring);
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }
                     // `new C` of a class the site's cache has, whose objects
                     // need only their slots (`make_plain`): anything else
                     // (a Throwable, a constructor this scope may not call:

@@ -996,7 +996,7 @@ pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
             *dst = f(*dst);
             *base = f(*base);
         }
-        MethodCall { dst, obj, base, .. } => {
+        MethodCall { dst, obj, base, .. } | MethodCallNow { dst, obj, base, .. } => {
             *dst = f(*dst);
             *obj = f(*obj);
             *base = f(*base);
@@ -3690,7 +3690,11 @@ impl<'src> Compiler<'src> {
                 // Mark the call (the last instruction) as wanting a reference.
                 let last = f.code.len() - 1;
                 let writes_r = match f.code[last] {
-                    Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::StaticCall { dst, .. } | Instr::CallSpread { dst, .. } => dst == r,
+                    Instr::Call { dst, .. }
+                    | Instr::MethodCall { dst, .. }
+                    | Instr::MethodCallNow { dst, .. }
+                    | Instr::StaticCall { dst, .. }
+                    | Instr::CallSpread { dst, .. } => dst == r,
                     Instr::Rare { op, a: dst, .. } if op.is_intrinsic() => dst == r,
                     _ => false,
                 };
@@ -5297,6 +5301,21 @@ impl<'src> Compiler<'src> {
                 // what it left.
                 let obj = self.prop_obj(f, target)?;
                 let site = self.method_site(f, text);
+                // No argument, or literals only: nothing is evaluated
+                // between finding the method and calling it, so one
+                // instruction does both (MethodCallNow).
+                if args.iter().all(|a| !a.unpack && a.name.is_none() && self.literal(a.value).is_some()) {
+                    let base = f.temp();
+                    for _ in 1..args.len() {
+                        f.temp();
+                    }
+                    for (n, arg) in args.iter().enumerate() {
+                        self.expr_into(f, arg.value, base + n as Reg)?;
+                    }
+                    let dst = out(f, hint, mark);
+                    f.emit(Instr::MethodCallNow { dst, obj, method: site, base, argc: args.len() as u8 });
+                    return Ok(dst);
+                }
                 let recv = self.init_method(f, obj, site, args.len() as u8, mark);
                 let word = recv + 1;
                 let (base, argc) =
