@@ -64,18 +64,20 @@ fn isa() -> Result<cranelift_codegen::isa::OwnedTargetIsa, String> {
 
 /// Compile `functions` (those that can be) and write the object file of
 /// an executable carrying `package`.
-pub fn build(functions: &[Input], package: &[u8]) -> Result<Built, String> {
+/// `engine` is the build of p8 making it (`Platform::engine_key`): the
+/// runtime library refuses the image when it is not its own.
+pub fn build(functions: &[Input], package: &[u8], engine: [u8; 16]) -> Result<Built, String> {
     let builder = ObjectBuilder::new(isa()?, "p8native", default_libcall_names()).map_err(|e| err("object")(e.to_string()))?;
     let mut module = ObjectModule::new(builder);
     let ptr = module.target_config().pointer_type();
     if ptr != types::I64 {
         return Err("native code needs a 64-bit target".to_string());
     }
-    // The call helper.
+    // The helper.
     let mut helper = module.make_signature();
-    helper.params.extend([AbiParam::new(types::I64), AbiParam::new(types::I32)]);
-    helper.returns.push(AbiParam::new(types::I32));
-    let call = module.declare_function(abi::CALL, Linkage::Import, &helper).map_err(|e| err("the call helper")(e.to_string()))?;
+    helper.params.extend([AbiParam::new(types::I64), AbiParam::new(types::I32), AbiParam::new(types::I32)]);
+    helper.returns.push(AbiParam::new(types::I64));
+    let call = module.declare_function(abi::HELP, Linkage::Import, &helper).map_err(|e| err("the helper")(e.to_string()))?;
     // A native function.
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(types::I64));
@@ -98,7 +100,7 @@ pub fn build(functions: &[Input], package: &[u8]) -> Result<Built, String> {
         }
         module.clear_context(&mut ctx);
     }
-    image_and_main(&mut module, &ids, &native, package)?;
+    image_and_main(&mut module, &ids, &native, package, engine)?;
     let object = module.finish().emit().map_err(|e| err("the object file")(e.to_string()))?;
     Ok(Built { object, native, names })
 }
@@ -110,18 +112,38 @@ fn function(module: &mut ObjectModule, func: &mut ir::Function, fbc: &mut Functi
         return Err(emit::NotNative);
     }
     let mut b = FunctionBuilder::new(func, fbc);
-    let call = module.declare_func_in_func(call, b.func);
+    let helper = module.declare_func_in_func(call, b.func);
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
     let blocks: Vec<ir::Block> = f.insns.iter().map(|_| b.create_block()).collect();
+    let next = b.declare_var(types::I32);
+    let (dispatch, table, beyond) = (b.create_block(), b.create_block(), b.create_block());
     b.switch_to_block(entry);
     let ctx = b.block_params(entry)[0];
+    let zero = b.ins().iconst(types::I32, 0);
+    b.def_var(next, zero);
     b.ins().jump(blocks[0], &[]);
+    // After a help: on at the pc it gave, by a jump table over the pcs. (A
+    // pc past the code is the interpreter's to refuse: handed back there.)
+    b.switch_to_block(dispatch);
+    let at = b.use_var(next);
+    let inside = b.ins().icmp_imm_u(ir::condcodes::IntCC::UnsignedLessThan, at, f.insns.len() as i64);
+    b.ins().brif(inside, table, &[], beyond, &[]);
+    b.switch_to_block(table);
+    let calls: Vec<ir::BlockCall> = blocks.iter().map(|&k| b.func.dfg.block_call(k, &[])).collect();
+    let default = b.func.dfg.block_call(beyond, &[]);
+    let jt = b.create_jump_table(ir::JumpTableData::new(default, &calls));
+    b.ins().br_table(at, jt);
+    b.switch_to_block(beyond);
+    b.set_cold_block(beyond);
+    let wide = b.ins().uextend(types::I64, at);
+    let code = b.ins().bor_imm_u(wide, (p8_native_abi::exit::GUARD << 32) as i64);
+    b.ins().return_(&[code]);
     for (pc, insn) in f.insns.iter().enumerate() {
         b.switch_to_block(blocks[pc]);
         let regs = b.ins().load(types::I64, ir::MemFlagsData::trusted(), ctx, abi::CTX_REGS);
-        let mut e = emit::Emit { b: &mut b, func: f, pc: pc as u32, blocks: &blocks, ctx, regs, call };
-        tpl::instruction(&mut e, insn)?;
+        let mut e = emit::Emit { b: &mut b, func: f, pc: pc as u32, blocks: &blocks, ctx, regs, helper, dispatch, next };
+        tpl::instruction(&mut e, insn);
     }
     b.seal_all_blocks();
     b.finalize(module.target_config());
@@ -130,7 +152,7 @@ fn function(module: &mut ObjectModule, func: &mut ir::Function, fbc: &mut Functi
 
 /// The image (`p8_native_abi::image`), the table and keys it points to,
 /// the package, and `main`, which passes the image to the entry.
-fn image_and_main(module: &mut ObjectModule, ids: &[FuncId], native: &[(u32, u32)], package: &[u8]) -> Result<(), String> {
+fn image_and_main(module: &mut ObjectModule, ids: &[FuncId], native: &[(u32, u32)], package: &[u8], engine: [u8; 16]) -> Result<(), String> {
     let data = |module: &mut ObjectModule, name: &str, bytes: Vec<u8>| -> Result<cranelift_module::DataId, String> {
         let id = module.declare_data(name, Linkage::Local, false, false).map_err(|e| err(name)(e.to_string()))?;
         let mut d = DataDescription::new();
@@ -159,6 +181,7 @@ fn image_and_main(module: &mut ObjectModule, ids: &[FuncId], native: &[(u32, u32
     put(image::VERSION, image::VERSION_WORD);
     put(image::COUNT, ids.len() as u64);
     put(image::PACKAGE_LEN, package.len() as u64);
+    bytes[image::ENGINE as usize..image::ENGINE as usize + 16].copy_from_slice(&engine);
     img.define(bytes.into_boxed_slice());
     img.set_align(8);
     for (at, id) in [(image::FUNCTIONS, table_id), (image::KEYS, keys), (image::PACKAGE, pkg)] {

@@ -35,7 +35,27 @@ impl Context<'_> {
         // Each round of this loop is one frame's run (the frame's code and
         // window are read once); the inner loop goes back here whenever
         // the frame changes or `slow` ran (it may have moved the registers).
+        // How deep the frame native code just handed back is (native.rs):
+        // the next round of the frame loop runs that frame here, even at
+        // pc 0 (another frame, a callee it left pushed, is entered).
+        let mut handed_back = 0;
         'frame: loop {
+            // A frame starting at its first instruction whose code the
+            // executable has machine code for (native.rs) runs that, until
+            // it hands the frame back: every call path comes here.
+            if pc == 0
+                && handed_back != self.frames.len()
+                && let Some(id) = self.frames.last().expect("a frame").func.code.native
+            {
+                let depth = self.frames.len();
+                match self.native_entry(regs, id)? {
+                    Flow::Go(next) => pc = next,
+                    Flow::Done => return Ok(()),
+                }
+                handed_back = depth;
+                continue 'frame;
+            }
+            handed_back = 0;
             let mut top = self.frames.last().expect("a frame");
             let mut clo = &*top.func;
             let base = top.base as usize;
@@ -949,16 +969,9 @@ impl Context<'_> {
                                 if (n as usize) < target.code.required || target.code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     uncached!();
                                 }
-                                // Code the executable has machine code for
-                                // (native.rs) runs that first; it hands the
-                                // frame back at a pc.
-                                let native = target.code.native;
                                 self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
-                                if let Some(id) = native {
-                                    pc = self.native_entry(regs, id)?;
-                                }
                                 continue 'frame;
                             }
                             Some(&Callee::Builtin(i)) => {
@@ -3103,6 +3116,50 @@ pub(crate) fn owner_write(cell: &RefCell<Value>, v: Value) {
     // (The array goes after the borrow: its element holds this cell.)
     let old = cell.replace(v);
     drop(old);
+}
+
+/// `owner_write` along a path (`$a['p'][0] = v` where `$a['p'][0]` is
+/// bound to `$a`'s own cell): the arrays the keys before the last lead to
+/// are looked in, nothing is written on the way; when the last key's
+/// element is bound to `cell`, the cell gets the value in place of the
+/// array. True when it was so; false, nothing done, otherwise.
+#[cold]
+#[inline(never)]
+pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Value) -> bool {
+    let Some((last, before)) = keys.split_last() else { return false };
+    let hit = {
+        let held = cell.borrow();
+        let find = |a: &PhpArray, k: &Value| -> Option<Value> {
+            let e = if let Some(i) = k.as_int() { a.get_int(i) } else { a.get_str(k.as_str()?) };
+            e.map(Value::deref)
+        };
+        let mut cur = held.clone();
+        let mut found = true;
+        for k in before {
+            match cur.as_array().and_then(|a| find(a, k)) {
+                Some(next) => cur = next,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        found
+            && cur.as_array().is_some_and(|a| {
+                let e = if let Some(i) = last.as_int() {
+                    a.get_int(i)
+                } else if let Some(s) = last.as_str() {
+                    a.get_str(s)
+                } else {
+                    None
+                };
+                e.is_some_and(|e| is_owner(e, Some(&**cell)))
+            })
+    };
+    if hit {
+        owner_write(cell, v.clone());
+    }
+    hit
 }
 
 /// A copy of a register's value, as `step` makes one (strings and arrays

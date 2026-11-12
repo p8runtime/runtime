@@ -2521,6 +2521,26 @@ impl Context<'_> {
                         && let Some(pname) = name.cloned_str()
                     {
                         let o = Rc::clone(o);
+                        // An untyped property bound by reference whose element
+                        // at the path is bound to the property's own cell
+                        // (`$this->p[0] = &$this->p`): the value replaces the
+                        // array, as the loop's arm does (`write_cell_path`'s
+                        // `Wrote::Owner`). Native code runs this instruction
+                        // here, so this path must give what the arm gives.
+                        if op.is_none() && !append && n >= 1 && o.class.properties[slot].ty.is_none() {
+                            let held = o.slots()[slot].replace(Value::UNDEF);
+                            let cell = held.as_reference().map(Rc::clone);
+                            p8_runtime::object::put_slot(&o.slots()[slot], held);
+                            let path: Vec<Value> = keys.iter().map(Value::deref).collect();
+                            if let Some(cell) = cell
+                                && fast::owner_path_write(&cell, &path, &v.deref())
+                            {
+                                keys.clear();
+                                self.dim_keys = keys;
+                                regs[base + dst as usize] = v.deref();
+                                return Ok(Next::Go(pc));
+                            }
+                        }
                         let written = self.update_slot_dim(&o, Some(slot), &pname, &keys, append, v, op);
                         let r = self.finish_prop_dim(regs, written, &keys, append, op);
                         keys.clear();
@@ -3089,6 +3109,26 @@ impl Context<'_> {
         {
             w[dst as usize] = self.append(a, v)?;
             return Ok(Next::Go(at + 1));
+        }
+        // A variable bound by reference whose element at the path is bound
+        // to the variable's own cell (`$a[k] = &$a`, `$a['p'][0] = &$a`):
+        // the value replaces the array, as the loop's arms do
+        // (`vmops::assign_dim`'s `owner_write`, `assign_path`'s
+        // `Wrote::Owner`). Native code runs this instruction here, so this
+        // path must give what the arms give.
+        if n >= 1
+            && !append
+            && let Some(cell) = w[var as usize].as_reference().map(Rc::clone)
+        {
+            // (The one key may be a constant operand.)
+            let path: Vec<Value> = match const_index(keys) {
+                Some(k) => vec![clo.consts[k].clone()],
+                None => w[keys as usize..keys as usize + n as usize].iter().map(Value::deref).collect(),
+            };
+            if fast::owner_path_write(&cell, &path, &v.deref()) {
+                w[dst as usize] = v.deref();
+                return Ok(Next::Go(at + 1));
+            }
         }
         // The result is what was stored: a string offset's one byte.
         let r = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
