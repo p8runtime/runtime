@@ -358,7 +358,7 @@ impl Context<'_> {
                         }
                         return Ok(());
                     }
-                    leave(&mut self.frames, regs, value);
+                    leave_fast(&mut self.frames, regs, value, &self.ids);
                     pc = self.frames.last().expect("the caller's frame").pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
@@ -963,7 +963,7 @@ impl Context<'_> {
                                 out!((imm as u16, Reg::from(args), n, Reg::from(dst)), |cx, regs, clo, base, _, at, ops| cx.call_ops(regs, clo, base, at, ops))
                             };
                         }
-                        match clo.sites[imm as usize].get() {
+                        match clo.sites[(imm & 0xffff) as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
                                 // As many arguments as parameters, to a
@@ -975,7 +975,12 @@ impl Context<'_> {
                                 {
                                     uncached!();
                                 }
-                                self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
+                                // Where the result goes: the call's
+                                // register, or (RET_VAR) the variable the
+                                // next instruction would move it into,
+                                // which `leave_fast` then stores itself.
+                                let ret = (base + ((imm >> 16) & 0xff) as usize) as u32 | (imm & insn::RET_VAR);
+                                self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, ret);
                                 bind(&mut self.frames, regs, target.shape, base + args as usize, n as usize);
                                 pc = 0;
                                 continue 'frame;
@@ -2741,6 +2746,56 @@ pub(crate) fn ini_on(v: &Value) -> bool {
 /// register; the caller (if any) resumes at its saved pc.
 #[inline(always)]
 pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
+    let ret = pop(frames, regs);
+    if ret & insn::RET_VAR == 0 {
+        // (The Return arm tests pending after `leave`.)
+        let _ = put(&mut regs[ret as usize], value);
+    } else if ret != NO_RET {
+        to_register(frames, regs, ret, value);
+    }
+}
+
+/// `leave` for the loop's Return arms. A frame called by `$v = f(..)`
+/// (RET_VAR) stores its result in the variable here, as the move after
+/// the call would (`vmops::assign_take`: through a reference the variable
+/// holds), and the caller goes on past that move. Only where that is the
+/// same: with a destructor due (a local of this frame died, and it runs
+/// before the assignment, which it may see or prevent by throwing), or a
+/// result that is not a plain value to store (undefined, a reference),
+/// the result goes to the call's register and the move runs.
+#[inline(always)]
+pub(crate) fn leave_fast(frames: &mut Frames, regs: &mut [Value], value: Value, ids: &Ids) {
+    let ret = pop(frames, regs);
+    if ret & insn::RET_VAR == 0 {
+        // (The Return arm tests pending after it.)
+        let _ = put(&mut regs[ret as usize], value);
+    } else if ret != NO_RET {
+        if ids.has_pending() || value.is_undef() || value.is_reference() {
+            return to_register(frames, regs, ret, value);
+        }
+        // (The Return arm tests pending after it, at the move's pc.)
+        let _ = put_var(&mut regs[(ret & !insn::RET_VAR) as usize], value);
+        frames.slots[frames.len - 1].pc += 1;
+    }
+}
+
+/// The result of a frame called with RET_VAR into the call's register
+/// (the one the move at the caller's pc reads), for that move to run.
+#[cold]
+#[inline(never)]
+fn to_register(frames: &Frames, regs: &mut [Value], ret: u32, value: Value) {
+    let caller = &frames.slots[frames.len - 1];
+    let _ = match caller.func.code.code.get(caller.pc as usize) {
+        Some(&Instr::AssignTake { src, .. }) => put(&mut regs[caller.base as usize + usize::from(src)], value),
+        // (RET_VAR is lowered for a call with that move after it only.)
+        _ => put_var(&mut regs[(ret & !insn::RET_VAR) as usize], value),
+    };
+}
+
+/// Pop the current frame (its locals released), giving where its result
+/// goes (`Frame::ret`).
+#[inline(always)]
+fn pop(frames: &mut Frames, regs: &mut [Value]) -> u32 {
     let n = frames.len - 1;
     // A frame with an Extra (arguments past its parameters, variables
     // named at run time, an included file's shared scope): one test.
@@ -2774,10 +2829,7 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     if frame.owner.is_some() {
         frame.owner = None;
     }
-    if frame.ret != NO_RET {
-        // (The Return arm tests pending after `leave`.)
-        let _ = put(&mut regs[frame.ret as usize], value);
-    }
+    frame.ret
 }
 
 /// Whether a value holds nothing to release (a scalar, null, undefined):

@@ -114,6 +114,13 @@ pub const VAL_CONST: u32 = 1 << 29;
 /// 256), not the register.
 pub const ARG_CONST: u32 = 1 << 30;
 
+/// Call's `imm` bit: the instruction after it moves the result into a
+/// variable (`$v = f(..)`), and bits 16..24 name that variable; without
+/// it they name the result register (`c`, which always does). A frame
+/// called with it stores its result in the variable and goes past the
+/// move (`leave_fast`).
+pub const RET_VAR: u32 = 1 << 31;
+
 /// IterNextRef's `imm` bit (above the end's pc): the key is assigned too.
 pub const ITER_KEY: u32 = 1 << 31;
 
@@ -303,7 +310,24 @@ fn r(reg: Reg) -> Option<u8> {
 /// The executed form of `func`'s code: one `Insn` per `Instr`.
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect()
+    let mut insns: Vec<Insn> = (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect();
+    if !func.frees_temps {
+        // A temporary of code that does not free each where it dies may
+        // still hold a dead value, which a call's result releases as it
+        // lands there: such a call stores in its register.
+        for insn in &mut insns {
+            *insn = to_register(*insn);
+        }
+    }
+    insns
+}
+
+/// A call as one that stores its result in its register (no RET_VAR).
+fn to_register(insn: Insn) -> Insn {
+    match insn.op {
+        Op::Call => Insn { imm: insn.imm & 0xffff | u32::from(insn.c) << 16, ..insn },
+        _ => insn,
+    }
 }
 
 /// A class reference as the flag of an instruction that names a class:
@@ -616,7 +640,13 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::IterInit, src, iter, 0, end)
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
-        Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
+        Instr::Call { site, base, argc, dst } => {
+            let (ret, flag) = match ret_var(code, pc, dst, ncv) {
+                Some(var) => (var, RET_VAR),
+                None => (r(dst)?, 0),
+            };
+            i(Op::Call, base, Reg::from(argc), dst, u32::from(site) | u32::from(ret) << 16 | flag)
+        }
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
@@ -832,6 +862,17 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
     }
 }
 
+/// The variable the result of the call at `pc` (in `dst`, a temporary) is
+/// moved into by the next instruction, `$v = f(..)`: a variable of the
+/// window. (The move keeps its pc: a call that does not store there
+/// itself runs it.)
+fn ret_var(code: &[Instr], pc: usize, dst: Reg, ncv: Reg) -> Option<u8> {
+    match code.get(pc + 1) {
+        Some(&Instr::AssignTake { var, src }) if src == dst && var < ncv && dst >= ncv => r(var),
+        _ => None,
+    }
+}
+
 /// The most arguments `Op::CallRegs` passes.
 pub const CALL_REGS: usize = 3;
 
@@ -913,6 +954,28 @@ mod tests {
         // Not consecutive: the Moves stay.
         assert_eq!(at(5).op, Op::P8_MOVE_REG);
         assert_eq!(at(6).op, Op::P8_MOVE_REG);
+    }
+
+    #[test]
+    fn a_call_names_the_variable_its_result_is_moved_into() {
+        let code = [
+            // `$v = f();`: the variable 1 takes the temporary 5.
+            Instr::Call { site: 4, base: 6, argc: 0, dst: 5 },
+            Instr::AssignTake { var: 1, src: 5 },
+            // Another temporary's move, a move into a temporary, no move.
+            Instr::Call { site: 4, base: 6, argc: 0, dst: 5 },
+            Instr::AssignTake { var: 1, src: 4 },
+            Instr::Call { site: 4, base: 6, argc: 0, dst: 5 },
+            Instr::AssignTake { var: 3, src: 5 },
+            Instr::Call { site: 4, base: 6, argc: 0, dst: 5 },
+        ];
+        let at = |pc| lower_at(&code, pc, &[], 3).unwrap();
+        assert_eq!(at(0), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 1 << 16 | RET_VAR });
+        // The move is there as it was, for the calls that leave it to run.
+        assert_eq!(at(1).op, Op::P8_ASSIGN_TAKE);
+        assert_eq!(at(2), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at(4), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at(6), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
     }
 
     #[test]

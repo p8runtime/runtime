@@ -138,7 +138,9 @@ impl NativeFrame<'_, '_> {
             return None;
         }
         let (args, n, dst) = (usize::from(insn.a), usize::from(insn.b), usize::from(insn.c));
-        let Some(&Callee::User(t)) = top.func.sites.get(insn.imm as usize).and_then(|s| s.get()) else { return None };
+        // (The site is the low half of `imm`; the result goes to the
+        // call's register, and the move after it runs.)
+        let Some(&Callee::User(t)) = top.func.sites.get((insn.imm & 0xffff) as usize).and_then(|s| s.get()) else { return None };
         let target = &cx.closures[t as usize];
         // (The loop's Call arm's conditions.)
         if n < target.code.required || target.code.is_generator || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
