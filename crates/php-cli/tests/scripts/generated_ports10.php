@@ -243,3 +243,25 @@ for ($r = 0; $r < 2; $r++) {
     $str = 'abc';
     try { $str[0] .= 'x'; } catch (Throwable $e) { show($e); }
 }
+
+echo "-- steps of elements\n";
+for ($r = 0; $r < 2; $r++) {
+    $a = ['f' => 1.5, 'n' => null, 's' => 'a', 'num' => '9', 'arr' => [], 'deep' => ['x' => 1.0]]; $k = 'f'; $box = new Box; $str = 'abc'; $i = 0;
+    $a[$k]++; $k = 'n'; $a[$k]++; $k = 's'; $a[$k]++; $k = 'num'; $a[$k]--;
+    $k = 'deep'; $x = 'x'; $a[$k][$x]++;
+    echo json_encode($a), "\n";
+    $k = 'missing'; $a[$k]++; echo $a['missing'], "\n";
+    $k = 'arr';
+    try { $a[$k]++; } catch (Throwable $e) { show($e); }
+    $k = 'q'; echo $box[$k]++, "\n";
+    try { $str[$i]++; } catch (Throwable $e) { show($e); }
+    $nul = null; $k = 'z'; $nul[$k]--; var_dump($nul);
+}
+
+echo "-- variadics with named arguments\n";
+function vari(...$rest) { return json_encode($rest); }
+function vari2($a, ...$rest) { return $a . ' ' . json_encode($rest); }
+for ($r = 0; $r < 2; $r++) {
+    echo vari(1, 2, x: 3, y: 4), ' ', vari(x: 1), ' ', vari2(1, 2, z: 3), ' ', vari2(a: 5, b: 6), "\n";
+    try { echo vari2(1, a: 2), "\n"; } catch (Throwable $e) { show($e); }
+}

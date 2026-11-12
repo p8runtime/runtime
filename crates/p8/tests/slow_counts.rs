@@ -692,7 +692,8 @@ fn misses_run_out_of_line_on_their_operands() {
 /// `clone`, `throw` and the catches' tests, `isset(C::$s)`, ArrayAccess
 /// reads, `isset()` and `empty()` of an ArrayAccess element, `empty()` of a
 /// bool key, `foreach` of a reference, an argument coerced to its type,
-/// `.=` of an element, `++` and `--` of a float: out of line on the arms'
+/// `.=` of an element, `++` and `--` of a float, `$a[$k]++` of a float,
+/// a variadic taking a named argument: out of line on the arms'
 /// operands, not the detour.
 #[test]
 fn the_tenth_batch_runs_out_of_line_on_its_operands() {
@@ -704,6 +705,7 @@ fn the_tenth_batch_runs_out_of_line_on_its_operands() {
          class E1 extends Exception {} class E2 extends Exception {}
          class Box implements ArrayAccess { function offsetExists($k): bool { return $k !== 'no'; } function offsetGet($k): mixed { return 3; } function offsetSet($k, $v): void {} function offsetUnset($k): void {} }
          function typed(int $x) { return $x; }
+         function vari(...$r) { return count($r); }
          $str = new Str; $g = new G; $box = new Box; $name = 'p'; $arr = [1 => 1]; $flags = [1 => 0]; $t = 0; $cat = ''; $num = '6'; $ref = &$arr; $fl = 1.5; $kk = 'k'; $ab = 'ab'; $yes = true;
          for ($i = 0; $i < $n; $i++) {
              foreach ($ref as $v) { $t += $v; }
@@ -711,6 +713,7 @@ fn the_tenth_batch_runs_out_of_line_on_its_operands() {
              $sa = ['k' => '']; $sa[$kk] .= $ab; $t += strlen($sa['k']);
              $fl++; $fl--; $t += $fl * 2;
              $t += strlen(\"{$str}-{$i}\") + 2 * $num;
+             $dm = ['k' => 0.5]; $dm[$kk]++; $t += $dm['k'] * 2 + vari(1, x: 2);
              $cat = $str . $str . 'x' . $str . ('p' . $str);
              $t += count([5, 6] + $arr) + count($arr + [5, 6]) + ($num - '2') * $num;
              $o = new stdClass; $o->$name = $i; $t += $o->p;
@@ -724,7 +727,7 @@ fn the_tenth_batch_runs_out_of_line_on_its_operands() {
          }
          echo $t, ' ', $cat;",
     );
-    assert_eq!(out, "1860 ssxsps");
+    assert_eq!(out, "1960 ssxsps");
 }
 
 /// The first run of an intrinsic's call site (`strlen`, `count`, the type

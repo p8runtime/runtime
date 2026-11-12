@@ -2288,30 +2288,7 @@ impl Context<'_> {
                         None => pc = end as usize,
                     }
                 }
-                Instr::CollectVariadic { var } => {
-                    // Its own argument (if passed), then those past it:
-                    // the list made once, at its size.
-                    let extra = self.frames.last().map_or(0, |f| f.args().len());
-                    let mut list = p8_runtime::array::values_buffer(usize::from(argc > var as usize) + extra);
-                    if argc > var as usize {
-                        list.push(std::mem::replace(&mut reg!(var), Value::UNDEF));
-                    }
-                    if let Some(frame) = self.frames.last() {
-                        list.extend(frame.args().iter().cloned());
-                    }
-                    let mut arr = PhpArray::from_list(list);
-                    // Named arguments no parameter takes: by their names.
-                    if let Some((depth, named)) = self.named_extra.take() {
-                        if depth == self.frames.len() {
-                            for (k, v) in named.iter() {
-                                arr.insert(k, v.clone());
-                            }
-                        } else {
-                            self.named_extra = Some((depth, named));
-                        }
-                    }
-                    reg!(var) = Value::array(arr);
-                }
+                Instr::CollectVariadic { var } => return self.collect_variadic_ops(regs, clo, base, argc, at, var),
                 Instr::FetchList { dst, arr, key } => {
                     let container = match reg!(arr).as_reference() {
                         Some(cell) => cell.borrow().clone(),
@@ -2358,29 +2335,7 @@ impl Context<'_> {
                     let program = self.load_eval(&code)?;
                     return Ok(self.run_in_scope(regs, base, func, &program.main, dst, pc));
                 }
-                Instr::DimIncDec { var, keys, n, dst, inc, post } => {
-                    let key_regs = &w[keys as usize..keys as usize + n as usize];
-                    if arrayaccess::path_has_object(&reg!(var), key_regs, false) {
-                        let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
-                        let root = reg!(var).deref();
-                        let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
-                        regs[base + dst as usize] = r;
-                        return Ok(Next::Go(pc));
-                    }
-                    let path = self.key_path(w, clo, keys, n)?;
-                    let mut root = match reg!(var).as_reference() {
-                        Some(cell) => std::mem::take(&mut *cell.borrow_mut()),
-                        None => std::mem::take(&mut reg!(var)),
-                    };
-                    let r = self.incdec_path(&mut root, &path, inc);
-                    self.key_path_done(path);
-                    match reg!(var).as_reference() {
-                        Some(cell) => *cell.borrow_mut() = root,
-                        None => reg!(var) = root,
-                    }
-                    let (old, new) = r?;
-                    reg!(dst) = if post { old } else { new };
-                }
+                Instr::DimIncDec { var, keys, n, dst, inc, post } => return self.dim_inc_dec_ops(regs, clo, base, at, (var, keys, n, dst, inc, post)),
                 Instr::CallSpread { dst, callee, args } => return self.call_spread_ops(regs, clo, base, at, (dst, callee, args)),
                 Instr::ArrayUnpack { arr, src } => {
                     let v = self.operand(w, clo, src);
@@ -3980,6 +3935,73 @@ impl Context<'_> {
         self.report_diags();
         w[dst as usize] = Value::str(PhpStr::new(bytes));
         free_parts(w, start, n);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `var[k1]..[kn]++` (and `--`, the prefix forms; the DimIncDec at
+    /// `at`, the keys from `keys`, the expression's value to `dst`): an
+    /// ArrayAccess object on the way given the rest (`offsetGet`, then
+    /// `offsetSet`), else the path walked (the keys' conversions, a missing
+    /// element's warning) and the element stepped (a float, null, a
+    /// string's step, the errors). `step` runs it, and the loop's DimIncDec
+    /// arm for what is not an int through arrays.
+    #[inline(never)]
+    pub(crate) fn dim_inc_dec_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (var, keys, n, dst, inc, post): (Reg, Reg, u8, Reg, bool, bool)) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let key_regs = &w[keys as usize..keys as usize + n as usize];
+        if arrayaccess::path_has_object(&w[var as usize], key_regs, false) {
+            let key_values: Vec<Value> = key_regs.iter().map(Value::deref).collect();
+            let root = w[var as usize].deref();
+            let r = self.aa_write(regs, &root, &key_values, false, arrayaccess::DimOp::IncDec { inc, post })?;
+            regs[base + dst as usize] = r;
+            return Ok(Next::Go(at + 1));
+        }
+        let path = self.key_path(w, clo, keys, n)?;
+        let mut root = match w[var as usize].as_reference() {
+            Some(cell) => std::mem::take(&mut *cell.borrow_mut()),
+            None => std::mem::take(&mut w[var as usize]),
+        };
+        let r = self.incdec_path(&mut root, &path, inc);
+        self.key_path_done(path);
+        match w[var as usize].as_reference() {
+            Some(cell) => *cell.borrow_mut() = root,
+            None => w[var as usize] = root,
+        }
+        let (old, new) = r?;
+        w[dst as usize] = if post { old } else { new };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `...$rest` (the CollectVariadic at `at`, the parameter `var`, `argc`
+    /// passed): its own argument (if passed) and those past the
+    /// parameters, as a list, then the named arguments no parameter takes,
+    /// by their names. `step` runs it, and the loop's CollectVariadic arm
+    /// when there are named ones.
+    #[inline(never)]
+    pub(crate) fn collect_variadic_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, argc: usize, at: usize, var: Reg) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        // Its own argument (if passed), then those past it: the list made
+        // once, at its size.
+        let extra = self.frames.last().map_or(0, |f| f.args().len());
+        let mut list = p8_runtime::array::values_buffer(usize::from(argc > var as usize) + extra);
+        if argc > var as usize {
+            list.push(std::mem::replace(&mut w[var as usize], Value::UNDEF));
+        }
+        if let Some(frame) = self.frames.last() {
+            list.extend(frame.args().iter().cloned());
+        }
+        let mut arr = PhpArray::from_list(list);
+        // Named arguments no parameter takes: by their names.
+        if let Some((depth, named)) = self.named_extra.take() {
+            if depth == self.frames.len() {
+                for (k, v) in named.iter() {
+                    arr.insert(k, v.clone());
+                }
+            } else {
+                self.named_extra = Some((depth, named));
+            }
+        }
+        w[var as usize] = Value::array(arr);
         Ok(Next::Go(at + 1))
     }
 

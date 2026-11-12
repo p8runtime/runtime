@@ -1259,10 +1259,10 @@ impl Context<'_> {
                     }
                     // `...$rest`: its own argument (if passed) and those
                     // past the parameters, as a list (named arguments no
-                    // parameter takes: `step`).
+                    // parameter takes: out of line, `collect_variadic_ops`).
                     Op::CollectVariadic => {
                         if self.named_extra.is_some() {
-                            slow!();
+                            out!(Reg::from(insn.a), |cx, regs, clo, base, argc, at, var| cx.collect_variadic_ops(regs, clo, base, argc, at, var));
                         }
                         let var = rx!(insn.a);
                         let list = collect_variadic(&mut w[var], top.argc as usize > var, top.args());
@@ -1399,10 +1399,13 @@ impl Context<'_> {
                         done!(released);
                     }
                     // `$a[k0]..++` on an int through arrays (`dim_inc_dec`);
-                    // anything else is `step`'s.
+                    // anything else out of line (`dim_inc_dec_ops`).
                     Op::DimIncDec => {
                         ops!(a, b, c, imm);
-                        let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else { slow!() };
+                        // (The rest: out of line, `dim_inc_dec_ops`.)
+                        let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else {
+                            out!((Reg::from(a), Reg::from(b), imm as u8, Reg::from(c), imm & insn::DIM_INC != 0, imm & insn::DIM_POST != 0), |cx, regs, clo, base, _, at, ops| cx.dim_inc_dec_ops(regs, clo, base, at, ops))
+                        };
                         done!(put(&mut w[rx!(c)], v));
                     }
                     // `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` of

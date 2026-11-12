@@ -481,3 +481,49 @@ DivisionByZeroError: Division by zero
 TypeError: Unsupported operand types: string - int
 get 's'
 Error: Cannot use assign-op operators with string offsets
+-- steps of elements
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 250
+{"f":2.5,"n":1,"s":"b","num":8,"arr":[],"deep":{"x":2}}
+
+Warning: Undefined array key "missing" in %s on line 253
+1
+TypeError: Cannot increment array
+get 'q'
+
+Notice: Indirect modification of overloaded element of Box has no effect in %s on line 256
+5
+Error: Cannot increment/decrement string offsets
+
+Warning: Undefined array key "z" in %s on line 258
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 258
+array(1) {
+  ["z"]=>
+  NULL
+}
+
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 250
+{"f":2.5,"n":1,"s":"b","num":8,"arr":[],"deep":{"x":2}}
+
+Warning: Undefined array key "missing" in %s on line 253
+1
+TypeError: Cannot increment array
+get 'q'
+
+Notice: Indirect modification of overloaded element of Box has no effect in %s on line 256
+5
+Error: Cannot increment/decrement string offsets
+
+Warning: Undefined array key "z" in %s on line 258
+
+Warning: Decrement on type null has no effect, this will change in the next major version of PHP in %s on line 258
+array(1) {
+  ["z"]=>
+  NULL
+}
+-- variadics with named arguments
+{"0":1,"1":2,"x":3,"y":4} {"x":1} 1 {"0":2,"z":3} 5 {"b":6}
+Error: Named parameter $a overwrites previous argument
+{"0":1,"1":2,"x":3,"y":4} {"x":1} 1 {"0":2,"z":3} 5 {"b":6}
+Error: Named parameter $a overwrites previous argument
