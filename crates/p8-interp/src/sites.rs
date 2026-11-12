@@ -226,6 +226,54 @@ impl Closure {
     }
 }
 
+/// The context's tables of declared code (`Context::codes`,
+/// `Context::closures`): a table that only grows. A call site keeps an
+/// index into one (`Callee::User`, `UserMethod::code`), so nothing may
+/// remove, move or replace the entry an index names, and this type has no
+/// way to: it reads as a slice (no `DerefMut`), and its vector is private
+/// to this module, so the two methods here are every write there is.
+mod grow {
+    use std::rc::Rc;
+
+    pub(crate) struct GrowOnly<T>(Vec<T>);
+
+    impl<T> GrowOnly<T> {
+        pub(crate) const fn new() -> Self {
+            GrowOnly(Vec::new())
+        }
+
+        /// One more entry, at the end.
+        #[inline]
+        pub(crate) fn push(&mut self, entry: T) {
+            self.0.push(entry);
+        }
+    }
+
+    impl<T> GrowOnly<Rc<T>> {
+        /// The entry at `i`, made first (`make`) if it is still `stand_in`,
+        /// what an entry not made yet is pushed as: the one replacement
+        /// there is, once per entry. A made entry stays what it is.
+        #[inline]
+        pub(crate) fn made_at(&mut self, i: usize, stand_in: &Rc<T>, make: impl FnOnce() -> Rc<T>) -> &Rc<T> {
+            let slot = &mut self.0[i];
+            if Rc::ptr_eq(slot, stand_in) {
+                *slot = make();
+            }
+            slot
+        }
+    }
+
+    impl<T> std::ops::Deref for GrowOnly<T> {
+        type Target = [T];
+
+        #[inline(always)]
+        fn deref(&self) -> &[T] {
+            &self.0
+        }
+    }
+}
+pub(crate) use grow::GrowOnly;
+
 impl Context<'_> {
     /// Register a declared function's or method's code: its closure is
     /// made when it is first resolved, not now (most of a large
@@ -242,12 +290,13 @@ impl Context<'_> {
     /// frame, a callable) goes through here, so `fast` only ever finds
     /// made ones at the indices its call sites cached.
     pub(crate) fn closure_at(&mut self, i: u32) -> Rc<Closure> {
-        let slot = &mut self.closures[i as usize];
-        if Rc::ptr_eq(slot, &self.isolate.unbuilt) {
-            *slot = Closure::new(Arc::clone(&self.codes[i as usize]), self.isolate);
-            slot.index.set(i);
-        }
-        Rc::clone(slot)
+        let (codes, isolate) = (&self.codes, &*self.isolate);
+        let made = self.closures.made_at(i as usize, &isolate.unbuilt, || {
+            let made = Closure::new(Arc::clone(&codes[i as usize]), isolate);
+            made.index.set(i);
+            made
+        });
+        Rc::clone(made)
     }
 }
 
@@ -291,10 +340,11 @@ pub(crate) struct MethodSite {
 /// - `code` is an index in the running context's `closures`. A class with
 ///   PHP methods is linked in one context (its `Method::func` are indices
 ///   in that context's table, as `method_frame` uses them), so matching
-///   the class is being in that context; and the table only grows
-///   (`add_code` is its one push; `closure_at` replaces the not-yet-made
-///   stand-in once, and a record is only made of a made entry:
-///   `remember_user_method`). Nothing removes or moves an entry.
+///   the class is being in that context; and the table only grows: its
+///   type (`GrowOnly`) can push an entry (`add_code`) and replace the
+///   not-yet-made stand-in once (`closure_at`), nothing else, so nothing
+///   removes or moves an entry. A record is only made of a made entry
+///   (`remember_user_method`).
 ///
 /// So an entry is only ever replaced, never cleared.
 #[derive(Clone, Copy, Default)]
@@ -877,6 +927,26 @@ mod tests {
     use crate::{Isolate, Registry};
     use std::rc::Rc;
     use std::sync::Arc;
+
+    /// The code tables' one replacement (`GrowOnly::made_at`) is of the
+    /// stand-in, once: a made entry is what every later ask gets, and
+    /// nothing is made in its place (a call site kept its index).
+    #[test]
+    fn a_made_entry_of_a_code_table_is_never_replaced() {
+        let stand_in = Rc::new("not made");
+        let mut table = super::GrowOnly::new();
+        table.push(Rc::clone(&stand_in));
+        table.push(Rc::clone(&stand_in));
+        let first = Rc::clone(table.made_at(1, &stand_in, || Rc::new("made")));
+        assert!(!Rc::ptr_eq(&first, &stand_in) && *first == "made");
+        let again = Rc::clone(table.made_at(1, &stand_in, || panic!("a made entry is not made again")));
+        assert!(Rc::ptr_eq(&first, &again), "the entry is the one made first");
+        // Naming something else as the stand-in replaces nothing either.
+        let other = Rc::new("other");
+        let still = Rc::clone(table.made_at(1, &other, || panic!("only the stand-in is replaced")));
+        assert!(Rc::ptr_eq(&first, &still));
+        assert!(Rc::ptr_eq(&table[0], &stand_in) && table.len() == 2, "the other entry is as pushed");
+    }
 
     /// A declared function or method gets its closure when something first
     /// runs it (a call site, a method call, a callable, recursion), never
