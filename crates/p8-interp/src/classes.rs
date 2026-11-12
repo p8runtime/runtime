@@ -659,6 +659,7 @@ impl Context<'_> {
         let own = enum_props.iter().map(|n| PhpStr::from(*n)).chain(def.properties.iter().map(|p| PhpStr::from(p.name.as_bytes()))).collect();
         let property_order = property_order(own, parent.as_deref(), trait_properties);
         Ok(Rc::new(Class {
+            id: p8_runtime::object::ClassId::fresh(),
             name: class_name,
             lower,
             flags: def.flags | destructor | enum_flags,

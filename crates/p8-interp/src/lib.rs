@@ -2744,6 +2744,7 @@ impl Context<'_> {
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
         if let Some(o) = target.as_object() {
             self.remember_method(&clo.methods[method as usize], o, &m);
+            self.remember_user_method(&clo.methods[method as usize], o, &m);
         }
         self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
     }
@@ -4928,6 +4929,7 @@ impl Context<'_> {
             .entry((resource.kind, user))
             .or_insert_with(|| {
                 Rc::new(Class {
+                    id: p8_runtime::object::ClassId::fresh(),
                     name: PhpStr::from(resource.kind),
                     lower: resource.kind.as_bytes().to_vec(),
                     flags: p8_runtime::object::CLASS_RESOURCE | p8_runtime::object::CLASS_FINAL | if user { p8_runtime::object::CLASS_DESTRUCTOR } else { 0 },
