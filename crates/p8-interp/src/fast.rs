@@ -42,8 +42,11 @@ impl Context<'_> {
         'frame: loop {
             // A frame starting at its first instruction whose code the
             // executable has machine code for (native.rs) runs that, until
-            // it hands the frame back: every call path comes here.
+            // it hands the frame back: every call path comes here. (An
+            // executable with no native code tests that alone, not each
+            // frame's function.)
             if pc == 0
+                && self.isolate.native.is_some()
                 && handed_back != self.frames.len()
                 && let Some(id) = self.frames.last().expect("a frame").func.code.native
             {
