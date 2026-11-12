@@ -549,9 +549,7 @@ struct Settings {
     ini: Vec<(String, String)>,
     limit: u64,
     /// `p8 serve`: each request's log line says how many files it
-    /// compiled from source (none, for a project served from its package),
-    /// and no request changes the process's working directory (it is the
-    /// project's folder, for every worker; see `Server::execute`).
+    /// compiled from source (none, for a project served from its package).
     project: bool,
 }
 
@@ -658,12 +656,6 @@ pub fn run(config: Config) -> i32 {
     }
 
     let settings = settings(&config, host, port, docroot);
-    // `p8 serve`: workers run requests side by side, and a process has one
-    // working directory, so it is the project's folder for every request
-    // (php -S, one request at a time, moves it to each script's folder).
-    if settings.project {
-        let _ = std::env::set_current_dir(&settings.docroot);
-    }
     let workers = if settings.project { config.workers.max(1) } else { 1 };
     let (tx, rx) = mpsc::channel::<Incoming>();
     let flight = Arc::new(Flight::default());
@@ -948,17 +940,20 @@ impl Server {
     /// Run a PHP file as a request of its own (the router, or the target).
     fn execute(&mut self, isolate: &mut p8::Isolate, conn: &mut Conn, file: &Path, request: &p8::Request, chdir: bool, carried: Option<p8::Carried>) -> Ran {
         let script = self.compile(file);
-        // php -S runs a script in its folder. `p8 serve` runs requests side
-        // by side in one process, whose working directory stays the
-        // project's (see `run`).
-        if chdir
-            && !self.s.project
-            && let Some(dir) = file.parent()
-        {
-            let _ = std::env::set_current_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
-        }
         self.watchdog.arm(self.s.limit);
         let mut context = isolate.new_context(conn);
+        // The request starts in its script's folder, as PHP's servers start
+        // it: php_execute_script changes to the primary script's directory
+        // (VCWD_CHDIR_FILE, main/main.c:2592-2599) unless the SAPI says not
+        // to, which php-fpm does not (fpm_main.c) and the CLI server does
+        // only for its router (php_cli_server.c:2332, "Don't chdir to the
+        // router script"), which then runs in the directory the server
+        // started in. The directory is the request's own (#459, PHP's
+        // virtual cwd): a chdir() in it is seen by no other request, on
+        // this worker or another, and the process's never moves.
+        if chdir && let Some(dir) = file.parent() {
+            context.set_working_dir(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
+        }
         for (name, value) in &self.s.ini {
             context.set_ini(name, value);
         }
