@@ -42,8 +42,11 @@ impl Context<'_> {
         'frame: loop {
             // A frame starting at its first instruction whose code the
             // executable has machine code for (native.rs) runs that, until
-            // it hands the frame back: every call path comes here.
+            // it hands the frame back: every call path comes here. (An
+            // executable with no native code tests that alone, not each
+            // frame's function.)
             if pc == 0
+                && self.isolate.native.is_some()
                 && handed_back != self.frames.len()
                 && let Some(id) = self.frames.last().expect("a frame").func.code.native
             {
@@ -654,24 +657,20 @@ impl Context<'_> {
                                 }
                             }
                         };
-                        let (class, scope) = (Rc::as_ptr(&o.class) as usize, top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
-                        let by_ref = clo.methods[method].borrow().as_ref().and_then(|s| match &s.code {
-                            // (Not counted when the next frame slot runs it.)
-                            MethodCode::User(code) if s.class == class && s.scope == scope => {
-                                self.frames.site_code(code).map(|t| self.frames.next_code(t.as_ref()).code.param_by_ref(n))
-                            }
-                            _ => None,
-                        });
-                        // A miss (a class or scope the site has not seen, a
-                        // megamorphic site): the method the call will run,
-                        // found by name (`call_takes_ref_out`), as `step`
-                        // asks.
-                        let by_ref = match by_ref {
-                            Some(by_ref) => by_ref,
-                            None => match self.cached_takes_ref_out(&clo.methods[method], &o.class, n) {
+                        // The site's plain record (`UserMethod`) has the
+                        // method's by-reference bits.
+                        let q = clo.methods[method].user.get();
+                        // A miss (a native method, a class or scope the
+                        // site has not seen, a megamorphic site): the
+                        // method the call will run, found by name
+                        // (`call_takes_ref_out`), as `step` asks.
+                        let by_ref = if q.is_for(&o.class, top.scope.as_ref()) {
+                            q.by_ref(n)
+                        } else {
+                            match self.cached_takes_ref_out(&clo.methods[method], &o.class, n) {
                                 Some(by_ref) => by_ref,
                                 None => self.call_takes_ref_out(&o.class, clo.code.sites[method].sym, n),
-                            },
+                            }
                         };
                         if by_ref {
                             let cell = make_ref(&mut w[..], Reg::from(var));
@@ -1143,24 +1142,27 @@ impl Context<'_> {
                                 }
                             }
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-                        let found = {
-                            let site = clo.methods[method].borrow();
-                            match site.as_ref() {
-                                // (The code not counted when the frame slot
-                                // the call reuses runs it already.)
-                                Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
-                                    MethodCode::User(code) => self.frames.site_code(code).zip(s.declaring.upgrade()),
-                                    MethodCode::Native(..) => None,
-                                },
-                                _ => None,
-                            }
-                        };
-                        let Some((target, declaring)) = found else { uncached!() };
-                        let code = &self.frames.next_code(target.as_ref()).code;
+                        // The site's plain record (`UserMethod`): the user
+                        // method found for this class and scope (their
+                        // numbers), as its index in `closures` (a function
+                        // call site's shape), its class this many parents
+                        // up. (The class is this request's, so the index
+                        // is of this request's table: `UserMethod`.)
+                        let q = clo.methods[method].user.get();
+                        if !q.is_for(&o.class, top.scope.as_ref()) {
+                            uncached!();
+                        }
+                        let Some(target) = self.closures.get(q.code as usize) else { uncached!() };
+                        let code = &target.code;
                         if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
+                        let mut declaring = &o.class;
+                        for _ in 0..q.up {
+                            let Some(parent) = &declaring.parent else { uncached!() };
+                            declaring = parent;
+                        }
+                        let declaring = Rc::clone(declaring);
                         let this = Rc::clone(o);
                         // A temporary (`(new A)->f()`) is released as it is used:
                         // the call's `$this` holds the object.
@@ -1168,7 +1170,7 @@ impl Context<'_> {
                             clear(&mut w[rx!(obj)]);
                         }
                         // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(target.as_ref(), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
@@ -2608,6 +2610,27 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
         return None;
     }
     let cell = &o.slots()[slot];
+    // Two integers added, subtracted or multiplied with no overflow: no
+    // conversion and nothing to report, so `ops::binary` has nothing to
+    // add (an overflow is its: the result is a float).
+    if let Some(b) = y.as_int()
+        && let Some(new) = cell.peek(|v| {
+            let a = v.as_int()?;
+            match op {
+                BinOp::Add => a.checked_add(b),
+                BinOp::Sub => a.checked_sub(b),
+                BinOp::Mul => a.checked_mul(b),
+                _ => None,
+            }
+        })
+    {
+        let new = Value::int(new);
+        if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+            return None;
+        }
+        cell.assign(new.clone());
+        return Some(new);
+    }
     let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
     let mut diags = Vec::new();
     let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;

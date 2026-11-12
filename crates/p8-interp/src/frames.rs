@@ -302,41 +302,17 @@ impl Frames {
     }
 
     /// A call's frame above the running one, which goes on at `resume`
-    /// when it returns: `func` as `site_code` gave it (None: the slot the
-    /// push reuses runs it already). The frame pushed.
+    /// when it returns: `func` (None: the slot the push reuses runs it
+    /// already). The frame pushed.
     #[inline(always)]
     pub(crate) fn call(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
         self.top_mut().pc = resume as u32;
         self.push_code(func, base, argc, ret)
     }
 
-    /// The code a call site's cache keeps (a `Weak`, so that no closure
-    /// keeps itself) for the frame a call pushes next: `Some(None)` when
-    /// the slot that push reuses already runs it (no count is taken, as
-    /// `push` takes none for the same function called again from the
-    /// same depth), `Some(code)` otherwise, None when the code is gone.
-    #[inline(always)]
-    pub(crate) fn site_code(&self, code: &std::rc::Weak<Closure>) -> Option<Option<Rc<Closure>>> {
-        match self.slots.get(self.len) {
-            Some(slot) if std::ptr::eq(Rc::as_ptr(&slot.func), code.as_ptr()) => Some(None),
-            _ => {
-                p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
-                code.upgrade().map(Some)
-            }
-        }
-    }
-
-    /// The function `site_code` gave (`func`), for the checks before the
-    /// push: that one, or the next slot's.
-    #[inline(always)]
-    pub(crate) fn next_code<'a>(&'a self, func: Option<&'a Rc<Closure>>) -> &'a Closure {
-        match func {
-            Some(f) => f,
-            None => &self.slots[self.len].func,
-        }
-    }
-
-    /// `push`, of `func` (None: the next slot's, as `site_code` found it).
+    /// `push`, of `func` (None: the next slot's). The slot takes a count
+    /// of the code only when it does not run it already: the same
+    /// function called again from the same depth takes none.
     #[inline(always)]
     fn push_code(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
         let n = self.len;
@@ -348,6 +324,7 @@ impl Frames {
         if let Some(func) = func
             && !Rc::ptr_eq(&slot.func, func)
         {
+            p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
             slot.func = Rc::clone(func);
         }
         (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);

@@ -1,0 +1,41 @@
+11 22 22
+22 45 45
+34 70 70
+destruct 100
+node 100
+after 0
+destruct 101
+node 101
+after 1
+destruct 102
+node 102
+after 2
+destruct 35
+node 35 36
+35
+destruct 36
+node 36 37
+36
+destruct 37
+node 37 38
+37
+500 600 700 1801
+500 600 700 1801
+500 600 700 1801
+
+Warning: Undefined variable $nothing in %s on line 62
+37
+
+Warning: Undefined variable $nothing in %s on line 62
+37
+destruct 801
+destruct 900
+node 801
+destruct 801
+destruct 900
+node 801
+end
+destruct 500
+destruct 37
+destruct 600
+destruct 700
