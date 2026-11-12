@@ -311,23 +311,41 @@ fn r(reg: Reg) -> Option<u8> {
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
     let mut insns: Vec<Insn> = (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect();
-    if !func.frees_temps {
-        // A temporary of code that does not free each where it dies may
-        // still hold a dead value, which a call's result releases as it
-        // lands there: such a call stores in its register.
-        for insn in &mut insns {
-            *insn = to_register(*insn);
-        }
-    }
+    name_results(code, &mut insns, func.ncv, func.frees_temps);
     insns
 }
 
-/// A call as one that stores its result in its register (no RET_VAR).
-fn to_register(insn: Insn) -> Insn {
-    match insn.op {
-        Op::Call => Insn { imm: insn.imm & 0xffff | u32::from(insn.c) << 16, ..insn },
-        Op::CallRegs => Insn { imm: insn.imm & !(RET_VAR | 0x3f << 24), ..insn },
-        _ => insn,
+/// Says in every call where its result goes: a Call's `imm` bits 16..24
+/// name its result register, or with RET_VAR the variable the next
+/// instruction moves the result into (`$v = f(..)`, `ret_var`); a
+/// CallRegs names that variable (one of the first 64) in bits 24..30.
+///
+/// Code that does not free each temporary where it dies (`frees_temps`
+/// false) may still hold a dead value in the call's temporary, which the
+/// result releases as it lands there: its calls store in their registers.
+///
+/// A pass of its own, never inlined: `lower_in` is the compiler's cost
+/// per instruction, and deciding this inside it made every instruction's
+/// lowering dearer (it stopped being one function with its encoders).
+#[inline(never)]
+fn name_results(code: &[Instr], insns: &mut [Insn], ncv: Reg, frees_temps: bool) {
+    for (pc, insn) in insns.iter_mut().enumerate() {
+        match insn.op {
+            Op::Call => {
+                let var = if frees_temps { ret_var(code, pc, Reg::from(insn.c), ncv) } else { None };
+                insn.imm |= match var {
+                    Some(var) => u32::from(var) << 16 | RET_VAR,
+                    None => u32::from(insn.c) << 16,
+                };
+            }
+            // The Call is after the moves (`b` of them, or one constant).
+            Op::CallRegs if frees_temps => {
+                if let Some(var) = ret_var(code, pc + usize::from(insn.b), Reg::from(insn.c), ncv).filter(|&var| var < 64) {
+                    insn.imm |= u32::from(var) << 24 | RET_VAR;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -511,8 +529,8 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let when = Opnd::Flag(if when { kinds::T } else { kinds::F });
             enc::jump_cmp(enc::JumpCmp { cmp: Opnd::Flag(cmp_flag(cmp)?), when, a: o(a)?, b: o(b)?, target: Opnd::Imm(target) })
         }
-        Instr::Move { dst, src } => call_regs(code, pc, ncv).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? })),
-        Instr::LoadConst { dst, k: kk } => call_regs(code, pc, ncv).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: konst(consts, usize::from(kk))? })),
+        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? })),
+        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: konst(consts, usize::from(kk))? })),
         Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
@@ -641,13 +659,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             i(Op::IterInit, src, iter, 0, end)
         }
         Instr::SendVar { site, n, arg, var } => i(Op::SendVar, arg, var, 0, u32::from(site) | u32::from(n) << 16),
-        Instr::Call { site, base, argc, dst } => {
-            let (ret, flag) = match ret_var(code, pc, dst, ncv) {
-                Some(var) => (var, RET_VAR),
-                None => (r(dst)?, 0),
-            };
-            i(Op::Call, base, Reg::from(argc), dst, u32::from(site) | u32::from(ret) << 16 | flag)
-        }
+        Instr::Call { site, base, argc, dst } => i(Op::Call, base, Reg::from(argc), dst, u32::from(site)),
         Instr::MethodCall { dst, obj, method, base, argc } => i(Op::MethodCall, dst, obj, base, u32::from(method) | u32::from(argc) << 16),
         Instr::New { dst, class } => i(Op::New, dst, 0, 0, u32::from(class)),
         Instr::Construct { obj, base, argc } => i(Op::Construct, obj, base, Reg::from(argc), 0),
@@ -885,19 +897,14 @@ pub const CALL_REGS: usize = 3;
 /// their pcs), so a jump into the middle runs them one by one.
 ///
 /// A user function is called from here too (the Moves, then the call), so
-/// `imm` says where its result goes as the Call's does: RET_VAR, with the
-/// variable (one of the first 64) in bits 24..30.
-fn call_regs(code: &[Instr], pc: usize, ncv: Reg) -> Option<Insn> {
-    let ret = |call: usize, dst: Reg| match ret_var(code, call, dst, ncv) {
-        Some(var) if var < 64 => u32::from(var) << 24 | RET_VAR,
-        _ => 0,
-    };
+/// `imm` says where its result goes as the Call's does (`name_results`).
+fn call_regs(code: &[Instr], pc: usize) -> Option<Insn> {
     if let Instr::LoadConst { dst: base, k } = code[pc] {
         let Some(&Instr::Call { site, base: b, argc: 1, dst }) = code.get(pc + 1) else { return None };
         if b != base {
             return None;
         }
-        return Some(Insn { op: Op::CallRegs, a: u8::try_from(k).ok()?, b: 1, c: r(dst)?, imm: u32::from(site) | u32::from(r(base)?) << 16 | ARG_CONST | ret(pc + 1, dst) });
+        return Some(Insn { op: Op::CallRegs, a: u8::try_from(k).ok()?, b: 1, c: r(dst)?, imm: u32::from(site) | u32::from(r(base)?) << 16 | ARG_CONST });
     }
     let Instr::Move { dst: base, src: first } = code[pc] else { return None };
     for n in 1..=CALL_REGS {
@@ -909,7 +916,7 @@ fn call_regs(code: &[Instr], pc: usize, ncv: Reg) -> Option<Insn> {
             Instr::Call { site, base: b, argc, dst } if b == base && argc as usize == n && (first + n as Reg <= base || first >= base + n as Reg) => {
                 r(first + n as Reg - 1)?;
                 r(base + n as Reg - 1)?;
-                return Some(Insn { op: Op::CallRegs, a: r(first)?, b: n as u8, c: r(dst)?, imm: u32::from(site) | u32::from(r(base)?) << 16 | ret(pc + n, dst) });
+                return Some(Insn { op: Op::CallRegs, a: r(first)?, b: n as u8, c: r(dst)?, imm: u32::from(site) | u32::from(r(base)?) << 16 });
             }
             _ => return None,
         }
@@ -978,13 +985,21 @@ mod tests {
             Instr::AssignTake { var: 3, src: 5 },
             Instr::Call { site: 4, base: 6, argc: 0, dst: 5 },
         ];
-        let at = |pc| lower_at(&code, pc, &[], 3).unwrap();
-        assert_eq!(at(0), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 1 << 16 | RET_VAR });
+        let at = lowered(&code, &[], 3, true);
+        assert_eq!(at[0], Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 1 << 16 | RET_VAR });
         // The move is there as it was, for the calls that leave it to run.
-        assert_eq!(at(1).op, Op::P8_ASSIGN_TAKE);
-        assert_eq!(at(2), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
-        assert_eq!(at(4), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
-        assert_eq!(at(6), Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at[1].op, Op::P8_ASSIGN_TAKE);
+        assert_eq!(at[2], Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at[4], Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at[6], Insn { op: Op::Call, a: 6, b: 0, c: 5, imm: 4 | 5 << 16 });
+    }
+
+    /// The whole of `code` lowered as `lower` does it: each instruction,
+    /// then where every call's result goes.
+    fn lowered(code: &[Instr], consts: &[Frozen], ncv: Reg, frees_temps: bool) -> Vec<Insn> {
+        let mut insns: Vec<Insn> = (0..code.len()).map(|pc| lower_at(code, pc, consts, ncv).unwrap_or(SLOW)).collect();
+        name_results(code, &mut insns, ncv, frees_temps);
+        insns
     }
 
     #[test]
@@ -1003,16 +1018,17 @@ mod tests {
             Instr::Move { dst: 6, src: 0 },
             Instr::Call { site: 4, base: 6, argc: 1, dst: 5 },
         ];
-        let at = |pc| lower_at(&code, pc, &consts(), 3).unwrap();
-        assert_eq!(at(0), Insn { op: Op::CallRegs, a: 0, b: 2, c: 5, imm: 4 | 6 << 16 | 2 << 24 | RET_VAR });
-        assert_eq!(at(2), Insn { op: Op::Call, a: 6, b: 2, c: 5, imm: 4 | 2 << 16 | RET_VAR });
-        assert_eq!(at(4), Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 | 2 << 24 | RET_VAR | ARG_CONST });
-        assert_eq!(at(7), Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 });
+        let at = lowered(&code, &consts(), 3, true);
+        assert_eq!(at[0], Insn { op: Op::CallRegs, a: 0, b: 2, c: 5, imm: 4 | 6 << 16 | 2 << 24 | RET_VAR });
+        assert_eq!(at[2], Insn { op: Op::Call, a: 6, b: 2, c: 5, imm: 4 | 2 << 16 | RET_VAR });
+        assert_eq!(at[4], Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 | 2 << 24 | RET_VAR | ARG_CONST });
+        assert_eq!(at[7], Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 });
         // Code that does not free its temporaries where they die stores
         // every call's result in its register.
-        assert_eq!(to_register(at(0)), Insn { op: Op::CallRegs, a: 0, b: 2, c: 5, imm: 4 | 6 << 16 });
-        assert_eq!(to_register(at(2)), Insn { op: Op::Call, a: 6, b: 2, c: 5, imm: 4 | 5 << 16 });
-        assert_eq!(to_register(at(4)), Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 | ARG_CONST });
+        let at = lowered(&code, &consts(), 3, false);
+        assert_eq!(at[0], Insn { op: Op::CallRegs, a: 0, b: 2, c: 5, imm: 4 | 6 << 16 });
+        assert_eq!(at[2], Insn { op: Op::Call, a: 6, b: 2, c: 5, imm: 4 | 5 << 16 });
+        assert_eq!(at[4], Insn { op: Op::CallRegs, a: 0, b: 1, c: 5, imm: 4 | 6 << 16 | ARG_CONST });
     }
 
     #[test]
