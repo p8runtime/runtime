@@ -143,7 +143,7 @@ impl NativeFrame<'_, '_> {
         let Some(&Callee::User(t)) = top.func.sites.get((insn.imm & 0xffff) as usize).and_then(|s| s.get()) else { return None };
         let target = &cx.closures[t as usize];
         // (The loop's Call arm's conditions.)
-        if n < target.code.required || target.code.is_generator || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+        if !fast::direct(target.shape, &target.code, insn.b) || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
             return None;
         }
         cx.frames.call(Some(target), pc as usize + 1, base + args, n, (base + dst) as u32);

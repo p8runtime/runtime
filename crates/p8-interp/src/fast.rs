@@ -966,13 +966,7 @@ impl Context<'_> {
                         match clo.sites[(imm & 0xffff) as usize].get() {
                             Some(&Callee::User(target)) => {
                                 let target = &self.closures[target as usize];
-                                // As many arguments as parameters, to a
-                                // function that is not a generator
-                                // (`Shape::exact`): one test for both, and
-                                // for no required argument missing.
-                                if (u32::from(n) != target.shape.exact && ((n as usize) < target.code.required || target.code.is_generator))
-                                    || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
-                                {
+                                if !direct(target.shape, &target.code, n) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     uncached!();
                                 }
                                 // Where the result goes: the call's
@@ -1008,9 +1002,8 @@ impl Context<'_> {
                     // reads its arguments from the variables (or constants)
                     // themselves, framelessly, and the Moves into the
                     // argument registers are not run. A user function the Call
-                    // arm would call directly (not a generator, no required
-                    // argument missing) is
-                    // called from here: the Moves, each as `Op::Move` does it,
+                    // arm would call directly (`direct`) is called from
+                    // here: the Moves, each as `Op::Move` does it,
                     // then the Call, with no instruction fetched between
                     // them. Anything else runs the first Move as `Op::Move`
                     // does, and goes on with the next.
@@ -1020,10 +1013,7 @@ impl Context<'_> {
                         let site = clo.sites[(imm & 0xffff) as usize].get();
                         if let Some(&Callee::User(target)) = site {
                             let target = &self.closures[target as usize];
-                            // (The Call arm's test, the other way round.)
-                            if (n as u32 == target.shape.exact || (n >= target.code.required && !target.code.is_generator))
-                                && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT
-                            {
+                            if direct(target.shape, &target.code, b) && self.stop.load(AtomicOrdering::Relaxed) == NO_INTERRUPT {
                                 let args = rk!((imm >> 16) as usize);
                                 if imm & insn::ARG_CONST != 0 {
                                     let v = cst!(start).clone();
@@ -2709,6 +2699,16 @@ pub(crate) fn enter(frames: &mut Frames, regs: &mut Vec<Value>) {
     let frame = &frames.slots[frames.len - 1];
     let (shape, base, argc) = (frame.func.shape, frame.base as usize, frame.argc as usize);
     bind(frames, regs, shape, base, argc);
+}
+
+/// Whether a call of a function with `n` arguments is entered where it is
+/// made (its frame pushed and bound there, by the loop's Call and CallRegs
+/// arms and a native frame's call): no required argument is missing, and
+/// its code is not a generator's. As many arguments as parameters says
+/// both in one test (`Shape::exact`), and most calls pass that many.
+#[inline(always)]
+pub(crate) fn direct(shape: Shape, code: &Function, n: u8) -> bool {
+    u32::from(n) == shape.exact || (usize::from(n) >= code.required && !code.is_generator)
 }
 
 /// `enter`, for a caller that has the frame's numbers in hand (the loop's
