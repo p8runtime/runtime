@@ -123,10 +123,142 @@ fn run(exe: &Path, args: &[&Path]) -> Output {
 
 /// The counts `--native-counts` printed: (entries, returns, guards).
 fn counts(out: &Output) -> (u64, u64, u64) {
+    let c = all_counts(out);
+    (c.entries, c.returns, c.guards)
+}
+
+/// What `--native-counts` printed.
+#[derive(Debug, PartialEq)]
+struct Counts {
+    entries: u64,
+    returns: u64,
+    /// Frames handed back at an instruction (the interpreter ran the rest).
+    guards: u64,
+    /// Frames an instruction the interpreter ran left (an exception).
+    lefts: u64,
+    /// Instructions the interpreter ran for the native code.
+    helps: u64,
+}
+
+fn all_counts(out: &Output) -> Counts {
     let err = String::from_utf8_lossy(&out.stderr);
     let line = err.lines().find_map(|l| l.strip_prefix("p8 native: ")).unwrap_or_else(|| panic!("no counts in {err:?}"));
     let n: Vec<u64> = line.split(|c: char| !c.is_ascii_digit()).filter(|w| !w.is_empty()).filter_map(|w| w.parse().ok()).collect();
-    (n[1], n[2], n[3])
+    Counts { entries: n[1], returns: n[2], guards: n[3], lefts: n[4], helps: n[5] }
+}
+
+/// `script` (a file of its own) through a native executable: its output
+/// (equal to p8's) and the counts.
+fn native_run(name: &str, script: &str) -> (String, Counts) {
+    let (src, exe) = build(name, &[("main.php", script)]);
+    let main = src.join("main.php");
+    let plain = run(p8(), &[&main]);
+    let native = run(&exe, &[Path::new("--native-counts"), &main]);
+    assert!(native.status.success(), "{name}: {:?} {}", native.status, String::from_utf8_lossy(&native.stderr));
+    assert_eq!(String::from_utf8_lossy(&native.stdout), String::from_utf8_lossy(&plain.stdout), "{name}");
+    (String::from_utf8_lossy(&native.stdout).into_owned(), all_counts(&native))
+}
+
+/// Native code is entered on every path a user function is called by:
+/// its first call (which resolves the site on the interpreter), a method,
+/// a static method, a closure, a callback a builtin makes, a call from
+/// native code. Each script calls its function the number of times
+/// counted, from the main code (never native).
+#[test]
+fn native_code_is_entered_on_every_call_path() {
+    let paths = [
+        ("first_call", "<?php function f($x) { return $x + 1; }\necho f(1), \"\\n\";\n", "2\n", 1),
+        ("method", "<?php class A { function m($x) { return $x * 2; } }\n$a = new A;\necho $a->m(4), \"\\n\";\n", "8\n", 1),
+        ("static_method", "<?php class A { static function s($x) { return $x - 1; } }\necho A::s(4), \"\\n\";\n", "3\n", 1),
+        ("closure", "<?php $f = function ($x) { return $x + 10; };\necho $f(1), \"\\n\";\n", "11\n", 1),
+        ("callback", "<?php function dbl($x) { return $x * 2; }\necho implode(',', array_map('dbl', [1, 2, 3])), \"\\n\";\n", "2,4,6\n", 3),
+        ("from_native", "<?php function inner($x) { return $x + 1; }\nfunction outer($x) { return inner($x) + inner($x); }\necho outer(1), \"\\n\";\n", "4\n", 3),
+    ];
+    for (name, script, out, calls) in paths {
+        let (got, c) = native_run(name, script);
+        assert_eq!(got, out, "{name}");
+        assert_eq!((c.entries, c.returns, c.guards, c.lefts), (calls, calls, 0, 0), "{name}: {c:?}");
+    }
+}
+
+/// An instruction with no template (a concatenation), and a value holding
+/// memory (a string copied and released), no longer end the native run:
+/// the interpreter runs that one instruction and the native code goes on
+/// at the next pc. The loop runs to its return in native code.
+#[test]
+fn an_instruction_without_a_template_runs_on_the_interpreter_and_the_native_code_goes_on() {
+    let script = "<?php function grow($n) { $s = ''; for ($i = 0; $i < $n; $i++) { $s .= 'ab'; $t = $s; } return strlen($t) + $i; }\necho grow(50), \"\\n\";\n";
+    let (got, c) = native_run("helped", script);
+    assert_eq!(got, "150\n");
+    assert_eq!((c.entries, c.returns, c.guards, c.lefts), (1, 1, 0, 0), "{c:?}");
+    // The concatenation and the string's copy, each round, and strlen: the
+    // interpreter's.
+    assert!(c.helps >= 100, "{c:?}");
+}
+
+/// An executable whose machine code another build of p8 made (here: the
+/// build identity in its image changed) is not run by this runtime
+/// library: the image is stamped with the engine key of the p8 that made
+/// it, and a runtime library runs only its own.
+#[test]
+fn machine_code_of_another_build_is_refused() {
+    let (src, exe) = build("other_build", &[("main.php", "<?php function f() { return 1; }\necho f(), \"\\n\";\n")]);
+    let main = src.join("main.php");
+    assert_eq!(String::from_utf8_lossy(&run(&exe, &[&main]).stdout), "1\n");
+    // The image: `p8native`, its version (2), then at 56 the engine key.
+    let mut bytes = std::fs::read(&exe).expect("the executable");
+    let mut magic = b"p8native".to_vec();
+    magic.extend_from_slice(&2u64.to_le_bytes());
+    let at = bytes.windows(16).position(|w| w == magic.as_slice()).expect("the image");
+    bytes[at + 56] ^= 0xff;
+    let other = exe.with_file_name("other");
+    std::fs::write(&other, &bytes).expect("write");
+    std::fs::set_permissions(&other, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+    // (macOS runs a changed executable only signed again; ad hoc, as the
+    // linker signed it.)
+    if cfg!(target_os = "macos") {
+        let signed = Command::new("codesign").args(["-s", "-", "-f"]).arg(&other).output().expect("codesign");
+        assert!(signed.status.success(), "{}", String::from_utf8_lossy(&signed.stderr));
+    }
+    let refused = run(&other, &[&main]);
+    assert_eq!(refused.status.code(), Some(70), "{}", String::from_utf8_lossy(&refused.stderr));
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("another build of p8"));
+}
+
+/// The request's working directory (#474) reaches the builtins native
+/// code calls: they run through the interpreter's own arms, on the same
+/// request. A native function that `chdir`s reads a relative path there.
+#[test]
+fn the_working_directory_reaches_builtins_called_from_native_code() {
+    let script = "<?php function read_in($dir) { chdir($dir); return file_get_contents('x') . getcwd(); }\nmkdir(__DIR__ . '/sub');\nfile_put_contents(__DIR__ . '/sub/x', 'in sub ');\necho read_in(__DIR__ . '/sub') === 'in sub ' . realpath(__DIR__ . '/sub') ? \"ok\\n\" : \"wrong\\n\";\n";
+    let (src, exe) = build("cwd", &[("main.php", script)]);
+    let main = src.join("main.php");
+    let native = run(&exe, &[Path::new("--native-counts"), &main]);
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "ok\n", "{}", String::from_utf8_lossy(&native.stderr));
+    let c = all_counts(&native);
+    assert_eq!((c.entries, c.returns, c.lefts), (1, 1, 0), "{c:?}");
+}
+
+/// Typed parameters and returns of scalar types are checked inline (by
+/// the value's tag): no instruction of this function is the interpreter's.
+#[test]
+fn scalar_types_are_checked_inline() {
+    let script = "<?php function add(int $a, float $b): float { return $a + $b; }\necho add(1, 2.5), \"\\n\";\n";
+    let (got, c) = native_run("typed", script);
+    assert_eq!(got, "3.5\n");
+    assert_eq!((c.entries, c.returns, c.guards, c.lefts, c.helps), (1, 1, 0, 0, 0), "{c:?}");
+}
+
+/// An exception thrown in native code: caught in the same function (the
+/// native code goes on at the handler), and thrown out of one (the frame
+/// is left; the caller catches it).
+#[test]
+fn exceptions_in_native_code_go_where_the_interpreter_sends_them() {
+    let script = "<?php function f($x) { try { if ($x) { throw new Exception('in'); } return 1; } catch (Exception $e) { return 2; } }\nfunction g() { throw new Exception('out'); }\necho f(0), f(1), \"\\n\";\ntry { g(); } catch (Exception $e) { echo $e->getMessage(), \"\\n\"; }\n";
+    let (got, c) = native_run("exceptions", script);
+    assert_eq!(got, "12\nout\n");
+    assert_eq!((c.entries, c.returns, c.lefts), (3, 2, 1), "{c:?}");
 }
 
 #[test]
@@ -154,14 +286,15 @@ fn what_native_code_does_not_handle_runs_on_the_interpreter_from_where_it_stoppe
     assert_eq!(String::from_utf8_lossy(&plain.stdout), FALLBACK_OUT);
     let native = run(&exe, &[Path::new("--native-counts"), &script]);
     assert_eq!(String::from_utf8_lossy(&native.stdout), FALLBACK_OUT, "{}", String::from_utf8_lossy(&native.stderr));
-    let (entries, returns, guards) = counts(&native);
-    // The eight calls dumped are native: three return natively (two
-    // ints, an int and a float, mix(10)); the strings, the overflow, the
-    // arrays, null, and mix(50)'s `$x * 3` overflowing in its 40th round
-    // (the loop goes on on the interpreter, with `$t` and `$i` as the
-    // native code left them) hand the frame back at a guard.
-    assert!(entries >= 8, "{entries} native entries");
-    assert_eq!((guards, returns), (5, entries - 5));
+    let c = all_counts(&native);
+    // Every call is native and returns natively: the strings, the
+    // overflow, the arrays, null, and mix(50)'s `$x * 3` overflowing in
+    // its 40th round are each one instruction the interpreter runs, with
+    // the registers as the native code left them, the native code going
+    // on after it (the loop's `$t` and `$i` are the native code's).
+    assert!(c.entries >= 8, "{c:?}");
+    assert_eq!((c.returns, c.guards, c.lefts), (c.entries, 0, 0), "{c:?}");
+    assert!(c.helps >= 5, "{c:?}");
 }
 
 /// A native function calling itself a million deep: each native call runs

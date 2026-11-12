@@ -14,7 +14,9 @@
 //! registers (16-byte values, [`VALUE_SIZE`], at `ctx.regs`), touching
 //! plain values only (tags below [`tag::FIRST_HEAP`]: no count to keep,
 //! nothing to release), and returns `reason << 32 | pc` ([`exit`]): where
-//! the interpreter takes the frame over. It calls one helper, [`CALL`].
+//! the interpreter takes the frame over. For anything else it calls one
+//! helper, [`HELP`], which has the interpreter run that instruction, and
+//! goes on at the pc the helper gives.
 //!
 //! # The executable
 //!
@@ -39,30 +41,34 @@ pub const CTX_INTERRUPT: i32 = 8;
 pub mod exit {
     /// At a return, which the interpreter runs.
     pub const RETURN: u64 = 0;
-    /// At an instruction whose operands the code has nothing for (a
-    /// value of another type, an overflow, a reference, an interrupt
-    /// due): the interpreter runs it, the registers as before it.
+    /// At an instruction the code leaves to the interpreter, the registers
+    /// as before it (a pc the helper gave past the code: never, in code
+    /// the generator made).
     pub const GUARD: u64 = 1;
-    /// After the call at pc, which left an error or a destructor due.
-    pub const PENDING: u64 = 2;
-    /// At the call at pc, which threw.
-    pub const THREW: u64 = 3;
+    /// The interpreter goes on from what the helper's run gave (it left
+    /// the frame, or pushed a callee it did not run nested; the pc is 0).
+    pub const LEFT: u64 = 2;
 }
 
-/// The helper for a call (`Op::Call`): `extern "C" fn(ctx: *mut Ctx, pc:
-/// u32) -> u32`, returning one of [`call`].
-pub const CALL: &str = "p8n_call";
+/// The one helper: `extern "C" fn(ctx: *mut Ctx, op: u32, pc: u32) ->
+/// u64`, the instruction at `pc` run by the interpreter ([`op`]), returning
+/// `status << 32 | next` ([`help`]).
+pub const HELP: &str = "p8n_help";
 
-/// What [`CALL`] returns.
-pub mod call {
-    /// Done: the result is in the call's register; go on after it.
-    pub const DONE: u32 = 0;
-    /// Not run: hand the frame back at the call (`exit::GUARD`).
-    pub const NOT_TAKEN: u32 = 1;
-    /// Done, something due: `exit::PENDING`.
-    pub const PENDING: u32 = 2;
-    /// Threw: `exit::THREW`.
-    pub const THREW: u32 = 3;
+/// What [`HELP`] runs.
+pub mod op {
+    /// An `Op::Call`: a resolved user function directly, else as `STEP`.
+    pub const CALL: u32 = 0;
+    /// Any instruction, as the interpreter's loop runs it out of line.
+    pub const STEP: u32 = 1;
+}
+
+/// What [`HELP`] returns, in its high word.
+pub mod help {
+    /// The instruction ran: go on at `next` (the low word).
+    pub const NEXT: u64 = 0;
+    /// It ran, and the frame is the interpreter's: `exit::LEFT`.
+    pub const LEFT: u64 = 2;
 }
 
 /// The boundary's entry: `extern "C" fn(argc: c_int, argv: *const *const
@@ -86,9 +92,13 @@ pub mod image {
     /// The package's bytes and their length.
     pub const PACKAGE: i32 = 40;
     pub const PACKAGE_LEN: i32 = 48;
-    pub const SIZE: usize = 56;
+    /// The build of p8 that made the image: its engine key (16 bytes, the
+    /// one its packages carry, `Platform::engine_key`). The runtime library
+    /// refuses an image of another build.
+    pub const ENGINE: i32 = 56;
+    pub const SIZE: usize = 72;
     /// `p8native`, and the version of this contract: an image of another
     /// contract is refused.
     pub const MAGIC_WORD: u64 = u64::from_le_bytes(*b"p8native");
-    pub const VERSION_WORD: u64 = 1;
+    pub const VERSION_WORD: u64 = 2;
 }

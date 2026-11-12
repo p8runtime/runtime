@@ -13,9 +13,9 @@
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData as MemFlags, types};
-use cranelift_frontend::FunctionBuilder;
+use cranelift_frontend::{FunctionBuilder, Variable};
 use p8_bytecode::Function;
-use p8_native_abi::{self as abi, exit, tag};
+use p8_native_abi::{self as abi, exit, help, op, tag};
 use p8_runtime::frozen::Frozen;
 
 /// An instruction (or an operand of it) native code is not made for:
@@ -35,8 +35,12 @@ pub struct Emit<'a, 'f> {
     pub ctx: ir::Value,
     /// The window's address, loaded at this pc's block.
     pub regs: ir::Value,
-    /// The call helper (`abi::CALL`).
-    pub call: ir::FuncRef,
+    /// The helper (`abi::HELP`).
+    pub helper: ir::FuncRef,
+    /// The block that goes on at the pc in `next` (a jump table over the
+    /// pcs' blocks): where the code goes on after a help.
+    pub dispatch: ir::Block,
+    pub next: Variable,
 }
 
 const FLAGS: MemFlags = MemFlags::trusted();
@@ -106,15 +110,35 @@ impl Emit<'_, '_> {
         self.b.ins().band(plain, defined)
     }
 
-    /// Go on only when `ok`; else hand the frame back at `at`, the
-    /// instruction there to run on the interpreter.
+    /// Go on only when `ok`; else the interpreter runs the instruction at
+    /// `at` (`help`), and the code goes on where that left the frame.
     pub fn guard_at(&mut self, ok: ir::Value, at: u32) {
         let (cont, cold) = (self.b.create_block(), self.b.create_block());
         self.b.set_cold_block(cold);
         self.b.ins().brif(ok, cont, &[], cold, &[]);
         self.b.switch_to_block(cold);
-        self.exit(exit::GUARD, at);
+        self.help(op::STEP, at);
         self.b.switch_to_block(cont);
+    }
+
+    /// Have the interpreter run the instruction at `at` (`op`, `abi::op`),
+    /// then go on at the pc it gives (`dispatch`), or leave the frame to
+    /// the interpreter when it says so. Fills the current block.
+    pub fn help(&mut self, what: u32, at: u32) {
+        let (o, p) = (self.b.ins().iconst(types::I32, i64::from(what)), self.b.ins().iconst(types::I32, i64::from(at)));
+        let inst = self.b.ins().call(self.helper, &[self.ctx, o, p]);
+        let r = self.b.inst_results(inst)[0];
+        let status = self.b.ins().ushr_imm_u(r, 32);
+        let next = self.b.ins().ireduce(types::I32, r);
+        let is_next = self.b.ins().icmp_imm_u(IntCC::Equal, status, help::NEXT as i64);
+        let (go, out) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(is_next, go, &[], out, &[]);
+        self.b.switch_to_block(go);
+        self.b.def_var(self.next, next);
+        self.b.ins().jump(self.dispatch, &[]);
+        self.b.switch_to_block(out);
+        self.b.set_cold_block(out);
+        self.exit(exit::LEFT, 0);
     }
 
     /// `guard_at` this instruction.
