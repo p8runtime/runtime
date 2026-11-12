@@ -2557,6 +2557,27 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
         return None;
     }
     let cell = &o.slots()[slot];
+    // Two integers added, subtracted or multiplied with no overflow: no
+    // conversion and nothing to report, so `ops::binary` has nothing to
+    // add (an overflow is its: the result is a float).
+    if let Some(b) = y.as_int()
+        && let Some(new) = cell.peek(|v| {
+            let a = v.as_int()?;
+            match op {
+                BinOp::Add => a.checked_add(b),
+                BinOp::Sub => a.checked_sub(b),
+                BinOp::Mul => a.checked_mul(b),
+                _ => None,
+            }
+        })
+    {
+        let new = Value::int(new);
+        if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+            return None;
+        }
+        cell.assign(new.clone());
+        return Some(new);
+    }
     let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
     let mut diags = Vec::new();
     let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;
