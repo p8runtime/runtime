@@ -33,6 +33,20 @@ var_dump(chdir('plain/below'));
 var_dump(chdir('missing/..'));
 var_dump(getcwd() === $real);
 
+echo "-- search permission\n";
+// chdir(2) asks for search permission for this user: the owner's bits
+// count for the owner, whatever the others' say.
+mkdir('closed');
+chmod('closed', 0001);
+var_dump(chdir('closed'));
+var_dump(getcwd() === $real);
+chmod('closed', 0100);
+var_dump(chdir('closed'));
+var_dump(getcwd() === "$real/closed");
+chdir($real);
+chmod('closed', 0700);
+rmdir('closed');
+
 echo "-- relative after a move\n";
 chdir('sub');
 file_put_contents('in-sub', 'here');

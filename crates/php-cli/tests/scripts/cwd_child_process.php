@@ -40,6 +40,14 @@ proc_close($proc);
 chdir('sub');
 echo $pwd(shell_exec('pwd -P')), "\n";
 echo shell_exec('cat ../here.txt');
+// A relative program, array form: the one under the directory moved to.
+file_put_contents('tool', "#!/bin/sh\necho tool in sub\n");
+chmod('tool', 0755);
+$proc = proc_open(['./tool'], $spec, $pipes);
+echo stream_get_contents($pipes[1]);
+fclose($pipes[1]);
+proc_close($proc);
+unlink('tool');
 chdir('..');
 
 unlink('here.txt');

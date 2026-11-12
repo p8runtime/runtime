@@ -83,11 +83,11 @@ pub fn change_to(cwd: &Path, path: &Path) -> std::io::Result<PathBuf> {
     if !meta.is_dir() {
         return Err(std::io::Error::from_raw_os_error(ENOTDIR));
     }
-    // chdir(2) needs search permission on the directory: a directory no
-    // one may search is refused as it refuses it.
-    #[cfg(unix)]
-    if std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 == 0 {
-        return Err(std::io::Error::from_raw_os_error(EACCES));
+    // chdir(2) needs search permission on the directory for the user the
+    // process runs as (ACLs and root included): looking a name up in it is
+    // the system's own answer to that, which a mode bit is not.
+    if let Err(e) = std::fs::metadata(dir.join(".")) {
+        return Err(if e.kind() == std::io::ErrorKind::PermissionDenied { std::io::Error::from_raw_os_error(EACCES) } else { e });
     }
     Ok(dir)
 }

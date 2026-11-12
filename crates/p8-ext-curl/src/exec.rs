@@ -347,6 +347,9 @@ struct Hop<'a> {
     /// Credentials go along (same host as the first request, or unrestricted).
     auth: bool,
     referer: Option<&'a str>,
+    /// The request's working directory: a relative certificate or key
+    /// file is under it.
+    cwd: &'a std::path::Path,
 }
 
 fn prepare(hop: &Hop) -> Result<Prepared, CurlErr> {
@@ -443,7 +446,7 @@ fn prepare(hop: &Hop) -> Result<Prepared, CurlErr> {
     if !hop.body.is_empty() {
         request = request.body(hop.body.to_vec());
     }
-    Ok(Prepared { request: apply_options(request, st, encoding.is_some())?, text })
+    Ok(Prepared { request: apply_options(request, st, encoding.is_some(), hop.cwd)?, text })
 }
 
 fn credentials(st: &State, url: &rsurl::Url) -> (Option<String>, String) {
@@ -482,7 +485,10 @@ fn base64(data: &[u8]) -> String {
 }
 
 /// The options that configure the transport rather than the message.
-fn apply_options(mut req: Request, st: &State, encoding: bool) -> Result<Request, CurlErr> {
+fn apply_options(mut req: Request, st: &State, encoding: bool, cwd: &std::path::Path) -> Result<Request, CurlErr> {
+    // A file option is the request's working directory's when relative
+    // (libcurl opens it against the process's, which other requests share).
+    let file = |p: &str| p8_runtime::cwd::join(cwd, std::path::Path::new(p)).to_string_lossy().into_owned();
     let ms = |option_ms: i64, option_s: i64| -> Option<Duration> {
         let v = opt_int(st, option_ms).map(|n| n.max(0) as u64).filter(|n| *n > 0).map(Duration::from_millis);
         v.or_else(|| opt_int(st, option_s).filter(|n| *n > 0).map(|n| Duration::from_secs(n as u64)))
@@ -502,16 +508,16 @@ fn apply_options(mut req: Request, st: &State, encoding: bool) -> Result<Request
         req = req.verify_tls(false);
     }
     if let Some(p) = opt_str(st, c::CURLOPT_CAINFO).filter(|p| !p.is_empty()) {
-        req = req.ca_bundle(&p);
+        req = req.ca_bundle(&file(&p));
     }
     if let Some(p) = opt_str(st, c::CURLOPT_CAPATH).filter(|p| !p.is_empty()) {
-        req = req.ca_path(&p);
+        req = req.ca_path(&file(&p));
     }
     if let Some(p) = opt_str(st, c::CURLOPT_SSLCERT).filter(|p| !p.is_empty()) {
-        req = req.client_cert(&p);
+        req = req.client_cert(&file(&p));
     }
     if let Some(p) = opt_str(st, c::CURLOPT_SSLKEY).filter(|p| !p.is_empty()) {
-        req = req.client_key(&p);
+        req = req.client_key(&file(&p));
     }
     if let Some(p) = opt_str(st, c::CURLOPT_SSLKEYPASSWD) {
         req = req.client_key_pass(&p);
@@ -604,6 +610,7 @@ fn micros(d: Option<Duration>) -> i64 {
 pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(), CurlErr>, Throw> {
     let h = handle(this);
     let mut st = h.st.borrow().clone();
+    let cwd = ctx.cwd().to_path_buf();
     h.st.borrow_mut().info = Info::default();
     let started = Instant::now();
 
@@ -753,7 +760,7 @@ pub(crate) fn perform(ctx: &mut dyn Ctx, this: &Rc<Object>) -> Result<Result<(),
     loop {
         let cur = rsurl::Url::parse(&url).unwrap_or_else(|_| parsed.clone());
         let same_host = (cur.host.clone(), cur.port) == first_host;
-        let prepared = match prepare(&Hop { st: &st, url: &url, method: &method, body: &body, content_type: content_type.as_deref(), auth: same_host || unrestricted, referer: referer.as_deref() }) {
+        let prepared = match prepare(&Hop { st: &st, url: &url, method: &method, body: &body, content_type: content_type.as_deref(), auth: same_host || unrestricted, referer: referer.as_deref(), cwd: &cwd }) {
             Ok(p) => p,
             Err(e) => {
                 result = Err(e);

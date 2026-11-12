@@ -1332,20 +1332,21 @@ fn temp_dir() -> String {
 
 /// tempnam(string $directory, string $prefix): a new empty file's path.
 fn tempnam(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let mut dir = path_arg(args);
+    let given = path_arg(args);
     // php_do_open_temporary_file: the directory's real path (VCWD_REALPATH,
-    // against the request's working directory).
-    if let Ok(real) = p8_runtime::os::canonicalize(at(ctx, &dir))
-        && !dir.is_empty()
-    {
-        dir = real.to_string_lossy().into_owned();
-    }
-    if dir.is_empty() || !Path::new(&dir).is_dir() {
-        if !dir.is_empty() {
-            ctx.report(8, "tempnam(): file created in the system's temporary directory");
+    // against the request's working directory), never the name as given:
+    // one that does not resolve to a directory is the system's temporary
+    // directory, with the notice.
+    let real = if given.is_empty() { None } else { p8_runtime::os::canonicalize(at(ctx, &given)).ok().filter(|p| p.is_dir()) };
+    let dir = match real {
+        Some(real) => real.to_string_lossy().into_owned(),
+        None => {
+            if !given.is_empty() {
+                ctx.report(8, "tempnam(): file created in the system's temporary directory");
+            }
+            temp_dir()
         }
-        dir = temp_dir();
-    }
+    };
     let prefix: String = text(&str_arg(args, 1)).chars().take(63).collect();
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     for i in 0..1000u32 {

@@ -428,23 +428,9 @@ fn warn_all(ctx: &mut dyn Ctx, warns: Vec<String>) {
 
 /// The absolute form of a path (expand_filepath): joined to the request's
 /// working directory `cwd` (Ctx::cwd), `.` and `..` folded away.
+/// One function with every other expansion: p8_runtime::cwd::expand.
 pub(crate) fn expand_path(cwd: &std::path::Path, path: &str) -> String {
-    let full = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("{}/{path}", cwd.to_string_lossy())
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    for p in full.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            p => parts.push(p),
-        }
-    }
-    format!("/{}", parts.join("/"))
+    p8_runtime::cwd::expand(cwd, std::path::Path::new(path)).to_string_lossy().into_owned()
 }
 
 /// zip_open(): the archive at `path`, or libzip's error code.

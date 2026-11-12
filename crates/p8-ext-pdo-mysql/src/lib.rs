@@ -162,7 +162,7 @@ impl Driver for MysqlDriver {
     }
 
     /// pdo_mysql_handle_factory()
-    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options, _cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError> {
+    fn connect(&self, dsn: &str, user: Option<&[u8]>, pass: Option<&[u8]>, options: &Options, cwd: &std::path::Path) -> Result<Box<dyn Connection>, ConnectError> {
         let vars = parse_data_source(dsn.as_bytes(), &["charset", "dbname", "host", "port", "unix_socket", "user", "password"]);
         let text = |i: usize| vars[i].as_ref().map(|v| String::from_utf8_lossy(v).into_owned());
         let mut flags = 0;
@@ -189,7 +189,8 @@ impl Driver for MysqlDriver {
         // atoi(): the leading digits; 0 is the default port.
         let port = text(3).map_or(3306, |p| p.trim_start().bytes().take_while(u8::is_ascii_digit).fold(0u32, |n, d| n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'))));
         let port = u16::try_from(port).ok().filter(|&p| p != 0).unwrap_or(3306);
-        let socket = text(4);
+        // A relative socket is the request's working directory's.
+        let socket = text(4).map(|s| p8_runtime::cwd::join(cwd, std::path::Path::new(&s)).to_string_lossy().into_owned());
         let address = if host == "localhost" { Address::Socket(socket.as_deref().unwrap_or(DEFAULT_SOCKET)) } else { Address::Tcp { host: &host, port } };
         let user = user.map(<[u8]>::to_vec).or_else(|| vars[5].clone()).unwrap_or_default();
         let pass = pass.map(<[u8]>::to_vec).or_else(|| vars[6].clone()).unwrap_or_default();

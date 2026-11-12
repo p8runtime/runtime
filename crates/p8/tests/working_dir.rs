@@ -43,17 +43,129 @@ fn folder(root: &Path, name: &str) -> PathBuf {
 }
 
 fn run(platform: &p8::Platform, source: &str, start: Option<&Path>) -> (i32, String) {
+    run_with(platform, source, start, &[])
+}
+
+/// [`run`] with ini settings made for the request.
+fn run_with(platform: &p8::Platform, source: &str, start: Option<&Path>, ini: &[(&str, &str)]) -> (i32, String) {
     let script = platform.compile(source.as_bytes(), "t.php").expect("compiles");
     let mut isolate = platform.new_isolate();
     let mut host = Capture::default();
     let status = {
         let mut context = isolate.new_context(&mut host);
+        for (name, value) in ini {
+            context.set_ini(name, value);
+        }
         if let Some(dir) = start {
             context.set_working_dir(dir);
         }
         context.run(&script)
     };
     (status, String::from_utf8(host.0).expect("utf-8"))
+}
+
+/// A name that exists relative to the process's directory (this crate's,
+/// where cargo runs the test) and not relative to the request's: a builtin
+/// that still resolved against the process's would find it.
+const PROCESS_ONLY: &str = "src";
+
+#[test]
+fn tempnam_never_uses_a_folder_of_the_process_directory() {
+    let root = scratch("tempnam");
+    assert!(Path::new(PROCESS_ONLY).is_dir() && !root.join(PROCESS_ONLY).exists());
+    let source = format!("<?php $f = tempnam('{PROCESS_ONLY}', 'p8cwdtest'); echo $f, \"\\n\"; unlink($f);");
+    let (status, out) = run(&platform(), &source, Some(&root));
+    // A file left in the process's folder by the old resolution goes.
+    for e in std::fs::read_dir(PROCESS_ONLY).expect("src/").flatten() {
+        if e.file_name().to_string_lossy().starts_with("p8cwdtest") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    let temp = std::fs::canonicalize(std::env::temp_dir()).expect("the temporary directory");
+    assert_eq!(status, 0);
+    assert!(out.contains("tempnam(): file created in the system's temporary directory"), "{out}");
+    let made = out.lines().last().expect("the file's name");
+    assert!(made.starts_with(&format!("{}/p8cwdtest", temp.display())), "{out}");
+    std::fs::remove_dir_all(&root).expect("the scratch folder removed");
+}
+
+#[test]
+fn opcache_finds_a_script_by_the_request_s_relative_name() {
+    let root = scratch("opcache");
+    std::fs::write(root.join("x.php"), "<?php return 1;").expect("x.php");
+    let on = |name: &str| matches!(name, "opcache.enable" | "opcache.enable_cli").then(|| "1".to_string());
+    let platform = platform().opcache(p8::OpcacheSettings::from_ini(true, &on)).keep_compiled();
+    let source = format!(
+        "<?php var_dump(include 'x.php'); var_dump(opcache_is_script_cached('{abs}'), opcache_is_script_cached('x.php'), opcache_invalidate('x.php', true), opcache_is_script_cached('{abs}'));",
+        abs = root.join("x.php").display()
+    );
+    let ini = [("opcache.enable", "1"), ("opcache.enable_cli", "1")];
+    assert_eq!(run_with(&platform, &source, Some(&root), &ini), (0, "int(1)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n".into()));
+    std::fs::remove_dir_all(&root).expect("the scratch folder removed");
+}
+
+#[test]
+fn a_unix_socket_is_bound_and_reached_in_the_request_s_directory() {
+    let root = scratch("socket");
+    // A short name under a directory too long for sun_path (104 bytes on
+    // macOS, 108 on Linux) with the directory joined to it.
+    let long = root.join("d".repeat(110usize.saturating_sub(root.as_os_str().len()).max(8)));
+    std::fs::create_dir(&long).expect("a long folder");
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::SOCKETS]);
+    let source = "<?php
+        $s = socket_create(AF_UNIX, SOCK_STREAM, 0);
+        var_dump(socket_bind($s, 's.sock'), file_exists('s.sock'), is_file('s.sock'));
+        socket_getsockname($s, $name); var_dump($name);
+        $c = socket_create(AF_UNIX, SOCK_STREAM, 0);
+        var_dump(socket_connect($c, 's.sock'));
+        socket_getpeername($c, $peer); var_dump($peer);
+        socket_close($c); socket_close($s); unlink('s.sock');";
+    let want = "bool(true)\nbool(true)\nbool(false)\nstring(6) \"s.sock\"\nbool(true)\nstring(6) \"s.sock\"\n";
+    for dir in [&root, &long] {
+        let (status, out) = run(&platform, source, Some(dir));
+        let _ = std::fs::remove_file("s.sock");
+        assert_eq!((status, out.as_str()), (0, want), "in {} ({} bytes)", dir.display(), dir.as_os_str().len());
+        assert!(!dir.join("s.sock").exists());
+    }
+    std::fs::remove_dir_all(&root).expect("the scratch folder removed");
+}
+
+#[test]
+fn mysqli_connects_to_a_relative_socket_in_the_request_s_directory() {
+    let root = scratch("mysqli");
+    // Not a server: it takes the connection and closes it, so a client that
+    // reached it fails reading the greeting (2013), not finding it (2002).
+    let listener = std::os::unix::net::UnixListener::bind(root.join("m.sock")).expect("a socket");
+    let server = std::thread::spawn(move || drop(listener.accept()));
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::MYSQLI]);
+    let source = "<?php mysqli_report(MYSQLI_REPORT_OFF); $m = @mysqli_connect('localhost', 'u', 'p', '', 0, 'm.sock'); echo mysqli_connect_errno();";
+    let (status, out) = run(&platform, source, Some(&root));
+    server.join().expect("the socket's thread");
+    assert_eq!(status, 0);
+    assert_ne!(out, "2002", "the socket was looked for elsewhere");
+    assert!(out.parse::<i64>().is_ok_and(|n| n > 0), "{out}");
+    std::fs::remove_dir_all(&root).expect("the scratch folder removed");
+}
+
+#[test]
+fn curl_reads_a_relative_ca_file_in_the_request_s_directory() {
+    let root = scratch("curl");
+    let system = ["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"].into_iter().find(|p| Path::new(p).is_file()).expect("a system CA bundle");
+    std::fs::copy(system, root.join("ca.pem")).expect("ca.pem");
+    // Not a TLS server: it takes the connection and closes it. A CA file
+    // that loads makes that a handshake failure; one not found is
+    // CURLE_SSL_CACERT_BADFILE (77) before any connection.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let server = std::thread::spawn(move || drop(listener.accept()));
+    let platform = p8::Platform::new(&[p8::extensions::STANDARD, p8::extensions::CURL]);
+    let source = format!("<?php $h = curl_init('https://127.0.0.1:{port}/'); curl_setopt($h, CURLOPT_CAINFO, 'ca.pem'); curl_setopt($h, CURLOPT_RETURNTRANSFER, true); curl_exec($h); echo curl_errno($h);");
+    let (status, out) = run(&platform, &source, Some(&root));
+    let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+    server.join().expect("the server's thread");
+    assert_eq!(status, 0);
+    assert_ne!(out, "77", "the CA file was looked for elsewhere");
+    std::fs::remove_dir_all(&root).expect("the scratch folder removed");
 }
 
 /// PHP that waits until the file `flag` exists: a handshake between the two

@@ -308,7 +308,8 @@ fn real_connect(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &[Value], func: &str
     let host = host.map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned()).unwrap_or_default();
     // "p:" asks for a persistent link: p8 opens a plain one.
     let host = host.strip_prefix("p:").unwrap_or(&host).to_string();
-    let socket = socket.map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned());
+    // A relative socket is the request's working directory's.
+    let socket = socket.map(|s| p8_runtime::cwd::resolve(ctx, String::from_utf8_lossy(s.as_bytes()).as_ref()).to_string_lossy().into_owned());
     // As mysqlnd: no host, or "localhost", is the Unix socket.
     let address = if host.is_empty() || host == "localhost" {
         Address::Socket(socket.as_deref().unwrap_or("/tmp/mysql.sock"))

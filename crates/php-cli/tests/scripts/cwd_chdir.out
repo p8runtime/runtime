@@ -25,6 +25,13 @@ bool(false)
 Warning: chdir(): No such file or directory (errno 2) in %s on line 33
 bool(false)
 bool(true)
+-- search permission
+
+Warning: chdir(): Permission denied (errno 13) in %s on line 41
+bool(false)
+bool(true)
+bool(true)
+bool(true)
 -- relative after a move
 bool(false)
 bool(true)
