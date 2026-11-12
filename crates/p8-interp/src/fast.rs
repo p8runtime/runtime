@@ -2097,18 +2097,15 @@ pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
 /// The variables a call sends itself (`vars`, its `Function::arg_vars`
 /// entry) into its argument registers from `args`, for `target`: a
 /// variable is made a reference where it takes the parameter by
-/// reference, else copied (`send_vars`). None, with nothing sent, when a
-/// copied one is undefined (the warning: `step`); else whether a write
-/// released memory.
+/// reference, else copied (`send_vars`). None when a copied one is
+/// undefined (the warning: `step`, which sends them all again: the ones
+/// before it were sent here, the same values it sends); else whether a
+/// write released memory.
 #[inline(never)]
 fn send_vars(w: &mut [Value], vars: &[(u8, Reg)], args: usize, target: &Function) -> Option<bool> {
-    let defined = |v: &Value| !v.is_undef() && v.as_reference().is_none_or(|c| !c.borrow().is_undef());
-    if vars.iter().any(|&(n, var)| !target.param_by_ref(usize::from(n)) && !defined(&w[usize::from(var)])) {
-        return None;
-    }
     let mut released = false;
     for &(n, var) in vars {
-        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)]).expect("defined") };
+        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)])? };
         released |= put(&mut w[(args + usize::from(n)) & (WINDOW - 1)], v);
     }
     Some(released)
