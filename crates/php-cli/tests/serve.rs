@@ -377,9 +377,10 @@ fn raw(port: u16, path: &str) -> Vec<u8> {
 }
 
 /// A recursion that never ends, under an 8M limit whose hard limit (twice
-/// it) its fatal error's trace runs past; it prints first, and that output
-/// is still in the buffers when it dies.
-const PAST_HARD: &str = "<?php ini_set('memory_limit', '8M'); echo 'started '; function f($n) { return f($n + 1) + 1; } f(0);";
+/// it) its fatal error's trace runs past. (It prints nothing first: with
+/// implicit_flush on, as in PHP's CLI server, an echo goes to the client at
+/// once, and a request that dies after it closes its connection there.)
+const PAST_HARD: &str = "<?php ini_set('memory_limit', '8M'); function f($n) { return f($n + 1) + 1; } f(0);";
 
 /// A request that grows its call stack (100 calls) under a small limit:
 /// it runs only on a worker that holds none of an earlier request's memory.
