@@ -2,11 +2,14 @@
 //! names one (`native=`), the machine code of its handler's inline cases,
 //! on plain values only (ints, floats, bools, null; program-memory
 //! strings copied). Each template is the native form of the interpreter's
-//! fast path for the same instruction (named beside it), and hands the
-//! frame back (a guard, `Emit::guard`) on everything else: an undefined
-//! variable, a reference, a value holding memory, an int overflow, a
-//! literal of another type. The interpreter then runs that instruction
-//! as it always does, so those cases keep one copy, the interpreter's.
+//! fast path for the same instruction (named beside it). Everything else
+//! (an undefined variable, a reference, a value holding memory to copy or
+//! release, an int overflow, a literal of another type, and every opcode
+//! with no template) the interpreter runs, called from the native code
+//! (`Emit::help`: its own `step`, as its loop runs an instruction out of
+//! line), and the native code goes on at the pc it gives. So those cases
+//! keep one copy, the interpreter's, and no template reads or writes a
+//! value holding memory.
 //!
 //! The dispatch over opcodes is generated from `ops.def`
 //! (`native_dispatch!`, p8-vmgen): a generated instruction's template
@@ -22,15 +25,19 @@ use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData as MemFlags, types};
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
 use p8_bytecode::insn::{self, Insn, Op, args, spec};
-use p8_native_abi::{call as calls, exit, tag};
+use p8_native_abi::{op, tag};
 use p8_runtime::frozen::Frozen;
 use p8_runtime::ops::BinOp;
 
 include!(concat!(env!("OUT_DIR"), "/native_dispatch.rs"));
 
-/// The instruction at `e.pc` as native code, or why not.
-pub fn instruction(e: &mut Emit, insn: &Insn) -> R {
-    native_dispatch!(e, insn)
+/// The instruction at `e.pc` as native code: its template, or, for an
+/// opcode with none or operands its template does not take (a template
+/// says so before it writes or branches), the interpreter's run of it.
+pub fn instruction(e: &mut Emit, insn: &Insn) {
+    if native_dispatch!(e, insn).is_err() {
+        e.help(op::STEP, e.pc);
+    }
 }
 
 /// An opcode without a template.
@@ -121,12 +128,65 @@ pub fn load_null(e: &mut Emit, insn: &Insn) -> R {
     copy(e, u32::from(insn.a), Operand::Lit(tag::NULL, 0))
 }
 
-/// `Op::VerifyArgs`: with no parameter typed, every argument is plainly
-/// of its type (`args_plain`), and there is nothing to do. A function
-/// with a typed parameter is not native yet.
+/// Whether the value in register `r` is plainly of type `ty` by its tag
+/// alone, as `TypeDecl::quick` decides for a plain value: null, a bool,
+/// an int, a float, a program-memory string the type takes (`mixed`
+/// takes all), or undefined (an argument not passed, which `args_plain`
+/// leaves to the frame's defaults). Anything else (a value holding
+/// memory, `true`/`false` alone, a reference) is false: the interpreter
+/// checks it.
+fn plainly(e: &mut Emit, ty: &p8_runtime::types::TypeDecl, r: u32) -> ir::Value {
+    use p8_runtime::types::{T_BOOL, T_FLOAT, T_INT, T_MIXED, T_NULL, T_STRING};
+    let t = e.tag(r);
+    let mut ok = e.is(t, tag::UNDEF);
+    for (bit, want) in [(T_NULL, tag::NULL), (T_BOOL, tag::BOOL), (T_INT, tag::INT), (T_FLOAT, tag::FLOAT), (T_STRING, tag::ISTR)] {
+        if ty.mask & (bit | T_MIXED) != 0 {
+            let is = e.is(t, want);
+            ok = e.b.ins().bor(ok, is);
+        }
+    }
+    ok
+}
+
+/// `Op::VerifyArgs`: every argument plainly of its parameter's declared
+/// type (`args_plain`), by its tag; anything else, a variadic one's
+/// included, the interpreter's (the instruction run whole).
 pub fn verify_args(e: &mut Emit, _: &Insn) -> R {
-    if e.func.params.iter().any(|p| p.ty.is_some()) {
+    let f = e.func;
+    if f.params.iter().any(|p| p.ty.is_some() && p.variadic) {
         return Err(NotNative);
+    }
+    let mut all = None;
+    for (i, p) in f.params.iter().enumerate().take(256) {
+        if let Some(ty) = &p.ty {
+            let ok = plainly(e, ty, i as u32);
+            all = Some(match all {
+                Some(a) => e.b.ins().band(a, ok),
+                None => ok,
+            });
+        }
+    }
+    if let Some(ok) = all {
+        e.guard(ok);
+    }
+    e.next()
+}
+
+/// `Op::VerifyReturn` (`a`: the value returned): plainly of the declared
+/// return type, by its tag, else the interpreter's (a generator's are the
+/// interpreter's whole).
+pub fn verify_return(e: &mut Emit, insn: &Insn) -> R {
+    let f = e.func;
+    if f.is_generator {
+        return Err(NotNative);
+    }
+    if let Some(ty) = &f.ret_type {
+        let ok = plainly(e, ty, u32::from(insn.a));
+        // (An undefined value is no return value: the interpreter's.)
+        let t = e.tag(u32::from(insn.a));
+        let defined = e.b.ins().icmp_imm_u(IntCC::NotEqual, t, tag::UNDEF as i64);
+        let ok = e.b.ins().band(ok, defined);
+        e.guard(ok);
     }
     e.next()
 }
@@ -366,10 +426,11 @@ pub fn step_jump(e: &mut Emit, insn: &Insn) -> R {
     let fits = e.b.ins().icmp_imm_u(IntCC::Equal, over, 0);
     e.guard(fits);
     let y = match bound {
-        // A literal bound of another type: the step, then the test.
+        // A literal bound of another type: the step, then the test (the
+        // next instruction) on the interpreter.
         None => {
             e.store_payload(var, n);
-            e.exit(exit::GUARD, pc + 1);
+            e.help(op::STEP, pc + 1);
             return Ok(());
         }
         Some(Operand::Lit(_, p)) => {
@@ -395,31 +456,13 @@ pub fn step_jump(e: &mut Emit, insn: &Insn) -> R {
     e.goto(target, pc + 1)
 }
 
-/// `Op::Call`: the call helper runs it whole (`NativeFrame::call`); what
-/// it does not take, the interpreter runs at the call.
+/// `Op::Call`: the helper runs it whole (`NativeFrame::help` with
+/// `HelpOp::Call`: a resolved user function called directly, natively
+/// when it has native code; anything else as `step` runs it).
 pub fn call(e: &mut Emit, _: &Insn) -> R {
-    let next = e.block(e.pc + 1)?;
-    let pc = e.b.ins().iconst(types::I32, i64::from(e.pc));
-    let inst = e.b.ins().call(e.call, &[e.ctx, pc]);
-    let status = e.b.inst_results(inst)[0];
-    let done = e.b.ins().icmp_imm_u(IntCC::Equal, status, i64::from(calls::DONE));
-    let other = e.b.create_block();
-    e.b.set_cold_block(other);
-    e.b.ins().brif(done, next, &[], other, &[]);
-    e.b.switch_to_block(other);
-    // The other answers are the exit reasons of the same numbers.
-    let reason = e.b.ins().uextend(types::I64, status);
-    let high = e.b.ins().ishl_imm_u(reason, 32);
-    let code = e.b.ins().bor_imm_u(high, i64::from(e.pc));
-    e.b.ins().return_(&[code]);
+    e.help(op::CALL, e.pc);
     Ok(())
 }
-
-const _: () = {
-    assert!(calls::NOT_TAKEN as u64 == exit::GUARD);
-    assert!(calls::PENDING as u64 == exit::PENDING);
-    assert!(calls::THREW as u64 == exit::THREW);
-};
 
 /// `Op::CallRegs` not taken as a frameless builtin call: its first Move
 /// (the loop's fallback): argument register `imm >> 16` = register `a`,

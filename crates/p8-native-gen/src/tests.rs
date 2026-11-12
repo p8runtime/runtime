@@ -13,16 +13,17 @@ fn compile(source: &str) -> p8_bytecode::Program {
 fn native_names(source: &str) -> Vec<String> {
     let program = compile(source);
     let inputs: Vec<Input> = program.functions.iter().enumerate().map(|(i, f)| Input { file: 0, index: i as u32, function: f }).collect();
-    let built = build(&inputs, b"package bytes").expect("an object file");
+    let built = build(&inputs, b"package bytes", [7; 16]).expect("an object file");
     assert_eq!(built.native.len(), built.names.len());
     built.names
 }
 
-/// A function made only of instructions with templates is compiled; one
-/// with any other instruction (a concatenation, a typed parameter's
-/// check, a string literal copied into a variable) stays bytecode.
+/// Every function is compiled but a generator (whose call makes its
+/// Generator): an instruction with no template (a concatenation, a typed
+/// parameter's check, a string literal copied into a variable) is the
+/// interpreter's, called from the native code.
 #[test]
-fn functions_of_templated_instructions_are_compiled_and_no_others() {
+fn every_function_but_a_generator_is_compiled() {
     let names = native_names(
         r#"<?php
         function sq($x) { return $x * $x; }
@@ -31,9 +32,10 @@ fn functions_of_templated_instructions_are_compiled_and_no_others() {
         function text($a) { return $a . "x"; }
         function typed(int $a) { return $a + 1; }
         function greeting() { $s = "hello"; return $s; }
+        function numbers() { yield 1; }
         "#,
     );
-    assert_eq!(names, ["sq", "sum_to", "wave"]);
+    assert_eq!(names, ["sq", "sum_to", "wave", "text", "typed", "greeting"]);
 }
 
 /// The object has what the executable needs: `main`, which calls the
@@ -42,10 +44,12 @@ fn functions_of_templated_instructions_are_compiled_and_no_others() {
 fn the_object_has_main_and_names_the_boundary() {
     let program = compile("<?php function one() { return 1; }");
     let inputs = [Input { file: 3, index: 0, function: &program.functions[0] }];
-    let built = build(&inputs, b"p8pack").expect("an object file");
+    let built = build(&inputs, b"p8pack", *b"engine-of-p8-x86").expect("an object file");
     assert_eq!(built.native, [(3, 0)]);
     let has = |s: &str| built.object.windows(s.len()).any(|w| w == s.as_bytes());
-    assert!(has(abi::ENTRY) && has(abi::CALL) && has("main"));
+    assert!(has(abi::ENTRY) && has(abi::HELP) && has("main"));
+    // The build that made it is stamped in the image.
+    assert!(has("engine-of-p8-x86"));
     // The package's bytes are in it as they are.
     assert!(has("p8pack"));
 }
