@@ -1944,7 +1944,9 @@ pub(crate) enum Flow {
 /// convert. A reference is tested by its value (`verify_args` checks
 /// that); a typed variadic by each element of its list (CollectVariadic
 /// made it), as ZEND_RECV_VARIADIC checks them.
-#[inline]
+/// (`always`: #352's prototype loops are more callers than the one loop,
+/// and with them it is a call.)
+#[inline(always)]
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
     clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,

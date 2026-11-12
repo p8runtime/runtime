@@ -22,7 +22,11 @@
 //!
 //! The shapes: `loop_a`, one table of P handlers; `loop_b`, the hottest
 //! straight-line P handlers inline in a small match and the table for the
-//! rest; `loop_c`, every P handler inline in one match.
+//! rest; `loop_c`, every P handler inline in one match; `loop_d`, a big
+//! inline list; `loop_e` to `loop_g`, B, D and C with the F handlers
+//! inlined in the loop's function; `loop_i` and `loop_j`, E with a longer
+//! inline list; `loop_h` and `loop_k`, one loop (no inner one) whose call
+//! arms are the F handlers' bodies, the frame read again after them.
 
 use super::*;
 
@@ -41,6 +45,12 @@ pub(super) fn shape() -> u8 {
         Ok("e") => 5,
         Ok("f") => 6,
         Ok("g") => 7,
+        Ok("h") => 8,
+        Ok("i") => 9,
+        Ok("j") => 10,
+        Ok("k") => 11,
+        #[cfg(p8_proto_tail)]
+        Ok("t") => 12,
         _ => 0,
     })
 }
@@ -105,6 +115,36 @@ static P_TABLE: [P; 256] = {
         ($op:ident) => {{
             fn e(cx: &Context<'_>, w: &mut [Value; WINDOW], top: &Frame, clo: &Closure, pc: usize, insn: &Insn) -> usize {
                 cx.p_arm(w, top, clo, pc, insn, Op::$op)
+            }
+            e
+        }};
+    }
+    macro_rules! hand {
+        ($($op:ident)*) => { $( t[Op::$op as usize] = entry!($op); )* };
+    }
+    macro_rules! generated {
+        ($(($op:ident, $cold:ident, |$hx:ident, $insn:ident| $call:expr);)*) => { $( t[Op::$op as usize] = entry!($op); )* };
+    }
+    hand_ops!(hand);
+    gen_ops!(generated);
+    t
+};
+
+/// The tail-call loop's table: an opcode's P handler, then the next
+/// instruction's entry by a tail call (`become`), so no handler returns to
+/// a loop until a word is not a pc of the code. A ceiling to measure, not
+/// a proposal: `become` is a nightly feature.
+#[cfg(p8_proto_tail)]
+static T_TABLE: [P; 256] = {
+    let mut t: [P; 256] = [p_defer; 256];
+    macro_rules! entry {
+        ($op:ident) => {{
+            fn e(cx: &Context<'_>, w: &mut [Value; WINDOW], top: &Frame, clo: &Closure, pc: usize, insn: &Insn) -> usize {
+                let next = cx.p_arm(&mut *w, top, clo, pc, insn, Op::$op);
+                match clo.code.insns.get(next) {
+                    Some(insn) => become T_TABLE[insn.op as u8 as usize](cx, w, top, clo, next, insn),
+                    None => next,
+                }
             }
             e
         }};
@@ -190,6 +230,125 @@ macro_rules! proto_loop {
     };
 }
 
+/// The frame as a loop holds it: the frame, its closure, its code and its
+/// window of the registers.
+macro_rules! frame {
+    ($s:ident, $regs:ident) => {{
+        let top = $s.frames.last().expect("a frame");
+        let clo = &*top.func;
+        let base = top.base as usize;
+        let code = &clo.code.insns[..];
+        let w: &mut [Value; WINDOW] = match $regs.get_mut(base..base + WINDOW) {
+            Some(w) => w.try_into().expect("a window's worth of registers"),
+            None => grown_window($regs, base),
+        };
+        (top, clo, code, w)
+    }};
+}
+
+/// In a direct loop, what took the context mutably (`$flow`, a `Flow`):
+/// the frame read again, the next pc given.
+macro_rules! direct_f {
+    ($s:ident, $regs:ident, $w:ident, $top:ident, $clo:ident, $code:ident; $flow:expr) => {
+        match $flow? {
+            Flow::Go(next) => {
+                ($top, $clo, $code, $w) = frame!($s, $regs);
+                next
+            }
+            Flow::Done => return Ok(()),
+        }
+    };
+}
+
+/// A direct loop's match: the listed opcodes' P handlers inline, the call
+/// opcodes' arms as `run` has them (the F handlers' bodies, the frame read
+/// again after one; `New` and a `Construct` with no constructor in place),
+/// the table for `$rest`.
+macro_rules! direct_arms {
+    ($s:ident, $regs:ident, $w:ident, $top:ident, $clo:ident, $code:ident, $pc:ident, $insn:ident; $rest:pat => [$($op:ident)*]) => {
+        match $insn.op {
+            $(Op::$op => $s.p_arm(&mut *$w, $top, $clo, $pc, $insn, Op::$op),)*
+            Op::Call => direct_f!($s, $regs, $w, $top, $clo, $code; $s.call_body($regs, $pc)),
+            Op::MethodCall => direct_f!($s, $regs, $w, $top, $clo, $code; $s.method_body($regs, $pc)),
+            Op::CallRegs => {
+                if let Some(&Callee::Builtin(_)) = $clo.sites[($insn.imm & 0xffff) as usize].get() {
+                    direct_f!($s, $regs, $w, $top, $clo, $code; $s.call_regs_body($regs, $pc))
+                } else {
+                    $s.p_arm(&mut *$w, $top, $clo, $pc, $insn, Op::CallRegs)
+                }
+            }
+            Op::New => 'new: {
+                let info = match Self::cached_new($clo, $insn.imm as u16) {
+                    Some(info) => info,
+                    None => match $s.new_info_kept($clo, $insn.imm as u16) {
+                        Some(info) => info,
+                        None => break 'new direct_f!($s, $regs, $w, $top, $clo, $code; $s.run::<true>($regs, $pc)),
+                    },
+                };
+                let Some(object) = $s.make_plain(&info) else {
+                    break 'new direct_f!($s, $regs, $w, $top, $clo, $code; $s.run::<true>($regs, $pc));
+                };
+                object.destructed.set(true);
+                $s.last_new = Some(info);
+                if put(&mut $w[usize::from($insn.a)], Value::object(object)) && $s.ids.has_pending() {
+                    break 'new direct_f!($s, $regs, $w, $top, $clo, $code; $s.after_errors($regs, $pc + 1, $pc).map(Flow::Go));
+                }
+                $pc + 1
+            }
+            Op::Construct => 'construct: {
+                let (obj, args, n) = ($insn.a, $insn.b, usize::from($insn.c));
+                let Some(object) = $w[usize::from(obj)].as_object() else {
+                    break 'construct direct_f!($s, $regs, $w, $top, $clo, $code; $s.slow($regs, $pc));
+                };
+                let info = match $s.last_new.as_ref() {
+                    Some(i) if Rc::ptr_eq(&i.class, &object.class) => i,
+                    _ => match $s.new_infos.get(&(Rc::as_ptr(&object.class) as usize)) {
+                        Some(i) => i,
+                        None => break 'construct direct_f!($s, $regs, $w, $top, $clo, $code; $s.run::<true>($regs, $pc)),
+                    },
+                };
+                match &info.ctor {
+                    None => {
+                        object.destructed.set(false);
+                        $s.last_new = None;
+                        let start = usize::from(args);
+                        let mut released = false;
+                        for r in &mut $w[start..start + n] {
+                            released |= clear(r);
+                        }
+                        if released && $s.ids.has_pending() {
+                            break 'construct direct_f!($s, $regs, $w, $top, $clo, $code; $s.after_errors($regs, $pc + 1, $pc).map(Flow::Go));
+                        }
+                        $pc + 1
+                    }
+                    Some(_) => direct_f!($s, $regs, $w, $top, $clo, $code; $s.construct_body($regs, $pc)),
+                }
+            }
+            $rest => P_TABLE[$insn.op as u8 as usize]($s, &mut *$w, $top, $clo, $pc, $insn),
+        }
+    };
+}
+
+/// A direct loop: one loop, the frame held across P handlers and read
+/// again after anything that took the context mutably; `$list` is its
+/// inline list (without the calls), `$rest` every other opcode.
+macro_rules! direct_loop {
+    ($(#[$doc:meta])* $name:ident, $list:ident, $rest:pat) => {
+        $(#[$doc])*
+        #[inline(never)]
+        fn $name(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<(), Throw> {
+            let (mut top, mut clo, mut code, mut w) = frame!(self, regs);
+            loop {
+                let Some(insn) = code.get(pc) else {
+                    pc = direct_f!(self, regs, w, top, clo, code; self.special_direct(regs, pc));
+                    continue;
+                };
+                pc = $list!(direct_arms!(self, regs, w, top, clo, code, pc, insn; $rest =>));
+            }
+        }
+    };
+}
+
 /// A hybrid loop's match: the listed opcodes' handlers inline, the table
 /// for `$rest` (every other opcode, so the match has no default).
 macro_rules! hybrid {
@@ -201,14 +360,14 @@ macro_rules! hybrid {
     };
 }
 
-/// The small inline list: moves, jumps, int arithmetic and compares, and
-/// the calls and returns (whose handlers are a word for the F handler).
-macro_rules! small_list {
-    ($m:ident!($($args:tt)*)) => {
+/// The simple inline list: moves, jumps, int arithmetic and compares, and
+/// the returns (whose handlers are a word for the F handler); then `$more`.
+macro_rules! simple_list {
+    ($m:ident!($($args:tt)*) $($more:ident)*) => {
         $m!($($args)* [
             Slow VerifyArgs VerifyReturn Jump Compare CompareC IncVar DecVar
             IncJumpLt IncJumpLe DecJumpGt DecJumpGe IncJumpLtC IncJumpLeC DecJumpGtC DecJumpGeC
-            Add Sub Mul AddC SubC MulC LoadNull Call CallRegs MethodCall New Construct ReturnNull
+            Add Sub Mul AddC SubC MulC LoadNull ReturnNull
             P8_MOVE_REG P8_MOVE_K P8_ASSIGN_REG P8_ASSIGN_K P8_ASSIGN_TAKE P8_FREE P8_THIS
             P8_JUMP_COND_T P8_JUMP_COND_F
             P8_JUMP_CMP_LT_T_REG P8_JUMP_CMP_LT_T_K P8_JUMP_CMP_LT_F_REG P8_JUMP_CMP_LT_F_K
@@ -217,7 +376,63 @@ macro_rules! small_list {
             P8_JUMP_CMP_EQ_T_REG P8_JUMP_CMP_EQ_T_K P8_JUMP_CMP_EQ_F_REG P8_JUMP_CMP_EQ_F_K
             P8_JUMP_CMP_ID_T_REG P8_JUMP_CMP_ID_T_K P8_JUMP_CMP_ID_F_REG P8_JUMP_CMP_ID_F_K
             P8_RETURN_TMP P8_RETURN_CV P8_RETURN_K
+            $($more)*
         ])
+    };
+}
+
+/// The small inline list: the simple one and the calls (whose handlers are
+/// a word for the F handler).
+macro_rules! small_list {
+    ($($m:tt)*) => {
+        simple_list!($($m)* Call CallRegs MethodCall New Construct)
+    };
+}
+
+/// The simple list and the generated property and array handlers; then
+/// `$more`.
+macro_rules! data_list {
+    ($m:ident!($($args:tt)*) $($more:ident)*) => {
+        simple_list!($m!($($args)*)
+            P8_FETCH_DIM_R_REG P8_FETCH_DIM_R_KINT P8_FETCH_DIM_R_KSTR
+            P8_FETCH_DIM_IS_REG P8_FETCH_DIM_IS_KINT P8_FETCH_DIM_IS_KSTR
+            P8_ISSET_DIM_REG P8_ISSET_DIM_KINT P8_ISSET_DIM_KSTR
+            P8_ASSIGN_DIM_REG_REG_USED P8_ASSIGN_DIM_REG_REG_UNUSED P8_ASSIGN_DIM_REG_K_USED
+            P8_ASSIGN_DIM_REG_K_UNUSED P8_ASSIGN_DIM_KINT_REG_USED P8_ASSIGN_DIM_KINT_REG_UNUSED
+            P8_ASSIGN_DIM_KSTR_REG_USED P8_ASSIGN_DIM_KSTR_REG_UNUSED
+            P8_APPEND_DIM_REG_USED P8_APPEND_DIM_REG_UNUSED P8_APPEND_DIM_K_USED P8_APPEND_DIM_K_UNUSED
+            P8_FETCH_PROP_REG P8_FETCH_PROP_THIS
+            P8_ASSIGN_PROP_REG_REG_COPY_USED P8_ASSIGN_PROP_REG_REG_COPY_UNUSED
+            P8_ASSIGN_PROP_REG_REG_TAKE_USED P8_ASSIGN_PROP_REG_REG_TAKE_UNUSED
+            P8_ASSIGN_PROP_REG_K_COPY_USED P8_ASSIGN_PROP_REG_K_COPY_UNUSED
+            P8_ASSIGN_PROP_THIS_REG_COPY_USED P8_ASSIGN_PROP_THIS_REG_COPY_UNUSED
+            P8_ASSIGN_PROP_THIS_REG_TAKE_USED P8_ASSIGN_PROP_THIS_REG_TAKE_UNUSED
+            P8_ASSIGN_PROP_THIS_K_COPY_USED P8_ASSIGN_PROP_THIS_K_COPY_UNUSED
+            $($more)*
+        )
+    };
+}
+
+/// The medium inline list: the small one and the generated property and
+/// array handlers.
+macro_rules! medium_list {
+    ($($m:tt)*) => {
+        data_list!($($m)* Call CallRegs MethodCall New Construct)
+    };
+}
+
+/// The medium list and the argument handlers.
+macro_rules! sends_list {
+    ($($m:tt)*) => {
+        data_list!($($m)* Call CallRegs MethodCall New Construct SendVarMethod SendVar)
+    };
+}
+
+/// The medium list and the argument handlers, without the calls (a loop
+/// whose call arms are its own).
+macro_rules! direct_sends_list {
+    ($($m:tt)*) => {
+        data_list!($($m)* SendVarMethod SendVar)
     };
 }
 
@@ -258,11 +473,24 @@ macro_rules! big_list {
     };
 }
 
+/// The argument opcodes.
+macro_rules! send_ops {
+    () => {
+        Op::SendVarMethod | Op::SendVar
+    };
+}
+
 /// The opcodes the big list adds to the small one.
 macro_rules! data_ops {
     () => {
+        send_ops!() | hand_data_ops!() | generated_data_ops!()
+    };
+}
+
+/// The hand opcodes the big list adds, but for the argument ones.
+macro_rules! hand_data_ops {
+    () => {
         Op::Intrinsic
-            | Op::SendVarMethod
             | Op::Binary
             | Op::BinaryC
             | Op::ConcatN
@@ -283,8 +511,13 @@ macro_rules! data_ops {
             | Op::ArraySetC
             | Op::FetchConst
             | Op::IterInit
-            | Op::SendVar
-            | Op::P8_FETCH_DIM_R_REG
+    };
+}
+
+/// The generated property and array opcodes (the medium list's).
+macro_rules! generated_data_ops {
+    () => {
+        Op::P8_FETCH_DIM_R_REG
             | Op::P8_FETCH_DIM_R_KINT
             | Op::P8_FETCH_DIM_R_KSTR
             | Op::P8_FETCH_DIM_IS_REG
@@ -441,7 +674,64 @@ impl Context<'_> {
             4 => self.loop_d(regs, pc),
             5 => self.loop_e(regs, pc),
             6 => self.loop_f(regs, pc),
-            _ => self.loop_g(regs, pc),
+            7 => self.loop_g(regs, pc),
+            8 => self.loop_h(regs, pc),
+            9 => self.loop_i(regs, pc),
+            10 => self.loop_j(regs, pc),
+            #[cfg(p8_proto_tail)]
+            12 => self.loop_t(regs, pc),
+            _ => self.loop_k(regs, pc),
+        }
+    }
+
+    proto_loop!(
+        /// Shape T (nightly, a ceiling): every P handler tail-calls the next.
+        #[cfg(p8_proto_tail)]
+        loop_t,
+        special_inline,
+        |cx, w, top, clo, pc, insn| T_TABLE[insn.op as u8 as usize](cx, &mut *w, top, clo, pc, insn)
+    );
+
+    direct_loop!(
+        /// Shape H: E's inline list in one loop whose call arms are its own.
+        loop_h,
+        simple_list,
+        data_ops!() | rare_ops!()
+    );
+
+    proto_loop!(
+        /// Shape I: E with the generated property and array handlers inline.
+        loop_i,
+        special_inline,
+        |cx, w, top, clo, pc, insn| medium_list!(hybrid!(cx, w, top, clo, pc, insn; send_ops!() | hand_data_ops!() | rare_ops!() =>))
+    );
+
+    proto_loop!(
+        /// Shape J: I with the argument handlers inline.
+        loop_j,
+        special_inline,
+        |cx, w, top, clo, pc, insn| sends_list!(hybrid!(cx, w, top, clo, pc, insn; hand_data_ops!() | rare_ops!() =>))
+    );
+
+    direct_loop!(
+        /// Shape K: J's inline list in one loop whose call arms are its own.
+        loop_k,
+        direct_sends_list,
+        hand_data_ops!() | rare_ops!()
+    );
+
+    /// What a handler's word asks for in a direct loop (no call's word:
+    /// the calls are the loop's own arms).
+    #[inline(always)]
+    fn special_direct(&mut self, regs: &mut Vec<Value>, word: usize) -> Result<Flow, Throw> {
+        let at = word & PC_MASK;
+        match (word >> KIND) as u8 {
+            K_SLOW => self.slow(regs, at),
+            K_DEFER => self.run::<true>(regs, at),
+            K_COLD => self.f_cold(regs, at),
+            K_PEND => self.after_errors(regs, at, word >> AUX & PC_MASK).map(Flow::Go),
+            K_RET => self.ret_body(regs, at),
+            _ => panic!("pc {word} is not in the code"),
         }
     }
 
@@ -662,7 +952,11 @@ impl Context<'_> {
             let site = clo.methods[method].borrow();
             match site.as_ref() {
                 Some(s) if s.class == Rc::as_ptr(&o.class) as usize && s.scope == scope && !s.is_static => match &s.code {
-                    MethodCode::User(code) => self.frames.site_code(code).zip(s.declaring.upgrade()),
+                    // (Not `zip`: with this many loops in one binary it is a call.)
+                    MethodCode::User(code) => match (self.frames.site_code(code), s.declaring.upgrade()) {
+                        (Some(target), Some(declaring)) => Some((target, declaring)),
+                        _ => None,
+                    },
                     MethodCode::Native(..) => None,
                 },
                 _ => None,
