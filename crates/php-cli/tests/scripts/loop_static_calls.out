@@ -56,7 +56,7 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g0 g1
+g0 g1 
 not set [Undefined variable $undef3: $viaRef is NULL]
 0 '0'
 -- 1
@@ -117,7 +117,7 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g1 g2
+g1 g2 
 not set [Undefined variable $undef3: $viaRef is NULL]
 1 '1'
 -- 2
@@ -178,7 +178,7 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g2 g3
+g2 g3 
 not set [Undefined variable $undef3: $viaRef is NULL]
 2 '2'
 -- 3
@@ -240,7 +240,7 @@ Warning: Undefined variable $undef2 in %s on line 176
 n n
 ArgumentCountError: Too few arguments to function Args::need(), 1 passed in %s on line 177 and exactly 2 expected
 ArgumentCountError
-g3 g4
+g3 g4 
 not set [Undefined variable $undef3: $viaRef is NULL]
 3 '3'
 autoload Missing
