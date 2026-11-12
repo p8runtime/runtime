@@ -151,10 +151,11 @@ impl Context<'_> {
             }
             // `dst = a op b`: two ints inline, the rest (floats, references,
             // `.` on strings) through `arith`; what may warn or throw is
-            // `step`'s. `$b` is the right operand as a `Src` (a register, or
-            // a constant for the `C` forms).
+            // `$miss` (out of line on the arm's operands, `binary_ops`).
+            // `$b` is the right operand as a `Src` (a register, or a
+            // constant for the `C` forms).
             macro_rules! arith {
-                ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr) => {{
+                ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr, $miss:expr) => {{
                     let b: Src = $b;
                     let released = if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), src(&w[..], b).as_int())
                         && let Some(n) = $int(x, y)
@@ -163,10 +164,17 @@ impl Context<'_> {
                     } else if arith(&mut w[..], $op, Reg::from($dst), Reg::from($a), b) {
                         true
                     } else {
-                        slow!()
+                        $miss
                     };
                     done!(released);
                 }};
+            }
+            // `arith!`'s miss of a register form (`$b` the right operand's
+            // register): out of line on the arm's operands (`binary_ops`).
+            macro_rules! arith_miss {
+                ($op:expr, $dst:expr, $a:expr, $b:expr) => {
+                    out!(($op, Reg::from($dst), Reg::from($a), Reg::from($b)), |cx, regs, clo, base, _, at, ops| cx.binary_ops(regs, clo, base, at, ops))
+                };
             }
             // `var op= src`: two ints inline, the rest (floats, references,
             // `.=` on strings) through `assign_op`; `$b` a `Src` as `arith!`'s.
@@ -538,10 +546,11 @@ impl Context<'_> {
                     Op::Slow => slow!(),
                     // Function entry, when every passed argument is plainly of
                     // its declared type (`verify_args` would accept each as it
-                    // is); a conversion, a class check or a variadic: `step`.
+                    // is); a conversion, a class check or a variadic: out of
+                    // line (`verify_args_ops`).
                     Op::VerifyArgs => {
                         if !args_plain(clo, &w[..], top.argc as usize) {
-                            slow!();
+                            out!((), |cx, regs, clo, base, argc, at, ()| cx.verify_args_ops(regs, clo, base, argc, at));
                         }
                         pc += 1;
                     }
@@ -564,13 +573,18 @@ impl Context<'_> {
                     // A builtin PHP compiles to an opcode (strlen, count, the
                     // type tests, array_key_exists): the plain case here, once
                     // the site resolved to the builtin (the first run, and a
-                    // disabled function, are `step`'s); the arguments are
+                    // disabled function, are the call's); the arguments are
                     // consumed as a call's are. Anything else is the call.
                     // (The kinds are numbered as `insn::INTRINSICS`.)
                     Op::Intrinsic => {
                         ops!(a, b, c, imm);
                         let (dst, args, argc) = (a, rx!(b), c);
-                        let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() else { slow!() };
+                        // (A site not resolved yet, a user function's: the
+                        // call, out of line on the arm's operands, `call_ops`,
+                        // which resolves it, as `step` runs it.)
+                        let Some(&Callee::Builtin(i)) = clo.sites[(imm & 0xffff) as usize].get() else {
+                            out!(((imm & 0xffff) as u16, Reg::from(b), c, Reg::from(a)), |cx, regs, clo, base, _, at, ops| cx.call_ops(regs, clo, base, at, ops))
+                        };
                         // The rest (`count()` of a Countable, a string
                         // converted, a warning): the builtin's call, out of
                         // line as the Call arm's (`builtin_call`).
@@ -695,7 +709,8 @@ impl Context<'_> {
                         {
                             pc += 1;
                         } else {
-                            slow!();
+                            // (Anything else: out of line, `inc_dec_var_ops`.)
+                            out!((Reg::from(insn.a), true), |cx, regs, clo, base, _, at, ops| cx.inc_dec_var_ops(regs, clo, base, at, ops));
                         }
                     }
                     Op::IncJumpLt => step_jump!(insn.a, &w[rx!(insn.b)], insn.imm, i64::checked_add, |n, b| n < b),
@@ -719,39 +734,49 @@ impl Context<'_> {
                         {
                             pc += 1;
                         } else {
-                            slow!();
+                            out!((Reg::from(insn.a), false), |cx, regs, clo, base, _, at, ops| cx.inc_dec_var_ops(regs, clo, base, at, ops));
                         }
                     }
                     Op::Binary => {
                         ops!(a, b, c, imm);
                         if !arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), reg_src!(c)) {
-                            slow!();
+                            arith_miss!(insn::binop(imm), a, b, c);
                         }
                         done!(true);
                     }
                     // `b op K`, or `K op b` (CONST_LEFT: `"prefix" . $s`).
+                    // (The rest out of line on the arm's operands, in the
+                    // code's order: `binary_ops`.)
                     Op::BinaryC => {
                         ops!(a, b, c, imm);
-                        let done = if imm & insn::CONST_LEFT != 0 {
+                        let left = imm & insn::CONST_LEFT != 0;
+                        let done = if left {
                             arith_left(&mut w[..], insn::binop(imm), Reg::from(a), cst!(imm >> 8), Reg::from(b))
                         } else {
                             arith(&mut w[..], insn::binop(imm), Reg::from(a), Reg::from(b), cst_src!(imm >> 8))
                         };
                         if !done {
-                            slow!();
+                            let (x, y) = (Reg::from(b), p8_bytecode::const_operand((imm >> 8) as usize));
+                            let (x, y) = if left { (y, x) } else { (x, y) };
+                            out!((insn::binop(imm), Reg::from(a), x, y), |cx, regs, clo, base, _, at, ops| cx.binary_ops(regs, clo, base, at, ops));
                         }
                         done!(true);
                     }
-                    Op::Add => arith!(BinOp::Add, insn.a, insn.b, reg_src!(insn.c), i64::checked_add),
-                    Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, reg_src!(insn.c), i64::checked_sub),
-                    Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, reg_src!(insn.c), i64::checked_mul),
-                    Op::AddC => arith!(BinOp::Add, insn.a, insn.b, cst_src!(insn.imm), i64::checked_add),
-                    Op::SubC => arith!(BinOp::Sub, insn.a, insn.b, cst_src!(insn.imm), i64::checked_sub),
-                    Op::MulC => arith!(BinOp::Mul, insn.a, insn.b, cst_src!(insn.imm), i64::checked_mul),
+                    // (What `arith` does not take: out of line, `binary_ops`;
+                    // AddC and MulC may have had the literal on the left, so
+                    // theirs reads the instruction's order, `binary_at_ops`.)
+                    Op::Add => arith!(BinOp::Add, insn.a, insn.b, reg_src!(insn.c), i64::checked_add, arith_miss!(BinOp::Add, insn.a, insn.b, insn.c)),
+                    Op::Sub => arith!(BinOp::Sub, insn.a, insn.b, reg_src!(insn.c), i64::checked_sub, arith_miss!(BinOp::Sub, insn.a, insn.b, insn.c)),
+                    Op::Mul => arith!(BinOp::Mul, insn.a, insn.b, reg_src!(insn.c), i64::checked_mul, arith_miss!(BinOp::Mul, insn.a, insn.b, insn.c)),
+                    Op::AddC => arith!(BinOp::Add, insn.a, insn.b, cst_src!(insn.imm), i64::checked_add, out!((), |cx, regs, clo, base, _, at, ops| cx.binary_at_ops(regs, clo, base, at, ops))),
+                    Op::SubC => arith!(BinOp::Sub, insn.a, insn.b, cst_src!(insn.imm), i64::checked_sub, out!((BinOp::Sub, Reg::from(insn.a), Reg::from(insn.b), p8_bytecode::const_operand(insn.imm as usize)), |cx, regs, clo, base, _, at, ops| cx.binary_ops(regs, clo, base, at, ops))),
+                    Op::MulC => arith!(BinOp::Mul, insn.a, insn.b, cst_src!(insn.imm), i64::checked_mul, out!((), |cx, regs, clo, base, _, at, ops| cx.binary_at_ops(regs, clo, base, at, ops))),
                     Op::ConcatN => {
                         ops!(a, b, c, imm);
                         if !concat_n(&mut w[..], Reg::from(a), Reg::from(b), c) {
-                            slow!();
+                            // (An object part, a conversion: out of line,
+                            // `concat_n_ops`.)
+                            out!((Reg::from(a), Reg::from(b), c), |cx, regs, clo, base, _, at, ops| cx.concat_n_ops(regs, clo, base, at, ops));
                         }
                         done!(true);
                     }
@@ -760,7 +785,8 @@ impl Context<'_> {
                     Op::AssignDimOp => {
                         ops!(a, b, c, imm);
                         if !dim_op(&mut w[..], insn::binop(imm >> 8), Reg::from(a), Reg::from(b), Reg::from(c), Reg::from(imm as u8)) {
-                            slow!();
+                            // (The rest: out of line, `assign_dim_op_ops`.)
+                            out!((insn::binop(imm >> 8), Reg::from(a), Reg::from(b), 1, Reg::from(c), Reg::from(imm as u8)), |cx, regs, clo, base, _, at, ops| cx.assign_dim_op_ops(regs, clo, base, at, ops));
                         }
                         done!(true);
                     }
@@ -874,14 +900,15 @@ impl Context<'_> {
                     // register): the iterator is the array and position 0;
                     // an empty one jumps past the loop. An object runs out
                     // of line on the arm's operands (`iter_init_object_ops`).
-                    // (A reference, anything that warns: `step`.)
+                    // (A reference, anything that warns: out of line,
+                    // `iter_init_ops`.)
                     Op::IterInit => {
                         ops!(a, b, c, imm);
                         let Some(arr) = w[rx!(a)].as_array() else {
                             if w[rx!(a)].is_object() {
                                 out!((Reg::from(a), Reg::from(b), imm), |cx, regs, clo, base, _, at, ops| cx.iter_init_object_ops(regs, clo, base, at, ops));
                             }
-                            slow!()
+                            out!((Reg::from(a), Reg::from(b), imm), |cx, regs, clo, base, _, at, ops| cx.iter_init_ops(regs, clo, base, at, ops))
                         };
                         if arr.is_empty() {
                             pc = imm as usize;
@@ -1245,10 +1272,10 @@ impl Context<'_> {
                     }
                     // `...$rest`: its own argument (if passed) and those
                     // past the parameters, as a list (named arguments no
-                    // parameter takes: `step`).
+                    // parameter takes: out of line, `collect_variadic_ops`).
                     Op::CollectVariadic => {
                         if self.named_extra.is_some() {
-                            slow!();
+                            out!(Reg::from(insn.a), |cx, regs, clo, base, argc, at, var| cx.collect_variadic_ops(regs, clo, base, argc, at, var));
                         }
                         let var = rx!(insn.a);
                         let list = collect_variadic(&mut w[var], top.argc as usize > var, top.args());
@@ -1306,21 +1333,27 @@ impl Context<'_> {
                     // cache names for this class and scope, copied when it
                     // takes it by value, the variable made a reference when
                     // it takes it by reference (a class not resolved yet, a
-                    // miss, an undefined variable: `step`).
+                    // miss, an undefined variable: out of line on the arm's
+                    // operands, `send_var_static_ops`).
                     Op::SendVarStatic => {
                         ops!(a, b, c, imm);
                         let (arg, var, n, method, class) = (a, b, usize::from(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
+                        macro_rules! miss {
+                            () => {
+                                out!((class, method as u16, c, Reg::from(arg), Reg::from(var)), |cx, regs, clo, base, _, at, ops| cx.send_var_static_ops(regs, clo, base, at, ops))
+                            };
+                        }
                         let by_ref = self.static_target(clo, class).and_then(|t| self.cached_takes_ref(&clo.methods[method], &t, n));
                         match by_ref {
                             Some(false) => {
-                                let Some(v) = copied(&w[rx!(var)]) else { slow!() };
+                                let Some(v) = copied(&w[rx!(var)]) else { miss!() };
                                 done!(put(&mut w[rx!(arg)], v));
                             }
                             Some(true) => {
                                 let cell = make_ref(&mut w[..], Reg::from(var));
                                 done!(put(&mut w[rx!(arg)], Value::reference(cell)));
                             }
-                            None => slow!(),
+                            None => miss!(),
                         }
                     }
                     // `global $name`: the cell at the global's index the
@@ -1379,10 +1412,13 @@ impl Context<'_> {
                         done!(released);
                     }
                     // `$a[k0]..++` on an int through arrays (`dim_inc_dec`);
-                    // anything else is `step`'s.
+                    // anything else out of line (`dim_inc_dec_ops`).
                     Op::DimIncDec => {
                         ops!(a, b, c, imm);
-                        let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else { slow!() };
+                        // (The rest: out of line, `dim_inc_dec_ops`.)
+                        let Some(v) = dim_inc_dec(&mut w[..], rx!(a), rx!(b), imm) else {
+                            out!((Reg::from(a), Reg::from(b), imm as u8, Reg::from(c), imm & insn::DIM_INC != 0, imm & insn::DIM_POST != 0), |cx, regs, clo, base, _, at, ops| cx.dim_inc_dec_ops(regs, clo, base, at, ops))
+                        };
                         done!(put(&mut w[rx!(c)], v));
                     }
                     // `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` of
@@ -1454,10 +1490,13 @@ impl Context<'_> {
                     }
                     // The same for `C::m(..)` (`static_takes_ref_out`: the
                     // class known without a lookup, the method the site's
-                    // cache has); else `step`'s lookup.
+                    // cache has); else the lookup out of line on the arm's
+                    // operands (`static_arg_by_ref_ops`).
                     Op::StaticArgByRef => {
                         ops!(a, b, c, imm);
-                        let Some(by_ref) = self.static_takes_ref_out(clo, (imm >> 16) as u16, (imm & 0xffff) as usize, usize::from(c)) else { slow!() };
+                        let Some(by_ref) = self.static_takes_ref_out(clo, (imm >> 16) as u16, (imm & 0xffff) as usize, usize::from(c)) else {
+                            out!((Reg::from(a), (imm >> 16) as u16, (imm & 0xffff) as u16, c), |cx, regs, clo, base, _, at, ops| cx.static_arg_by_ref_ops(regs, clo, base, at, ops))
+                        };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
                     }
                     // Parameter a passed (and not a hole a named argument
@@ -1469,7 +1508,8 @@ impl Context<'_> {
                     }
                     // Whether `f($a['k'])` sends by reference, from the
                     // function or builtin the call site resolved to (not
-                    // resolved yet: `step` resolves it).
+                    // resolved yet: out of line on the arm's operands,
+                    // `func_arg_by_ref_ops`, which resolves it).
                     Op::FuncArgByRef => {
                         ops!(a, b, c, imm);
                         let n = usize::from(c);
@@ -1477,7 +1517,7 @@ impl Context<'_> {
                             Some(&Callee::User(f)) => self.codes[f as usize].param_by_ref(n),
                             Some(&Callee::Builtin(i)) => self.isolate.registry.by_ref(i, n),
                             Some(Callee::Constant(_)) => false,
-                            None => slow!(),
+                            None => out!((Reg::from(a), imm as u16, c), |cx, regs, clo, base, _, at, ops| cx.func_arg_by_ref_ops(regs, clo, base, at, ops)),
                         };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
                     }
@@ -1765,14 +1805,22 @@ impl Context<'_> {
                     // hookless, set property, by the entry made for this
                     // access (`dyn_entry`), read as a cached one is; a
                     // dynamic property of a class without magic. Anything
-                    // else (magic, the warning, an unset one): `step`.
+                    // else (magic, the warning, an unset one): out of line
+                    // on the arm's operands (`fetch_prop_ops`; PROP_QUIET
+                    // for `??` / `?->`).
                     Op::FetchPropDyn => {
                         ops!(a, b, c, imm);
+                        macro_rules! miss {
+                            () => {{
+                                let obj = if imm & insn::PROP_PATH_THIS != 0 { p8_bytecode::THIS } else { Reg::from(b) };
+                                out!((Reg::from(a), obj, Reg::from(c), imm & insn::PROP_QUIET != 0), |cx, regs, clo, base, _, at, ops| cx.fetch_prop_ops(regs, clo, base, at, ops))
+                            }};
+                        }
                         let o = if imm & insn::PROP_PATH_THIS != 0 {
-                            let Some(o) = &top.this else { slow!() };
+                            let Some(o) = &top.this else { miss!() };
                             o
                         } else {
-                            let Some(o) = w[rx!(b)].as_object() else { slow!() };
+                            let Some(o) = w[rx!(b)].as_object() else { miss!() };
                             o
                         };
                         let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
@@ -1781,28 +1829,45 @@ impl Context<'_> {
                             // (A dynamic property: `dynamic_prop`.)
                             None => dynamic_prop(o, &w[rx!(c)]),
                         };
-                        let Some(v) = found else { slow!() };
+                        let Some(v) = found else { miss!() };
                         done!(put(&mut w[rx!(a)], v));
                     }
                     // `$o->$name = $v`: the same entry, written as a cached
                     // one is (`plain_slot`, `write_slot`), the value into the
                     // result register (`imm >> 8`); TAKE: the value's
-                    // temporary released. Anything else: `step`.
+                    // temporary released. Anything else: out of line on the
+                    // arm's operands (`assign_prop_ops`), the object let go
+                    // of first.
                     Op::AssignPropDyn => {
                         ops!(a, b, c, imm);
+                        macro_rules! miss {
+                            () => {{
+                                let obj = if imm & insn::PROP_PATH_THIS != 0 { p8_bytecode::THIS } else { Reg::from(a) };
+                                let val = if imm & insn::PROP_OP_K != 0 { p8_bytecode::const_operand(usize::from(b)) } else { Reg::from(b) };
+                                let take = imm & insn::TAKE != 0 && imm & insn::PROP_OP_K == 0;
+                                out!((obj, Reg::from(c), val, Reg::from((imm >> 8) as u8), take), |cx, regs, clo, base, _, at, ops| cx.assign_prop_ops(regs, clo, base, at, ops))
+                            }};
+                        }
                         let o = if imm & insn::PROP_PATH_THIS != 0 {
-                            let Some(o) = &top.this else { slow!() };
+                            let Some(o) = &top.this else { miss!() };
                             Rc::clone(o)
                         } else {
-                            let Some(o) = w[rx!(a)].as_object() else { slow!() };
+                            let Some(o) = w[rx!(a)].as_object() else { miss!() };
                             Rc::clone(o)
                         };
-                        let Some(entry) = dyn_entry(&o, &w[rx!(c)], top.scope.as_ref()) else { slow!() };
+                        let Some(entry) = dyn_entry(&o, &w[rx!(c)], top.scope.as_ref()) else {
+                            drop(o);
+                            miss!()
+                        };
                         let scope = (top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize), top.scope.as_deref());
                         let v = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
-                        let Some((slot, plain)) = plain_slot(entry, &o, scope, v, !self.reinit.is_empty()) else { slow!() };
+                        let Some((slot, plain)) = plain_slot(entry, &o, scope, v, !self.reinit.is_empty()) else {
+                            drop(o);
+                            miss!()
+                        };
                         if !vmops::write_slot(&o, slot, plain, v) {
-                            slow!();
+                            drop(o);
+                            miss!();
                         }
                         let v = v.clone();
                         drop(o);
@@ -1922,6 +1987,31 @@ impl Context<'_> {
                             out!((Reg::from(a), Reg::from(b)), |cx, regs, clo, base, _, at, ops| cx.bit_not_ops(regs, clo, base, at, ops))
                         };
                         done!(put(&mut w[rx!(a)], Value::int(!n)));
+                    }
+                    // `echo`, `clone`, `throw`, a catch's test,
+                    // `isset(C::$name)`: out of line on the arm's operands
+                    // (`echo_ops`, `clone_ops`, `throw_ops`, `catch_if_ops`,
+                    // `isset_static_ops`; an operand that may be a literal
+                    // is in imm).
+                    Op::Echo => {
+                        ops!(a, b, c, imm);
+                        out!(imm as Reg, |cx, regs, clo, base, _, at, src| cx.echo_ops(regs, clo, base, at, src));
+                    }
+                    Op::Clone => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), imm as Reg), |cx, regs, clo, base, _, at, ops| cx.clone_ops(regs, clo, base, at, ops));
+                    }
+                    Op::Throw => {
+                        ops!(a, b, c, imm);
+                        out!(imm as Reg, |cx, regs, clo, base, _, at, src| cx.throw_ops(regs, clo, base, at, src));
+                    }
+                    Op::CatchIf => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), u16::from(b) | u16::from(c) << 8, imm), |cx, regs, clo, base, _, at, ops| cx.catch_if_ops(regs, clo, base, at, ops));
+                    }
+                    Op::IssetStatic => {
+                        ops!(a, b, c, imm);
+                        out!((Reg::from(a), Reg::from(b), imm as u16), |cx, regs, clo, base, _, at, ops| cx.isset_static_ops(regs, clo, base, at, ops));
                     }
                     // `use ($x)` / `use (&$x)` of the closure just made (in
                     // a): the variable's value (defined), or the variable

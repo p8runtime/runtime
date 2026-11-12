@@ -205,9 +205,9 @@ pub(crate) fn jump_cmp<S: spec::JumpCmp>(hx: Hx, args::JumpCmp { a, b, target }:
 
 /// `$a[k]` on an array holding a plain value at that key: an int key, a
 /// string literal (looked up by its hash, in place), a string in a
-/// register; an array through a reference by `elem`. IS (`??`): a missing
-/// key of an array is null. Anything else (a missing key's warning, an
-/// object, a string's offset) is cold.
+/// register; an array through a reference by `elem`. IS (`??`) and EMPTY
+/// (empty()'s last dimension): a missing key of an array is null. Anything
+/// else (a missing key's warning, an object, a string's offset) is cold.
 #[inline(always)]
 pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, key }: args::FetchDim) -> Ctl {
     let kv = hx.v::<S::Key>(key);
@@ -235,12 +235,12 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, ke
                 Some(v) => v,
                 None => return Ctl::Cold,
             },
-            None if S::Mode::ID == IS => Value::NULL,
+            None if S::Mode::ID != R => Value::NULL,
             None => return Ctl::Cold,
         }
     } else {
         // (Out of line: the array case is the arm's straight path.)
-        match dim_of(&hx.w[..], arr as Reg, hx.src::<S::Key>(key), S::Key::ID == KSTR, S::Mode::ID == IS) {
+        match dim_of(&hx.w[..], arr as Reg, hx.src::<S::Key>(key), S::Key::ID == KSTR, S::Mode::ID != R) {
             Some(v) => v,
             None => return Ctl::Cold,
         }
