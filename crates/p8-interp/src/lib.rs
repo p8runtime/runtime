@@ -1726,57 +1726,8 @@ impl Context<'_> {
                     // The result may go straight to a variable (`$x = $a + $b`).
                     assign(w, dst, v);
                 }
-                Instr::AssignOp { op, var, src } => {
-                    let y = self.operand(w, clo, src);
-                    if op == BinOp::Concat {
-                        let y = self.string_of(regs, y)?;
-                        // An object on the left: its __toString() first.
-                        if regs[base + var as usize].deref().is_object() {
-                            let x = regs[base + var as usize].deref();
-                            let x = self.string_of(regs, x)?;
-                            assign(&mut regs[base..], var, x);
-                        }
-                        let w = &mut regs[base..base + func.nregs as usize];
-                        // `.=` appends in place when the string is not shared
-                        let x = self.take_var(w, func, var);
-                        if let Some(e) = ops::object_string_error(&x).or_else(|| ops::object_string_error(&y)) {
-                            assign(w, var, x);
-                            return Err(self.op_error(e));
-                        }
-                        let mut s = match x.into_str() {
-                            Ok(s) => s,
-                            Err(other) => ops::to_string_lossy(&other, &mut self.diags),
-                        };
-                        let tail = ops::to_string_lossy(&y, &mut self.diags);
-                        self.report_diags();
-                        s.push_bytes(tail.as_bytes());
-                        assign(w, var, Value::str(s));
-                    } else {
-                        let undefined = w[var as usize].is_undef();
-                        let x = self.operand(w, clo, var);
-                        let r = ops::binary(op, &x, &y, &mut self.diags);
-                        self.report_diags();
-                        let v = r.map_err(|e| self.op_error(e))?;
-                        // An undefined variable's warning goes to the error
-                        // handler before the write, as in PHP (it may unset
-                        // the variable): the write waits for it.
-                        if undefined && !self.pending_errors.is_empty() {
-                            self.deferred_write = Some((base + var as usize, v));
-                        } else {
-                            assign(w, var, v);
-                        }
-                    }
-                }
-                Instr::Compare { cmp, dst, a, b } => {
-                    let v = if cmp == Cmp::Spaceship {
-                        let x = self.operand_ref(w, clo, a);
-                        let y = self.operand_ref(w, clo, b);
-                        compare(cmp, &x, &y)
-                    } else {
-                        Value::bool(self.test_regs(w, clo, cmp, a, b))
-                    };
-                    assign(w, dst, v);
-                }
+                Instr::AssignOp { op, var, src } => return self.assign_op_ops(regs, clo, base, at, (op, var, src)),
+                Instr::Compare { cmp, dst, a, b } => return self.compare_ops(regs, clo, base, at, (cmp, dst, a, b)),
                 // A fused step and test runs here as its step alone; the
                 // test is the next instruction.
                 Instr::IncVar { var }
@@ -1812,12 +1763,7 @@ impl Context<'_> {
                     self.report_diags();
                     reg!(dst) = r.map_err(|e| self.op_error(e))?;
                 }
-                Instr::BitNot { dst, src } => {
-                    let v = self.operand(w, clo, src);
-                    let r = ops::bit_not(&v, &mut self.diags);
-                    self.report_diags();
-                    reg!(dst) = r.map_err(|e| self.op_error(e))?;
-                }
+                Instr::BitNot { dst, src } => return self.bit_not_ops(regs, clo, base, at, (dst, src)),
                 Instr::Cast { kind: CastKind::String, dst, src } => {
                     let v = self.operand(w, clo, src);
                     let v = self.string_of(regs, v)?;
@@ -2100,34 +2046,7 @@ impl Context<'_> {
                         }
                     }
                 }
-                Instr::FetchConst { site, dst } => {
-                    let s = &func.sites[site as usize];
-                    let v = match clo.sites[site as usize].get() {
-                        Some(Callee::Constant(v)) => v.clone(),
-                        _ => match self.constant_by_key(s.sym).map(|v| (v, s.sym)).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1).map(|v| (v, g.1)))) {
-                            // Deprecated: said on every fetch, so never cached.
-                            // A builtin one says what its #[\Deprecated] does.
-                            Some((v, key))
-                                if let Some(message) = self.isolate.registry.constant_deprecation(key).map(str::to_string).or_else(|| {
-                                    self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(|name| format!("Constant {name} is deprecated"))
-                                }) =>
-                            {
-                                self.diags.push(Diag::Deprecated(message));
-                                self.report_diags();
-                                v
-                            }
-                            Some((v, _)) => {
-                                let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
-                                v
-                            }
-                            None => {
-                                let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
-                                return Err(self.throw("Error", format!("Undefined constant \"{name}\"")));
-                            }
-                        },
-                    };
-                    reg!(dst) = v;
-                }
+                Instr::FetchConst { site, dst } => return self.fetch_const_ops(regs, clo, base, at, (dst, site)),
                 Instr::ConcatN { dst, start, n } if w[start as usize..start as usize + n as usize].iter().any(|v| v.deref().is_object()) => {
                     // An object part: its __toString() may run PHP code.
                     let values: Vec<Value> = (0..n).map(|i| self.operand(w, clo, start + i as Reg)).collect();
@@ -2270,32 +2189,8 @@ impl Context<'_> {
                         return self.call_site(regs, clo, base, class, (b, c as u8, a), pc);
                     }
                     Rare::VerifyArgs => self.verify_args(regs, base, argc)?,
-                    Rare::VerifyReturn => {
-                        if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
-                            let v = self.operand(w, clo, a);
-                            match self.check_type(ty, &v, func.strict)? {
-                                Ok(Some(converted)) => reg!(a) = converted,
-                                Ok(None) => {}
-                                Err(()) => {
-                                    if let Some(s) = self.stringable(regs, ty, &v, func.strict)? {
-                                        regs[base + a as usize] = s;
-                                        return Ok(Next::Go(pc));
-                                    }
-                                    // b: 0 a value returned, else none (`return;`, the end).
-                                    let given = if b != 0 { "none".into() } else { p8_runtime::args::value_name(&v) };
-                                    let name = self.function_display();
-                                    let shown = self.type_shown(ty);
-                                    return Err(self.throw("TypeError", format!("{name}(): Return value must be of type {shown}, {given} returned")));
-                                }
-                            }
-                        }
-                    }
-                    Rare::VarRef => {
-                        let name = self.var_name(w, clo, b);
-                        let global = c == 1 || self.frames.last().is_some_and(|f| f.global);
-                        let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
-                        reg!(a) = Value::reference(cell);
-                    }
+                    Rare::VerifyReturn => return self.verify_return_ops(regs, clo, base, at, (a, b != 0)),
+                    Rare::VarRef => return self.var_ref_ops(regs, clo, base, at, (a, b, c == 1)),
                     Rare::VarGet => return self.var_get_ops(regs, clo, base, at, (a, b, c)),
                     Rare::VarUnset => {
                         let name = self.var_name(w, clo, a);
@@ -2863,110 +2758,16 @@ impl Context<'_> {
                     }
                 }
                 Instr::IssetProp { dst, obj, name } => return self.isset_prop_ops(regs, clo, base, at, (dst, obj, name)),
-                Instr::UnsetProp { obj, name } => {
-                    let target = reg!(obj).deref();
-                    let name = name!(name).clone();
-                    if let (Some(o), Some(n)) = (target.as_object(), name.to_php_string())
-                        && let Some(p) = self.hooked_property(o, n.as_bytes())
-                    {
-                        let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
-                        return Err(self.throw("Error", format!("Cannot unset hooked property {class}::${}", String::from_utf8_lossy(n.as_bytes()))));
-                    }
-                    if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Unset) {
-                        let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                        self.run_magic(regs, found, &mut [pname])?;
-                        return Ok(Next::Go(pc));
-                    }
-                    if let Some(lo) = self.lazy_pending(&target, &name) {
-                        self.lazy_init(regs, &lo)?;
-                        return Ok(Next::Go(insn_at));
-                    }
-                    let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                    self.unset_prop(&target, &name)?;
-                }
+                Instr::UnsetProp { obj, name } => return self.unset_prop_ops(regs, clo, base, at, (obj, name)),
                 Instr::MethodCall { .. } => return self.method_call(regs, clo, base, argc, at),
                 Instr::StaticCall { dst, class, method, base: args, argc, vars } => {
                     return self.static_call_ops(regs, clo, base, at, StaticCallOps { dst, class, method, args, argc, vars });
                 }
-                Instr::ClassConst { dst, class, name } => {
-                    let name_reg = name;
-                    let name = name!(name).clone();
-                    // `self::class` with no class to name (zend_compile's
-                    // ZEND_FETCH_CLASS_NAME): its own error.
-                    let is_class = name.as_str().is_some_and(|n| n.as_bytes().eq_ignore_ascii_case(b"class"));
-                    if is_class
-                        && matches!(func.classes[class as usize], p8_bytecode::ClassRef::ParentScope)
-                        && self.scope().0.is_some_and(|c| c.parent.is_none())
-                    {
-                        return Err(self.throw("Error", "Cannot use \"parent\" when current class scope has no parent"));
-                    }
-                    if is_class && self.scope().0.is_none() {
-                        let word = match &func.classes[class as usize] {
-                            p8_bytecode::ClassRef::Scope => Some("self"),
-                            p8_bytecode::ClassRef::ParentScope => Some("parent"),
-                            p8_bytecode::ClassRef::Static => Some("static"),
-                            _ => None,
-                        };
-                        if let Some(word) = word {
-                            return Err(self.throw("Error", format!("Cannot use \"{word}\" in the global scope")));
-                        }
-                    }
-                    if let Some((thunk, scope, key)) = self.pending_constant(func, class, &name, w)? {
-                        self.eval_constant(regs, &thunk, scope, key)?;
-                        return Ok(Next::Go(at));
-                    }
-                    let v = self.class_constant(func, class, &name, w)?;
-                    if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
-                        && let Some(((key, keep), scope)) = self.class_const_key(clo, class, &name, w)
-                    {
-                        *site.borrow_mut() = ConstSite { key, _keep: keep, scope, value: v.clone() };
-                    }
-                    reg!(dst) = v;
-                }
-                Instr::FetchStaticProp { dst, class, name } => {
-                    if let Some(c) = self.lazy_class(func, class, w)? {
-                        self.resolve_class(regs, &c)?;
-                        return Ok(Next::Go(at));
-                    }
-                    let name_reg = name;
-                    let name = name!(name).clone();
-                    // Kept for the loop's handler too: the cell, for this class and scope.
-                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
-                    let v = cell.borrow().deref();
-                    reg!(dst) = if v.is_undef() { Value::NULL } else { v };
-                }
-                Instr::AssignStaticProp { class, name, val, dst } => {
-                    if let Some(c) = self.lazy_class(func, class, w)? {
-                        self.resolve_class(regs, &c)?;
-                        return Ok(Next::Go(at));
-                    }
-                    let name_reg = name;
-                    let name = name!(name).clone();
-                    let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
-                    let v = self.operand(w, clo, val);
-                    store(&cell, v.clone());
-                    reg!(dst) = v;
-                }
+                Instr::ClassConst { dst, class, name } => return self.class_const_ops(regs, clo, base, at, (dst, class, name)),
+                Instr::FetchStaticProp { dst, class, name } => return self.fetch_static_prop_ops(regs, clo, base, at, (dst, class, name)),
+                Instr::AssignStaticProp { class, name, val, dst } => return self.assign_static_prop_ops(regs, clo, base, at, (class, name, val, dst)),
                 Instr::AssignStaticPropOp { op, class, name, val, dst } => return self.assign_static_prop_op_ops(regs, clo, base, at, (op, class, name, val, dst)),
-                Instr::InstanceOf { dst, src, class } => {
-                    let v = self.operand(w, clo, src);
-                    // PHP fetches `static`/`self`/`parent` for an object
-                    // only: with no class scope, the error.
-                    if v.deref().as_object().is_some()
-                        && matches!(func.classes[class as usize], p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope)
-                    {
-                        self.class_of(func, class, w)?;
-                    }
-                    reg!(dst) = Value::bool(self.instance_of(func, &v, class, w));
-                    // The class a name the code names resolved to, declared
-                    // (never autoloaded), for the loop's handler.
-                    if let p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name) = &func.classes[class as usize]
-                        && let Some(c) = self.classes.get(&name.sym)
-                        && clo.class_refs[class as usize].borrow().strong_count() == 0
-                    {
-                        *clo.class_refs[class as usize].borrow_mut() = Rc::downgrade(c);
-                    }
-                }
+                Instr::InstanceOf { dst, src, class } => return self.instance_of_ops(regs, clo, base, at, (dst, src, class)),
                 Instr::Clone { dst, src } => {
                     let v = self.operand(w, clo, src);
                     // A lazy object is initialized before it is cloned.
@@ -3275,6 +3076,55 @@ impl Context<'_> {
         Ok(Next::Go(at + 1))
     }
 
+    /// A reference to `$$name` (the VarRef at `at`, to `dst`; `global`: a
+    /// global's): the running scope's variable of that name made a
+    /// reference (created when missing), or the global's (a function's
+    /// scope, a file included at global scope). `step` runs it, and the
+    /// loop's VarRef arm, with none of `step`'s dispatch.
+    #[inline(never)]
+    pub(crate) fn var_ref_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, name, global): (Reg, Reg, bool)) -> Result<Next, Throw> {
+        let in_main = base == 0;
+        let nregs = clo.code.nregs as usize;
+        let name = self.var_name(&regs[base..base + nregs], clo, name);
+        let global = global || self.frames.last().is_some_and(|f| f.global);
+        let (below, w) = regs.split_at_mut(base);
+        let w = &mut w[..nregs];
+        let cell = if global && !in_main { self.with_main(below, |cx, main| cx.global_cell(main, &name)) } else { self.var_cell(w, in_main, &name) };
+        w[dst as usize] = Value::reference(cell);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `unset($obj->name)` (the UnsetProp at `at`; the name operand a
+    /// constant or a run-time name's register): a hooked property's error,
+    /// `__unset`, a lazy object initialized (then this instruction again),
+    /// else the property removed (a readonly one's error, a visibility's).
+    /// `step` runs it, and the loop's UnsetProp arm, with none of `step`'s
+    /// dispatch.
+    #[inline(never)]
+    pub(crate) fn unset_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (obj, name): (Reg, Reg)) -> Result<Next, Throw> {
+        let w = &regs[base..base + clo.code.nregs as usize];
+        let target = w[obj as usize].deref();
+        let name = Self::val(w, clo, name).clone();
+        if let (Some(o), Some(n)) = (target.as_object(), name.to_php_string())
+            && let Some(p) = self.hooked_property(o, n.as_bytes())
+        {
+            let class = String::from_utf8_lossy(p.declaring_name.as_bytes()).into_owned();
+            return Err(self.throw("Error", format!("Cannot unset hooked property {class}::${}", String::from_utf8_lossy(n.as_bytes()))));
+        }
+        if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Unset) {
+            let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            self.run_magic(regs, found, &mut [pname])?;
+            return Ok(Next::Go(at + 1));
+        }
+        if let Some(lo) = self.lazy_pending(&target, &name) {
+            self.lazy_init(regs, &lo)?;
+            return Ok(Next::Go(at));
+        }
+        let target = self.lazy_forward(&target, &name).unwrap_or(target);
+        self.unset_prop(&target, &name)?;
+        Ok(Next::Go(at + 1))
+    }
+
     /// `$$name` read (the VarGet at `at`, the name in `name`; `flags` bit 0:
     /// quiet, bit 1: a global's): the running scope's variable of that
     /// name, or the global's (a function's scope, a file included at
@@ -3316,6 +3166,539 @@ impl Context<'_> {
         let c = self.class_of(&clo.code, class, w)?;
         w[dst as usize] = Value::str(c.name.clone());
         Ok(Next::Go(at + 1))
+    }
+
+    /// `C::NAME` (the ClassConst at `at`: class reference `class`, the
+    /// name operand `name`, a constant or a run-time name's register, to
+    /// `dst`): the class resolved (the autoloader), a constant whose value
+    /// is code computed (once: a self-referencing one's error), the value
+    /// read (the errors of `self`/`parent`/`static` with no class to name,
+    /// a private or protected constant, a trait's, an undefined one), and
+    /// the name's cache entry filled for the loop's next read. `step` runs
+    /// it, and the loop's CLASS_CONST arm when its entry does not answer
+    /// (`class_const_out`).
+    #[inline(never)]
+    pub(crate) fn class_const_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, class, name_reg): (Reg, u16, Reg)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let nregs = func.nregs as usize;
+        let name = Self::val(&regs[base..base + nregs], clo, name_reg).clone();
+        // `self::class` with no class to name (zend_compile's
+        // ZEND_FETCH_CLASS_NAME): its own error.
+        let is_class = name.as_str().is_some_and(|n| n.as_bytes().eq_ignore_ascii_case(b"class"));
+        if is_class && matches!(func.classes[class as usize], p8_bytecode::ClassRef::ParentScope) && self.scope().0.is_some_and(|c| c.parent.is_none()) {
+            return Err(self.throw("Error", "Cannot use \"parent\" when current class scope has no parent"));
+        }
+        if is_class && self.scope().0.is_none() {
+            let word = match &func.classes[class as usize] {
+                p8_bytecode::ClassRef::Scope => Some("self"),
+                p8_bytecode::ClassRef::ParentScope => Some("parent"),
+                p8_bytecode::ClassRef::Static => Some("static"),
+                _ => None,
+            };
+            if let Some(word) = word {
+                return Err(self.throw("Error", format!("Cannot use \"{word}\" in the global scope")));
+            }
+        }
+        if let Some((thunk, scope, key)) = self.pending_constant(func, class, &name, &regs[base..base + nregs])? {
+            // (It may grow the registers: the window is taken again below.)
+            self.eval_constant(regs, &thunk, scope, key)?;
+        }
+        let w = &mut regs[base..base + nregs];
+        let v = self.class_constant(func, class, &name, w)?;
+        if let Some(site) = const_index(name_reg).and_then(|i| clo.class_consts.get(i))
+            && let Some(((key, keep), scope)) = self.class_const_key(clo, class, &name, w)
+        {
+            *site.borrow_mut() = ConstSite { key, _keep: keep, scope, value: v.clone() };
+        }
+        w[dst as usize] = v;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's CLASS_CONST arm's miss (ops.def `out=`): `class_const_ops`
+    /// on the operands it decoded, the name its constant `site`.
+    #[inline(never)]
+    pub(crate) fn class_const_out(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::ClassConst) -> Result<Next, Throw> {
+        self.class_const_ops(regs, clo, base, at, (a.dst as Reg, a.class as u16, p8_bytecode::const_operand(a.site as usize)))
+    }
+
+    /// `C::$name` (the FetchStaticProp at `at`: class reference `class`,
+    /// the name operand `name`, to `dst`): a class whose initializers have
+    /// not run resolved (then this instruction again), the property's cell
+    /// found (the errors: an undeclared one, a visibility, no class
+    /// scope) and kept in the name's entry for the loop's next read, its
+    /// value read (an uninitialized typed one's null). `step` runs it,
+    /// and the loop's FETCH_STATIC_PROP arm when its entry does not answer
+    /// (`fetch_static_prop_out`).
+    #[inline(never)]
+    pub(crate) fn fetch_static_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, class, name_reg): (Reg, u16, Reg)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let nregs = func.nregs as usize;
+        if let Some(c) = self.lazy_class(func, class, &regs[base..base + nregs])? {
+            self.resolve_class(regs, &c)?;
+            return Ok(Next::Go(at));
+        }
+        let w = &mut regs[base..base + nregs];
+        let name = Self::val(w, clo, name_reg).clone();
+        // Kept for the loop's handler too: the cell, for this class and scope.
+        let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
+        let v = cell.borrow().deref();
+        w[dst as usize] = if v.is_undef() { Value::NULL } else { v };
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's FETCH_STATIC_PROP arm's miss (ops.def `out=`):
+    /// `fetch_static_prop_ops` on the operands it decoded, the name its
+    /// constant `site`.
+    #[inline(never)]
+    pub(crate) fn fetch_static_prop_out(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::FetchStaticProp) -> Result<Next, Throw> {
+        self.fetch_static_prop_ops(regs, clo, base, at, (a.dst as Reg, a.class as u16, p8_bytecode::const_operand(a.site as usize)))
+    }
+
+    /// `C::$name = val` (the AssignStaticProp at `at`, the result to
+    /// `dst`): as `fetch_static_prop_ops` finds the cell, then the value
+    /// stored in it (through a reference it holds). `step` runs it, and
+    /// the loop's ASSIGN_STATIC_PROP arm when its entry does not answer
+    /// (`assign_static_prop_out`).
+    #[inline(never)]
+    pub(crate) fn assign_static_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (class, name_reg, val, dst): (u16, Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let nregs = func.nregs as usize;
+        if let Some(c) = self.lazy_class(func, class, &regs[base..base + nregs])? {
+            self.resolve_class(regs, &c)?;
+            return Ok(Next::Go(at));
+        }
+        let w = &mut regs[base..base + nregs];
+        let name = Self::val(w, clo, name_reg).clone();
+        let cell = self.static_cell_at(clo, class, name_reg, &name, w)?;
+        let v = self.operand(w, clo, val);
+        store(&cell, v.clone());
+        w[dst as usize] = v;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's ASSIGN_STATIC_PROP arm's miss (ops.def `out=`):
+    /// `assign_static_prop_ops` on the operands it decoded, the name its
+    /// constant `site`.
+    #[inline(never)]
+    pub(crate) fn assign_static_prop_out<S: p8_bytecode::insn::spec::AssignStaticProp>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::AssignStaticProp) -> Result<Next, Throw> {
+        use p8_bytecode::insn::kind::Kind as _;
+        let val = if S::Val::ID == p8_bytecode::insn::kinds::K { p8_bytecode::const_operand(a.val as usize) } else { a.val as Reg };
+        self.assign_static_prop_ops(regs, clo, base, at, (a.class as u16, p8_bytecode::const_operand(a.site as usize), val, a.dst as Reg))
+    }
+
+    /// `var[k1]..[kn] = val` (the AssignDim at `at`: the keys in
+    /// `keys..keys+n`, or the one key a constant operand; `append`: the
+    /// last level is `[]`; the result to `dst`): the path walked once, each
+    /// level's key converted for its container (the warnings, the errors),
+    /// an ArrayAccess object on the way given the rest (`offsetSet`), a
+    /// string offset's byte. `step` runs it, and the loop's ASSIGN_DIM and
+    /// APPEND_DIM arms for what they do not take (`assign_dim_out`,
+    /// `append_dim_out`).
+    #[inline(never)]
+    pub(crate) fn assign_dim_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (var, keys, n, append, val, dst): (Reg, Reg, u8, bool, Reg, Reg)) -> Result<Next, Throw> {
+        let nregs = clo.code.nregs as usize;
+        let w = &mut regs[base..base + nregs];
+        let v = self.operand(w, clo, val);
+        // `$a[] = v` on an array variable (the commonest write): appended
+        // in place, nothing else to look at.
+        if n == 0
+            && append
+            && let Some(a) = w[var as usize].array_mut()
+        {
+            w[dst as usize] = self.append(a, v)?;
+            return Ok(Next::Go(at + 1));
+        }
+        // The result is what was stored: a string offset's one byte.
+        let r = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
+            Written::Done(r) => r,
+            Written::Object(o, level, v) => {
+                // (The one key may be a constant operand.)
+                let rest: Vec<Value> = match const_index(keys) {
+                    Some(k) if level == 0 => vec![clo.consts[k].clone()],
+                    Some(_) => Vec::new(),
+                    None => w[keys as usize + level..keys as usize + n as usize].iter().map(Value::deref).collect(),
+                };
+                self.aa_write(regs, &Value::object(o), &rest, append, arrayaccess::DimOp::Set(v))?
+            }
+        };
+        regs[base + dst as usize] = r;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's ASSIGN_DIM arm's miss (ops.def `out=`): `assign_dim_ops`
+    /// on the operands it decoded (one key; a literal value its constant).
+    /// A literal key is the instruction's own operand: lowering gives a
+    /// canonical integer string (`'5'`) the int's constant, which an
+    /// ArrayAccess object's `offsetSet` must not see.
+    #[inline(never)]
+    pub(crate) fn assign_dim_out<S: p8_bytecode::insn::spec::AssignDim>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::AssignDim) -> Result<Next, Throw> {
+        use p8_bytecode::insn::kind::Kind as _;
+        use p8_bytecode::insn::kinds::{K, REG};
+        let key = if S::Key::ID == REG {
+            a.key as Reg
+        } else {
+            let Instr::AssignDim { keys, .. } = clo.code.code[at] else { unreachable!("ASSIGN_DIM lowers an AssignDim") };
+            keys
+        };
+        let val = if S::Val::ID == K { p8_bytecode::const_operand(a.val as usize) } else { a.val as Reg };
+        self.assign_dim_ops(regs, clo, base, at, (a.var as Reg, key, 1, false, val, a.dst as Reg))
+    }
+
+    /// The loop's APPEND_DIM arm's miss (ops.def `out=`): `assign_dim_ops`
+    /// on the operands it decoded (no key; a literal value its constant).
+    #[inline(never)]
+    pub(crate) fn append_dim_out<S: p8_bytecode::insn::spec::AppendDim>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::AppendDim) -> Result<Next, Throw> {
+        use p8_bytecode::insn::kind::Kind as _;
+        let val = if S::Val::ID == p8_bytecode::insn::kinds::K { p8_bytecode::const_operand(a.val as usize) } else { a.val as Reg };
+        self.assign_dim_ops(regs, clo, base, at, (a.var as Reg, 0, 0, true, val, a.dst as Reg))
+    }
+
+    /// `$var op= src` (the AssignOp at `at`; `src` a register or a
+    /// constant operand): `.=` (`__toString()` of an object on either
+    /// side, appended in place when the string is not shared), else the
+    /// operation (the conversions' warnings, the errors), an undefined
+    /// variable's write held until its warning's handler ran. `step` runs
+    /// it, and the loop's AssignOp and AssignOpC arms for what they do not
+    /// take.
+    #[inline(never)]
+    pub(crate) fn assign_op_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (op, var, src): (BinOp, Reg, Reg)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let nregs = func.nregs as usize;
+        let w = &mut regs[base..base + nregs];
+        let y = self.operand(w, clo, src);
+        if op == BinOp::Concat {
+            let y = self.string_of(regs, y)?;
+            // An object on the left: its __toString() first.
+            if regs[base + var as usize].deref().is_object() {
+                let x = regs[base + var as usize].deref();
+                let x = self.string_of(regs, x)?;
+                assign(&mut regs[base..], var, x);
+            }
+            let w = &mut regs[base..base + nregs];
+            // `.=` appends in place when the string is not shared
+            let x = self.take_var(w, func, var);
+            if let Some(e) = ops::object_string_error(&x).or_else(|| ops::object_string_error(&y)) {
+                assign(w, var, x);
+                return Err(self.op_error(e));
+            }
+            let mut s = match x.into_str() {
+                Ok(s) => s,
+                Err(other) => ops::to_string_lossy(&other, &mut self.diags),
+            };
+            let tail = ops::to_string_lossy(&y, &mut self.diags);
+            self.report_diags();
+            s.push_bytes(tail.as_bytes());
+            assign(w, var, Value::str(s));
+        } else {
+            let undefined = w[var as usize].is_undef();
+            let x = self.operand(w, clo, var);
+            let r = ops::binary(op, &x, &y, &mut self.diags);
+            self.report_diags();
+            let v = r.map_err(|e| self.op_error(e))?;
+            // An undefined variable's warning goes to the error handler
+            // before the write, as in PHP (it may unset the variable): the
+            // write waits for it.
+            if undefined && !self.pending_errors.is_empty() {
+                self.deferred_write = Some((base + var as usize, v));
+            } else {
+                assign(w, var, v);
+            }
+        }
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `a cmp b` (the Compare at `at`, to `dst`; `b` a register or a
+    /// constant operand): `<=>`'s int, else the test (arrays element by
+    /// element, objects, the conversions and their warnings, an
+    /// uncomparable pair's error). `step` runs it, and the loop's Compare
+    /// and CompareC arms for what they do not take.
+    #[inline(never)]
+    pub(crate) fn compare_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (cmp, dst, a, b): (Cmp, Reg, Reg, Reg)) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let v = if cmp == Cmp::Spaceship {
+            let x = self.operand_ref(w, clo, a);
+            let y = self.operand_ref(w, clo, b);
+            compare(cmp, &x, &y)
+        } else {
+            Value::bool(self.test_regs(w, clo, cmp, a, b))
+        };
+        assign(w, dst, v);
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `~src` (the BitNot at `at`, to `dst`): an int's, a float's
+    /// (truncated), a string's bytes, the TypeError of anything else.
+    /// `step` runs it, and the loop's BitNot arm for what is not an int.
+    #[inline(never)]
+    pub(crate) fn bit_not_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src): (Reg, Reg)) -> Result<Next, Throw> {
+        let w = &mut regs[base..base + clo.code.nregs as usize];
+        let v = self.operand(w, clo, src);
+        let r = ops::bit_not(&v, &mut self.diags);
+        self.report_diags();
+        w[dst as usize] = r.map_err(|e| self.op_error(e))?;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The returned value `a` checked against the declared return type
+    /// (the VerifyReturn at `at`; `none`: no value was returned, `return;`
+    /// or the end): converted when the mode allows it, a Stringable's
+    /// string, else the TypeError. A generator's is not checked here.
+    /// `step` runs it, and the loop's VerifyReturn arm when its quick test
+    /// does not pass.
+    #[inline(never)]
+    pub(crate) fn verify_return_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (a, none): (Reg, bool)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
+            let v = self.operand(&regs[base..base + func.nregs as usize], clo, a);
+            match self.check_type(ty, &v, func.strict)? {
+                Ok(Some(converted)) => regs[base + a as usize] = converted,
+                Ok(None) => {}
+                Err(()) => {
+                    if let Some(s) = self.stringable(regs, ty, &v, func.strict)? {
+                        regs[base + a as usize] = s;
+                        return Ok(Next::Go(at + 1));
+                    }
+                    let given = if none { "none".into() } else { p8_runtime::args::value_name(&v) };
+                    let name = self.function_display();
+                    let shown = self.type_shown(ty);
+                    return Err(self.throw("TypeError", format!("{name}(): Return value must be of type {shown}, {given} returned")));
+                }
+            }
+        }
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `src instanceof C` (the InstanceOf at `at`, class reference
+    /// `class`, to `dst`): `static`/`self`/`parent` fetched for an object
+    /// (with no class scope, the error), a class in a register's (a
+    /// string's class, never autoloaded; the error of anything else), the
+    /// test; a named class's resolution remembered for the loop's next
+    /// test. `step` runs it, and the loop's INSTANCEOF arm when it does
+    /// not answer (`instance_of_out`).
+    #[inline(never)]
+    pub(crate) fn instance_of_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, src, class): (Reg, Reg, u16)) -> Result<Next, Throw> {
+        let func = &*clo.code;
+        let w = &mut regs[base..base + func.nregs as usize];
+        let v = self.operand(w, clo, src);
+        // PHP fetches `static`/`self`/`parent` for an object only: with no
+        // class scope, the error.
+        if v.deref().as_object().is_some() && matches!(func.classes[class as usize], p8_bytecode::ClassRef::Static | p8_bytecode::ClassRef::Scope | p8_bytecode::ClassRef::ParentScope) {
+            self.class_of(func, class, w)?;
+        }
+        w[dst as usize] = Value::bool(self.instance_of(func, &v, class, w));
+        // The class a name the code names resolved to, declared (never
+        // autoloaded), for the loop's handler.
+        if let p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name) = &func.classes[class as usize]
+            && let Some(c) = self.classes.get(&name.sym)
+            && clo.class_refs[class as usize].borrow().strong_count() == 0
+        {
+            *clo.class_refs[class as usize].borrow_mut() = Rc::downgrade(c);
+        }
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's INSTANCEOF arm's miss (ops.def `out=`): `instance_of_ops`
+    /// on the operands it decoded.
+    #[inline(never)]
+    pub(crate) fn instance_of_out(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::InstanceOf) -> Result<Next, Throw> {
+        self.instance_of_ops(regs, clo, base, at, (a.dst as Reg, a.src as Reg, a.class as u16))
+    }
+
+    /// A global constant (the FetchConst at `at`: call site `site` names
+    /// it, to `dst`): the site's value, else the constant looked up (a
+    /// namespaced name's global fallback), a deprecated one's notice (said
+    /// on every read, so never cached), the error of an undefined one; a
+    /// plain one cached in the site for the loop's next read. `step` runs
+    /// it, and the loop's FetchConst arm when the site holds no value.
+    #[inline(never)]
+    pub(crate) fn fetch_const_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (dst, site): (Reg, u16)) -> Result<Next, Throw> {
+        let s = &clo.code.sites[site as usize];
+        let v = match clo.sites[site as usize].get() {
+            Some(Callee::Constant(v)) => v.clone(),
+            _ => match self.constant_by_key(s.sym).map(|v| (v, s.sym)).or_else(|| s.fallback.as_ref().and_then(|g| self.constant_by_key(g.1).map(|v| (v, g.1)))) {
+                // Deprecated: said on every fetch, so never cached.
+                // A builtin one says what its #[\Deprecated] does.
+                Some((v, key))
+                    if let Some(message) = self.isolate.registry.constant_deprecation(key).map(str::to_string).or_else(|| {
+                        self.runtime_deprecated(s.name.as_bytes(), s.fallback.as_ref().map(|g| g.0.as_bytes())).map(|name| format!("Constant {name} is deprecated"))
+                    }) =>
+                {
+                    self.diags.push(Diag::Deprecated(message));
+                    self.report_diags();
+                    v
+                }
+                Some((v, _)) => {
+                    let _ = clo.sites[site as usize].set(Callee::Constant(v.clone()));
+                    v
+                }
+                None => {
+                    let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
+                    return Err(self.throw("Error", format!("Undefined constant \"{name}\"")));
+                }
+            },
+        };
+        regs[base + dst as usize] = v;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// `$obj->name` (the FetchProp at `at`: `obj` a register or THIS, the
+    /// name operand `name`, to `dst`; `quiet` for `??` / `?->`): the
+    /// entry's slot, a `get` hook, `__isset` / `__get`, a lazy object
+    /// initialized (then this instruction again), else the property read
+    /// (an undefined one's warning, a non-object's) and the entry filled.
+    /// `step` runs it, and the loop's FETCH_PROP arm when its entry does
+    /// not answer (`fetch_prop_out`).
+    #[inline(never)]
+    pub(crate) fn fetch_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (dst, obj, name, quiet): (Reg, Reg, Reg, bool)) -> Result<Next, Throw> {
+        let nregs = clo.code.nregs as usize;
+        let w = &mut regs[base..base + nregs];
+        // (A quiet read's object is a register: `quiet` reads `$this` into one.)
+        let target = if quiet && obj != p8_bytecode::THIS { w[obj as usize].deref() } else { self.prop_target(w, clo, obj)? };
+        // The name's constant: its cache entry.
+        let site = const_index(name).and_then(|i| clo.props.get(i));
+        if let (Some(site), Some(o)) = (site, target.as_object())
+            && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+        {
+            w[dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        let name = Self::val(w, clo, name).clone();
+        if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
+            let v = self.run_nested(regs, hook?, &mut [])?;
+            regs[base + dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        if let Some(o) = target.as_object()
+            && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0
+            && (self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || (quiet && self.prop_magic(&target, &name, crate::classes::Magic::Isset).is_some()))
+        {
+            use crate::classes::Magic;
+            let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            // `??`: __isset decides when there is one, then __get reads.
+            let set = if quiet {
+                match self.prop_magic(&target, &name, Magic::Isset) {
+                    Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.to_bool(),
+                    None => true,
+                }
+            } else {
+                true
+            };
+            let v = match self.prop_magic(&target, &name, Magic::Get) {
+                Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
+                Some(_) => Value::NULL,
+                None => self.fetch_prop(&target, &name, quiet)?,
+            };
+            regs[base + dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        if let Some(lo) = self.lazy_pending(&target, &name) {
+            self.lazy_init(regs, &lo)?;
+            return Ok(Next::Go(at));
+        }
+        let target = self.lazy_forward(&target, &name).unwrap_or(target);
+        let v = self.fetch_prop(&target, &name, quiet)?;
+        regs[base + dst as usize] = v;
+        if let (Some(site), Some(o)) = (site, target.as_object()) {
+            self.remember_prop(site, o, &name);
+        }
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's FETCH_PROP arm's miss (ops.def `out=`): `fetch_prop_ops`
+    /// on the operands it decoded, the name its constant `site`.
+    #[inline(never)]
+    pub(crate) fn fetch_prop_out<S: p8_bytecode::insn::spec::FetchProp>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::FetchProp) -> Result<Next, Throw> {
+        use p8_bytecode::insn::kind::Kind as _;
+        let obj = if S::Obj::ID == p8_bytecode::insn::kinds::THIS { p8_bytecode::THIS } else { a.obj as Reg };
+        let quiet = S::Mode::ID == p8_bytecode::insn::kinds::IS;
+        self.fetch_prop_ops(regs, clo, base, at, (a.dst as Reg, obj, p8_bytecode::const_operand(a.site as usize), quiet))
+    }
+
+    /// `$obj->name = val` (the AssignProp at `at`: `obj` a register or
+    /// THIS, the name operand `name`, the value `val`, moved out of its
+    /// temporary when `take`, the result to `dst`): the entry's slot
+    /// written (a typed property's coercion and errors), a `set` hook,
+    /// `__set`, a lazy object initialized (then this instruction again),
+    /// else the property written (a dynamic one's deprecation, a readonly
+    /// one's error, a non-object's) and the entry filled. `step` runs it,
+    /// and the loop's ASSIGN_PROP arm when its entry does not answer
+    /// (`assign_prop_out`).
+    #[inline(never)]
+    pub(crate) fn assign_prop_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (obj, name, val, dst, take): (Reg, Reg, Reg, Reg, bool)) -> Result<Next, Throw> {
+        let nregs = clo.code.nregs as usize;
+        let w = &mut regs[base..base + nregs];
+        let target = self.prop_target(w, clo, obj)?;
+        // The name's constant: the same cache entry reads use.
+        let site = const_index(name).and_then(|i| clo.props.get(i));
+        if let (Some(site), Some(o), true) = (site, target.as_object(), Self::val(w, clo, name).is_str())
+            && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
+        {
+            let pname = Self::val(w, clo, name).clone();
+            // (Copied, the temporary released only once the write is
+            // done: a typed property's class may be autoloaded first, and
+            // this instruction runs again then; an error leaves the value
+            // to the unwinding, as the uncached path below does.)
+            let v = self.operand(w, clo, val);
+            self.write_cached(o, slot, &pname, v.clone())?;
+            let w = &mut regs[base..base + nregs];
+            if take {
+                clear(&mut w[val as usize]);
+            }
+            w[dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        // (A lazy object's initialization below runs this instruction
+        // again: the value is only copied here.)
+        let v = self.operand(w, clo, val);
+        let name = Self::val(w, clo, name).clone();
+        if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
+            self.run_nested(regs, hook?, &mut [v.clone()])?;
+            if take {
+                clear(&mut regs[base + val as usize]);
+            }
+            regs[base + dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
+            let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
+            self.run_magic(regs, found, &mut [pname, v.clone()])?;
+            if take {
+                clear(&mut regs[base + val as usize]);
+            }
+            regs[base + dst as usize] = v;
+            return Ok(Next::Go(at + 1));
+        }
+        if let Some(lo) = self.lazy_pending(&target, &name) {
+            self.lazy_init(regs, &lo)?;
+            return Ok(Next::Go(at));
+        }
+        let target = self.lazy_forward(&target, &name).unwrap_or(target);
+        self.write_prop(&target, &name, v.clone())?;
+        // A site already holding this class missed for another reason (an
+        // unset slot with __set): looking again finds the same.
+        if let (Some(site), Some(o)) = (site, target.as_object())
+            && site.get().class != Rc::as_ptr(&o.class) as usize
+        {
+            self.remember_prop(site, o, &name);
+        }
+        let w = &mut regs[base..base + nregs];
+        if take {
+            clear(&mut w[val as usize]);
+        }
+        w[dst as usize] = v;
+        Ok(Next::Go(at + 1))
+    }
+
+    /// The loop's ASSIGN_PROP arm's miss (ops.def `out=`): `assign_prop_ops`
+    /// on the operands it decoded, the name its constant `site` (a
+    /// literal value, `val` K, its constant).
+    #[inline(never)]
+    pub(crate) fn assign_prop_out<S: p8_bytecode::insn::spec::AssignProp>(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, a: p8_bytecode::insn::args::AssignProp) -> Result<Next, Throw> {
+        use p8_bytecode::insn::kind::Kind as _;
+        use p8_bytecode::insn::kinds::{K, TAKE, THIS};
+        let obj = if S::Obj::ID == THIS { p8_bytecode::THIS } else { a.obj as Reg };
+        let val = if S::Val::ID == K { p8_bytecode::const_operand(a.val as usize) } else { a.val as Reg };
+        self.assign_prop_ops(regs, clo, base, at, (obj, p8_bytecode::const_operand(a.site as usize), val, a.dst as Reg, S::Mode::ID == TAKE))
     }
 
     /// `f($var)`'s argument `n` (the SendVar at `at`, call site `site`, the
@@ -3832,8 +4215,6 @@ impl Context<'_> {
     #[cold]
     #[inline(never)]
     fn cold_run(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, _argc: usize, at: usize) -> Result<Next, Throw> {
-        // This instruction's index (a lazy object's initialization runs it again).
-        let insn_at = at;
         let func = &*clo.code;
         let mut pc = at + 1;
         let w = &mut regs[base..];
@@ -3841,11 +4222,6 @@ impl Context<'_> {
         macro_rules! reg {
             ($r:expr) => {
                 w[$r as usize]
-            };
-        }
-        macro_rules! name {
-            ($r:expr) => {
-                Self::val(w, clo, $r)
             };
         }
         let instr = func.code[at];
@@ -3929,33 +4305,7 @@ impl Context<'_> {
             }
             // The path is walked once: each level's key converted for its
             // container; an ArrayAccess object on the way takes the rest.
-            Instr::AssignDim { var, keys, n, append, val, dst } => {
-                let v = self.operand(w, clo, val);
-                // `$a[] = v` on an array variable (the commonest write):
-                // appended in place, nothing else to look at.
-                if n == 0
-                    && append
-                    && let Some(a) = reg!(var).array_mut()
-                {
-                    reg!(dst) = self.append(a, v)?;
-                    return Ok(Next::Go(pc));
-                }
-                // The result is what was stored: a string offset's one byte.
-                reg!(dst) = match self.assign_dim(w, clo, var, keys, n, append, v, None)? {
-                    Written::Done(r) => r,
-                    Written::Object(o, at, v) => {
-                        // (The one key may be a constant operand.)
-                        let rest: Vec<Value> = match const_index(keys) {
-                            Some(k) if at == 0 => vec![clo.consts[k].clone()],
-                            Some(_) => Vec::new(),
-                            None => w[keys as usize + at..keys as usize + n as usize].iter().map(Value::deref).collect(),
-                        };
-                        let r = self.aa_write(regs, &Value::object(o), &rest, append, arrayaccess::DimOp::Set(v))?;
-                        regs[base + dst as usize] = r;
-                        return Ok(Next::Go(pc));
-                    }
-                };
-            }
+            Instr::AssignDim { var, keys, n, append, val, dst } => return self.assign_dim_ops(regs, clo, base, at, (var, keys, n, append, val, dst)),
             Instr::IssetDim { dst, var, keys, n } => {
                 // (The one key may be a constant operand, read in place.)
                 let key_regs: &[Value] = match const_index(keys) {
@@ -4006,115 +4356,8 @@ impl Context<'_> {
                 }
                 reg!(dst) = Value::bool(set && !cur.is_null_or_undef());
             }
-            Instr::FetchProp { dst, obj, name, quiet } => {
-                let target = if quiet { reg!(obj).deref() } else { self.prop_target(w, clo, obj)? };
-                // The name's constant: its cache entry.
-                let site = const_index(name).and_then(|i| clo.props.get(i));
-                if let (Some(site), Some(o)) = (site, target.as_object())
-                    && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
-                {
-                    reg!(dst) = v;
-                    return Ok(Next::Go(pc));
-                }
-                let name = name!(name).clone();
-                if let Some(hook) = self.prop_hook(&target, &name, HOOK_GET) {
-                    let v = self.run_nested(regs, hook?, &mut [])?;
-                    regs[base + dst as usize] = v;
-                    return Ok(Next::Go(pc));
-                }
-                if let Some(o) = target.as_object()
-                    && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0
-                    && (self.prop_magic(&target, &name, crate::classes::Magic::Get).is_some() || (quiet && self.prop_magic(&target, &name, crate::classes::Magic::Isset).is_some()))
-                {
-                    use crate::classes::Magic;
-                    let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                    // `??`: __isset decides when there is one, then __get reads.
-                    let set = if quiet {
-                        match self.prop_magic(&target, &name, Magic::Isset) {
-                            Some(found) => self.run_magic(regs, found, &mut [pname.clone()])?.to_bool(),
-                            None => true,
-                        }
-                    } else {
-                        true
-                    };
-                    let v = match self.prop_magic(&target, &name, Magic::Get) {
-                        Some(found) if set => self.run_magic(regs, found, &mut [pname])?.deref(),
-                        Some(_) => Value::NULL,
-                        None => self.fetch_prop(&target, &name, quiet)?,
-                    };
-                    regs[base + dst as usize] = v;
-                    return Ok(Next::Go(pc));
-                }
-                if let Some(lo) = self.lazy_pending(&target, &name) {
-                    self.lazy_init(regs, &lo)?;
-                    return Ok(Next::Go(insn_at));
-                }
-                let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                reg!(dst) = self.fetch_prop(&target, &name, quiet)?;
-                if let (Some(site), Some(o)) = (site, target.as_object()) {
-                    self.remember_prop(site, o, &name);
-                }
-            }
-            Instr::AssignProp { obj, name, val, dst, take } => {
-                let target = self.prop_target(w, clo, obj)?;
-                // The name's constant: the same cache entry reads use.
-                let site = const_index(name).and_then(|i| clo.props.get(i));
-                if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                    && let Some(slot) = cached_slot(site.get(), o, self.scope_addr())
-                {
-                    let pname = name!(name).clone();
-                    // (Copied, the temporary released only once the write
-                    // is done: a typed property's class may be autoloaded
-                    // first, and this instruction runs again then; an
-                    // error leaves the value to the unwinding, as the
-                    // uncached path below does.)
-                    let v = self.operand(w, clo, val);
-                    self.write_cached(o, slot, &pname, v.clone())?;
-                    if take {
-                        clear(&mut reg!(val));
-                    }
-                    reg!(dst) = v;
-                    return Ok(Next::Go(pc));
-                }
-                // (A lazy object's initialization below runs this
-                // instruction again: the value is only copied here.)
-                let v = self.operand(w, clo, val);
-                let name = name!(name).clone();
-                if let Some(hook) = self.prop_hook(&target, &name, HOOK_SET) {
-                    self.run_nested(regs, hook?, &mut [v.clone()])?;
-                    if take {
-                        clear(&mut regs[base + val as usize]);
-                    }
-                    regs[base + dst as usize] = v;
-                    return Ok(Next::Go(pc));
-                }
-                if let Some(found) = self.prop_magic(&target, &name, crate::classes::Magic::Set) {
-                    let pname = Value::str(name.to_php_string().unwrap_or_else(PhpStr::empty));
-                    self.run_magic(regs, found, &mut [pname, v.clone()])?;
-                    if take {
-                        clear(&mut regs[base + val as usize]);
-                    }
-                    regs[base + dst as usize] = v;
-                    return Ok(Next::Go(pc));
-                }
-                if let Some(lo) = self.lazy_pending(&target, &name) {
-                    self.lazy_init(regs, &lo)?;
-                    return Ok(Next::Go(insn_at));
-                }
-                let target = self.lazy_forward(&target, &name).unwrap_or(target);
-                self.write_prop(&target, &name, v.clone())?;
-                // A site already holding this class missed for another
-                // reason (an unset slot with __set): looking again finds the same.
-                if let (Some(site), Some(o)) = (site, target.as_object())
-                    && site.get().class != Rc::as_ptr(&o.class) as usize
-                {
-                    self.remember_prop(site, o, &name);
-                }
-                if take {
-                    clear(&mut reg!(val));
-                }
-                reg!(dst) = v;
-            }
+            Instr::FetchProp { dst, obj, name, quiet } => return self.fetch_prop_ops(regs, clo, base, at, (dst, obj, name, quiet)),
+            Instr::AssignProp { obj, name, val, dst, take } => return self.assign_prop_ops(regs, clo, base, at, (obj, name, val, dst, take)),
             _ => unreachable!("cold_run runs the generated instructions"),
         }
         Ok(Next::Go(pc))
