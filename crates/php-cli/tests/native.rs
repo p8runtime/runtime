@@ -226,6 +226,20 @@ fn machine_code_of_another_build_is_refused() {
     assert!(String::from_utf8_lossy(&refused.stderr).contains("another build of p8"));
 }
 
+/// The request's working directory (#474) reaches the builtins native
+/// code calls: they run through the interpreter's own arms, on the same
+/// request. A native function that `chdir`s reads a relative path there.
+#[test]
+fn the_working_directory_reaches_builtins_called_from_native_code() {
+    let script = "<?php function read_in($dir) { chdir($dir); return file_get_contents('x') . getcwd(); }\nmkdir(__DIR__ . '/sub');\nfile_put_contents(__DIR__ . '/sub/x', 'in sub ');\necho read_in(__DIR__ . '/sub') === 'in sub ' . realpath(__DIR__ . '/sub') ? \"ok\\n\" : \"wrong\\n\";\n";
+    let (src, exe) = build("cwd", &[("main.php", script)]);
+    let main = src.join("main.php");
+    let native = run(&exe, &[Path::new("--native-counts"), &main]);
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "ok\n", "{}", String::from_utf8_lossy(&native.stderr));
+    let c = all_counts(&native);
+    assert_eq!((c.entries, c.returns, c.lefts), (1, 1, 0), "{c:?}");
+}
+
 /// Typed parameters and returns of scalar types are checked inline (by
 /// the value's tag): no instruction of this function is the interpreter's.
 #[test]
