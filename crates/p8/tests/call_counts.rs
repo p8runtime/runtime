@@ -57,6 +57,42 @@ fn a_method_called_again_from_the_same_depth_takes_no_count_of_its_code() {
     assert_eq!(out, "210 20 190");
 }
 
+/// `C::m(..)`, `self::m(..)` and `static::m(..)` called again and again
+/// from one depth take their code as `$o->m(..)` does: no strong handle
+/// made for each call when the frame slot already holds it, one made when
+/// it holds another's (two methods called in turn).
+#[test]
+fn a_static_method_called_again_from_the_same_depth_takes_no_count_of_its_code() {
+    let out = flat(
+        "class A {
+             static function add($x) { return $x + 1; }
+             static function none() { return 1; }
+             static function run($n) {
+                 $s = 0;
+                 for ($i = 0; $i < $n; $i++) { $s += self::add($i); }
+                 for ($i = 0; $i < $n; $i++) { $s += static::none(); }
+                 return $s;
+             }
+         }
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s += A::add($i); }
+         for ($i = 0; $i < $n; $i++) { $s += A::none(); }
+         echo $s + A::run($n);",
+        Count::CodeCounted,
+    );
+    assert_eq!(out, "460");
+    let turns = "class A {
+             static function a($x) { return $x; }
+             static function b($x) { return 1; }
+         }
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s += A::a($i); $s += A::b($i); }
+         echo $s;";
+    let (few, many) = (run(turns, 20, Count::CodeCounted), run(turns, 120, Count::CodeCounted));
+    assert_eq!(few.0, "210");
+    assert_eq!(many.1 - few.1, 200, "two static methods in turn: one handle a call, {} at n = 20, {} at n = 120", few.1, many.1);
+}
+
 /// assert() of an assertion that holds is answered from its argument:
 /// the registers are not lent to it (they are for one that fails, which
 /// may run assert.callback).

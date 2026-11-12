@@ -352,8 +352,8 @@ impl Isolate {
             isolate: self,
             frames,
             functions: HashMap::default(),
-            closures: Vec::new(),
-            codes: Vec::new(),
+            closures: GrowOnly::new(),
+            codes: GrowOnly::new(),
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
@@ -454,9 +454,11 @@ pub struct Context<'i> {
     /// The closure of every declared function and method, by index (call
     /// sites refer to them so). A slot is the isolate's `unbuilt` stand-in
     /// until the function is first resolved: `closure_at` makes it then.
-    pub(crate) closures: Vec<Rc<Closure>>,
+    /// It only grows, as `codes` does (`GrowOnly`): an index a call site
+    /// kept names the same code for the context's life.
+    pub(crate) closures: GrowOnly<Rc<Closure>>,
     /// The compiled code at each index of `closures`, made or not.
-    pub(crate) codes: Vec<Arc<Function>>,
+    pub(crate) codes: GrowOnly<Arc<Function>>,
     /// Constants the script defined (define(), const).
     /// The script's own constants, in the order defined, by key
     /// (p8_runtime::ext::const_key): each with its name as defined.

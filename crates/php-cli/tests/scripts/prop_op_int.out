@@ -1,0 +1,750 @@
+-- no overflow
+int(8)
+int(-2)
+int(8)
+int(8)
+int(8)
+int(-2)
+int(8)
+int(8)
+int(8)
+int(-2)
+int(8)
+int(8)
+int(8)
+int(-2)
+int(8)
+int(8)
+int(8)
+int(-2)
+int(8)
+int(8)
+-- the last integer before an overflow, and the first after
+U
+max-1 + 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + 1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+max + 0: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + -1: int(9223372036854775806)
+  left: int(9223372036854775806)
+min + -1: float(-9.223372036854776E+18)
+  left: float(-9.223372036854776E+18)
+min+1 - 1: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+min - 1: float(-9.223372036854776E+18)
+  left: float(-9.223372036854776E+18)
+0 - min: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+-1 - min: int(9223372036854775807)
+  left: int(9223372036854775807)
+max - -1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+max * 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max * 2: float(1.8446744073709552E+19)
+  left: float(1.8446744073709552E+19)
+max * -1: int(-9223372036854775807)
+  left: int(-9223372036854775807)
+min * -1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+-1 * min: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+min * 0: int(0)
+  left: int(0)
+3037000500 * 3037000500: float(9.22337203700025E+18)
+  left: float(9.22337203700025E+18)
+3037000499 * 3037000499: int(9223372030926249001)
+  left: int(9223372030926249001)
+4294967296 * -2147483648: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+4294967296 * 2147483648: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+T
+max-1 + 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + 1: TypeError: Cannot assign float to property T::$p of type int
+  left: int(9223372036854775807)
+max + 0: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + -1: int(9223372036854775806)
+  left: int(9223372036854775806)
+min + -1: converted
+  left: int(-9223372036854775808)
+min+1 - 1: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+min - 1: converted
+  left: int(-9223372036854775808)
+0 - min: TypeError: Cannot assign float to property T::$p of type int
+  left: int(0)
+-1 - min: int(9223372036854775807)
+  left: int(9223372036854775807)
+max - -1: TypeError: Cannot assign float to property T::$p of type int
+  left: int(9223372036854775807)
+max * 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max * 2: TypeError: Cannot assign float to property T::$p of type int
+  left: int(9223372036854775807)
+max * -1: int(-9223372036854775807)
+  left: int(-9223372036854775807)
+min * -1: TypeError: Cannot assign float to property T::$p of type int
+  left: int(-9223372036854775808)
+-1 * min: TypeError: Cannot assign float to property T::$p of type int
+  left: int(-1)
+min * 0: int(0)
+  left: int(0)
+3037000500 * 3037000500: TypeError: Cannot assign float to property T::$p of type int
+  left: int(3037000500)
+3037000499 * 3037000499: int(9223372030926249001)
+  left: int(9223372030926249001)
+4294967296 * -2147483648: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+4294967296 * 2147483648: TypeError: Cannot assign float to property T::$p of type int
+  left: int(4294967296)
+N
+max-1 + 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + 1: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(9223372036854775807)
+max + 0: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + -1: int(9223372036854775806)
+  left: int(9223372036854775806)
+min + -1: converted
+  left: int(-9223372036854775808)
+min+1 - 1: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+min - 1: converted
+  left: int(-9223372036854775808)
+0 - min: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(0)
+-1 - min: int(9223372036854775807)
+  left: int(9223372036854775807)
+max - -1: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(9223372036854775807)
+max * 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max * 2: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(9223372036854775807)
+max * -1: int(-9223372036854775807)
+  left: int(-9223372036854775807)
+min * -1: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(-9223372036854775808)
+-1 * min: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(-1)
+min * 0: int(0)
+  left: int(0)
+3037000500 * 3037000500: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(3037000500)
+3037000499 * 3037000499: int(9223372030926249001)
+  left: int(9223372030926249001)
+4294967296 * -2147483648: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+4294967296 * 2147483648: TypeError: Cannot assign float to property N::$p of type ?int
+  left: int(4294967296)
+IntStr
+max-1 + 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + 1: converted
+  left: string(19) "9.2233720368548E+18"
+max + 0: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + -1: int(9223372036854775806)
+  left: int(9223372036854775806)
+min + -1: converted
+  left: int(-9223372036854775808)
+min+1 - 1: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+min - 1: converted
+  left: int(-9223372036854775808)
+0 - min: converted
+  left: string(19) "9.2233720368548E+18"
+-1 - min: int(9223372036854775807)
+  left: int(9223372036854775807)
+max - -1: converted
+  left: string(19) "9.2233720368548E+18"
+max * 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max * 2: converted
+  left: string(18) "1.844674407371E+19"
+max * -1: int(-9223372036854775807)
+  left: int(-9223372036854775807)
+min * -1: converted
+  left: string(19) "9.2233720368548E+18"
+-1 * min: converted
+  left: string(19) "9.2233720368548E+18"
+min * 0: int(0)
+  left: int(0)
+3037000500 * 3037000500: converted
+  left: string(19) "9.2233720370002E+18"
+3037000499 * 3037000499: int(9223372030926249001)
+  left: int(9223372030926249001)
+4294967296 * -2147483648: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+4294967296 * 2147483648: converted
+  left: string(19) "9.2233720368548E+18"
+IntFloat
+max-1 + 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + 1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+max + 0: int(9223372036854775807)
+  left: int(9223372036854775807)
+max + -1: int(9223372036854775806)
+  left: int(9223372036854775806)
+min + -1: float(-9.223372036854776E+18)
+  left: float(-9.223372036854776E+18)
+min+1 - 1: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+min - 1: float(-9.223372036854776E+18)
+  left: float(-9.223372036854776E+18)
+0 - min: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+-1 - min: int(9223372036854775807)
+  left: int(9223372036854775807)
+max - -1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+max * 1: int(9223372036854775807)
+  left: int(9223372036854775807)
+max * 2: float(1.8446744073709552E+19)
+  left: float(1.8446744073709552E+19)
+max * -1: int(-9223372036854775807)
+  left: int(-9223372036854775807)
+min * -1: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+-1 * min: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+min * 0: int(0)
+  left: int(0)
+3037000500 * 3037000500: float(9.22337203700025E+18)
+  left: float(9.22337203700025E+18)
+3037000499 * 3037000499: int(9223372030926249001)
+  left: int(9223372030926249001)
+4294967296 * -2147483648: int(-9223372036854775808)
+  left: int(-9223372036854775808)
+4294967296 * 2147483648: float(9.223372036854776E+18)
+  left: float(9.223372036854776E+18)
+-- operands that are not integers
+U
+add 1.5: float(8.5)
+  left: float(8.5)
+sub 1.5: float(5.5)
+  left: float(5.5)
+mul 1.5: float(10.5)
+  left: float(10.5)
+add 2: float(9)
+  left: float(9)
+sub 2: float(5)
+  left: float(5)
+mul 2: float(14)
+  left: float(14)
+add "5": int(12)
+  left: int(12)
+sub "5": int(2)
+  left: int(2)
+mul "5": int(35)
+  left: int(35)
+add "5.5": float(12.5)
+  left: float(12.5)
+sub "5.5": float(1.5)
+  left: float(1.5)
+mul "5.5": float(38.5)
+  left: float(38.5)
+add " 5": int(12)
+  left: int(12)
+sub " 5": int(2)
+  left: int(2)
+mul " 5": int(35)
+  left: int(35)
+add "5 ": int(12)
+  left: int(12)
+sub "5 ": int(2)
+  left: int(2)
+mul "5 ": int(35)
+  left: int(35)
+
+Warning: A non-numeric value encountered in %s on line 16
+add "5 apples": int(12)
+  left: int(12)
+
+Warning: A non-numeric value encountered in %s on line 17
+sub "5 apples": int(2)
+  left: int(2)
+
+Warning: A non-numeric value encountered in %s on line 18
+mul "5 apples": int(35)
+  left: int(35)
+add "abc": TypeError: Unsupported operand types: int + string
+  left: int(7)
+sub "abc": TypeError: Unsupported operand types: int - string
+  left: int(7)
+mul "abc": TypeError: Unsupported operand types: int * string
+  left: int(7)
+add "": TypeError: Unsupported operand types: int + string
+  left: int(7)
+sub "": TypeError: Unsupported operand types: int - string
+  left: int(7)
+mul "": TypeError: Unsupported operand types: int * string
+  left: int(7)
+add true: int(8)
+  left: int(8)
+sub true: int(6)
+  left: int(6)
+mul true: int(7)
+  left: int(7)
+add false: int(7)
+  left: int(7)
+sub false: int(7)
+  left: int(7)
+mul false: int(0)
+  left: int(0)
+add null: int(7)
+  left: int(7)
+sub null: int(7)
+  left: int(7)
+mul null: int(0)
+  left: int(0)
+add []: TypeError: Unsupported operand types: int + array
+  left: int(7)
+sub []: TypeError: Unsupported operand types: int - array
+  left: int(7)
+mul []: TypeError: Unsupported operand types: int * array
+  left: int(7)
+add [1]: TypeError: Unsupported operand types: int + array
+  left: int(7)
+sub [1]: TypeError: Unsupported operand types: int - array
+  left: int(7)
+mul [1]: TypeError: Unsupported operand types: int * array
+  left: int(7)
+add stdClass: TypeError: Unsupported operand types: int + stdClass
+  left: int(7)
+sub stdClass: TypeError: Unsupported operand types: int - stdClass
+  left: int(7)
+mul stdClass: TypeError: Unsupported operand types: int * stdClass
+  left: int(7)
+add AA: TypeError: Unsupported operand types: int + AA
+  left: int(7)
+sub AA: TypeError: Unsupported operand types: int - AA
+  left: int(7)
+mul AA: TypeError: Unsupported operand types: int * AA
+  left: int(7)
+T
+
+Deprecated: Implicit conversion from float 8.5 to int loses precision in %s on line 16
+add 1.5: converted
+  left: int(8)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in %s on line 17
+sub 1.5: converted
+  left: int(5)
+
+Deprecated: Implicit conversion from float 10.5 to int loses precision in %s on line 18
+mul 1.5: converted
+  left: int(10)
+add 2: converted
+  left: int(9)
+sub 2: converted
+  left: int(5)
+mul 2: converted
+  left: int(14)
+add "5": int(12)
+  left: int(12)
+sub "5": int(2)
+  left: int(2)
+mul "5": int(35)
+  left: int(35)
+
+Deprecated: Implicit conversion from float 12.5 to int loses precision in %s on line 16
+add "5.5": converted
+  left: int(12)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 17
+sub "5.5": converted
+  left: int(1)
+
+Deprecated: Implicit conversion from float 38.5 to int loses precision in %s on line 18
+mul "5.5": converted
+  left: int(38)
+add " 5": int(12)
+  left: int(12)
+sub " 5": int(2)
+  left: int(2)
+mul " 5": int(35)
+  left: int(35)
+add "5 ": int(12)
+  left: int(12)
+sub "5 ": int(2)
+  left: int(2)
+mul "5 ": int(35)
+  left: int(35)
+
+Warning: A non-numeric value encountered in %s on line 16
+add "5 apples": int(12)
+  left: int(12)
+
+Warning: A non-numeric value encountered in %s on line 17
+sub "5 apples": int(2)
+  left: int(2)
+
+Warning: A non-numeric value encountered in %s on line 18
+mul "5 apples": int(35)
+  left: int(35)
+add "abc": TypeError: Unsupported operand types: int + string
+sub "abc": TypeError: Unsupported operand types: int - string
+mul "abc": TypeError: Unsupported operand types: int * string
+add "": TypeError: Unsupported operand types: int + string
+sub "": TypeError: Unsupported operand types: int - string
+mul "": TypeError: Unsupported operand types: int * string
+add true: int(8)
+  left: int(8)
+sub true: int(6)
+  left: int(6)
+mul true: int(7)
+  left: int(7)
+add false: int(7)
+  left: int(7)
+sub false: int(7)
+  left: int(7)
+mul false: int(0)
+  left: int(0)
+add null: int(7)
+  left: int(7)
+sub null: int(7)
+  left: int(7)
+mul null: int(0)
+  left: int(0)
+add []: TypeError: Unsupported operand types: int + array
+sub []: TypeError: Unsupported operand types: int - array
+mul []: TypeError: Unsupported operand types: int * array
+add [1]: TypeError: Unsupported operand types: int + array
+sub [1]: TypeError: Unsupported operand types: int - array
+mul [1]: TypeError: Unsupported operand types: int * array
+add stdClass: TypeError: Unsupported operand types: int + stdClass
+sub stdClass: TypeError: Unsupported operand types: int - stdClass
+mul stdClass: TypeError: Unsupported operand types: int * stdClass
+add AA: TypeError: Unsupported operand types: int + AA
+sub AA: TypeError: Unsupported operand types: int - AA
+mul AA: TypeError: Unsupported operand types: int * AA
+-- a float property takes an integer as a float
+float(3.5)
+float(7)
+float(0)
+float(3)
+float(3)
+float(0)
+float(3.5)
+float(7)
+float(0)
+float(3)
+float(3)
+float(0)
+float(3.5)
+float(7)
+float(0)
+float(3)
+float(3)
+float(0)
+-- readonly
+inside: Error: Cannot modify readonly property RO::$p
+outside: Error: Cannot modify readonly property RO::$p
+outside *: Error: Cannot modify readonly property RO::$p
+int(1)
+inside: Error: Cannot modify readonly property RO::$p
+outside: Error: Cannot modify readonly property RO::$p
+outside *: Error: Cannot modify readonly property RO::$p
+int(1)
+inside: Error: Cannot modify readonly property RO::$p
+outside: Error: Cannot modify readonly property RO::$p
+outside *: Error: Cannot modify readonly property RO::$p
+int(1)
+-- a narrower set visibility
+inside: int(2)
+child: Error: Cannot modify private(set) property PS::$p from scope PS2
+outside: Error: Cannot modify private(set) property PS::$p from global scope
+int(2)
+inside: int(2)
+child: Error: Cannot modify private(set) property PS::$p from scope PS2
+outside: Error: Cannot modify private(set) property PS::$p from global scope
+int(2)
+inside: int(2)
+child: Error: Cannot modify private(set) property PS::$p from scope PS2
+outside: Error: Cannot modify private(set) property PS::$p from global scope
+int(2)
+-- a property that is a reference
+int(3)
+int(3)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+typed: TypeError
+int(9223372036854775807)
+int(9223372036854775806)
+int(9223372036854775806)
+int(3)
+int(3)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+typed: TypeError
+int(9223372036854775807)
+int(9223372036854775806)
+int(9223372036854775806)
+int(3)
+int(3)
+float(9.223372036854776E+18)
+float(9.223372036854776E+18)
+typed: TypeError
+int(9223372036854775807)
+int(9223372036854775806)
+int(9223372036854775806)
+-- hooks
+get
+set 3
+get
+set 9
+int(3)
+int(9)
+int(2)
+int(3)
+get
+set 3
+get
+set 9
+int(3)
+int(9)
+int(2)
+int(3)
+get
+set 3
+get
+set 9
+int(3)
+int(9)
+int(2)
+int(3)
+-- magic, unset and undefined
+int(2)
+__get p
+__set p
+__get p
+__set p
+int(42)
+int(44)
+__get q
+__set q
+__get q
+__set q
+int(41)
+int(42)
+__get hidden
+__set hidden
+int(41)
+int(2)
+__get p
+__set p
+__get p
+__set p
+int(42)
+int(44)
+__get q
+__set q
+__get q
+__set q
+int(41)
+int(42)
+__get hidden
+__set hidden
+int(41)
+int(2)
+__get p
+__set p
+__get p
+__set p
+int(42)
+int(44)
+__get q
+__set q
+__get q
+__set q
+int(41)
+int(42)
+__get hidden
+__set hidden
+int(41)
+uninitialized: Error: Typed property UT::$p must not be accessed before initialization
+initialized: int(2)
+unset: Error: Typed property UT::$p must not be accessed before initialization
+
+Warning: Undefined property: U::$p in %s on line 16
+unset untyped: int(1)
+again: float(9.223372036854776E+18)
+dynamic: float(9.223372036854776E+18)
+dynamic: int(12)
+uninitialized: Error: Typed property UT::$p must not be accessed before initialization
+initialized: int(2)
+unset: Error: Typed property UT::$p must not be accessed before initialization
+
+Warning: Undefined property: U::$p in %s on line 16
+unset untyped: int(1)
+again: float(9.223372036854776E+18)
+dynamic: float(9.223372036854776E+18)
+dynamic: int(12)
+uninitialized: Error: Typed property UT::$p must not be accessed before initialization
+initialized: int(2)
+unset: Error: Typed property UT::$p must not be accessed before initialization
+
+Warning: Undefined property: U::$p in %s on line 16
+unset untyped: int(1)
+again: float(9.223372036854776E+18)
+dynamic: float(9.223372036854776E+18)
+dynamic: int(12)
+-- $this and a constant operand
+int(5)
+int(20)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.8446744073709552E+19)
+typed: TypeError: Cannot assign float to property K::$n of type int
+int(9223372036854775807)
+int(5)
+int(20)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.8446744073709552E+19)
+typed: TypeError: Cannot assign float to property K::$n of type int
+int(9223372036854775807)
+int(5)
+int(20)
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.8446744073709552E+19)
+typed: TypeError: Cannot assign float to property K::$n of type int
+int(9223372036854775807)
+-- one name, two properties: the private one of the method's class
+int(2)
+int(200)
+int(3)
+int(400)
+int(401)
+int(2)
+int(200)
+int(3)
+int(400)
+int(401)
+int(2)
+int(200)
+int(3)
+int(400)
+int(401)
+-- the value the result replaces is released at the assignment
+before
+destruct
+after
+int(1)
+before
+destruct
+after
+int(1)
+before
+destruct
+after
+int(1)
+-- the other operators
+U div 2: float(3.5)
+  left: float(3.5)
+U div 0: DivisionByZeroError: Division by zero
+  left: int(7)
+U div 64: float(0.109375)
+  left: float(0.109375)
+U div -1: int(-7)
+  left: int(-7)
+U mod 2: int(1)
+  left: int(1)
+U mod 0: DivisionByZeroError: Modulo by zero
+  left: int(7)
+U mod 64: int(7)
+  left: int(7)
+U mod -1: int(0)
+  left: int(0)
+U pow_ 2: int(49)
+  left: int(49)
+U pow_ 0: int(1)
+  left: int(1)
+U pow_ 64: float(1.2197604876358358E+54)
+  left: float(1.2197604876358358E+54)
+U pow_ -1: float(0.14285714285714285)
+  left: float(0.14285714285714285)
+U cat 2: string(2) "72"
+  left: string(2) "72"
+U cat 0: string(2) "70"
+  left: string(2) "70"
+U cat 64: string(3) "764"
+  left: string(3) "764"
+U cat -1: string(3) "7-1"
+  left: string(3) "7-1"
+U shl 2: int(28)
+  left: int(28)
+U shl 0: int(7)
+  left: int(7)
+U shl 64: int(0)
+  left: int(0)
+U shl -1: ArithmeticError: Bit shift by negative number
+  left: int(7)
+U bor 2: int(7)
+  left: int(7)
+U bor 0: int(7)
+  left: int(7)
+U bor 64: int(71)
+  left: int(71)
+U bor -1: int(-1)
+  left: int(-1)
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in %s on line 19
+T div 2: converted
+  left: int(3)
+T div 0: DivisionByZeroError: Division by zero
+
+Deprecated: Implicit conversion from float 0.109375 to int loses precision in %s on line 19
+T div 64: converted
+  left: int(0)
+T div -1: int(-7)
+  left: int(-7)
+T mod 2: int(1)
+  left: int(1)
+T mod 0: DivisionByZeroError: Modulo by zero
+T mod 64: int(7)
+  left: int(7)
+T mod -1: int(0)
+  left: int(0)
+T pow_ 2: int(49)
+  left: int(49)
+T pow_ 0: int(1)
+  left: int(1)
+T pow_ 64: TypeError: Cannot assign float to property T::$p of type int
+  left: int(7)
+
+Deprecated: Implicit conversion from float 0.14285714285714285 to int loses precision in %s on line 21
+T pow_ -1: converted
+  left: int(0)
+T cat 2: converted
+  left: int(72)
+T cat 0: converted
+  left: int(70)
+T cat 64: converted
+  left: int(764)
+T cat -1: TypeError: Cannot assign string to property T::$p of type int
+  left: int(7)
+T shl 2: int(28)
+  left: int(28)
+T shl 0: int(7)
+  left: int(7)
+T shl 64: int(0)
+  left: int(0)
+T shl -1: ArithmeticError: Bit shift by negative number
+T bor 2: int(7)
+  left: int(7)
+T bor 0: int(7)
+  left: int(7)
+T bor 64: int(71)
+  left: int(71)
+T bor -1: int(-1)
+  left: int(-1)
