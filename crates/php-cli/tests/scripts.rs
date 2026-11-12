@@ -202,27 +202,64 @@ fn check_with(exe: &std::ffi::OsStr, options: &[&std::ffi::OsStr]) {
     assert!(!scripts.is_empty(), "no scripts in {}", dir.display());
     let mut failures = Vec::new();
     for script in &scripts {
-        // Bytes: a script may print text in another encoding (XMLWriter's ISO-8859-1).
-        let want = std::fs::read(script.with_extension("out")).expect("expected output");
-        let out = Command::new(exe).args(options).arg(script).output().expect("run p8");
-        if String::from_utf8_lossy(&out.stderr).contains("p8: not using the package") {
-            failures.push(format!("{}: the package was not used", script.display()));
-        }
-        let shown = std::fs::canonicalize(script).expect("canonical path");
-        let got = replace(&out.stdout, shown.to_string_lossy().as_bytes(), b"%s");
-        if got != want {
-            let (got, want) = (String::from_utf8_lossy(&got), String::from_utf8_lossy(&want));
-            let line = got.lines().zip(want.lines()).position(|(g, w)| g != w).unwrap_or(got.lines().count().min(want.lines().count()));
-            failures.push(format!(
-                "{}: first difference at line {}\n  got:  {:?}\n  want: {:?}",
-                script.display(),
-                line + 1,
-                got.lines().nth(line),
-                want.lines().nth(line)
-            ));
-        }
+        run_script(exe, options, script, &mut failures);
     }
     assert!(failures.is_empty(), "{} of {} scripts differ:\n{}", failures.len(), scripts.len(), failures.join("\n"));
+}
+
+/// `script` run by `exe` with `options`: where what it prints is not its
+/// NAME.out, added to `failures`.
+fn run_script(exe: &std::ffi::OsStr, options: &[&std::ffi::OsStr], script: &Path, failures: &mut Vec<String>) {
+    // Bytes: a script may print text in another encoding (XMLWriter's ISO-8859-1).
+    let want = std::fs::read(script.with_extension("out")).expect("expected output");
+    let out = Command::new(exe).args(options).arg(script).output().expect("run p8");
+    if String::from_utf8_lossy(&out.stderr).contains("p8: not using the package") {
+        failures.push(format!("{}: the package was not used", script.display()));
+    }
+    let shown = std::fs::canonicalize(script).expect("canonical path");
+    let got = replace(&out.stdout, shown.to_string_lossy().as_bytes(), b"%s");
+    if got != want {
+        let (got, want) = (String::from_utf8_lossy(&got), String::from_utf8_lossy(&want));
+        let line = got.lines().zip(want.lines()).position(|(g, w)| g != w).unwrap_or(got.lines().count().min(want.lines().count()));
+        failures.push(format!(
+            "{}: first difference at line {}\n  got:  {:?}\n  want: {:?}",
+            script.display(),
+            line + 1,
+            got.lines().nth(line),
+            want.lines().nth(line)
+        ));
+    }
+}
+
+/// tests/scripts_later/NAME.php prints its NAME.out: what PHP 8.6 printed
+/// for a script p8 does not run as PHP does yet (recorded as tests/scripts'
+/// are). Each test of one is ignored, with the issue that will make it
+/// pass; the script moves to tests/scripts when it does.
+fn later(name: &str) {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts_later").join(name).with_extension("php");
+    let mut failures = Vec::new();
+    run_script(env!("CARGO_BIN_EXE_p8").as_ref(), &[], &script, &mut failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// PHP takes a method call's receiver and finds its method before the
+/// arguments run (INIT_METHOD_CALL, then the sends): an argument that
+/// replaces the receiver's variable does not change the method called,
+/// and a call on null or of a method that is not there is an error
+/// before any argument runs. p8 does both in the call, after them.
+#[test]
+#[ignore = "#490: p8 takes a method call's receiver and finds the method after the arguments have run"]
+fn later_method_call_order() {
+    later("method_call_order");
+}
+
+/// The same order, for a variable that is not set: PHP's error for a call
+/// on null, or of a method that is not there, comes with no "Undefined
+/// variable" warning before it (the variable is never read).
+#[test]
+#[ignore = "#490: p8 reads a method call's arguments before it finds the method (a warning before the error)"]
+fn later_method_call_error_first() {
+    later("method_call_error_first");
 }
 
 /// `haystack` with every `from` replaced by `to`.

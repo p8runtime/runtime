@@ -666,13 +666,14 @@ impl Context<'_> {
                             _ => None,
                         });
                         // A miss (a class or scope the site has not seen, a
-                        // megamorphic site): the class's method by name
-                        // (`method_takes_ref_out`), as `step` asks.
+                        // megamorphic site): the method the call will run,
+                        // found by name (`call_takes_ref_out`), as `step`
+                        // asks.
                         let by_ref = match by_ref {
                             Some(by_ref) => by_ref,
                             None => match self.cached_takes_ref_out(&clo.methods[method], &o.class, n) {
                                 Some(by_ref) => by_ref,
-                                None => self.method_takes_ref_out(&o.class, clo.code.sites[method].sym, n),
+                                None => self.call_takes_ref_out(&o.class, clo.code.sites[method].sym, n),
                             },
                         };
                         if by_ref {
@@ -1453,8 +1454,8 @@ impl Context<'_> {
                     // Whether `$o->m(..)` takes argument c by reference, when
                     // the call site's cache knows the method for this class
                     // and scope (`cached_takes_ref`, a user method's or a
-                    // native one's); a miss asks the class by name
-                    // (`method_takes_ref_out`, as `step` does); not an
+                    // native one's); a miss finds the method the call will
+                    // run (`call_takes_ref_out`, as `step` does); not an
                     // object (through a reference either): no.
                     Op::MethodArgByRef => {
                         ops!(a, b, c, imm);
@@ -1475,7 +1476,7 @@ impl Context<'_> {
                         let n = usize::from(c);
                         let by_ref = match self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, n) {
                             Some(by_ref) => by_ref,
-                            None => self.method_takes_ref_out(&o.class, clo.code.sites[imm as usize].sym, n),
+                            None => self.call_takes_ref_out(&o.class, clo.code.sites[imm as usize].sym, n),
                         };
                         done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
                     }
