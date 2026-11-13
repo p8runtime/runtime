@@ -537,21 +537,37 @@ fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
 /// see it, an object not lazy, and a value there (an unset one takes the
 /// full path: its warning, __get). Inline: the loop's property reads are
 /// its most frequent instructions after moves and jumps, and a call
-/// returned the value through memory.
+/// returned the value through memory. (An empty entry's class is 0, no
+/// class's address: the class compare alone turns it away.)
 #[inline(always)]
 pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
-    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, |v| {
-        if v.is_undef() {
-            None
-        } else if let Some(cell) = v.as_reference() {
-            Some(cell.borrow().clone())
-        } else {
-            Some(v.clone())
-        }
-    })
+    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, slot_copy)
+}
+
+/// `cached_prop`'s look at the slot: None for an unset one, else a copy
+/// of the value (of the referenced one, for a reference). A named
+/// function, inline always: as a closure, the loop kept it out of line,
+/// a call per read with the slot's value spilled around it (1,054,873
+/// reads on WordPress's front page, ~15 instructions each in the call).
+#[inline(always)]
+fn slot_copy(v: &Value) -> Option<Value> {
+    if v.is_undef() {
+        None
+    } else if let Some(cell) = v.as_reference() {
+        Some(ref_copy(cell))
+    } else {
+        Some(v.clone())
+    }
+}
+
+/// A copy of the value a property's reference holds (`slot_copy`'s rare
+/// case, out of line: the borrow's checks stay out of every arm).
+#[inline(never)]
+fn ref_copy(cell: &RefCell<Value>) -> Value {
+    cell.borrow().clone()
 }
 
 /// The cache entry for property `name` of `o`'s class at `slot` (`prop`,
@@ -660,7 +676,7 @@ pub(crate) fn refill_prop(site: &Cell<PropSite>, o: &p8_runtime::object::Object,
 /// one there may be theirs).
 #[inline]
 pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<usize> {
-    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
     let slot = site.slot as usize;
@@ -681,7 +697,7 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
 /// else is the full write's.
 #[inline(always)]
 pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: (usize, Option<&Class>), v: &Value, reinit: bool) -> Option<(usize, Plain)> {
-    if site.class == 0 || site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope.0) || o.lazy.get() != 0 {
+    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope.0) || o.lazy.get() != 0 {
         return None;
     }
     if v.is_undef() || v.is_reference() {
