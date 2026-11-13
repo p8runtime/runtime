@@ -365,17 +365,17 @@ TypeError: intdiv(): Argument #1 ($num1) must be of type int, string given
 '+' false 0 0.0
 '.' false 0 0.0
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(1) "b"
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(2) "aa"
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(2) "Ba"
 int(10)
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(2) "b0"
 int(2)
 float(2.5)
@@ -383,8 +383,8 @@ int(0)
 int(2)
 float(101)
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(1) "1"
 
-Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in /home/sami/p8-perf/queue/num/t/numeric_strings_first_byte.php on line 103
+Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead in %s on line 103
 string(1) "_"
