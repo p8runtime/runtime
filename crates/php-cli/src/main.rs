@@ -267,6 +267,19 @@ fn php(cli: Cli) -> i32 {
                 eprintln!("request {request}: {:.3} ms", started.elapsed().as_secs_f64() * 1e3);
             }
         }
+        // The last request has ended: its destructors, shutdown functions
+        // and output buffers have run and its state is gone (`drop(context)`
+        // above), and the process exits next. What is left is memory no PHP
+        // code can see: the compiled code (every file's functions, classes
+        // and constants, kept by `platform`) and the isolate's tables made
+        // from it. Freeing them value by value would only hand them back to
+        // an allocator about to be torn down, so the exit takes them with
+        // the rest of the process's memory, as PHP's CLI frees its request
+        // memory in one go. A server (`p8 serve`, `-S`) keeps its platform
+        // and isolates for request after request and frees each request's
+        // state as it ends; this is only the command line's way out.
+        std::mem::forget(isolate);
+        std::mem::forget(platform);
         status
     })
 }

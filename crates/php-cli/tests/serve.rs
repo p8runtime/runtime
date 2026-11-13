@@ -600,3 +600,41 @@ class A { private function m(&$x) { $x .= '+hidden'; return 'hidden'; } public f
         assert_eq!(fetch(serve.port, "/three.php").1, "three v three v three v ");
     }
 }
+
+/// The resident memory of process `pid`, in KiB (`ps -o rss=`).
+fn resident_kib(pid: u32) -> u64 {
+    let out = run("ps", &["-o", "rss=", "-p", &pid.to_string()]);
+    let rss = text(&out.stdout);
+    rss.trim().parse().unwrap_or_else(|_| panic!("ps's resident size of {pid}: {rss:?}"))
+}
+
+/// A long-running server gives back what each request took: one worker
+/// answers 2,000 requests, each running code compiled for it alone (an
+/// eval of source no request ran before) beside code compiled once for
+/// the worker (lib.php's interface, class, function and closure), and
+/// each making values of its own (strings, objects, a closure). Its
+/// resident memory after the last 1,500 is what it was after the first
+/// 500, within 4 MiB: a server that kept each request's context grows by
+/// about 50 MiB here.
+#[test]
+fn a_long_running_server_frees_each_requests_code() {
+    let lib = "<?php interface Shape { public function area(): int; }
+final class Square implements Shape { public function __construct(private int $side) {} public function area(): int { return $this->side * $this->side; } }
+function total(array $shapes, Closure $f): int { return array_sum(array_map($f, $shapes)); }\n";
+    let page = "<?php require __DIR__ . '/lib.php';
+$n = (int) $_GET['n'];
+$sum = eval(\"return $n * 2 + 1;\");
+$words = []; for ($i = 0; $i < 2000; $i++) { $words[] = str_repeat(chr(97 + $i % 26), 40) . $n; }
+$shapes = []; for ($i = 0; $i < 50; $i++) { $shapes[] = new Square($i); }
+echo $sum, ' ', count($words), ' ', total($shapes, fn(Shape $s) => $s->area());";
+    let dir = site("long_running", &[("lib.php", lib), ("page.php", page)]);
+    let serve = Serve::start_with(&dir, &["--workers", "1"]);
+    let pid = serve.child.id();
+    let mut request = |n: usize| assert_eq!(fetch(serve.port, &format!("/page.php?n={n}")).1, format!("{} 2000 40425", n * 2 + 1));
+    (0..500).for_each(&mut request);
+    let warm = resident_kib(pid);
+    (500..2000).for_each(&mut request);
+    let after = resident_kib(pid);
+    eprintln!("resident: {warm} KiB after 500 requests, {after} KiB after 2,000");
+    assert!(after <= warm + 4096, "resident memory grew from {warm} KiB to {after} KiB over 1,500 requests");
+}
