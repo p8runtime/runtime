@@ -300,10 +300,27 @@ fn r(reg: Reg) -> Option<u8> {
     u8::try_from(reg).ok()
 }
 
-/// The executed form of `func`'s code: one `Insn` per `Instr`.
+/// The executed form of `func`'s code: one `Insn` per `Instr`, `Op::Slow`
+/// for one the loop does not run inline.
+///
+/// One function, called once per function compiled: its loop holds
+/// `lower_in`, the operands' classification (`opnd`) and the encoders
+/// (`enc`), all inlined into it, so that an instruction lowered is no
+/// call. Every script that is compiled pays this per instruction; laid
+/// out as calls (a closure per instruction, and each helper a call from
+/// it) it cost WordPress's front page 13.8 M machine instructions (#413).
+/// Never inlined itself, so that what is inlined into it does not depend
+/// on how large its caller is.
+#[inline(never)]
 pub fn lower(func: &Function) -> Vec<Insn> {
     let code = &func.code;
-    (0..code.len()).map(|pc| lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars).unwrap_or(SLOW)).collect()
+    let mut insns = vec![SLOW; code.len()];
+    for (pc, insn) in (0..code.len()).zip(&mut insns) {
+        if let Some(lowered) = lower_in(code, pc, &func.consts, func.ncv, &func.classes, &func.arg_vars) {
+            *insn = lowered;
+        }
+    }
+    insns
 }
 
 /// A class reference as the flag of an instruction that names a class:
@@ -322,6 +339,8 @@ fn class_flag(classes: &[ClassRef], class: u16) -> Option<Opnd> {
 
 /// `$x::class`: the register of class reference `class` when it is a
 /// class in a register (`Dynamic`) and `name` is the literal `class`.
+/// (Inlined into `lower`.)
+#[inline(always)]
 fn dynamic_class_name(classes: &[ClassRef], class: u16, name: Reg, consts: &[Frozen]) -> Option<Reg> {
     let ClassRef::Dynamic(src) = *classes.get(usize::from(class))? else { return None };
     match consts.get(const_index(name)?)? {
@@ -345,7 +364,8 @@ fn k(reg: Reg, nconsts: usize) -> Option<u32> {
 /// Constant `i` as an operand: of its type. `KStr` is a string that is not
 /// a canonical integer, so a KSTR handler looks it up as a string key
 /// with no numeric test; a numeric one is `K` (a dimension's is its int:
-/// `key_opnd`).
+/// `key_opnd`). (Inlined into `lower`, as `opnd` is.)
+#[inline(always)]
 fn konst(consts: &[Frozen], i: usize) -> Option<Opnd> {
     Some(match consts.get(i)? {
         Frozen::Int(_) => Opnd::KInt(i as u32),
@@ -356,6 +376,9 @@ fn konst(consts: &[Frozen], i: usize) -> Option<Opnd> {
 
 /// A register or constant operand, classified: a temporary or a variable
 /// (by `ncv`), a literal by its type. None for a constant past the table.
+/// (Inlined into `lower`: most instructions lowered classify an operand
+/// or three.)
+#[inline(always)]
 fn opnd(reg: Reg, consts: &[Frozen], ncv: Reg) -> Option<Opnd> {
     match const_index(reg) {
         Some(i) => konst(consts, i),
@@ -392,9 +415,9 @@ fn lower_at(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg) -> Option<In
 }
 
 /// The instruction at `pc` lowered; `classes` and `arg_vars` are the
-/// function's (`Function::classes`, `Function::arg_vars`). Inlined into
-/// `lower`'s loop, where it was before it took the two tables: a call per
-/// instruction is paid by every script that is compiled.
+/// function's (`Function::classes`, `Function::arg_vars`). The body of
+/// `lower`'s loop, inlined into it (its other caller is the unit tests'
+/// `lower_at`).
 #[inline(always)]
 fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[ClassRef], arg_vars: &[Vec<(u8, Reg)>]) -> Option<Insn> {
     let nconsts = consts.len();
@@ -413,14 +436,6 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             (None, Some(kb)) => Some((cmp, a, kb)),
             // (`K <=> $b` is not `$b <=> K`: it keeps its order, in `step`.)
             (Some(ka), None) if cmp != Cmp::Spaceship => Some((swapped(cmp), b, ka)),
-            _ => None,
-        }
-    };
-    // `dst = a op K`, or `K op b` (CONST_LEFT).
-    let bin_c = |op: BinOp, dst: Reg, a: Reg, b: Reg| -> Option<Insn> {
-        match (k(a), k(b)) {
-            (None, Some(kb)) => i(Op::BinaryC, dst, a, 0, binop_imm(op) | kb << 8),
-            (Some(ka), None) => i(Op::BinaryC, dst, b, 0, binop_imm(op) | CONST_LEFT | ka << 8),
             _ => None,
         }
     };
@@ -493,8 +508,15 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let when = Opnd::Flag(if when { kinds::T } else { kinds::F });
             enc::jump_cmp(enc::JumpCmp { cmp: Opnd::Flag(cmp_flag(cmp)?), when, a: o(a)?, b: o(b)?, target: Opnd::Imm(target) })
         }
-        Instr::Move { dst, src } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? })),
-        Instr::LoadConst { dst, k: kk } => call_regs(code, pc).or_else(|| enc::mov(enc::Mov { dst: o(dst)?, src: konst(consts, usize::from(kk))? })),
+        // (The first of a call's argument moves is the call: `call_regs`.)
+        Instr::Move { dst, src } => match call_regs(code, pc) {
+            Some(call) => Some(call),
+            None => enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? }),
+        },
+        Instr::LoadConst { dst, k: kk } => match call_regs(code, pc) {
+            Some(call) => Some(call),
+            None => enc::mov(enc::Mov { dst: o(dst)?, src: konst(consts, usize::from(kk))? }),
+        },
         Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
         Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
@@ -557,10 +579,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::SendVarMethod { word, n, arg, var } if n < crate::callee::REF_BITS => i(Op::SendVarMethod, word, arg, var, u32::from(n)),
         // (The word's register, the one after the receiver's, is in the
         // window too.)
-        Instr::InitMethod { recv, obj, method, argc } => {
+        Instr::InitMethod { recv, obj, method } => {
             r(recv + 1)?;
             let this = obj == THIS;
-            i(Op::InitMethod, recv, if this { 0 } else { obj }, Reg::from(this), u32::from(method) | u32::from(argc) << 16)
+            i(Op::InitMethod, recv, if this { 0 } else { obj }, Reg::from(this), u32::from(method))
         }
         Instr::Jump { target } => i(Op::Jump, 0, 0, 0, target),
         Instr::Compare { cmp, dst, a, b } => match cmp_c(cmp, a, b) {
@@ -585,7 +607,13 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             Some(kk) => wide(Op::DecJumpGeC, var, kk, target),
             None => i(Op::DecJumpGe, var, b, 0, target),
         },
-        Instr::Binary { op, dst, a, b } => bin_c(op, dst, a, b).or_else(|| i(Op::Binary, dst, a, b, binop_imm(op))),
+        // `dst = a op K`, or `K op b` (CONST_LEFT). (One that does not fit
+        // BinaryC does not fit Binary either: its constant is no register.)
+        Instr::Binary { op, dst, a, b } => match (k(a), k(b)) {
+            (None, Some(kb)) => i(Op::BinaryC, dst, a, 0, binop_imm(op) | kb << 8),
+            (Some(ka), None) => i(Op::BinaryC, dst, b, 0, binop_imm(op) | CONST_LEFT | ka << 8),
+            _ => i(Op::Binary, dst, a, b, binop_imm(op)),
+        },
         // (`+` and `*` commute: a literal on the left goes to the right.)
         Instr::Add { dst, a, b } => match (k(a), k(b)) {
             (None, Some(kk)) => i(Op::AddC, dst, a, 0, kk),
@@ -1127,10 +1155,10 @@ mod tests {
             Instr::MethodArgByRef { dst: 6, word: 20, n: crate::callee::REF_BITS },
             Instr::SendVarMethod { word: 20, n: 1, arg: 22, var: 1 },
             Instr::SendVarMethod { word: 20, n: crate::callee::REF_BITS, arg: 22, var: 1 },
-            Instr::InitMethod { recv: 19, obj: 1, method: 5, argc: 2 },
-            Instr::InitMethod { recv: 19, obj: THIS, method: 5, argc: 2 },
+            Instr::InitMethod { recv: 19, obj: 1, method: 5 },
+            Instr::InitMethod { recv: 19, obj: THIS, method: 5 },
             // The word's register past the window: not inline.
-            Instr::InitMethod { recv: 255, obj: 1, method: 5, argc: 2 },
+            Instr::InitMethod { recv: 255, obj: 1, method: 5 },
             Instr::MethodCallNow { dst: 6, obj: 1, method: 5, base: 20, argc: 2 },
             Instr::MethodCallNow { dst: 6, obj: THIS, method: 5, base: 20, argc: 0 },
         ];
@@ -1149,8 +1177,8 @@ mod tests {
         assert!(at(10).is_none());
         assert_eq!(at(11).unwrap(), Insn { op: Op::SendVarMethod, a: 20, b: 22, c: 1, imm: 1 });
         assert!(at(12).is_none());
-        assert_eq!(at(13).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 1, c: 0, imm: 5 | 2 << 16 });
-        assert_eq!(at(14).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 0, c: 1, imm: 5 | 2 << 16 });
+        assert_eq!(at(13).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 1, c: 0, imm: 5 });
+        assert_eq!(at(14).unwrap(), Insn { op: Op::InitMethod, a: 19, b: 0, c: 1, imm: 5 });
         assert!(at(15).is_none());
         assert_eq!(at(16).unwrap(), Insn { op: Op::MethodCallNow, a: 6, b: 1, c: 20, imm: 5 | 2 << 16 });
         assert_eq!(at(17).unwrap(), Insn { op: Op::MethodCallNow, a: 6, b: 0, c: 20, imm: 5 | 1 << 24 });

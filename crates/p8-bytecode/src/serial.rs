@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 30;
+pub const FORMAT: u32 = 31;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -852,7 +852,7 @@ impl Code for Instr {
             Instr::Call { site, base, argc, dst } => { w.byte(47); site.put(w); base.put(w); argc.put(w); dst.put(w); }
             Instr::SendVar { site, n, arg, var } => { w.byte(48); site.put(w); n.put(w); arg.put(w); var.put(w); }
             Instr::SendVarMethod { word, n, arg, var } => { w.byte(49); word.put(w); n.put(w); arg.put(w); var.put(w); }
-            Instr::InitMethod { recv, obj, method, argc } => { w.byte(109); recv.put(w); obj.put(w); method.put(w); argc.put(w); }
+            Instr::InitMethod { recv, obj, method } => { w.byte(109); recv.put(w); obj.put(w); method.put(w); }
             Instr::SendVarStatic { class, method, n, arg, var } => { w.byte(50); class.put(w); method.put(w); n.put(w); arg.put(w); var.put(w); }
             Instr::MethodArgByRef { dst, word, n } => { w.byte(51); dst.put(w); word.put(w); n.put(w); }
             Instr::StaticArgByRef { dst, class, method, n } => { w.byte(52); dst.put(w); class.put(w); method.put(w); n.put(w); }
@@ -1026,7 +1026,7 @@ impl Code for Instr {
             106 => Instr::Clone { dst: Code::get(r)?, src: Code::get(r)? },
             107 => Instr::Rare { op: Code::get(r)?, a: Code::get(r)?, b: Code::get(r)?, c: Code::get(r)?, class: Code::get(r)? },
             108 => Instr::LoadConst { dst: Code::get(r)?, k: Code::get(r)? },
-            109 => Instr::InitMethod { recv: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, argc: Code::get(r)? },
+            109 => Instr::InitMethod { recv: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)? },
             110 => Instr::MethodCallNow { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
             _ => return Err(Bad),
         })

@@ -233,14 +233,14 @@ pub enum Instr {
     /// Pass variable `var` as argument `n` of `site` into `arg`: by
     /// reference if the callee takes it so, else its value
     SendVar { site: u16, n: u8, arg: Reg, var: Reg },
-    /// Start `$obj->method(argc arguments)` (PHP's INIT_METHOD_CALL): the
+    /// Start `$obj->method(..)` (PHP's INIT_METHOD_CALL): the
     /// receiver is read now and kept in temporary `recv` (an argument
     /// evaluated later cannot replace it; `obj` is THIS for the running
     /// method's `$this`, and may be `recv` itself: a temporary captured in
     /// place), the method is found now (the errors of finding it come
     /// before any argument runs), and `recv + 1` gets the callee's word
     /// (`callee`) for the sends and the call to read.
-    InitMethod { recv: Reg, obj: Reg, method: u16, argc: u8 },
+    InitMethod { recv: Reg, obj: Reg, method: u16 },
     /// The same for a method call: bit `n` of the callee's word in `word`
     /// (InitMethod's) decides (PHP's SEND_VAR_EX).
     SendVarMethod { word: Reg, n: u8, arg: Reg, var: Reg },
