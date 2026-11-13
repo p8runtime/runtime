@@ -231,35 +231,6 @@ fn run_script(exe: &std::ffi::OsStr, options: &[&std::ffi::OsStr], script: &Path
     }
 }
 
-/// tests/scripts_later/NAME.php prints its NAME.out: what PHP 8.6 printed
-/// for a script p8 does not run as PHP does yet (recorded as tests/scripts'
-/// are). Each test of one is ignored, with the issue that will make it
-/// pass; the script moves to tests/scripts when it does.
-fn later(name: &str) {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/scripts_later").join(name).with_extension("php");
-    let mut failures = Vec::new();
-    run_script(env!("CARGO_BIN_EXE_p8").as_ref(), &[], &script, &mut failures);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// PHP takes a method call's receiver and finds its method before the
-/// arguments run (INIT_METHOD_CALL, then the sends): an argument that
-/// replaces the receiver's variable does not change the method called,
-/// and a call on null or of a method that is not there is an error
-/// before any argument runs. p8 does the same (`InitMethod`, #490).
-#[test]
-fn later_method_call_order() {
-    later("method_call_order");
-}
-
-/// The same order, for a variable that is not set: PHP's error for a call
-/// on null, or of a method that is not there, comes with no "Undefined
-/// variable" warning before it (the variable is never read).
-#[test]
-fn later_method_call_error_first() {
-    later("method_call_error_first");
-}
-
 /// `haystack` with every `from` replaced by `to`.
 fn replace(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(haystack.len());

@@ -365,9 +365,8 @@ hand ArrayPushC
 /// VAL_CONST; the constants in imm bits 0..14 and 14..28; TAKE as
 /// ArraySet's)
 hand ArraySetC
-/// start a call of method site imm & 0xffff with imm >> 16 arguments: a =
-/// the receiver (the object in b, or `$this` when c), a + 1 = the word of
-/// the method found on it
+/// start a call of method site imm: a = the receiver (the object in b, or
+/// `$this` when c), a + 1 = the word of the method found on it
 hand InitMethod
 /// a = (the object in b, or `$this` when imm >> 24)->(method site imm &
 /// 0xffff) with the (imm >> 16 & 0xff) literal arguments at c: InitMethod

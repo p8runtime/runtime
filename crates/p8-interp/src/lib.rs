@@ -1923,7 +1923,7 @@ impl Context<'_> {
                     }
                 }
                 Instr::SendVar { site, n, arg, var } => return self.send_var_ops(regs, clo, base, at, (site, n, arg, var)),
-                Instr::InitMethod { recv, obj, method, argc } => return self.init_method_ops(regs, clo, base, at, (recv, obj, method, argc)),
+                Instr::InitMethod { recv, obj, method } => return self.init_method_ops(regs, clo, base, at, (recv, obj, method)),
                 Instr::SendVarMethod { word, n, arg, var } => {
                     let by_ref = self.word_takes_ref(&reg!(word), n as usize);
                     reg!(arg) = if by_ref { Value::reference(make_ref(w, var)) } else { self.operand(w, clo, var) };
@@ -2781,7 +2781,7 @@ impl Context<'_> {
     /// runs it, and the loop's InitMethod arm on a class or scope its site
     /// has not seen.
     #[inline(never)]
-    pub(crate) fn init_method_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (recv, obj, method, _argc): (Reg, Reg, u16, u8)) -> Result<Next, Throw> {
+    pub(crate) fn init_method_ops(&mut self, regs: &mut [Value], clo: &Closure, base: usize, at: usize, (recv, obj, method): (Reg, Reg, u16)) -> Result<Next, Throw> {
         let w = &mut regs[base..base + clo.code.nregs as usize];
         let target = self.prop_target(w, clo, obj)?;
         let slot = &clo.methods[method as usize];

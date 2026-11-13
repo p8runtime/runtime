@@ -1547,14 +1547,14 @@ impl Context<'_> {
                         let recv = rx!(a);
                         macro_rules! unseen {
                             () => {{
-                                let ops = (Reg::from(a), if c != 0 { p8_bytecode::THIS } else { Reg::from(b) }, (imm & 0xffff) as u16, (imm >> 16) as u8);
+                                let ops = (Reg::from(a), if c != 0 { p8_bytecode::THIS } else { Reg::from(b) }, imm as u16);
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.init_method_ops(regs, clo, base, at, ops))
                             }};
                         }
                         // The site's plain record (`UserMethod`), keyed by
                         // the class's and the scope's numbers: its word is
                         // the answer.
-                        let q = clo.methods[(imm & 0xffff) as usize].user.get();
+                        let q = clo.methods[imm as usize].user.get();
                         let this = if c != 0 {
                             let Some(this) = &top.this else { unseen!() };
                             if !q.is_for(&this.class, top.scope.as_ref()) {

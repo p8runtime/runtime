@@ -467,13 +467,13 @@ pub fn bytecode(defs: &Defs) -> String {
     s.push_str("}\n\n");
     s.push_str("/// Every generated opcode: (opcode, instruction, the kind of each operand).\n");
     let _ = writeln!(s, "pub static SPECS: &[(Op, &str, &[&str])] = &[\n{table}];\n");
-    s.push_str("/// The encoders: one per instruction, named after its handler. Each takes the operands\n/// (`Opnd`, classified by lowering) by name and gives the opcode of the first\n/// specialisation whose kinds they have, its operands packed; None when there is none, or\n/// a value does not fit its field.\npub mod enc {\n    use super::*;\n\n");
+    s.push_str("/// The encoders: one per instruction, named after its handler. Each takes the operands\n/// (`Opnd`, classified by lowering) by name and gives the opcode of the first\n/// specialisation whose kinds they have, its operands packed; None when there is none, or\n/// a value does not fit its field. Each is inlined into its caller, the lowering's loop:\n/// an instruction lowered is no call.\npub mod enc {\n    use super::*;\n\n");
     for d in &defs.ops {
         let fields: Vec<String> = d.operands.iter().map(|o| format!("pub {}: Opnd", o.name)).collect();
         let (ty, kinds) = (camel(&d.handler), d.operands.iter().map(|o| format!("{}={}", o.name, o.kinds.join("|"))).collect::<Vec<_>>().join(" "));
         let _ = writeln!(s, "    /// `{}`'s operands: {kinds}.\n    pub struct {ty} {{ {} }}\n", d.name, fields.join(", "));
         let param = if d.operands.is_empty() { "_" } else { "o" };
-        let _ = writeln!(s, "    pub fn {}({param}: {ty}) -> Option<Insn> {{", d.handler);
+        let _ = writeln!(s, "    #[inline(always)]\n    pub fn {}({param}: {ty}) -> Option<Insn> {{", d.handler);
         for sp in specs(d) {
             let field = |i: usize| format!("o.{}", d.operands[i].name);
             let test = sp.kinds.iter().enumerate().map(|(i, k)| format!("matches!({}, {})", field(i), matches(k))).collect::<Vec<_>>();

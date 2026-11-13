@@ -3846,17 +3846,17 @@ impl<'src> Compiler<'src> {
         Ok(dst)
     }
 
-    /// The start of `obj->m(argc arguments)` (InitMethod): two consecutive
+    /// The start of `obj->m(..)` (InitMethod): two consecutive
     /// temporaries, the receiver as captured (returned) and the word of
     /// the method found on it. A temporary this expression made for the
     /// receiver (`mark` is where its temporaries start) and made last is
     /// captured in place: no second copy, nothing to free after.
-    fn init_method(&mut self, f: &mut FnBuilder, obj: Reg, site: u16, argc: u8, mark: usize) -> Reg {
+    fn init_method(&mut self, f: &mut FnBuilder, obj: Reg, site: u16, mark: usize) -> Reg {
         let last = f.temps.wrapping_sub(1);
         let in_place = f.temps > mark && obj == reg(TEMP, last) && !f.ref_temps.contains(&last);
         let recv = if in_place { obj } else { f.temp() };
         f.temp();
-        f.emit(Instr::InitMethod { recv, obj, method: site, argc });
+        f.emit(Instr::InitMethod { recv, obj, method: site });
         recv
     }
 
@@ -5316,7 +5316,7 @@ impl<'src> Compiler<'src> {
                     f.emit(Instr::MethodCallNow { dst, obj, method: site, base, argc: args.len() as u8 });
                     return Ok(dst);
                 }
-                let recv = self.init_method(f, obj, site, args.len() as u8, mark);
+                let recv = self.init_method(f, obj, site, mark);
                 let word = recv + 1;
                 let (base, argc) =
                     self.method_args(f, args, |n, arg, var| Instr::SendVarMethod { word, n, arg, var }, |dst, n| Instr::MethodArgByRef { dst, word, n })?;
@@ -5624,7 +5624,7 @@ impl<'src> Compiler<'src> {
                 };
                 let text = self.text(*name);
                 let site = self.method_site(f, text);
-                let recv = self.init_method(f, obj, site, args.len() as u8, mark);
+                let recv = self.init_method(f, obj, site, mark);
                 let word = recv + 1;
                 let (base, argc) =
                     self.method_args(f, args, |n, arg, var| Instr::SendVarMethod { word, n, arg, var }, |dst, n| Instr::MethodArgByRef { dst, word, n })?;
