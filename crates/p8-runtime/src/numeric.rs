@@ -41,7 +41,20 @@ pub fn numeric_prefix(s: &[u8]) -> &[u8] {
 /// The value of the numeric prefix of `s` ("12abc" -> 12) and how many
 /// bytes of `s` it covers, or None when `s` does not start with a number.
 /// An integer that overflows is a float, as in PHP.
+///
+/// A number starts with whitespace, a sign, a digit or a `.`, all at or
+/// below `'9'`: any other first byte, or an empty string, is "not a
+/// number" without the parse (is_numeric_string_ex's `*str > '9'` test,
+/// inline in front of the out-of-line parse as in PHP).
+#[inline]
 pub fn leading_numeric(s: &[u8]) -> Option<(Number, usize)> {
+    match s.first() {
+        Some(&b) if b <= b'9' => parse_leading_numeric(s),
+        _ => None,
+    }
+}
+
+fn parse_leading_numeric(s: &[u8]) -> Option<(Number, usize)> {
     let prefix = numeric_prefix(s);
     if prefix.is_empty() {
         return None;
@@ -57,6 +70,7 @@ pub fn leading_numeric(s: &[u8]) -> Option<(Number, usize)> {
 
 /// The value of `s` if the whole string is numeric (leading and trailing
 /// whitespace allowed, as in PHP 8).
+#[inline]
 pub fn numeric_string(s: &[u8]) -> Option<Number> {
     let (value, end) = leading_numeric(s)?;
     s[end..].iter().all(|b| WHITESPACE.contains(b)).then_some(value)
@@ -127,6 +141,13 @@ mod tests {
         assert_eq!(numeric_string(b"-"), None);
         assert_eq!(numeric_string(b"1e"), None);
         assert_eq!(leading_numeric(b"1e"), Some((Number::Int(1), 1)));
+        // Every byte a number can start with is at or below '9'.
+        for (s, n) in [(&b" 1"[..], Some(Number::Int(1))), (b"\t-1", Some(Number::Int(-1))), (b"+1", Some(Number::Int(1))), (b".5", Some(Number::Float(0.5))), (b"9", Some(Number::Int(9)))] {
+            assert_eq!(leading_numeric(s).map(|(v, _)| v), n, "{s:?}");
+        }
+        for s in [&b"x1"[..], b":1", b"A1", b"_1", b"~1", b"\xd9\xa1", b"\x001", b"", b" ", b"-", b"."] {
+            assert_eq!(leading_numeric(s), None, "{s:?}");
+        }
     }
 
     #[test]
