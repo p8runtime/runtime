@@ -612,10 +612,10 @@ fn resident_kib(pid: u32) -> u64 {
 /// answers 2,000 requests, each running code compiled for it alone (an
 /// eval of source no request ran before) beside code compiled once for
 /// the worker (lib.php's interface, class, function and closure), and
-/// each holding about 100 KiB of its own (strings, objects, a closure).
-/// Its resident memory after the last 1,500 is what it was after the
-/// first 500, within 4 MiB: a request whose state or code were kept would
-/// grow it by well over 100 MiB.
+/// each making values of its own (strings, objects, a closure). Its
+/// resident memory after the last 1,500 is what it was after the first
+/// 500, within 4 MiB: a server that kept each request's context grows by
+/// about 50 MiB here.
 #[test]
 fn a_long_running_server_frees_each_requests_code() {
     let lib = "<?php interface Shape { public function area(): int; }
