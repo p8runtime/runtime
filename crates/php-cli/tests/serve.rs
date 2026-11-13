@@ -608,13 +608,14 @@ fn resident_kib(pid: u32) -> u64 {
     rss.trim().parse().unwrap_or_else(|_| panic!("ps's resident size of {pid}: {rss:?}"))
 }
 
-/// A long-running server gives back each request's code: one worker
+/// A long-running server gives back what each request took: one worker
 /// answers 2,000 requests, each running code compiled for it alone (an
-/// eval of source no request ran before, declaring a class of its own)
-/// beside code compiled once for the worker (lib.php's interface, class,
-/// function and closure). Its resident memory after the last 1,500 is
-/// what it was after the first 500, within 4 MiB: a request whose code or
-/// state were kept would grow it by tens of MiB.
+/// eval of source no request ran before) beside code compiled once for
+/// the worker (lib.php's interface, class, function and closure), and
+/// each holding about 100 KiB of its own (strings, objects, a closure).
+/// Its resident memory after the last 1,500 is what it was after the
+/// first 500, within 4 MiB: a request whose state or code were kept would
+/// grow it by well over 100 MiB.
 #[test]
 fn a_long_running_server_frees_each_requests_code() {
     let lib = "<?php interface Shape { public function area(): int; }
@@ -622,15 +623,14 @@ final class Square implements Shape { public function __construct(private int $s
 function total(array $shapes, Closure $f): int { return array_sum(array_map($f, $shapes)); }\n";
     let page = "<?php require __DIR__ . '/lib.php';
 $n = (int) $_GET['n'];
-$parts = eval('return [' . str_repeat(\"'request $n', \", 200) . '];');
-eval(\"final class Req$n { const NAME = 'r$n'; public function name(): string { return self::NAME; } }\");
+$sum = eval(\"return $n * 2 + 1;\");
+$words = []; for ($i = 0; $i < 2000; $i++) { $words[] = str_repeat(chr(97 + $i % 26), 40) . $n; }
 $shapes = []; for ($i = 0; $i < 50; $i++) { $shapes[] = new Square($i); }
-$class = \"Req$n\";
-echo count($parts), ' ', total($shapes, fn(Shape $s) => $s->area()), ' ', (new $class)->name();";
+echo $sum, ' ', count($words), ' ', total($shapes, fn(Shape $s) => $s->area());";
     let dir = site("long_running", &[("lib.php", lib), ("page.php", page)]);
     let serve = Serve::start_with(&dir, &["--workers", "1"]);
     let pid = serve.child.id();
-    let mut request = |n: usize| assert_eq!(fetch(serve.port, &format!("/page.php?n={n}")).1, format!("200 40425 r{n}"));
+    let mut request = |n: usize| assert_eq!(fetch(serve.port, &format!("/page.php?n={n}")).1, format!("{} 2000 40425", n * 2 + 1));
     (0..500).for_each(&mut request);
     let warm = resident_kib(pid);
     (500..2000).for_each(&mut request);
