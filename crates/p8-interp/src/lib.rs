@@ -7268,6 +7268,13 @@ fn match_case(v: &Value) -> String {
 
 /// foreach's next element: its value into `val` (and key into `key`), the
 /// position past it into the iterator. False when there is none.
+///
+/// The step is PHP's FE_FETCH_R: the element's count incremented inline
+/// (`Value::clone`; only a reference goes through `deref`), the old loop
+/// value released with `put_var`'s inline decrement (the free alone out
+/// of line), and the position written into the iterator's int in place.
+/// A destructor a release left due is the arm's to run (it tests
+/// `ids.has_pending()` after this).
 #[inline(never)]
 fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> bool {
     let pos = w[iter as usize + 1].as_int().map_or(0, |p| p as usize);
@@ -7277,17 +7284,27 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
     // only when the loop names it.
     let (p, v, k) = if has_key {
         let Some((p, k, v)) = a.entry_at(pos) else { return false };
-        (p, v.deref(), Some(k))
+        (p, element(v), Some(k))
     } else {
         let Some((p, v)) = a.value_at(pos) else { return false };
-        (p, v.deref(), None)
+        (p, element(v), None)
     };
-    w[iter as usize + 1] = Value::int(p as i64 + 1);
-    assign(w, val, v);
+    match w[iter as usize + 1].as_int_mut() {
+        Some(at) => *at = p as i64 + 1,
+        None => w[iter as usize + 1] = Value::int(p as i64 + 1),
+    }
+    let _ = put_var(&mut w[val as usize], v);
     if let Some(k) = k {
-        assign(w, key, k.into_value());
+        let _ = put_var(&mut w[key as usize], k.into_value());
     }
     true
+}
+
+/// A foreach-by-value copy of an element: the value itself, or the value
+/// a reference holds.
+#[inline(always)]
+fn element(v: &Value) -> Value {
+    if v.is_reference() { v.deref() } else { v.clone() }
 }
 
 /// Arithmetic on two numbers (and the bit operators on two ints), when no
