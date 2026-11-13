@@ -64,20 +64,49 @@ impl Frozen {
             Frozen::Int(i) => Value::int(*i),
             Frozen::Float(f) => Value::float(*f),
             Frozen::Str(s) => Value::str(PhpStr::from(s.as_bytes())),
-            Frozen::Array(entries) => {
-                let mut array = PhpArray::new();
-                for (k, v) in entries.iter() {
-                    match k.as_ref().map(|k| Key::from_value(&k.to_value())) {
-                        Some(Ok((key, _))) => array.insert(key, v.to_value()),
-                        _ => {
-                            let _ = array.push(v.to_value());
-                        }
-                    }
-                }
-                Value::array(array)
+            Frozen::Array(entries) => Value::array(array_of(entries)),
+        }
+    }
+
+    /// The key this constant names, made with no value in between (a
+    /// string key's handle is the key's own).
+    fn to_key(&self) -> Option<Key> {
+        match self {
+            Frozen::Int(i) => Some(Key::Int(*i)),
+            Frozen::Str(s) => Some(Key::from_string(PhpStr::from(s.as_bytes()))),
+            k => Key::from_value(&k.to_value()).ok().map(|(key, _)| key),
+        }
+    }
+}
+
+/// A literal array as a value, built as `[k => v, ...]` builds it: a list
+/// (every key absent, or the int of its position) as one vector, filled
+/// once; an array whose first key is a string as a hash sized for every
+/// entry; anything else entry by entry. The same array either way.
+fn array_of(entries: &[(Option<Frozen>, Frozen)]) -> PhpArray {
+    let list = entries.iter().enumerate().all(|(i, (k, _))| match k {
+        None => true,
+        Some(Frozen::Int(k)) => *k == i as i64,
+        Some(_) => false,
+    });
+    if list {
+        let mut values = crate::array::values_buffer(entries.len());
+        values.extend(entries.iter().map(|(_, v)| v.to_value()));
+        return PhpArray::from_list(values);
+    }
+    let mut array = match entries.first() {
+        Some((Some(Frozen::Str(s)), _)) if crate::array::int_key(s.as_bytes()).is_none() => PhpArray::hashed(entries.len()),
+        _ => PhpArray::new(),
+    };
+    for (k, v) in entries.iter() {
+        match k.as_ref().and_then(Frozen::to_key) {
+            Some(key) => array.insert(key, v.to_value()),
+            None => {
+                let _ = array.push(v.to_value());
             }
         }
     }
+    array
 }
 
 #[cfg(test)]
