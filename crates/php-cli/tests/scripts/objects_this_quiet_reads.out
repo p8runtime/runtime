@@ -1,0 +1,72 @@
+int(1)
+bool(true)
+bool(false)
+int(2)
+string(7) "default"
+string(7) "no prop"
+bool(false)
+string(13) "uninitialized"
+bool(false)
+string(7) "no next"
+string(1) "p"
+int(1)
+string(8) "dyn none"
+string(7) "default"
+bool(false)
+bool(true)
+int(2)
+string(7) "default"
+string(7) "no prop"
+bool(false)
+string(13) "uninitialized"
+bool(false)
+string(7) "no next"
+string(1) "p"
+int(1)
+string(8) "dyn none"
+string(7) "default"
+bool(false)
+bool(true)
+int(2)
+string(7) "default"
+string(7) "no prop"
+bool(false)
+string(13) "uninitialized"
+bool(false)
+string(7) "no next"
+string(1) "p"
+int(1)
+string(8) "dyn none"
+string(6) "next a"
+bool(false)
+before
+read
+cleared, still held
+destruct first
+released
+bool(true)
+destruct second
+after second
+string(5) "unset"
+bool(false)
+int(1)
+__isset(arr)
+__get(arr)
+int(1)
+__isset(nope)
+string(4) "none"
+__isset(arr)
+__get(arr)
+bool(true)
+__isset(nope)
+bool(false)
+__isset(arr)
+__get(arr)
+bool(false)
+string(1) "v"
+string(3) "box"
+string(5) "other"
+string(3) "box"
+Error: Using $this when not in object context
+int(3)
+end
