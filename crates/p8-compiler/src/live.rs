@@ -423,8 +423,20 @@ impl Frame<'_> {
                 w!(dst);
             }
             // The object (or nothing), the name's place, the keys.
+            // (The name's place, base + 1, only when the name is there,
+            // and base only when the object is not the frame's `$this`:
+            // a slot it leaves alone may hold another expression's
+            // temporary, which must be freed after that one's last use,
+            // not kept until this write: a copy of the array it writes
+            // would make the write copy the array.)
             AssignPropDim { base, name, n, val, dst, .. } => {
-                let block = self.range(base, (n & !p8_bytecode::DIM_THIS) as usize + 3);
+                let mut block = self.range(base, (n & !p8_bytecode::DIM_THIS) as usize + 3);
+                if name != base.wrapping_add(1) {
+                    block &= !b(base.wrapping_add(1));
+                }
+                if n & p8_bytecode::DIM_THIS != 0 {
+                    block &= !b(base);
+                }
                 u!(name, val);
                 o.uses |= block;
                 o.dirty |= block;
