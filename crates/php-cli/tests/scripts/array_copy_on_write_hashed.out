@@ -1,0 +1,72 @@
+found in copy: 26 of 26
+a: 26 3 no
+b: 68 changed n pushed 139
+'k0'=0,'k1'=1,'k2'=2,'k3'=3,'k4'=4,'k5'=5,'k6'=6,'k7'=7,'k8'=8,'k9'=9,'k10'=10,'k11'=11,'k12'=12,'k13'=13,'k14'=14,'k15'=15,'k16'=16,'k17'=17,'k18'=18,'k19'=19,5='five','05'='zero five','-0'='minus zero','9223372036854775808'='too big',-3='minus three',7='seven'
+'u0'=0,'u1'=1,'u3'=3,'u4'=4,'u6'=6,'u7'=7,'u8'=8,'u9'=9,'u10'=10
+'u1'=1,'u3'=3,'u4'=4,'u6'=6,'u7'=7,'u8'=8,'u9'=9,'u10'=10,'u2'='back','u11'='back too'
+'u9'=9,'u10'=10,'u11'='back too','u0'='again'
+'u1'=1,'u3'=3,'u4'=4,'u6'=6,'u7'=7,'u8'=8,'u9'=9,'u10'=10,'u2'='back','u11'='back too'
+bool(false)
+string(4) "back"
+string(3) "u11"
+string(2) "u9"
+'a'=1,'b'=2,3='c' | 'b'=2,3='c','d'=4,4='next'
+via copy via copy lonely only the copy
+{"x":1,"y":{"deep":1}} {"x":1,"y":{"deep":2}} 1 2
+e0,e1,e2,e3,e4,e5,e6,e7,e8,e9
+e0,e1,e2,e3,e4,e6,e8,e9,late,later
+'e0'=0,'e1'=1,'e2'=2,'e3'=3,'e4'=4,'e6'=6,'e7'=7,'e8'=8,'e9'=9,'late'='L'
+'e0'=0,'e1'=10,'e2'=20,'e3'=30,'e4'=40,'e6'=60,'e8'=80,'e9'=90,'late'='L','later'='M'
+11 12 5 10
+array(10) {
+  ["name"]=>
+  string(1) "x"
+  [10]=>
+  float(1.5)
+  ["list"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["null"]=>
+  NULL
+  ["t"]=>
+  bool(true)
+  ["o0"]=>
+  string(2) "v0"
+  ["o2"]=>
+  string(2) "v2"
+  ["o3"]=>
+  string(2) "v3"
+  ["o4"]=>
+  string(2) "v4"
+  ["extra"]=>
+  string(1) "e"
+}
+Array
+(
+    [name] => x
+    [10] => 1.5
+    [list] => Array
+        (
+            [0] => 1
+            [1] => 2
+        )
+
+    [null] => 
+    [t] => 1
+    [o0] => v0
+    [o1] => v1
+    [o2] => v2
+    [o3] => v3
+    [o4] => v4
+)
+
+{"name":"x","10":1.5,"list":[1,2],"null":null,"t":true,"o0":"v0","o2":"v2","o3":"v3","o4":"v4","extra":"e"}
+a:10:{s:4:"name";s:1:"x";i:10;d:1.5;s:4:"list";a:2:{i:0;i:1;i:1;i:2;}s:4:"null";N;s:1:"t";b:1;s:2:"o0";s:2:"v0";s:2:"o2";s:2:"v2";s:2:"o3";s:2:"v3";s:2:"o4";s:2:"v4";s:5:"extra";s:1:"e";}
+missing: none
+
+Warning: Undefined array key "nope" in %s on line 156
+
