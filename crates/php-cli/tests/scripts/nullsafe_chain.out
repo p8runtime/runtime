@@ -1,0 +1,148 @@
+-- the issue's four
+NULL
+NULL
+NULL
+NULL
+-- longer chains
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+-- parentheses do not end it
+NULL
+NULL
+-- a receiver that is not null: the chain goes on
+int(20)
+NULL
+nothing ran
+NULL
+NULL
+m ran
+o arg ran
+m ran
+int(10)
+string(6) "static"
+o static arg ran
+sm ran
+string(2) "sm"
+-- a null that is not the receiver of ?->
+
+Warning: Attempt to read property "x" on null in %s on line 52
+NULL
+-- isset, empty, ??
+bool(false)
+bool(false)
+bool(true)
+string(7) "default"
+string(18) "default after call"
+string(11) "default dim"
+bool(true)
+int(21)
+-- isset, empty, ??: no key or name to the right is evaluated
+bool(false)
+bool(false)
+bool(true)
+string(1) "d"
+string(1) "d"
+bool(false)
+bool(false)
+bool(false)
+isset key, not null ran
+bool(true)
+-- a dynamic method, a spread, a variable static property
+NULL
+NULL
+NULL
+NULL
+string(4) "null"
+-- used as a value
+NULL
+array(2) {
+  [0]=>
+  NULL
+  ["k"]=>
+  NULL
+}
+bool(true)
+[]
+0
+array(2) {
+  [0]=>
+  NULL
+  [1]=>
+  NULL
+}
+string(4) "tail"
+-- inside functions
+NULL
+int(10)
+f1 ran
+m ran
+f2 ran
+m ran
+NULL
+int(21)
+f3 ran
+NULL
+int(21)
+m ran
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  string(1) "d"
+  [2]=>
+  bool(true)
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  string(1) "d"
+  [2]=>
+  bool(false)
+}
+-- in a loop, null and not null
+0: NULL
+1: loop ran
+m ran
+int(10)
+2: NULL
+3: loop ran
+m ran
+NULL
+-- a closure and a method
+closure ran
+m ran
+NULL
+int(10)
+method ran
+m ran
+NULL
+NULL
+-- the chain ends, the expression around it goes on
+string(2) "X!"
+int(3)
+before ran
+after ran
+int(2)
+-- plain chains beside them, in the same file
+int(20)
+plain arg ran
+m ran
+int(10)
+bool(false)
+bool(false)
+string(13) "plain default"
+plain static ran
+sm ran
+string(6) "static"
+string(2) "sm"
+int(21)
+string(21) "null in a plain chain"
+done
