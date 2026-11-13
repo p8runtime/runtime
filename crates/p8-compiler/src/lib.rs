@@ -1246,6 +1246,13 @@ pub struct Compiler<'src> {
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
+    /// The jumps taken where a `?->` finds its receiver null, in the
+    /// chains being compiled: each goes to the end of its whole chain,
+    /// past every step to its right (`chain_end`, #505).
+    null_jumps: Vec<usize>,
+    /// The expression about to be compiled is the left of a step of a
+    /// chain (`chain_link`): the chain does not end there.
+    chain_inner: bool,
     /// Where the data after `__halt_compiler();` starts (__COMPILER_HALT_OFFSET__).
     halt_offset: Option<usize>,
     /// The builtins (their by-reference parameters are known when compiling).
@@ -1385,6 +1392,8 @@ impl<'src> Compiler<'src> {
             spread_refs: Vec::new(),
             scratch: Scratch::default(),
             unused_result: false,
+            null_jumps: Vec::new(),
+            chain_inner: false,
             registry,
             file: Arc::from(file),
             line_starts,
@@ -4568,6 +4577,69 @@ impl<'src> Compiler<'src> {
     /// allows (else the caller moves it there). Temporaries the operands
     /// used are free once the instruction that reads them is emitted.
     fn expr_to(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
+        // A chain (`$a?->b->c()[0]`) ends at its outermost step: a `?->`
+        // anywhere in it whose receiver is null jumps here, with null.
+        if std::mem::take(&mut self.chain_inner) || !self.is_chain(e) {
+            return self.expr_step(f, e, hint);
+        }
+        let start = self.null_jumps.len();
+        let r = self.expr_step(f, e, hint);
+        match &r {
+            Ok(reg) => self.chain_end(f, start, *reg, None),
+            Err(_) => self.null_jumps.truncate(start),
+        }
+        r
+    }
+
+    /// The end of a chain whose `?->` jumps are `null_jumps[start..]`: the
+    /// value in `r` when each step ran, null in `r` (or `value`: isset's
+    /// false, for one) when a `?->` found its receiver null.
+    fn chain_end(&mut self, f: &mut FnBuilder, start: usize, r: Reg, value: Option<Frozen>) {
+        if self.null_jumps.len() == start {
+            return;
+        }
+        let jumps = self.null_jumps.split_off(start);
+        let end = f.emit(Instr::Jump { target: 0 });
+        f.patch_all(jumps, f.here());
+        match value {
+            Some(v) => {
+                let src = f.constant(v);
+                f.emit(Instr::Move { dst: r, src });
+            }
+            None => {
+                f.emit(Instr::LoadNull { dst: r });
+            }
+        }
+        f.patch(end, f.here());
+    }
+
+    /// `target` is about to be compiled as the left of a step of a chain
+    /// (`->`, `?->`, `[k]`, `::$p`, `::m()`): if it is a step itself, the
+    /// chain goes on through it rather than ending there.
+    fn chain_link(&mut self, target: &Expr) {
+        self.chain_inner = self.is_chain(target);
+    }
+
+    /// Whether `e` is a step a `?->` to its left can end (PHP's
+    /// zend_ast_is_short_circuited kinds): a property, a method call, an
+    /// index, a static property or a static call. A class constant
+    /// (`::K`, `::class`) is not one.
+    fn is_chain(&self, e: &Expr) -> bool {
+        match e {
+            Expr::PropertyFetch { .. }
+            | Expr::NullsafePropertyFetch { .. }
+            | Expr::MethodCall { .. }
+            | Expr::NullsafeMethodCall { .. }
+            | Expr::StaticCall { .. }
+            | Expr::ArrayDimFetch { .. }
+            | Expr::ClassConstFetch { constant: Expr::IndirectVariable { .. }, .. } => true,
+            Expr::ClassConstFetch { constant: Expr::Variable { name, .. }, .. } => self.text(*name).starts_with(b"$"),
+            _ => false,
+        }
+    }
+
+    /// `expr_to` for one step: a chain's own end is `expr_to`'s.
+    fn expr_step(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
         let mark = f.temps;
         if let Some(v) = self.literal(e) {
             return Ok(f.constant(v));
@@ -5057,6 +5129,7 @@ impl<'src> Compiler<'src> {
                 let Some(dim) = dim else {
                     return Err(CompileError { message: "Cannot use [] for reading".into(), line: self.line(*span) });
                 };
+                self.chain_link(array);
                 let arr = self.expr(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = out(f, hint, mark);
@@ -5197,6 +5270,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::PropertyFetch { target, property, .. } => {
+                self.chain_link(target);
                 let obj = self.prop_obj(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = out(f, hint, mark);
@@ -5204,6 +5278,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::MethodCall { target, method, args, .. } if needs_spread(args) && !is_partial(args) => {
+                self.chain_link(target);
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
@@ -5237,6 +5312,7 @@ impl<'src> Compiler<'src> {
             Expr::MethodCall { target, method, args, span } if is_placeholder(args) || is_partial(args) => {
                 // `$o->m(...)`: a Closure of [$o, 'm'] (`$o->m(?)`: its
                 // partial application).
+                self.chain_link(target);
                 let obj = self.expr(f, target)?;
                 let name = self.prop_name(f, method)?;
                 let pair = f.temp();
@@ -5290,6 +5366,7 @@ impl<'src> Compiler<'src> {
                     Expr::Variable { name, .. } => self.text(*name),
                     _ => b"$",
                 };
+                self.chain_link(target);
                 if text.starts_with(b"$") {
                     // `$o->$m()`: the callable [$o, $m].
                     let obj = self.expr(f, target)?;
@@ -5345,6 +5422,7 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::StaticCall { class: class_expr, method, args, .. } => {
+                self.chain_link(class_expr);
                 let class = self.class_ref(f, class_expr)?;
                 let text = match method {
                     Expr::Variable { name, .. } => self.text(*name),
@@ -5388,6 +5466,7 @@ impl<'src> Compiler<'src> {
             }
             // `C::${expr}`, `C::$$v`: a static property named when it runs.
             Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                self.chain_link(class);
                 let class_index = self.class_ref(f, class)?;
                 let name = self.expr(f, name)?;
                 let dst = out(f, hint, mark);
@@ -5399,6 +5478,9 @@ impl<'src> Compiler<'src> {
                     return Err(self.unsupported(constant.span(), "a class constant name in an expression"));
                 };
                 let text = self.text(*name);
+                if text.starts_with(b"$") {
+                    self.chain_link(class);
+                }
                 let class_index = self.class_ref(f, class)?;
                 let dst = out(f, hint, mark);
                 if let Some(prop) = text.strip_prefix(b"$") {
@@ -5461,6 +5543,8 @@ impl<'src> Compiler<'src> {
                 let dst = f.temp();
                 let mut ends = Vec::new();
                 for (i, v) in vars.iter().enumerate() {
+                    // A `?->` to the left that finds null: false (chain_end).
+                    let start = self.null_jumps.len();
                     match v {
                         Expr::ArrayDimFetch { array: Expr::Variable { name: g, .. }, dim: Some(name), .. } if self.text(*g) == b"$GLOBALS" => {
                             let var = self.global_get(f, name, true)?;
@@ -5477,22 +5561,26 @@ impl<'src> Compiler<'src> {
                         }
                         // `?->` reads as `->` here: null has no property set.
                         Expr::PropertyFetch { target, property, .. } | Expr::NullsafePropertyFetch { target, property, .. } => {
+                            self.chain_link(target);
                             let obj = self.quiet(f, target)?;
                             let name = self.prop_name_operand(f, property)?;
                             f.emit(Instr::IssetProp { dst, obj, name });
                         }
                         Expr::ClassConstFetch { class, constant: Expr::Variable { name, .. }, .. } if self.text(*name).starts_with(b"$") => {
+                            self.chain_link(class);
                             let class = self.class_ref(f, class)?;
                             let name = f.constant(Frozen::Str(Text::from(&self.text(*name)[1..])));
                             f.emit(Instr::rare(Rare::IssetStatic, dst, name, 0, class));
                         }
                         Expr::ClassConstFetch { class, constant: Expr::IndirectVariable { name, .. }, .. } => {
+                            self.chain_link(class);
                             let class = self.class_ref(f, class)?;
                             let name = self.expr(f, name)?;
                             f.emit(Instr::rare(Rare::IssetStatic, dst, name, 0, class));
                         }
                         // isset($o->p[k]...): the dimensions of a quietly read root
                         Expr::ArrayDimFetch { dim: Some(dim), array, .. } => {
+                            self.chain_link(array);
                             let arr = self.quiet(f, array)?;
                             let key = self.expr(f, dim)?;
                             f.emit(Instr::IssetDim { dst, var: arr, keys: key, n: 1 });
@@ -5503,6 +5591,7 @@ impl<'src> Compiler<'src> {
                         }
                         other => return Err(self.unsupported(other.span(), "this isset")),
                     }
+                    self.chain_end(f, start, dst, Some(Frozen::Bool(false)));
                     if i + 1 < vars.len() {
                         ends.push(f.emit(Instr::JumpIfNot { cond: dst, target: 0 }));
                     }
@@ -5577,10 +5666,13 @@ impl<'src> Compiler<'src> {
                     // `empty($c[k])`: the container read quietly, its last
                     // dimension with isset's key checks (FetchDim's `empty`).
                     Expr::ArrayDimFetch { array, dim: Some(dim), .. } if self.globals_dim(expr).is_none() => {
+                        let start = self.null_jumps.len();
+                        self.chain_link(array);
                         let arr = self.quiet(f, array)?;
                         let key = self.expr(f, dim)?;
                         let v = f.temp();
                         f.emit(Instr::FetchDim { dst: v, arr, key, quiet: true, empty: true });
+                        self.chain_end(f, start, v, None);
                         v
                     }
                     _ => self.quiet(f, expr)?,
@@ -5599,26 +5691,26 @@ impl<'src> Compiler<'src> {
                 f.emit(Instr::Eval { dst, src });
                 dst
             }
+            // Null: nothing to the right runs, to the chain's end (the
+            // jump is `chain_end`'s), where the whole chain is null.
             Expr::NullsafePropertyFetch { target, property, .. } => {
+                self.chain_link(target);
                 let obj = self.expr(f, target)?;
                 let dst = f.temp();
                 let null = f.constant(Frozen::Null);
-                let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
+                self.null_jumps.push(f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0)));
                 let name = self.prop_name_operand(f, property)?;
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: false });
-                let end = f.emit(Instr::Jump { target: 0 });
-                f.patch(is_null, f.here());
-                f.emit(Instr::LoadNull { dst });
-                f.patch(end, f.here());
                 dst
             }
             Expr::NullsafeMethodCall { target, method, args, .. } => {
                 // Null: no call, and its arguments are not evaluated. The
                 // result straight into where it goes (no copy left behind).
+                self.chain_link(target);
                 let obj = self.expr(f, target)?;
                 let dst = hint.unwrap_or_else(|| f.temp());
                 let null = f.constant(Frozen::Null);
-                let is_null = f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0));
+                self.null_jumps.push(f.emit(Instr::jump_cmp(Cmp::Identical, obj, null, true, 0)));
                 let Expr::Variable { name, .. } = method else {
                     return Err(self.unsupported(method.span(), "a method name in an expression"));
                 };
@@ -5629,10 +5721,6 @@ impl<'src> Compiler<'src> {
                 let (base, argc) =
                     self.method_args(f, args, |n, arg, var| Instr::SendVarMethod { word, n, arg, var }, |dst, n| Instr::MethodArgByRef { dst, word, n })?;
                 f.emit(Instr::MethodCall { dst, obj: recv, method: site, base, argc });
-                let end = f.emit(Instr::Jump { target: 0 });
-                f.patch(is_null, f.here());
-                f.emit(Instr::LoadNull { dst });
-                f.patch(end, f.here());
                 dst
             }
             Expr::Include { kind, expr, .. } => {
@@ -5894,12 +5982,29 @@ impl<'src> Compiler<'src> {
     }
 
     /// `e` read without "undefined" warnings (the left of ??, isset).
+    /// (A chain read so ends as `expr_to`'s does: null where a `?->` found
+    /// its receiver null.)
     fn quiet(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        if std::mem::take(&mut self.chain_inner) {
+            return self.quiet_step(f, e, true);
+        }
+        let start = self.null_jumps.len();
+        let r = self.quiet_step(f, e, false);
+        match &r {
+            Ok(reg) => self.chain_end(f, start, *reg, None),
+            Err(_) => self.null_jumps.truncate(start),
+        }
+        r
+    }
+
+    /// `quiet` for one step; `inner`: `e` is the left of a step of a chain.
+    fn quiet_step(&mut self, f: &mut FnBuilder, e: &Expr, inner: bool) -> Result<Reg> {
         if let Some(name) = self.globals_dim(e) {
             return self.global_get(f, name, true);
         }
         match e {
             Expr::ArrayDimFetch { array, dim: Some(dim), .. } => {
+                self.chain_link(array);
                 let arr = self.quiet(f, array)?;
                 let key = self.expr(f, dim)?;
                 let dst = f.temp();
@@ -5907,6 +6012,7 @@ impl<'src> Compiler<'src> {
                 Ok(dst)
             }
             Expr::PropertyFetch { target, property, .. } => {
+                self.chain_link(target);
                 let obj = self.quiet(f, target)?;
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
@@ -5914,7 +6020,10 @@ impl<'src> Compiler<'src> {
                 Ok(dst)
             }
             Expr::IndirectVariable { name, .. } => self.var_get(f, name, true),
-            _ => self.expr(f, e),
+            _ => {
+                self.chain_inner = inner;
+                self.expr(f, e)
+            }
         }
     }
 
