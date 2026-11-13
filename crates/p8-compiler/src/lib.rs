@@ -1253,6 +1253,9 @@ pub struct Compiler<'src> {
     /// The expression about to be compiled is the left of a step of a
     /// chain (`chain_link`): the chain does not end there.
     chain_inner: bool,
+    /// The file has a `?->` in it (found once, by one scan of its source):
+    /// without one no chain can end early, and none of the above is kept.
+    nullsafe: bool,
     /// Where the data after `__halt_compiler();` starts (__COMPILER_HALT_OFFSET__).
     halt_offset: Option<usize>,
     /// The builtins (their by-reference parameters are known when compiling).
@@ -1394,6 +1397,7 @@ impl<'src> Compiler<'src> {
             unused_result: false,
             null_jumps: Vec::new(),
             chain_inner: false,
+            nullsafe: memchr::memmem::find(source, b"?->").is_some(),
             registry,
             file: Arc::from(file),
             line_starts,
@@ -4576,11 +4580,11 @@ impl<'src> Compiler<'src> {
     /// Compile `e`, computing it straight into `hint` where the instruction
     /// allows (else the caller moves it there). Temporaries the operands
     /// used are free once the instruction that reads them is emitted.
-    /// (Inlined: an expression that is no step of a chain, most of them,
-    /// costs one test more than compiling it.)
+    /// (Inlined: in a file without `?->`, and for an expression that is no
+    /// step of a chain, it costs one test more than compiling it.)
     #[inline]
     fn expr_to(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
-        if !self.chain_inner && !is_step(e) {
+        if !self.nullsafe || (!self.chain_inner && !is_step(e)) {
             return self.expr_step(f, e, hint);
         }
         self.chain(f, e, hint)
@@ -4608,7 +4612,7 @@ impl<'src> Compiler<'src> {
     /// false, for one) when a `?->` found its receiver null.
     #[inline]
     fn chain_end(&mut self, f: &mut FnBuilder, start: usize, r: Reg, value: Option<Frozen>) {
-        if self.null_jumps.len() != start {
+        if self.nullsafe && self.null_jumps.len() != start {
             self.null_ends(f, start, r, value);
         }
     }
@@ -4636,7 +4640,9 @@ impl<'src> Compiler<'src> {
     /// chain goes on through it rather than ending there.
     #[inline]
     fn chain_link(&mut self, target: &Expr) {
-        self.chain_inner = is_step(target) && self.is_chain(target);
+        if self.nullsafe {
+            self.chain_inner = is_step(target) && self.is_chain(target);
+        }
     }
 
     /// Whether `e` is a step a `?->` to its left can end (PHP's
@@ -6004,6 +6010,9 @@ impl<'src> Compiler<'src> {
     /// (A chain read so ends as `expr_to`'s does: null where a `?->` found
     /// its receiver null.)
     fn quiet(&mut self, f: &mut FnBuilder, e: &Expr) -> Result<Reg> {
+        if !self.nullsafe {
+            return self.quiet_step(f, e, false);
+        }
         if std::mem::take(&mut self.chain_inner) {
             return self.quiet_step(f, e, true);
         }

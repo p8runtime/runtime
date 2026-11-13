@@ -132,4 +132,13 @@ var_dump(strtoupper($n?->p->q ?? "x") . "!");
 var_dump(1 + ($n?->p->q ?? 2));
 var_dump(arg("before") + (int) ($n?->m(arg("never"))->q) + arg("after"));
 
+echo "-- plain chains beside them, in the same file\n";
+var_dump($o->p->list[1][0]);
+var_dump($o->m(arg("plain arg"))->list[0]);
+var_dump(isset($o->p->list[9]), empty($o->p->list[1]), $o->p->none ?? "plain default");
+var_dump(Box::$s, Box::sm(arg("plain static")));
+$plain = fn($b) => $b->p->list[1][1] ?? "none";
+var_dump($plain($o));
+var_dump($o->none->x ?? "null in a plain chain");
+
 echo "done\n";

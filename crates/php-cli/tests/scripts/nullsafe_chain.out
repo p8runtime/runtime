@@ -131,4 +131,18 @@ int(3)
 before ran
 after ran
 int(2)
+-- plain chains beside them, in the same file
+int(20)
+plain arg ran
+m ran
+int(10)
+bool(false)
+bool(false)
+string(13) "plain default"
+plain static ran
+sm ran
+string(6) "static"
+string(2) "sm"
+int(21)
+string(21) "null in a plain chain"
 done
