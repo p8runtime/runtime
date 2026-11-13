@@ -990,10 +990,12 @@ impl Value {
     pub fn loose_eq(&self, other: &Value) -> bool {
         match (self.as_str(), other.as_str()) {
             (Some(a), Some(b)) => {
+                // (zendi_smart_str_equals: the second string is parsed
+                // only when the first is numeric.)
                 std::ptr::eq(a, b)
-                    || match (numeric_string(a.as_bytes()), numeric_string(b.as_bytes())) {
-                        (Some(x), Some(y)) => compare_numbers(x, y) == Ordering::Equal,
-                        _ => a.as_bytes() == b.as_bytes(),
+                    || match numeric_string(a.as_bytes()).and_then(|x| Some((x, numeric_string(b.as_bytes())?))) {
+                        Some((x, y)) => compare_numbers(x, y) == Ordering::Equal,
+                        None => a.as_bytes() == b.as_bytes(),
                     }
             }
             _ => self.compare(other) == Some(Ordering::Equal),
@@ -1095,9 +1097,9 @@ fn compare_numbers(a: Number, b: Number) -> Ordering {
 /// zendi_smart_strcmp: two numeric strings compare as numbers, anything
 /// else byte by byte (then by length).
 fn smart_strcmp(a: &StrHead, b: &StrHead) -> Ordering {
-    match (numeric_string(a.as_bytes()), numeric_string(b.as_bytes())) {
-        (Some(x), Some(y)) => compare_numbers(x, y),
-        _ => a.as_bytes().cmp(b.as_bytes()),
+    match numeric_string(a.as_bytes()).and_then(|x| Some((x, numeric_string(b.as_bytes())?))) {
+        Some((x, y)) => compare_numbers(x, y),
+        None => a.as_bytes().cmp(b.as_bytes()),
     }
 }
 
