@@ -55,6 +55,11 @@ pub(crate) struct GenState {
     /// Where send()'s value goes when it goes on.
     resume_dst: Option<Reg>,
     delegate: Option<Delegate>,
+    /// What it was resumed with while stopped in a `yield from`: the value
+    /// sent (Ok) or the exception thrown in (Err), which its YieldFrom
+    /// passes on to the generator it goes through (PHP sends to and
+    /// throws into the innermost one, zend_generator_get_current).
+    passed: Option<Result<Value, Rc<Object>>>,
 }
 
 pub(crate) struct Gen(RefCell<GenState>);
@@ -122,6 +127,7 @@ impl Context<'_> {
             returned: None,
             resume_dst: None,
             delegate: None,
+            passed: None,
         };
         let class = Rc::clone(&self.classes[&self.isolate.known.generator]);
         Object::with_data(class, &self.ids, Some(Rc::new(Gen(RefCell::new(state)))))
@@ -129,7 +135,7 @@ impl Context<'_> {
 
     /// Run the generator to its next yield (or its end): `sent` is what
     /// the yield it stopped at gives; `throw` is thrown there instead.
-    pub(crate) fn resume(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sent: Value, throw: Option<Rc<Object>>) -> Result<(), Throw> {
+    pub(crate) fn resume(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sent: Value, mut throw: Option<Rc<Object>>) -> Result<(), Throw> {
         let state = gen_of(object).expect("a Generator");
         let (func, pc, argc, this, scope, called) = {
             let mut s = state.0.borrow_mut();
@@ -164,6 +170,13 @@ impl Context<'_> {
             }
             if let Some(d) = s.resume_dst.take() {
                 regs[at + d as usize] = sent;
+            } else if s.delegate.is_some() {
+                // Stopped in a `yield from`: the value or the exception is
+                // its YieldFrom's to pass on (it runs again, at `pc`).
+                s.passed = Some(match throw.take() {
+                    Some(e) => Err(e),
+                    None => Ok(sent),
+                });
             }
         }
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
@@ -205,6 +218,7 @@ impl Context<'_> {
             s.key = Value::NULL;
             s.regs.clear();
             s.delegate = None;
+            s.passed = None;
         }
         r
     }
@@ -276,6 +290,19 @@ impl Context<'_> {
             };
             state.0.borrow_mut().delegate = Some(delegate);
         }
+        // What the generator was resumed with: sent on to an inner
+        // generator, thrown into it; an array or an Iterator takes no
+        // value, and an exception is thrown here, at the `yield from`.
+        let passed = state.0.borrow_mut().passed.take();
+        let (sent, thrown) = match passed {
+            Some(Err(e)) if !matches!(state.0.borrow().delegate, Some(Delegate::Generator(_))) => {
+                state.0.borrow_mut().delegate = None;
+                return Err(Throw::Object(e));
+            }
+            Some(Err(e)) => (Value::NULL, Some(e)),
+            Some(Ok(v)) => (v, None),
+            None => (Value::NULL, None),
+        };
         let iterator = match &mut state.0.borrow_mut().delegate {
             Some(Delegate::Iterator(o, first)) => Some((Rc::clone(o), std::mem::replace(first, false))),
             _ => None,
@@ -307,8 +334,13 @@ impl Context<'_> {
             Err(None) => None,
             Err(Some(inner)) => {
                 let started = gen_of(&inner).expect("a Generator").0.borrow().started;
-                if !started || !first {
-                    self.resume(regs, &inner, Value::NULL, None)?;
+                // An exception out of the inner generator: thrown here, and
+                // a later `yield from` starts afresh.
+                if (!started || !first)
+                    && let Err(t) = self.resume(regs, &inner, sent, thrown)
+                {
+                    state.0.borrow_mut().delegate = None;
+                    return Err(t);
                 }
                 let s = gen_of(&inner).expect("a Generator").0.borrow();
                 if s.finished {
@@ -381,7 +413,18 @@ impl Context<'_> {
         match op {
             Op::Current | Op::Key | Op::Valid => {
                 self.start(regs, object)?;
-                let s = state(object).0.borrow();
+                // In a `yield from` of a generator still running: the value
+                // and key are the innermost one's, as it is now (it may
+                // have been moved on directly too).
+                let mut leaf = Rc::clone(object);
+                loop {
+                    let inner = match &state(&leaf).0.borrow().delegate {
+                        Some(Delegate::Generator(g)) if !state(g).0.borrow().finished => Rc::clone(g),
+                        _ => break,
+                    };
+                    leaf = inner;
+                }
+                let s = if op == Op::Valid { state(object) } else { state(&leaf) }.0.borrow();
                 Ok(match op {
                     Op::Current => s.current.clone(),
                     Op::Key => s.key.clone(),

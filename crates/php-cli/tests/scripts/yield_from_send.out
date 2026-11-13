@@ -1,0 +1,75 @@
+-- the issue's script
+inner got: sent
+-- several sends, keys and the result of yield from
+before
+int(0)
+counter got 2
+int(2)
+counter got 3
+int(5)
+int(2)
+int(5)
+yield from gave 5
+string(5) "after"
+wrap got end
+NULL
+bool(false)
+int(5)
+-- send() first: the generator runs to its first yield, then gets it
+before
+counter got 5
+int(5)
+yield from gave 5
+string(5) "after"
+-- three levels
+current: 'leaf 1'
+leaf got x
+current: 'leaf 2'
+leaf got y
+middle: leaf done
+current: 'middle 1'
+middle got z
+top: middle done
+current: NULL
+bool(false)
+-- next() sends null
+inner got: 
+-- arrays and iterators ignore what is sent
+NULL
+from_array got int(10)
+int(20)
+int(30)
+'c'
+from_iterator got int(1)
+int(2)
+int(3)
+'c'
+-- throw() goes to the innermost generator
+catcher caught one
+int(2)
+catcher got after throw
+delegating: catcher done
+int(3)
+-- not caught inside: it comes out of yield from
+guarded caught two
+string(9) "guarded 2"
+bool(false)
+-- a new yield from after the caught one
+again caught three
+0 => 1
+1 => 2
+-- throw() into a yield from an array
+array_guarded caught four
+string(15) "array_guarded 2"
+-- not caught anywhere
+inner got: caller caught five
+bool(false)
+-- the inner generator is one we also hold
+counter got 4
+int(4)
+int(4)
+counter got 6
+int(10)
+int(10)
+int(10)
+done
