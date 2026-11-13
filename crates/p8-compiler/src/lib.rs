@@ -4576,10 +4576,22 @@ impl<'src> Compiler<'src> {
     /// Compile `e`, computing it straight into `hint` where the instruction
     /// allows (else the caller moves it there). Temporaries the operands
     /// used are free once the instruction that reads them is emitted.
+    /// (Inlined: an expression that is no step of a chain, most of them,
+    /// costs one test more than compiling it.)
+    #[inline]
     fn expr_to(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
-        // A chain (`$a?->b->c()[0]`) ends at its outermost step: a `?->`
-        // anywhere in it whose receiver is null jumps here, with null.
-        if std::mem::take(&mut self.chain_inner) || !self.is_chain(e) {
+        if !self.chain_inner && !is_step(e) {
+            return self.expr_step(f, e, hint);
+        }
+        self.chain(f, e, hint)
+    }
+
+    /// `expr_to` for a step of a chain (`$a?->b->c()[0]`): the chain ends
+    /// at its outermost step, where a `?->` anywhere in it whose receiver
+    /// is null jumps, with null.
+    #[inline(never)]
+    fn chain(&mut self, f: &mut FnBuilder, e: &Expr, hint: Option<Reg>) -> Result<Reg> {
+        if std::mem::take(&mut self.chain_inner) {
             return self.expr_step(f, e, hint);
         }
         let start = self.null_jumps.len();
@@ -4594,10 +4606,16 @@ impl<'src> Compiler<'src> {
     /// The end of a chain whose `?->` jumps are `null_jumps[start..]`: the
     /// value in `r` when each step ran, null in `r` (or `value`: isset's
     /// false, for one) when a `?->` found its receiver null.
+    #[inline]
     fn chain_end(&mut self, f: &mut FnBuilder, start: usize, r: Reg, value: Option<Frozen>) {
-        if self.null_jumps.len() == start {
-            return;
+        if self.null_jumps.len() != start {
+            self.null_ends(f, start, r, value);
         }
+    }
+
+    /// `chain_end` where there are jumps to patch.
+    #[inline(never)]
+    fn null_ends(&mut self, f: &mut FnBuilder, start: usize, r: Reg, value: Option<Frozen>) {
         let jumps = self.null_jumps.split_off(start);
         let end = f.emit(Instr::Jump { target: 0 });
         f.patch_all(jumps, f.here());
@@ -4616,8 +4634,9 @@ impl<'src> Compiler<'src> {
     /// `target` is about to be compiled as the left of a step of a chain
     /// (`->`, `?->`, `[k]`, `::$p`, `::m()`): if it is a step itself, the
     /// chain goes on through it rather than ending there.
+    #[inline]
     fn chain_link(&mut self, target: &Expr) {
-        self.chain_inner = self.is_chain(target);
+        self.chain_inner = is_step(target) && self.is_chain(target);
     }
 
     /// Whether `e` is a step a `?->` to its left can end (PHP's
@@ -6337,6 +6356,23 @@ impl<'src> Compiler<'src> {
 fn out(f: &mut FnBuilder, hint: Option<Reg>, mark: usize) -> Reg {
     f.reset_temps(mark);
     hint.unwrap_or_else(|| f.temp())
+}
+
+/// Whether `e` is of a kind a chain's step can be (`Compiler::is_chain`
+/// tells which `::` ones are): the test `expr_to` makes on every
+/// expression.
+#[inline]
+fn is_step(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::PropertyFetch { .. }
+            | Expr::NullsafePropertyFetch { .. }
+            | Expr::MethodCall { .. }
+            | Expr::NullsafeMethodCall { .. }
+            | Expr::StaticCall { .. }
+            | Expr::ArrayDimFetch { .. }
+            | Expr::ClassConstFetch { .. }
+    )
 }
 
 fn comparison(op: BinaryOp) -> Option<Cmp> {
