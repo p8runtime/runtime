@@ -1,0 +1,35 @@
+step a=1 x=1 y=a
+step b=2 x=2 y=b
+step c=3 x=3 y=c
+int(3)
+string(1) "c"
+destruct before
+body 0 one
+body 1 two
+destruct one
+after the loop
+destruct two
+unset
+p "plain!"
+r "target!"
+n [1,2,3]
+string(6) "target"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(5) "plain"
+0:x 1:y 2:z 
+{"0":"x","2":"z","3":"x0","4":"y1","5":"z2"}
+int(1)
+string(2) "01"
+int(-5)
+string(3) "1.5"
+string(1) "k"
+0=>10 2=>30 {"0":10,"2":30,"4":50}
+a=>1 c=>3 
+["www","qq"]
+11 12 21 22 
+null bool int float string array ArrayObject resource (stream) 
