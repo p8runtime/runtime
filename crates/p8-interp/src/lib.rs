@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)] // memory safety is the point of p8; see SECURITY.md
+// (#352's prototype only: the tail-call loop, compiled when the build asks for it.)
+#![cfg_attr(p8_proto_tail, feature(explicit_tail_calls, rust_preserve_none_cc))]
+#![cfg_attr(p8_proto_tail, allow(incomplete_features))]
 //! The p8 interpreter: one loop over register instructions, a task's
 //! frames over its one register file (task.rs), calls resolved once per
 //! call site.

@@ -11,6 +11,9 @@ use p8_bytecode::{Insn, Op, insn};
 // the loop's match, its hand arms then one arm per generated opcode.
 include!(concat!(env!("OUT_DIR"), "/dispatch.rs"));
 
+// #352's prototype loops (a measurement, not the product's loop).
+mod loops;
+
 impl Context<'_> {
     /// Run frames until the bottom one returns. The loop itself runs the
     /// common cases of the hottest instructions: those that need only the
@@ -32,6 +35,19 @@ impl Context<'_> {
         if let Some(e) = self.fiber_throw.take() {
             pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
         }
+        // (#352's prototype: the loop shape under measurement, 0 this one.)
+        match loops::shape() {
+            0 => self.run::<false>(regs, pc).map(|_| ()),
+            shape => self.run_shape(regs, pc, shape),
+        }
+    }
+
+    /// The loop. `ONE`: one instruction only, then `Flow::Go` with the pc
+    /// it left (what #352's prototype loops run an opcode they have no
+    /// handler of their own for through: this loop's arm, unchanged).
+    #[inline(never)]
+    fn run<const ONE: bool>(&mut self, regs: &mut Vec<Value>, mut pc: usize) -> Result<Flow, Throw> {
+        let mut stepped = false;
         // Each round of this loop is one frame's run (the frame's code and
         // window are read once); the inner loop goes back here whenever
         // the frame changes or `slow` ran (it may have moved the registers).
@@ -76,7 +92,7 @@ impl Context<'_> {
                 () => {{
                     match self.slow(regs, pc)? {
                         Flow::Go(next) => pc = next,
-                        Flow::Done => return Ok(()),
+                        Flow::Done => return Ok(Flow::Done),
                     }
                     continue 'frame;
                 }};
@@ -359,7 +375,7 @@ impl Context<'_> {
                         if self.ids.has_pending() {
                             self.run_destructors(regs)?;
                         }
-                        return Ok(());
+                        return Ok(Flow::Done);
                     }
                     leave(&mut self.frames, regs, value);
                     pc = self.frames.last().expect("the caller's frame").pc as usize;
@@ -376,7 +392,7 @@ impl Context<'_> {
                 ($m:ident) => {{
                     match self.cold(regs, pc, Self::$m)? {
                         Flow::Go(next) => pc = next,
-                        Flow::Done => return Ok(()),
+                        Flow::Done => return Ok(Flow::Done),
                     }
                     continue 'frame;
                 }};
@@ -389,7 +405,7 @@ impl Context<'_> {
                 ($ops:expr, $run:expr) => {{
                     match self.out_of_line(regs, pc, $ops, $run)? {
                         Flow::Go(next) => pc = next,
-                        Flow::Done => return Ok(()),
+                        Flow::Done => return Ok(Flow::Done),
                     }
                     continue 'frame;
                 }};
@@ -445,6 +461,12 @@ impl Context<'_> {
                 }};
             }
             loop {
+                if ONE {
+                    if stepped {
+                        return Ok(Flow::Go(pc));
+                    }
+                    stepped = true;
+                }
                 let insn: &Insn = &code[pc];
                 let op = insn.op;
                 // An arm's operands, read in the arm: read before the match,
@@ -2190,7 +2212,9 @@ pub(crate) enum Flow {
 /// convert. A reference is tested by its value (`verify_args` checks
 /// that); a typed variadic by each element of its list (CollectVariadic
 /// made it), as ZEND_RECV_VARIADIC checks them.
-#[inline]
+/// (`always`: #352's prototype loops are more callers than the one loop,
+/// and with them it is a call.)
+#[inline(always)]
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
     clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
