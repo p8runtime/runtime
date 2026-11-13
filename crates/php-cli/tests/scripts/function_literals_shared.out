@@ -1,0 +1,325 @@
+-- round 0
+array(5) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+    [2]=>
+    string(1) "z"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "p"
+    [1]=>
+    string(1) "q"
+  }
+  [2]=>
+  array(2) {
+    [1]=>
+    string(3) "one"
+    [0]=>
+    string(4) "zero"
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [2]=>
+    string(1) "c"
+  }
+  [4]=>
+  array(0) {
+  }
+}
+array(4) {
+  [0]=>
+  string(2) "x!"
+  [1]=>
+  string(1) "y"
+  [2]=>
+  array(1) {
+    ["in"]=>
+    array(3) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+      [2]=>
+      int(3)
+    }
+  }
+  [3]=>
+  string(6) "pushed"
+}
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 24
+array(8) {
+  ["k"]=>
+  string(5) "again"
+  [1]=>
+  string(4) "bool"
+  ["01"]=>
+  string(9) "string 01"
+  [-5]=>
+  string(6) "int -5"
+  ["-0"]=>
+  string(9) "string -0"
+  [2]=>
+  string(5) "float"
+  [""]=>
+  string(4) "null"
+  [3]=>
+  string(4) "tail"
+}
+array(3) {
+  [-3]=>
+  string(1) "a"
+  [-2]=>
+  string(1) "b"
+  [-1]=>
+  string(1) "c"
+}
+array(4) {
+  [5]=>
+  string(4) "five"
+  ["s"]=>
+  string(3) "str"
+  [6]=>
+  string(4) "next"
+  [7]=>
+  string(6) "pushed"
+}
+string(12) "Shared bytes"
+array(1) {
+  ["r"]=>
+  array(1) {
+    ["deep"]=>
+    string(7) "changed"
+  }
+}
+array(2) {
+  [0]=>
+  string(5) "first"
+  [1]=>
+  int(1)
+}
+array(1) {
+  ["d"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+-- round 1
+array(5) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    string(1) "y"
+    [2]=>
+    string(1) "z"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "p"
+    [1]=>
+    string(1) "q"
+  }
+  [2]=>
+  array(2) {
+    [1]=>
+    string(3) "one"
+    [0]=>
+    string(4) "zero"
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [2]=>
+    string(1) "c"
+  }
+  [4]=>
+  array(0) {
+  }
+}
+array(4) {
+  [0]=>
+  string(2) "x!"
+  [1]=>
+  string(1) "y"
+  [2]=>
+  array(1) {
+    ["in"]=>
+    array(3) {
+      [0]=>
+      int(1)
+      [1]=>
+      int(2)
+      [2]=>
+      int(3)
+    }
+  }
+  [3]=>
+  string(6) "pushed"
+}
+
+Deprecated: Using null as an array offset is deprecated, use an empty string instead in %s on line 24
+array(8) {
+  ["k"]=>
+  string(5) "again"
+  [1]=>
+  string(4) "bool"
+  ["01"]=>
+  string(9) "string 01"
+  [-5]=>
+  string(6) "int -5"
+  ["-0"]=>
+  string(9) "string -0"
+  [2]=>
+  string(5) "float"
+  [""]=>
+  string(4) "null"
+  [3]=>
+  string(4) "tail"
+}
+array(3) {
+  [-3]=>
+  string(1) "a"
+  [-2]=>
+  string(1) "b"
+  [-1]=>
+  string(1) "c"
+}
+array(4) {
+  [5]=>
+  string(4) "five"
+  ["s"]=>
+  string(3) "str"
+  [6]=>
+  string(4) "next"
+  [7]=>
+  string(6) "pushed"
+}
+string(12) "Shared bytes"
+array(1) {
+  ["r"]=>
+  array(1) {
+    ["deep"]=>
+    string(7) "changed"
+  }
+}
+array(3) {
+  [0]=>
+  string(5) "first"
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+}
+array(1) {
+  ["d"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+array(2) {
+  ["t"]=>
+  array(1) {
+    ["u"]=>
+    string(1) "v"
+  }
+  [0]=>
+  string(4) "list"
+}
+array(2) {
+  ["t"]=>
+  array(1) {
+    ["u"]=>
+    string(7) "written"
+  }
+  [0]=>
+  string(4) "list"
+}
+array(2) {
+  ["c"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+  ["name"]=>
+  string(6) "holder"
+}
+array(2) {
+  ["c"]=>
+  array(4) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+    [3]=>
+    int(4)
+  }
+  ["name"]=>
+  string(6) "holder"
+}
+array(2) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    string(2) "h1"
+  }
+  [0]=>
+  string(5) "added"
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    string(1) "r"
+  }
+}
+array(1) {
+  ["s"]=>
+  int(2)
+}
+array(1) {
+  ["p"]=>
+  array(1) {
+    ["q"]=>
+    string(1) "r"
+  }
+}
+array(2) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(7) "literal"
+}
+array(2) {
+  [0]=>
+  string(4) "same"
+  [1]=>
+  string(7) "literal"
+}

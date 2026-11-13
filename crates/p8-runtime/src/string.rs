@@ -153,6 +153,9 @@ const POOL_LIMIT: usize = 64 << 20;
 /// entry), counted against the limit.
 const POOL_ENTRY: usize = 64;
 
+/// The strings the pool has room for when it is first made.
+const POOL_FIRST: usize = 1 << 14;
+
 thread_local! {
     /// Each program-memory string as this thread's ordinary string, made
     /// the first time one is wanted (an array key, an owned handle) and
@@ -165,7 +168,10 @@ impl IStr {
     /// new one while the pool has room. None past the bound.
     pub fn intern(bytes: &[u8]) -> Option<&'static IStr> {
         let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-        let pool = pool.get_or_insert_with(|| Pool { by_bytes: Default::default(), size: 0 });
+        // Sized for an application's literals from the start (a WordPress
+        // page interns over ten thousand): the map grew through 13
+        // rehashes otherwise.
+        let pool = pool.get_or_insert_with(|| Pool { by_bytes: crate::fast::HashMap::with_capacity_and_hasher(POOL_FIRST, Default::default()), size: 0 });
         if let Some(s) = pool.by_bytes.get(bytes) {
             return Some(s);
         }
