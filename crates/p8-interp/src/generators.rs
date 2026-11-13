@@ -334,13 +334,13 @@ impl Context<'_> {
             Err(None) => None,
             Err(Some(inner)) => {
                 let started = gen_of(&inner).expect("a Generator").0.borrow().started;
-                if !started || !first {
-                    if let Err(t) = self.resume(regs, &inner, sent, thrown) {
-                        // Out of the inner generator: thrown here, and a
-                        // later `yield from` starts afresh.
-                        state.0.borrow_mut().delegate = None;
-                        return Err(t);
-                    }
+                // An exception out of the inner generator: thrown here, and
+                // a later `yield from` starts afresh.
+                if (!started || !first)
+                    && let Err(t) = self.resume(regs, &inner, sent, thrown)
+                {
+                    state.0.borrow_mut().delegate = None;
+                    return Err(t);
                 }
                 let s = gen_of(&inner).expect("a Generator").0.borrow();
                 if s.finished {
