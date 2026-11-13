@@ -430,12 +430,22 @@ impl Key {
 /// An element as a copy of its array holds it (zend_array_dup), and a
 /// property as a clone holds it (zval_add_ref): a reference nothing else
 /// holds (its variable gone) is a plain value.
-#[inline]
+///
+/// Inline, as zend_array_dup's element copy is: an array's copy runs it
+/// once per element, and a call per element cost as much as the copy
+/// itself. Only a reference goes out of line ([`dup_ref`]).
+#[inline(always)]
 pub(crate) fn dup(v: &Value) -> Value {
     match v.as_reference() {
-        Some(cell) if std::rc::Rc::strong_count(cell) == 1 => cell.borrow().clone(),
-        _ => v.clone(),
+        Some(cell) => dup_ref(v, cell),
+        None => v.clone(),
     }
+}
+
+/// [`dup`] of a reference `v` to `cell`.
+#[inline(never)]
+fn dup_ref(v: &Value, cell: &std::rc::Rc<std::cell::RefCell<Value>>) -> Value {
+    if std::rc::Rc::strong_count(cell) == 1 { cell.borrow().clone() } else { v.clone() }
 }
 
 impl Clone for Packed {
@@ -451,12 +461,16 @@ impl Clone for Packed {
 }
 
 /// zend_array_dup: the table copied into one allocation of its size,
-/// chains and all.
+/// chains and all. Only the taken positions are copied entries; the room
+/// after them is empty buckets that keep their chain heads (the index of
+/// the whole table), as PHP copies nNumUsed buckets and the hash part.
 impl Clone for Hashed {
     fn clone(&self) -> Self {
         // (In a kept buffer when its size is a pooled one.)
         let mut buckets = take(&BUCKETS, self.buckets.len());
-        buckets.extend(self.buckets.iter().map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head }));
+        let (taken, room) = self.buckets.split_at(self.used);
+        buckets.extend(taken.iter().map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head }));
+        buckets.extend(room.iter().map(|b| Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: b.head }));
         Hashed { buckets, used: self.used, live: self.live }
     }
 }
