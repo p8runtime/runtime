@@ -1,0 +1,99 @@
+null: NULL
+false: bool(false)
+int: int(42)
+float: float(1.5)
+lit: string(7) "literal"
+str: string(6) "ababab"
+arr: array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(3)
+  }
+}
+obj: string(4) "in K"
+ro: int(7)
+null: NULL
+false: bool(false)
+int: int(42)
+float: float(1.5)
+lit: string(7) "literal"
+str: string(6) "ababab"
+arr: array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(3)
+  }
+}
+obj: string(4) "in K"
+ro: int(7)
+2 ababab 3 ababab!
+2 ababab 3 ababab!
+2 ababab 3 ababab!
+through ref: int(0)
+copy 1, still 0
+through ref: int(10)
+copy 11, still 10
+through ref: int(20)
+copy 21, still 20
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+unset: NULL
+Undefined property: K::$float
+unset: NULL
+Undefined property: K::$float
+magic: string(1) "x"
+magic set: string(3) "set"
+magic: string(11) "__get(gone)"
+magic set: string(3) "set"
+magic: string(11) "__get(gone)"
+magic set: string(3) "set"
+Error: Typed property K::$typed must not be accessed before initialization
+Error: Typed property K::$typed must not be accessed before initialization
+K k-secret 20 literal
+Sub k-secret 42 literal
+K k-secret 20 literal
+Sub k-secret 42 literal
+sub-secret
+Cannot access private property Sub::$secret
+Cannot access private property Sub::$secret
+dyn int: int(20)
+dyn lit: string(7) "literal"
+dyn arr: array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(3)
+  }
+}
+dyn nope: NULL
+dyn int: int(20)
+kept in K
+kept in K
+property cleared
+destruct in K
+copy dropped
+end
+destruct in K
+destruct in K
