@@ -996,7 +996,7 @@ pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
             *dst = f(*dst);
             *base = f(*base);
         }
-        MethodCall { dst, obj, base, .. } => {
+        MethodCall { dst, obj, base, .. } | MethodCallNow { dst, obj, base, .. } => {
             *dst = f(*dst);
             *obj = f(*obj);
             *base = f(*base);
@@ -1137,14 +1137,18 @@ pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
             *arg = f(*arg);
             *var = f(*var);
         }
-        SendVarMethod { obj, arg, var, .. } => {
+        InitMethod { recv, obj, .. } => {
+            *recv = f(*recv);
             *obj = f(*obj);
+        }
+        SendVarMethod { word, arg, var, .. } => {
+            *word = f(*word);
             *arg = f(*arg);
             *var = f(*var);
         }
-        MethodArgByRef { dst, obj, .. } => {
+        MethodArgByRef { dst, word, .. } => {
             *dst = f(*dst);
-            *obj = f(*obj);
+            *word = f(*word);
         }
         StaticArgByRef { dst, .. } | FuncArgByRef { dst, .. } => *dst = f(*dst),
         Return { src } | Echo { src } | Exit { src, .. } | MatchError { src } | Throw { src } | CatchIf { src, .. } => {
@@ -3686,7 +3690,11 @@ impl<'src> Compiler<'src> {
                 // Mark the call (the last instruction) as wanting a reference.
                 let last = f.code.len() - 1;
                 let writes_r = match f.code[last] {
-                    Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::StaticCall { dst, .. } | Instr::CallSpread { dst, .. } => dst == r,
+                    Instr::Call { dst, .. }
+                    | Instr::MethodCall { dst, .. }
+                    | Instr::MethodCallNow { dst, .. }
+                    | Instr::StaticCall { dst, .. }
+                    | Instr::CallSpread { dst, .. } => dst == r,
                     Instr::Rare { op, a: dst, .. } if op.is_intrinsic() => dst == r,
                     _ => false,
                 };
@@ -3838,10 +3846,25 @@ impl<'src> Compiler<'src> {
         Ok(dst)
     }
 
-    /// A method call's arguments. The method is known only when the call
-    /// runs, so an argument that can be a reference is decided then: a
-    /// variable by `send`'s instruction; an element or property by
-    /// `asks`'s, branching to the reference or the value.
+    /// The start of `obj->m(argc arguments)` (InitMethod): two consecutive
+    /// temporaries, the receiver as captured (returned) and the word of
+    /// the method found on it. A temporary this expression made for the
+    /// receiver (`mark` is where its temporaries start) and made last is
+    /// captured in place: no second copy, nothing to free after.
+    fn init_method(&mut self, f: &mut FnBuilder, obj: Reg, site: u16, argc: u8, mark: usize) -> Reg {
+        let last = f.temps.wrapping_sub(1);
+        let in_place = f.temps > mark && obj == reg(TEMP, last) && !f.ref_temps.contains(&last);
+        let recv = if in_place { obj } else { f.temp() };
+        f.temp();
+        f.emit(Instr::InitMethod { recv, obj, method: site, argc });
+        recv
+    }
+
+    /// A method call's arguments. The method was found when the call
+    /// started (InitMethod), so an argument that can be a reference is
+    /// decided as it is passed: a variable by `send`'s instruction; an
+    /// element or property by `asks`'s, branching to the reference or the
+    /// value.
     fn method_args(
         &mut self,
         f: &mut FnBuilder,
@@ -5263,27 +5286,44 @@ impl<'src> Compiler<'src> {
                 dst
             }
             Expr::MethodCall { target, method, args, .. } => {
-                let obj = self.expr(f, target)?;
                 let text = match method {
                     Expr::Variable { name, .. } => self.text(*name),
                     _ => b"$",
                 };
                 if text.starts_with(b"$") {
                     // `$o->$m()`: the callable [$o, $m].
+                    let obj = self.expr(f, target)?;
                     let m = self.expr(f, method)?;
                     return self.call_pair(f, obj, m, args, hint, mark);
                 }
+                // The receiver captured and the method found before any
+                // argument runs (InitMethod); the sends and the call read
+                // what it left.
+                let obj = self.prop_obj(f, target)?;
                 let site = self.method_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
-                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
-                )?;
+                // No argument, or literals only: nothing is evaluated
+                // between finding the method and calling it, so one
+                // instruction does both (MethodCallNow).
+                if args.iter().all(|a| !a.unpack && a.name.is_none() && self.literal(a.value).is_some()) {
+                    let base = f.temp();
+                    for _ in 1..args.len() {
+                        f.temp();
+                    }
+                    for (n, arg) in args.iter().enumerate() {
+                        self.expr_into(f, arg.value, base + n as Reg)?;
+                    }
+                    let dst = out(f, hint, mark);
+                    f.emit(Instr::MethodCallNow { dst, obj, method: site, base, argc: args.len() as u8 });
+                    return Ok(dst);
+                }
+                let recv = self.init_method(f, obj, site, args.len() as u8, mark);
+                let word = recv + 1;
+                let (base, argc) =
+                    self.method_args(f, args, |n, arg, var| Instr::SendVarMethod { word, n, arg, var }, |dst, n| Instr::MethodArgByRef { dst, word, n })?;
                 // Straight into where the value goes (as a function call's
                 // is): no copy left behind in the arguments' registers.
                 let dst = out(f, hint, mark);
-                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                f.emit(Instr::MethodCall { dst, obj: recv, method: site, base, argc });
                 dst
             }
             // `parent::$prop::get()` / `::set($v)`: the parent's hook (or
@@ -5584,13 +5624,11 @@ impl<'src> Compiler<'src> {
                 };
                 let text = self.text(*name);
                 let site = self.method_site(f, text);
-                let (base, argc) = self.method_args(
-                    f,
-                    args,
-                    |n, arg, var| Instr::SendVarMethod { obj, method: site, n, arg, var },
-                    |dst, n| Instr::MethodArgByRef { dst, obj, method: site, n },
-                )?;
-                f.emit(Instr::MethodCall { dst, obj, method: site, base, argc });
+                let recv = self.init_method(f, obj, site, args.len() as u8, mark);
+                let word = recv + 1;
+                let (base, argc) =
+                    self.method_args(f, args, |n, arg, var| Instr::SendVarMethod { word, n, arg, var }, |dst, n| Instr::MethodArgByRef { dst, word, n })?;
+                f.emit(Instr::MethodCall { dst, obj: recv, method: site, base, argc });
                 let end = f.emit(Instr::Jump { target: 0 });
                 f.patch(is_null, f.here());
                 f.emit(Instr::LoadNull { dst });

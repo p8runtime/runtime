@@ -1,0 +1,63 @@
+RefFirst(x+a, x+b) x=x+a
+RefSecond(x+a, x+b) x=x+b
+RefBoth(x+a+b, x+a+b) x=x+a+b
+RefNone(x+a, x+b) x=x
+RefFirst(x+a, x+b) x=x+a
+RefSecond(x+a, x+b) x=x+b
+RefFirst(a+a, b+b) a=a+a b=b
+RefSecond(a+a, b+b) a=a b=b+b
+RefFirst(a+a, b+b) a=a+a b=b
+RefNone(a+a, b+b) a=a b=b
+RefSecond(a+a, b+b) a=a b=b+b
+RefBoth(a+a, b+b) a=a+a b=b+b
+RefFirst(a+a, b+b) a=a+a b=b
+RefFirst(a+a, b+b) a=a+a b=b
+RefSecond(a+a, b+b) a=a b=b+b
+RefFirst(a+a, b+b) a=a+a b=b
+RefNone(a+a, b+b) a=a b=b
+RefSecond(a+a, b+b) a=a b=b+b
+RefBoth(a+a, b+b) a=a+a b=b+b
+RefFirst(a+a, b+b) a=a+a b=b
+RefFirst(+a, b+b) {"new":"+a"}
+RefNone(+a, b+b) []
+RefFirst(x+a, y+b) x=x+a y=y
+RefFirst(x+a, y+b) x=x+a RefSecond
+RefSecond(x+a, y+b) x=x y=y+b
+RefSecond(x+a, y+b+b) x=x y=y+b+b
+RefBoth(x+a, y+b) x=x+a y=y+b
+RefBoth(x+a+a, y+b+b) x=x+a+a y=y+b+b
+RefSecond(x+a, y+b) x=x y=y+b
+RefSecond(x+a, y+b) x=x y=y+b
+RefNone(literal+a, y+b) y=y
+RefNone(1+a, y+b) y=y
+RefNone(x+a, y+b) y=y
+RefNone(x!+a, y+b) x=x y=y
+RefSecond(literal+a, y+b) y=y+b
+RefSecond(1+a, y+b+b) y=y+b+b
+RefSecond(x+a, y+b+b+b) y=y+b+b+b
+RefSecond(x!+a, y+b+b+b+b) x=x y=y+b+b+b+b
+RefNone(literal+a, y+b) y=y
+RefNone(1+a, y+b) y=y
+RefNone(x+a, y+b) y=y
+RefNone(x!+a, y+b) x=x y=y
+RefNone(literal+a, b+b) RefNone(1+a, 2.5+b)
+same object 'replaced'
+by value Self_
+by value, still $this
+x=x+++
+Wide::m v w23 v w25 v w27
+2 a r0 r1
+2 a b c
+26 v r0 r22 r23 r24 r25
+Wide::m v w23 v w25 v w27
+2 a r0 r1
+2 a b c
+26 v r0 r22 r23 r24 r25
+2026-01-02 Y-m-d 3
+1 stdClass
+Too few arguments to function Odd::needs(), 1 passed in %s on line 175 and exactly 2 expected
+before: x; 1 2 after: x+gen
+no this x+static
+Too few arguments to function Odd::needs(), 1 passed in %s on line 175 and exactly 2 expected
+before: x; 1 2 after: x+gen
+no this x+static

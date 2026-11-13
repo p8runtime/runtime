@@ -1,0 +1,27 @@
+[new a] m() [a gone] | after a
+[new b] m() [b gone] result of b | after b
+[new c] m() [c gone] | after c: result of c
+[new d] m(1) [d gone] | after d
+[new e] m(v) [e gone] | after e
+[new f] eff(arg) m(arg) [f gone] | after f
+[new g] ref(v+) [g gone] | after g v+
+[new h] eff(arg) m(arg) [h gone] | after h
+[new i] me me m() [i gone] | after i
+[new j] ref(v++) ref(v+++) eff(arg) m(arg) [j gone] | after j v+++
+[new k] m() [k gone] result of k [new l] m() [l gone] result of l | after k l
+[new m] [new n] m() [n gone] m(result of n) [m gone] result of m | after m n
+[new o] fail [o gone] | caught from o
+[new p] eff(arg) fail [p gone] | caught from p
+[new q] thrower [q gone] | caught from the argument
+[new r] eff(1) thrower [r gone] | caught from the argument
+[new t] [t gone] | caught Call to undefined method D::nope()
+[new u] keep | after u: u [u gone] | closure dropped
+[new loop 0] m(0) [loop 0 gone] [new loop 1] m(1) [loop 1 gone] [new loop 2] m(2) [loop 2 gone] | after the loop
+[new v] m() [v gone] | after v
+[new w] eff(arg) m(arg) [w gone] | call w done | after w
+[new x] eff(arg) m(arg) [x gone] | after x
+end of run
+[new magic 1] eff(arg) __call anything [magic 1 gone] | after magic 1
+[new magic 2] eff(arg) st | after magic 2
+[magic 2 gone] | magic 2 dropped
+3 eff(Y) 2026

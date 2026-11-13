@@ -1,0 +1,60 @@
+A::m(x+A, y) x=x+A
+A::m(x+A, b) x=x+A
+eff A::m(x+A, named) x=x+A
+V::m(x+V, y) x=x
+V::m(x+V, b) x=x
+eff V::m(x+V, named) x=x
+A::m(x+A, y) x=x+A
+A::m(x+A, b) x=x+A
+eff A::m(x+A, named) x=x+A
+Unknown named parameter $nope
+A::m(x+A, y)
+A::m(x+A, y) x=x+A
+A::m(x+A, named)
+V::m(x+V, y)
+V::m(x+V, y) x=x
+V::m(x+V, named)
+NULL
+string(12) "A::m(x+A, b)"
+string(3) "x+A"
+NULL
+string(1) "x"
+string(12) "V::m(x+V, b)"
+string(1) "x"
+string(11) "A::m(x+A, )"
+NULL
+NULL
+eff string(26) "V::m(in the property+V, b)"
+__call undefined(x+call, second) x=x
+__call undefined(x+call, second) x=x
+eff __call other(arg+call)
+A::__invoke x=x+invoke
+A::__invoke x=x+invoke+invoke
+3 n=3
+3 n=1
+3 n=3
+3 n=3
+3 n=1
+3 n=3
+6 n=6
+A::m(x+A, b) x=x+A
+A::m(x+A, b) x=x+A
+A::m(x+A, b) x=x+A
+A::m(x+A, b) x=x+A
+V::m(x+V, b) x=x
+V::m(x+V, b) x=x
+V::m(x+V, b) x=x
+V::m(x+V, b) x=x
+V::m(x+V, b)
+eff V::m(piped+V, b)
+Base x=x+Base
+Base x=x+make
+Child x=x+Child+Base
+Child x=x+make
+Base x=x+Base
+Base x=x+make
+Hearts?! x=?!
+Spades?! x=?!
+Late::m x=x+Late
+V::m(x+V, b) x=x
+Late::m x=x+Late

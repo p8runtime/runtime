@@ -3,6 +3,7 @@
 //! hold them.
 
 use super::*;
+use p8_bytecode::callee;
 
 /// A function as one context runs it: the shared compiled code, plus what
 /// belongs to this context alone: its constants as values, and what each
@@ -353,10 +354,11 @@ pub(crate) struct MethodSite {
     pub(crate) is_static: bool,
 }
 
-/// What `$o->m()` at one site ran last when that was a PHP method called
-/// on an object: plain numbers, read by the loop's arms (`MethodCall`,
-/// `SendVarMethod`) with no borrow and nothing to upgrade, as a function
-/// call site keeps its callee's index (`Callee::User`).
+/// What `$o->m()` at one site found last when that was a PHP method called
+/// on an object: plain numbers, read by the loop's arms (`InitMethod`,
+/// which hands the answer on as the callee's word, and `MethodCallNow`)
+/// with no borrow and nothing to upgrade, as a function call site keeps
+/// its callee's index (`Callee::User`).
 ///
 /// What makes a kept record safe to use with nothing but two compares:
 ///
@@ -394,45 +396,54 @@ pub(crate) struct UserMethod {
     /// calling code's class (its number; 0 outside one).
     class: u64,
     scope: u64,
-    /// Bit n: parameter n (of the first 64) is taken by reference.
-    refs: u64,
+    /// The callee's word (`p8_bytecode::callee`): what InitMethod leaves
+    /// beside the receiver for the sends and the call, made once, when the
+    /// record is. It says which arguments go by reference (a bit each for
+    /// the first `REF_BITS`; REST_REF for the ones after a by-reference
+    /// variadic parameter, however many; ASK when the method declares more
+    /// parameters than bits, and a send past them asks the code), and
+    /// `code` and `up` again (FAST when `up` fits the word). A record made
+    /// by `unentered` has only this: a method the loop does not enter (a
+    /// builtin one, `__call`, a static method called on an object), whose
+    /// word says so (no FAST) and carries what its sends need.
+    pub(crate) word: i64,
     /// The method's code: its index in the context's `closures`.
     pub(crate) code: u32,
     /// The class that declares the method: this many parents up from the
     /// receiver's class (0: that class itself).
     pub(crate) up: u16,
-    /// The last parameter is a by-reference variadic one (`&...$rest`):
-    /// every argument past the declared parameters goes by reference,
-    /// however many there are (`Function::param_by_ref`).
-    rest_by_ref: bool,
     /// In a static-syntax call's record: the method is static (its frame
     /// has no `$this`). An instance method's frame takes the caller's.
     pub(crate) is_static: bool,
 }
 
-impl UserMethod {
-    /// How many parameters `refs` has a bit for. A method that declares
-    /// more is not remembered here.
-    const PARAMS: usize = 64;
+/// The by-reference part of a callee's word for a method whose parameter
+/// `n` is by reference when `by_ref(n)`, of `params` declared parameters,
+/// the last a by-reference variadic one when `rest`.
+fn word_refs(params: usize, rest: bool, by_ref: impl Fn(usize) -> bool) -> i64 {
+    use p8_bytecode::callee::{ASK, REF_BITS, REF_SHIFT, REST_REF};
+    let bits = (0..REF_BITS as usize).filter(|&n| by_ref(n)).fold(0i64, |m, n| m | 1 << (REF_SHIFT as usize + n));
+    bits | if rest { REST_REF } else { 0 } | if params > REF_BITS as usize { ASK } else { 0 }
+}
 
+impl UserMethod {
     /// The mark of a static-syntax call's record, in `class`: a bit no
     /// class's number has (`ClassId` counts up from 1).
     const STATIC_SYNTAX: u64 = 1 << 63;
 
     /// The record of `code` (at `index` in `closures`) as the method of
     /// `class` called from `scope`, declared `up` parents up; None when it
-    /// does not fit (more than `PARAMS` parameters, deeper than `up` holds).
+    /// does not fit (deeper than `up` holds).
     fn new(class: &Class, scope: Option<&Rc<Class>>, index: u32, up: usize, code: &Function) -> Option<UserMethod> {
-        let declared = code.params.len();
-        if declared > Self::PARAMS {
-            return None;
-        }
         let rest_by_ref = code.params.last().is_some_and(|p| p.variadic && p.by_ref);
-        // (The bits past the declared parameters, for the arguments
-        // below 64: the rest's mode too.)
-        let rest = if rest_by_ref && declared < Self::PARAMS { !0u64 << declared } else { 0 };
-        let refs = code.params.iter().enumerate().fold(rest, |m, (i, p)| if p.by_ref { m | 1 << i } else { m });
-        Some(UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), refs, code: index, up: u16::try_from(up).ok()?, rest_by_ref, is_static: false })
+        let up = u16::try_from(up).ok()?;
+        // FAST: the loop's call may push the frame from the word (a record
+        // is only made of a PHP method run on the receiver as `$this`),
+        // when the word has room for `up`; the argument count is the
+        // call's to test.
+        let enter = if u32::from(up) <= callee::UP_MAX { callee::FAST | i64::from(up) << callee::UP_SHIFT } else { 0 };
+        let word = word_refs(code.params.len(), rest_by_ref, |n| code.param_by_ref(n)) | callee::USER | enter | i64::from(index);
+        Some(UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), word, code: index, up, is_static: false })
     }
 
     /// The record of `code` as the method a static-syntax call on `target`
@@ -440,6 +451,14 @@ impl UserMethod {
     fn for_static(target: &Class, scope: Option<&Rc<Class>>, index: u32, up: usize, code: &Function, is_static: bool) -> Option<UserMethod> {
         let of_class = Self::new(target, scope, index, up, code)?;
         Some(UserMethod { class: of_class.class | Self::STATIC_SYNTAX, is_static, ..of_class })
+    }
+
+    /// The record of a method found on an object of `class` from `scope`
+    /// that the loop does not enter: only its word (never FAST), for
+    /// InitMethod to hand on. `code` names nothing.
+    fn unentered(class: &Class, scope: Option<&Rc<Class>>, word: i64) -> UserMethod {
+        debug_assert!(word & callee::FAST == 0);
+        UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), code: u32::MAX, word, ..UserMethod::default() }
     }
 
     /// Whether this is the record of a static-syntax call on `target` from
@@ -456,11 +475,12 @@ impl UserMethod {
         self.class == class.id.get() && self.scope == scope.map_or(0, |c| c.id.get())
     }
 
-    /// Whether argument `n` goes by reference
-    /// (`Function::param_by_ref(n)` of the method's code).
-    #[inline(always)]
-    pub(crate) fn by_ref(self, n: usize) -> bool {
-        if n < Self::PARAMS { self.refs >> n & 1 != 0 } else { self.rest_by_ref }
+    /// Whether argument `n` goes by reference, as the record's word tells
+    /// a send (`callee::by_ref`); None: past the word's bits of a method
+    /// with more parameters than bits, where a send asks the code.
+    #[cfg(test)]
+    fn by_ref(self, n: usize) -> Option<bool> {
+        callee::by_ref(self.word, n)
     }
 }
 
@@ -503,6 +523,14 @@ pub(crate) enum MethodCode {
 fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
     let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
     p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| s.params.iter().take(64).enumerate().filter(|(_, p)| p.by_ref).fold(0, |m, (i, _)| m | 1 << i))
+}
+
+/// The callee's word of builtin method `name` declared by `declaring`:
+/// what its stub signature takes by reference.
+fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
+    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
+    // (No builtin method has a parameter past the word's bits to ask about.)
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| word_refs(0, false, |n| s.params.get(n).is_some_and(|p| p.by_ref)))
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -774,17 +802,11 @@ impl Context<'_> {
         }
     }
 
-    /// `cached_takes_ref` out of line: for the loop's arms (MethodArgByRef,
-    /// SendVarMethod past its user-method test), where an inlined copy
-    /// would hold registers through the loop's other arms.
-    #[inline(never)]
-    pub(crate) fn cached_takes_ref_out(&self, site: &RefCell<Option<MethodSite>>, class: &Rc<Class>, n: usize) -> Option<bool> {
-        self.cached_takes_ref(site, class, n)
-    }
-
-    /// The same for a static-syntax call (`C::m($a['k'])`, StaticArgByRef):
-    /// the class known without a lookup (`static_target`), the method the
-    /// site's cache has for it. Out of line, as `cached_takes_ref_out`.
+    /// Whether a static-syntax call's method takes its `n`th argument by
+    /// reference (`C::m($a['k'])`, StaticArgByRef): the class known without
+    /// a lookup (`static_target`), the method the site's cache has for it.
+    /// Out of line: an inlined copy would hold registers through the
+    /// loop's other arms.
     #[inline(never)]
     pub(crate) fn static_takes_ref_out(&self, clo: &Closure, class: u16, method: usize, n: usize) -> Option<bool> {
         let target = self.static_target(clo, class)?;
@@ -864,6 +886,57 @@ impl Context<'_> {
         if let Some(user) = UserMethod::new(&o.class, scope, index, up, &code.code) {
             slot.user.set(user);
         }
+    }
+
+    /// After a full method lookup on object `o` at InitMethod: the callee's
+    /// word (`p8_bytecode::callee`) of method `m`, and the site's plain
+    /// record left answering for this class and scope where they decide
+    /// the method. The record is `remember_user_method`'s when the method
+    /// is one the loop enters (its word says FAST). For the rest (a
+    /// builtin method, `__call`, a static method called on an object, a
+    /// PHP method the record has no room for) the word is made here, with
+    /// what the sends need of it, and kept as a record of that word alone
+    /// (`UserMethod::unentered`); not kept for a call an inner iterator
+    /// takes, nor a Closure's `__invoke`: those are found again each time.
+    pub(crate) fn callee_word(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) -> i64 {
+        let scope = self.frames.last().and_then(|f| f.scope.as_ref());
+        self.remember_user_method(slot, o, m);
+        let q = slot.user.get();
+        if q.is_for(&o.class, scope) {
+            return q.word;
+        }
+        // `$closure->__invoke($x)`: the builtin method hands its arguments
+        // to the closure's own code, so what that takes by reference is
+        // what the call sends by reference (one per Closure object, never
+        // the site's to keep).
+        if let crate::classes::Code::Native(_, name) = &m.func
+            && name.as_bytes().eq_ignore_ascii_case(b"__invoke")
+            && let Some(f) = crate::callable::closure_data(o).and_then(|d| d.func.user())
+        {
+            let f = &*f.code;
+            return word_refs(0, f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
+        }
+        let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
+        let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
+        let word = match (&m.func, &m.scope) {
+            // __call takes (name, [arguments]): everything by value.
+            _ if m.trampoline.is_some() => 0,
+            (crate::classes::Code::User(code), _) => {
+                let f = &*code.code;
+                let refs = word_refs(f.params.len(), f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
+                // (Its index: only a declared method's closure has one,
+                // and the context's closure there is this one. With none
+                // to name it by there is nothing to ask past the bits.)
+                let index = code.index.get();
+                if self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) { refs | callee::USER | i64::from(index) } else { refs & !callee::ASK }
+            }
+            (crate::classes::Code::Native(_, name), Some(declaring)) => native_word(declaring, name),
+            (crate::classes::Code::Native(..), None) => 0,
+        };
+        if own_class && on_this && m.closure.is_none() {
+            slot.user.set(UserMethod::unentered(&o.class, scope, word));
+        }
+        word
     }
 
     /// After `static_frame` resolved the static-syntax call at site
@@ -1201,7 +1274,7 @@ mod tests {
             let records: Vec<_> = run.methods.iter().map(|m| m.user.get()).filter(|r| r.class != 0).collect();
             assert_eq!(records.len(), 1, "run()'s one method call site remembered its method");
             assert!(records[0].is_for(&class, None), "the site's record is of this request's A");
-            assert!(records[0].by_ref(0) && !records[0].by_ref(1));
+            assert_eq!((records[0].by_ref(0), records[0].by_ref(1)), (Some(true), Some(false)));
             (records[0], class.id.get(), Rc::downgrade(&class))
         }
         let program = compile(source, &registry);
@@ -1256,7 +1329,7 @@ mod tests {
             assert_eq!((run.len(), m.len()), (2, 1), "each call site remembered its method");
             let (named, object, own) = (run[0], run[1], m[0]);
             // `A::m()` from no class, `self::n()` from A: static methods of A.
-            assert!(named.is_static_for(&class, None) && named.is_static && named.by_ref(0) && !named.by_ref(1));
+            assert!(named.is_static_for(&class, None) && named.is_static && named.by_ref(0) == Some(true) && named.by_ref(1) == Some(false));
             assert!(own.is_static_for(&class, Some(&class)) && own.is_static && !own.is_static_for(&class, None));
             // A static-syntax call's record is no object's, an object's no
             // static-syntax call's.
@@ -1282,15 +1355,30 @@ mod tests {
         }
     }
 
-    /// The record's by-reference answer is `Function::param_by_ref`'s for
-    /// every argument number, past the 64 bits too: a by-reference
-    /// variadic last parameter has its own flag. A method with more
-    /// declared parameters than bits is not remembered.
+    /// The record's by-reference answer (its word's) is
+    /// `Function::param_by_ref`'s for every argument number, past the
+    /// word's bits too: a by-reference variadic last parameter has its own
+    /// flag. For a method with more declared parameters than bits, the
+    /// word answers for the arguments it has bits for and says to ask the
+    /// code for the others.
     #[test]
     fn a_method_record_answers_by_reference_as_the_code_does() {
         let registry = Arc::new(Registry::default());
         let params = |n: usize, last: &str| (0..n).map(|i| if i % 3 == 1 { format!("&$p{i}") } else { format!("$p{i}") }).chain([last.to_string()]).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(", ");
-        let shapes = [params(0, ""), params(0, "&...$rest"), params(2, "...$rest"), params(2, "&...$rest"), params(62, "&...$rest"), params(63, "&...$rest"), params(63, "...$rest"), params(64, ""), params(64, "&...$rest"), params(64, "&$last")];
+        let bits = usize::from(p8_bytecode::callee::REF_BITS);
+        let shapes = [
+            params(0, ""),
+            params(0, "&...$rest"),
+            params(2, "...$rest"),
+            params(2, "&...$rest"),
+            params(bits - 2, "&...$rest"),
+            params(bits - 1, "&...$rest"),
+            params(bits - 1, "...$rest"),
+            params(bits, ""),
+            params(bits, "&...$rest"),
+            params(bits, "&$last"),
+            params(64, "&...$rest"),
+        ];
         let mut isolate = Isolate::new(Arc::clone(&registry));
         for shape in &shapes {
             let program = compile(&format!("<?php class A {{}} function f({shape}) {{}} new A;"), &registry);
@@ -1300,14 +1388,10 @@ mod tests {
             cx.declare_classes(&program.classes);
             assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
             let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
-            let record = super::UserMethod::new(&class, None, 0, 0, code);
-            if code.params.len() > 64 {
-                assert!(record.is_none(), "f({shape}): more parameters than bits, not remembered");
-                continue;
-            }
-            let record = record.unwrap_or_else(|| panic!("f({shape}) remembered"));
+            let record = super::UserMethod::new(&class, None, 0, 0, code).unwrap_or_else(|| panic!("f({shape}) remembered"));
             for n in 0..200 {
-                assert_eq!(record.by_ref(n), code.param_by_ref(n), "argument {n} of f({shape})");
+                let asks = code.params.len() > bits && n >= bits;
+                assert_eq!(record.by_ref(n), (!asks).then(|| code.param_by_ref(n)), "argument {n} of f({shape})");
             }
         }
     }

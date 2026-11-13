@@ -641,43 +641,16 @@ impl Context<'_> {
                         released |= put(&mut w[rx!(dst)], r);
                         done!(released);
                     }
-                    // `$o->m($v)`: an argument of the method the call site's
-                    // cache names for this class and scope (a user one's
-                    // code, a native one's by-reference bits), copied when
-                    // it takes it by value, the variable made a reference
-                    // when it takes it by reference (a miss, an undefined
-                    // variable: `step`, which looks the method up by name).
+                    // `$o->m($v)`: an argument of the method InitMethod
+                    // found, whose word (in a) has one bit for it: the
+                    // variable made a reference when the method takes it
+                    // by reference, copied when by value (an undefined
+                    // variable: `step`). No site is asked.
                     Op::SendVarMethod => {
                         ops!(a, b, c, imm);
-                        let (obj, arg, var, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
-                        // (An object through a reference, as MethodCall's.)
-                        let held;
-                        let o = match w[rx!(obj)].as_object() {
-                            Some(o) => o,
-                            None => {
-                                held = ref_object(&w[rx!(obj)]);
-                                match &held {
-                                    Some(o) => o,
-                                    None => slow!(),
-                                }
-                            }
-                        };
-                        // The site's plain record (`UserMethod`) has the
-                        // method's by-reference bits.
-                        let q = clo.methods[method].user.get();
-                        // A miss (a native method, a class or scope the
-                        // site has not seen, a megamorphic site): the
-                        // method the call will run, found by name
-                        // (`call_takes_ref_out`), as `step` asks.
-                        let by_ref = if q.is_for(&o.class, top.scope.as_ref()) {
-                            q.by_ref(n)
-                        } else {
-                            match self.cached_takes_ref_out(&clo.methods[method], &o.class, n) {
-                                Some(by_ref) => by_ref,
-                                None => self.call_takes_ref_out(&o.class, clo.code.sites[method].sym, n),
-                            }
-                        };
-                        if by_ref {
+                        let (arg, var) = (b, c);
+                        let Some(word) = w[rx!(a)].as_int() else { slow!() };
+                        if word >> (p8_bytecode::callee::REF_SHIFT + imm) & 1 != 0 {
                             let cell = make_ref(&mut w[..], Reg::from(var));
                             done!(put(&mut w[rx!(arg)], Value::reference(cell)));
                         } else {
@@ -1101,34 +1074,94 @@ impl Context<'_> {
                             }
                         }
                     }
-                    // A user method the call site's cache names for this class
-                    // and scope, on an object, with its required arguments, and
-                    // no interrupt pending: anything else is `method_call_ops`'s
-                    // (out of line).
+                    // The call InitMethod started: its word (in b + 1) says
+                    // whether the method is a PHP one this arm may enter
+                    // (FAST: on the receiver as `$this`), its code and how
+                    // far up its class is; the code says whether these
+                    // arguments enter it where it is made (`direct`: none
+                    // required missing, not a generator). No site is asked.
+                    // Anything else, or an interrupt pending, is
+                    // `method_call_ops`'s (out of line).
                     Op::MethodCall => {
                         ops!(a, b, c, imm);
                         let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16) as usize);
-                        // What the cached case does not take (a native
-                        // method, a class or scope the site has not seen:
-                        // the lookup by name, remembered; __call, a
-                        // generator, missing arguments, the errors, an
-                        // interrupt due): out of line on the arm's operands
-                        // (`method_call_ops`).
+                        // What the word does not take (a native method,
+                        // __call, a static method, a generator, missing
+                        // arguments, an interrupt due): out of line on the
+                        // arm's operands (`method_call_ops`), on the
+                        // receiver as captured.
                         macro_rules! uncached {
                             () => {{
                                 let ops = MethodCallOps { dst: Reg::from(dst), obj: Reg::from(obj), args: Reg::from(args), argc: n as u8, method: method as u16 };
                                 out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_ops(regs, clo, base, at, ops))
                             }};
                         }
+                        let word = match w[rk!(rx!(obj) + 1)].as_int() {
+                            Some(word) if word & p8_bytecode::callee::FAST != 0 => word,
+                            _ => uncached!(),
+                        };
+                        let target = &self.closures[(word & p8_bytecode::callee::CODE) as usize];
+                        if !direct(target.shape, &target.code, n as u8) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            uncached!();
+                        }
+                        let Some(o) = w[rx!(obj)].as_object() else { uncached!() };
+                        let mut declaring = &o.class;
+                        for _ in 0..(word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX {
+                            let Some(parent) = &declaring.parent else { uncached!() };
+                            declaring = parent;
+                        }
+                        let declaring = Rc::clone(declaring);
+                        // The receiver moves out of its temporary into the
+                        // call's `$this`: no count taken, none given back.
+                        let Ok(this) = std::mem::replace(&mut w[rx!(obj)], Value::UNDEF).into_object() else { uncached!() };
+                        // (No `called`: it is `$this`'s class, `called_class`.)
+                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.this = Some(this);
+                        frame.scope = Some(declaring);
+                        enter(&mut self.frames, regs);
+                        pc = 0;
+                        continue 'frame;
+                    }
+                    // InitMethod and MethodCall in one, for a call no
+                    // argument of which runs anything (none, or literals
+                    // already at c): the receiver read here (`$this` from
+                    // the frame when imm >> 24), the record the site keeps
+                    // for its class from this scope, and the frame entered
+                    // when that is of a PHP method these arguments enter
+                    // (`direct`). Anything else (a class or scope the site
+                    // has not seen, a method the loop does not enter, the
+                    // errors, an interrupt due) is `method_call_now_ops`'s,
+                    // out of line.
+                    Op::MethodCallNow => {
+                        ops!(a, b, c, imm);
+                        let (dst, obj, args, method, n) = (a, b, c, (imm & 0xffff) as usize, (imm >> 16 & 0xff) as usize);
+                        let on_this = imm >> 24 != 0;
+                        macro_rules! uncached {
+                            () => {{
+                                let ops = MethodCallOps {
+                                    dst: Reg::from(dst),
+                                    obj: if on_this { p8_bytecode::THIS } else { Reg::from(obj) },
+                                    args: Reg::from(args),
+                                    argc: n as u8,
+                                    method: method as u16,
+                                };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.method_call_now_ops(regs, clo, base, at, ops))
+                            }};
+                        }
                         // (An object through a reference: `global $o; $o->m()`.)
                         let held;
-                        let o = match w[rx!(obj)].as_object() {
-                            Some(o) => o,
-                            None => {
-                                held = ref_object(&w[rx!(obj)]);
-                                match &held {
-                                    Some(o) => o,
-                                    None => uncached!(),
+                        let o = if on_this {
+                            let Some(this) = &top.this else { uncached!() };
+                            this
+                        } else {
+                            match w[rx!(obj)].as_object() {
+                                Some(o) => o,
+                                None => {
+                                    held = ref_object(&w[rx!(obj)]);
+                                    match &held {
+                                        Some(o) => o,
+                                        None => uncached!(),
+                                    }
                                 }
                             }
                         };
@@ -1137,14 +1170,15 @@ impl Context<'_> {
                         // numbers), as its index in `closures` (a function
                         // call site's shape), its class this many parents
                         // up. (The class is this request's, so the index
-                        // is of this request's table: `UserMethod`.)
+                        // is of this request's table: `UserMethod`.) A
+                        // record of a method the loop does not enter
+                        // (`UserMethod::unentered`) names no code.
                         let q = clo.methods[method].user.get();
                         if !q.is_for(&o.class, top.scope.as_ref()) {
                             uncached!();
                         }
                         let Some(target) = self.closures.get(q.code as usize) else { uncached!() };
-                        let code = &target.code;
-                        if n < code.required || code.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                        if !direct(target.shape, &target.code, n as u8) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
                         let mut declaring = &o.class;
@@ -1156,7 +1190,7 @@ impl Context<'_> {
                         let this = Rc::clone(o);
                         // A temporary (`(new A)->f()`) is released as it is used:
                         // the call's `$this` holds the object.
-                        if is_temp(&clo.code, Reg::from(obj)) {
+                        if !on_this && is_temp(&clo.code, Reg::from(obj)) {
                             clear(&mut w[rx!(obj)]);
                         }
                         // (No `called`: it is `$this`'s class, `called_class`.)
@@ -1493,34 +1527,63 @@ impl Context<'_> {
                         let Some(v) = prop_inc_dec(o, site.get(), scope, imm) else { slow!() };
                         done!(put(&mut w[rx!(b)], v));
                     }
-                    // Whether `$o->m(..)` takes argument c by reference, when
-                    // the call site's cache knows the method for this class
-                    // and scope (`cached_takes_ref`, a user method's or a
-                    // native one's); a miss finds the method the call will
-                    // run (`call_takes_ref_out`, as `step` does); not an
-                    // object (through a reference either): no.
+                    // Whether the method InitMethod found takes argument c by
+                    // reference: its bit of the word in b.
                     Op::MethodArgByRef => {
                         ops!(a, b, c, imm);
-                        let held;
-                        let o = match w[rx!(b)].as_object() {
-                            Some(o) => o,
-                            None => {
-                                held = ref_object(&w[rx!(b)]);
-                                match &held {
-                                    Some(o) => o,
-                                    None => {
-                                        done!(put(&mut w[rx!(a)], Value::FALSE));
-                                        continue;
+                        let by_ref = w[rx!(b)].as_int().is_some_and(|word| word >> (p8_bytecode::callee::REF_SHIFT + u32::from(c)) & 1 != 0);
+                        done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                    }
+                    // Start `$o->m(..)`: the receiver (the object in b, or
+                    // through a reference there; `$this` from the frame
+                    // when c) captured in a, and the word the site keeps
+                    // for its class from this scope in a + 1. Anything
+                    // else (a class or scope the site has not seen: the
+                    // lookup by name, and its errors; not an object) is
+                    // `init_method_ops`'s, out of line on the arm's
+                    // operands.
+                    Op::InitMethod => {
+                        ops!(a, b, c, imm);
+                        let recv = rx!(a);
+                        macro_rules! unseen {
+                            () => {{
+                                let ops = (Reg::from(a), if c != 0 { p8_bytecode::THIS } else { Reg::from(b) }, (imm & 0xffff) as u16, (imm >> 16) as u8);
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.init_method_ops(regs, clo, base, at, ops))
+                            }};
+                        }
+                        // The site's plain record (`UserMethod`), keyed by
+                        // the class's and the scope's numbers: its word is
+                        // the answer.
+                        let q = clo.methods[(imm & 0xffff) as usize].user.get();
+                        let this = if c != 0 {
+                            let Some(this) = &top.this else { unseen!() };
+                            if !q.is_for(&this.class, top.scope.as_ref()) {
+                                unseen!();
+                            }
+                            Some(Rc::clone(this))
+                        } else {
+                            match w[rx!(b)].as_object() {
+                                Some(o) => {
+                                    if !q.is_for(&o.class, top.scope.as_ref()) {
+                                        unseen!();
                                     }
+                                    // (A temporary captured in place stays.)
+                                    (rx!(b) != recv).then(|| Rc::clone(o))
+                                }
+                                None => {
+                                    let Some(o) = ref_object(&w[rx!(b)]) else { unseen!() };
+                                    if !q.is_for(&o.class, top.scope.as_ref()) {
+                                        unseen!();
+                                    }
+                                    Some(o)
                                 }
                             }
                         };
-                        let n = usize::from(c);
-                        let by_ref = match self.cached_takes_ref_out(&clo.methods[imm as usize], &o.class, n) {
-                            Some(by_ref) => by_ref,
-                            None => self.call_takes_ref_out(&o.class, clo.code.sites[imm as usize].sym, n),
-                        };
-                        done!(put(&mut w[rx!(a)], Value::bool(by_ref)));
+                        let released = put(&mut w[rk!(recv + 1)], Value::int(q.word));
+                        match this {
+                            Some(this) => done!(put(&mut w[recv], Value::object(this)) | released),
+                            None => done!(released),
+                        }
                     }
                     // `&$o->p`: the declared slot the name's cache entry has
                     // for this class and scope, made a reference

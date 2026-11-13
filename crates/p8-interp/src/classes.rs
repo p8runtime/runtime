@@ -142,10 +142,11 @@ impl Context<'_> {
 
     /// The method `$obj->name(…)` runs when code of class `scope` calls it
     /// on an instance of `class`, and whether that code may call it (None:
-    /// the class has no method of that name). `method_frame` and the sends
-    /// before a call both ask here, so the method a send asks about is the
-    /// method the call runs. Always inline: a send's miss is this and one
-    /// test more, and as a call it gave its answer back through memory.
+    /// the class has no method of that name). The one place a method call
+    /// picks its method (`method_lookup`: InitMethod finds it once, and the
+    /// sends and the call take that answer, so the method a send asks about
+    /// is the method the call runs). Always inline: as a call it gave its
+    /// answer back through memory.
     #[inline(always)]
     pub(crate) fn pick_method<'c>(&self, class: &'c Rc<Class>, scope: Option<&'c Rc<Class>>, key: Option<Sym>) -> Option<Picked<'c>> {
         let method = called_method(class, scope.map(|s| &**s), key)?;
@@ -158,24 +159,6 @@ impl Context<'_> {
         Some(Picked { method, visible: may_call, declaring: Some(declaring) })
     }
 
-    /// Whether the method `$obj->name(…)` runs when the running code calls
-    /// it on an instance of `class` takes argument `n` by reference: the
-    /// method `method_frame` picks (`pick_method`), not the class's method
-    /// of that name. A method the caller may not see takes nothing by
-    /// reference (__call answers, by value, or the call is an error). For
-    /// a send on a site's miss (SendVarMethod, MethodArgByRef: a class or
-    /// scope the site has not seen).
-    pub(crate) fn call_takes_ref(&self, class: &Rc<Class>, key: Sym, n: usize) -> bool {
-        // The frame's scope, borrowed where it is: a send takes no count of it.
-        let scope = self.frames.last().and_then(|f| f.scope.as_ref());
-        self.pick_method(class, scope, Some(key)).is_some_and(|p| p.visible && self.param_by_ref(p.method, n))
-    }
-
-    /// `call_takes_ref` out of line, for the loop's sends.
-    #[inline(never)]
-    pub(crate) fn call_takes_ref_out(&self, class: &Rc<Class>, key: Sym, n: usize) -> bool {
-        self.call_takes_ref(class, key, n)
-    }
 
     /// A call of a builtin method PHP deprecates (zend_deprecated_function).
     #[inline]
@@ -929,11 +912,19 @@ impl Context<'_> {
 
     /// `$obj->method(args)`: the frame to push.
     pub(crate) fn method_frame(&mut self, target: &Value, key: Option<Sym>, display: &[u8]) -> Result<MethodFrame, Throw> {
+        self.method_lookup(target, key, display, true)
+    }
+
+    /// `method_frame`, for the call itself (`call`) or for the start of
+    /// one (InitMethod: the method found and its errors raised before the
+    /// arguments run; what PHP reports as the call is made, a builtin
+    /// method's deprecation, is left to the call).
+    pub(crate) fn method_lookup(&mut self, target: &Value, key: Option<Sym>, display: &[u8], call: bool) -> Result<MethodFrame, Throw> {
         p8_runtime::counts::bump(p8_runtime::counts::Count::MethodLookup);
         let object = if let Some(o) = target.as_object() {
             Rc::clone(o)
         } else if let Some(cell) = target.as_reference() {
-            return self.method_frame(&cell.borrow().clone(), key, display);
+            return self.method_lookup(&cell.borrow().clone(), key, display, call);
         } else {
             return Err(self.throw(
                 "Error",
@@ -952,7 +943,7 @@ impl Context<'_> {
                 && let Some(inner) = forward(&object)
                 && answers(&inner, key)
             {
-                return self.method_frame(&Value::object(inner), key, display);
+                return self.method_lookup(&Value::object(inner), key, display, call);
             }
             return Err(self.throw(
                 "Error",
@@ -972,7 +963,9 @@ impl Context<'_> {
         if method.is_abstract {
             return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(&method.declaring_name), text(&method.name))));
         }
-        self.method_deprecated(method);
+        if call {
+            self.method_deprecated(method);
+        }
         let func = self.code_of(method);
         let this = (!method.is_static).then_some(object);
         Ok(MethodFrame::method(func, this, declaring, class))

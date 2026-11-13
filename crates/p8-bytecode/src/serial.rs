@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 28;
+pub const FORMAT: u32 = 30;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -851,9 +851,10 @@ impl Code for Instr {
             Instr::IterNext { iter, val, key, has_key, end } => { w.byte(46); iter.put(w); val.put(w); key.put(w); has_key.put(w); end.put(w); }
             Instr::Call { site, base, argc, dst } => { w.byte(47); site.put(w); base.put(w); argc.put(w); dst.put(w); }
             Instr::SendVar { site, n, arg, var } => { w.byte(48); site.put(w); n.put(w); arg.put(w); var.put(w); }
-            Instr::SendVarMethod { obj, method, n, arg, var } => { w.byte(49); obj.put(w); method.put(w); n.put(w); arg.put(w); var.put(w); }
+            Instr::SendVarMethod { word, n, arg, var } => { w.byte(49); word.put(w); n.put(w); arg.put(w); var.put(w); }
+            Instr::InitMethod { recv, obj, method, argc } => { w.byte(109); recv.put(w); obj.put(w); method.put(w); argc.put(w); }
             Instr::SendVarStatic { class, method, n, arg, var } => { w.byte(50); class.put(w); method.put(w); n.put(w); arg.put(w); var.put(w); }
-            Instr::MethodArgByRef { dst, obj, method, n } => { w.byte(51); dst.put(w); obj.put(w); method.put(w); n.put(w); }
+            Instr::MethodArgByRef { dst, word, n } => { w.byte(51); dst.put(w); word.put(w); n.put(w); }
             Instr::StaticArgByRef { dst, class, method, n } => { w.byte(52); dst.put(w); class.put(w); method.put(w); n.put(w); }
             Instr::FuncArgByRef { dst, site, n } => { w.byte(53); dst.put(w); site.put(w); n.put(w); }
             Instr::Return { src } => { w.byte(54); src.put(w); }
@@ -902,6 +903,7 @@ impl Code for Instr {
             Instr::IssetProp { dst, obj, name } => { w.byte(97); dst.put(w); obj.put(w); name.put(w); }
             Instr::UnsetProp { obj, name } => { w.byte(98); obj.put(w); name.put(w); }
             Instr::MethodCall { dst, obj, method, base, argc } => { w.byte(99); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
+            Instr::MethodCallNow { dst, obj, method, base, argc } => { w.byte(110); dst.put(w); obj.put(w); method.put(w); base.put(w); argc.put(w); }
             Instr::StaticCall { dst, class, method, base, argc, vars } => { w.byte(100); dst.put(w); class.put(w); method.put(w); base.put(w); argc.put(w); vars.put(w); }
             Instr::ClassConst { dst, class, name } => { w.byte(101); dst.put(w); class.put(w); name.put(w); }
             Instr::FetchStaticProp { dst, class, name } => { w.byte(102); dst.put(w); class.put(w); name.put(w); }
@@ -964,9 +966,9 @@ impl Code for Instr {
             46 => Instr::IterNext { iter: Code::get(r)?, val: Code::get(r)?, key: Code::get(r)?, has_key: Code::get(r)?, end: Code::get(r)? },
             47 => Instr::Call { site: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)?, dst: Code::get(r)? },
             48 => Instr::SendVar { site: Code::get(r)?, n: Code::get(r)?, arg: Code::get(r)?, var: Code::get(r)? },
-            49 => Instr::SendVarMethod { obj: Code::get(r)?, method: Code::get(r)?, n: Code::get(r)?, arg: Code::get(r)?, var: Code::get(r)? },
+            49 => Instr::SendVarMethod { word: Code::get(r)?, n: Code::get(r)?, arg: Code::get(r)?, var: Code::get(r)? },
             50 => Instr::SendVarStatic { class: Code::get(r)?, method: Code::get(r)?, n: Code::get(r)?, arg: Code::get(r)?, var: Code::get(r)? },
-            51 => Instr::MethodArgByRef { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, n: Code::get(r)? },
+            51 => Instr::MethodArgByRef { dst: Code::get(r)?, word: Code::get(r)?, n: Code::get(r)? },
             52 => Instr::StaticArgByRef { dst: Code::get(r)?, class: Code::get(r)?, method: Code::get(r)?, n: Code::get(r)? },
             53 => Instr::FuncArgByRef { dst: Code::get(r)?, site: Code::get(r)?, n: Code::get(r)? },
             54 => Instr::Return { src: Code::get(r)? },
@@ -1024,6 +1026,8 @@ impl Code for Instr {
             106 => Instr::Clone { dst: Code::get(r)?, src: Code::get(r)? },
             107 => Instr::Rare { op: Code::get(r)?, a: Code::get(r)?, b: Code::get(r)?, c: Code::get(r)?, class: Code::get(r)? },
             108 => Instr::LoadConst { dst: Code::get(r)?, k: Code::get(r)? },
+            109 => Instr::InitMethod { recv: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, argc: Code::get(r)? },
+            110 => Instr::MethodCallNow { dst: Code::get(r)?, obj: Code::get(r)?, method: Code::get(r)?, base: Code::get(r)?, argc: Code::get(r)? },
             _ => return Err(Bad),
         })
     }

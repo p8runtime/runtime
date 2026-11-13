@@ -1,0 +1,10 @@
+P::f v=v, P::g v=P::g wrote
+P::f v=v, P::g v=P::g wrote
+P::f v=v, P::g v=P::g wrote
+P::f v=v, P::g v=P::g wrote
+P::f v=v, P::g v=P::g wrote
+P::f v=v, P::g v=P::g wrote
+Q::f v=Q::f wrote, Q::g v=v
+Q::f v=Q::f wrote, Q::g v=v
+P::f v=v | Q::f v=Q::f wrote | Q::f v=Q::f wrote
+P::f v=v | Q::f v=Q::f wrote | Q::f v=Q::f wrote

@@ -114,7 +114,7 @@ hand VerifyArgs native=verify_args
 hand VerifyReturn native=verify_return
 /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
 hand Intrinsic
-/// pass b's variable c as argument imm >> 16 of method site imm & 0xffff on the object in a
+/// pass variable c into b as argument imm of the method whose word (InitMethod's) is in a
 hand SendVarMethod
 /// pc = imm
 hand Jump native=jump
@@ -174,7 +174,8 @@ hand Call native=call
 /// call reads its arguments where they are, and pc goes past the call.
 /// Anything else runs the first Move (and the code after it) as it is.
 hand CallRegs native=call_regs
-/// a = b->(method site imm & 0xffff) with the imm >> 16 arguments at c
+/// a = b->(method site imm & 0xffff) with the imm >> 16 arguments at c; b
+/// is the receiver InitMethod captured, b + 1 the callee's word
 hand MethodCall
 /// a = a new object of class reference imm (its constructor not run)
 hand New
@@ -223,8 +224,8 @@ hand Cast
 /// into b; imm: INC and POST (bits 16 and 17), PROP_PATH_THIS (`$this`,
 /// not a)
 hand PropIncDec
-/// a = whether argument c of method site imm on the object in b is passed
-/// by reference
+/// a = whether argument c of the method whose word (InitMethod's) is in b
+/// is passed by reference
 hand MethodArgByRef
 /// a = a reference to the object in b's property (site imm), made one
 hand PropRef
@@ -364,3 +365,11 @@ hand ArrayPushC
 /// VAL_CONST; the constants in imm bits 0..14 and 14..28; TAKE as
 /// ArraySet's)
 hand ArraySetC
+/// start a call of method site imm & 0xffff with imm >> 16 arguments: a =
+/// the receiver (the object in b, or `$this` when c), a + 1 = the word of
+/// the method found on it
+hand InitMethod
+/// a = (the object in b, or `$this` when imm >> 24)->(method site imm &
+/// 0xffff) with the (imm >> 16 & 0xff) literal arguments at c: InitMethod
+/// and MethodCall in one, when no argument is evaluated between them
+hand MethodCallNow

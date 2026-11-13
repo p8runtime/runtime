@@ -1,0 +1,11 @@
+Real::plain lazy
+eff(arg) (initializer) Real::read from the initializer (Real) x=x+read
+Other initialized
+eff(arg) Other::read x=x
+eff(arg) Real::read from the initializer (Real) x=x+read
+eff(arg) Other::read x=x
+eff(arg) (factory) Real::read the real instance (Real) x=x+read
+Other Real
+Real::read the real instance (Real) x=x+read
+eff(arg) caught initializer failed x=x+read
+eff(arg) Real::read second try (Real) x=x+read

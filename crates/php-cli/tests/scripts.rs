@@ -246,9 +246,8 @@ fn later(name: &str) {
 /// arguments run (INIT_METHOD_CALL, then the sends): an argument that
 /// replaces the receiver's variable does not change the method called,
 /// and a call on null or of a method that is not there is an error
-/// before any argument runs. p8 does both in the call, after them.
+/// before any argument runs. p8 does the same (`InitMethod`, #490).
 #[test]
-#[ignore = "#490: p8 takes a method call's receiver and finds the method after the arguments have run"]
 fn later_method_call_order() {
     later("method_call_order");
 }
@@ -257,7 +256,6 @@ fn later_method_call_order() {
 /// on null, or of a method that is not there, comes with no "Undefined
 /// variable" warning before it (the variable is never read).
 #[test]
-#[ignore = "#490: p8 reads a method call's arguments before it finds the method (a warning before the error)"]
 fn later_method_call_error_first() {
     later("method_call_error_first");
 }

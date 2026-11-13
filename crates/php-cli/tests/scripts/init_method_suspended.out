@@ -1,0 +1,24 @@
+[new in generator] first
+A::m on in generator(x+m, sent 1) x=x+m
+second
+[new replacement] [in generator gone] A::m on in generator(x+m, sent 2) x=x+m B
+[new temporary] third
+fourth
+[temporary gone] A::m on temporary(x+m+m, sent 3sent 4)
+[replacement gone] done
+
+[new dropped] dropping: [dropped gone] dropped
+[new thrown into] [thrown into gone] caught in the argument
+2
+[new outer] nested
+A::m on outer(x+m+m, A::m on outer(x+m, value)) x=x+m+m
+inner
+A::m on outer(x+m+m+m+m, A::m on outer(x+m+m+m, inner returned)) x=x+m+m+m+m
+[outer gone] |
+[new in fiber] suspended
+A::m on in fiber(x+m, resumed with) x=x+m
+[in fiber gone] [new fiber temporary] again
+[fiber temporary gone] caught thrown into the fiber
+[new abandoned] last
+abandoning: [abandoned gone] abandoned
+3 60

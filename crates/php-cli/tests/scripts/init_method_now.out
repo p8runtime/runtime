@@ -1,0 +1,42 @@
+A in A::hit 1 | A in A::hit 2 | B::hit 1 | A in A::hit 3 | B::hit 2
+A::own, A::own, A::own, A::own
+0: A::own
+1: A::own
+2: 2: Call to private method A::own() from global scope
+3: A::own
+4: 4: Call to private method A::own() from global scope
+A::lit(1, 'dflt') A::lit('x', 2.5) A::lit(NULL, true)
+A::lit(1, 'dflt') A::lit('x', 2.5) A::lit(NULL, true)
+A in A::hit 4 | A in A::hit 5 | B::hit 3 | A in A::hit 6
+Using $this when not in object context
+Using $this when not in object context
+temporary: [A gone]
+A in A::hit 1
+temporary, literal: [B gone]
+A::lit(7, 'dflt')
+temporary: [A gone]
+A in A::hit 1
+temporary, literal: [B gone]
+A::lit(7, 'dflt')
+A::lit(1, 'dflt')
+A::lit(1, 'dflt')
+Call to a member function lit() on null
+Call to a member function lit() on int
+Call to a member function lit() on string
+A::lit(1, 'dflt')
+
+Warning: Undefined variable $undefined in %s on line 66
+Call to a member function hit() on null
+__call anything(1,two)
+__call anything(1,two)
+Call to undefined method A::anything()
+__call anything(1,two)
+A::st, called A; one two; ArgumentCountError: Too few arguments to function A::need(), 1 passed in %s on line 78 and exactly 2 expected
+A::st, called A; one two; ArgumentCountError: Too few arguments to function A::need(), 1 passed in %s on line 78 and exactly 2 expected
+A::st, called B; one two; ArgumentCountError: Too few arguments to function A::need(), 1 passed in %s on line 78 and exactly 2 expected
+A in A::hit 7 | A in A::hit 8
+3, closure got none, closure got 5
+3, closure got none, closure got 5
+done
+[B gone]
+[A gone]

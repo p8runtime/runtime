@@ -1,0 +1,13 @@
+caught: Undefined variable $undefined
+[temporary gone] caught: Undefined variable $undefined
+[temporary 2 gone] caught: Undefined variable $undefined
+end of throws
+[kept gone] |
+(handler: Undefined variable $undefined) [first gone] A::m on first(NULL)
+B replacement
+[replacement gone] (handler: Undefined variable $undefined) [second gone] A::m on second(NULL)
+unset
+(handler: Undefined variable $undefined) [third gone] A::m on third(NULL)
+B replacement 3
+[replacement 3 gone] |
+end
