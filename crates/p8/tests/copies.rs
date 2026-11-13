@@ -99,3 +99,27 @@ fn debug_backtrace_copies_no_frame() {
     assert_eq!(one, "2f 0");
     assert_eq!(many, one);
 }
+
+/// A quiet read of a property's array (`isset($o->a[$k])`, `$o->a[$k] ??`,
+/// `!empty(...)`, `$o->a ?? []`) lets go of its copy right after the read:
+/// the write to that array in the next statement changes it in place, on
+/// `$this` and on another object alike.
+#[test]
+fn a_quiet_property_read_keeps_no_copy_for_the_next_write() {
+    let (one, many) = no_copies_per_iteration(
+        "class C {
+             public $items = ['x' => 0];
+             function a($k) { if (isset($this->items[$k])) { $x = 1; } $this->items[$k] = 1; }
+             function b($k) { $v = $this->items[$k] ?? 0; $this->items[$k] = $v + 1; }
+             function c($k) { if (!empty($this->items[$k])) { $x = 1; } $this->items[$k] = 2; }
+             function d($k) { $v = $this->items ?? []; unset($v); $this->items[$k] = 3; }
+         }
+         function e($o, $k) { if (isset($o->items[$k])) { $x = 1; } $o->items[$k] = 4; }
+         function f($o, $k) { $v = $o->items[$k] ?? 0; $o->items[$k] = $v + 5; }
+         $c = new C();
+         for ($i = 0; $i < $n; $i++) { $k = 'k' . ($i % 3); $c->a($k); $c->b($k); $c->c($k); $c->d($k); e($c, $k); f($c, $k); }
+         ksort($c->items); echo json_encode($c->items);",
+    );
+    assert_eq!(one, r#"{"k0":9,"x":0}"#);
+    assert_eq!(many, r#"{"k0":9,"k1":9,"k2":9,"x":0}"#);
+}

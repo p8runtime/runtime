@@ -6041,7 +6041,11 @@ impl<'src> Compiler<'src> {
             }
             Expr::PropertyFetch { target, property, .. } => {
                 self.chain_link(target);
-                let obj = self.quiet(f, target)?;
+                // `$this` in an instance method is the frame's own, read in
+                // place as `prop_obj` reads it (it always exists, so a quiet
+                // read of it has nothing to keep quiet): no copy into a
+                // temporary, and no Free of that copy after the read.
+                let obj = if self.frame_this(f, target) { p8_bytecode::THIS } else { self.quiet(f, target)? };
                 let name = self.prop_name_operand(f, property)?;
                 let dst = f.temp();
                 f.emit(Instr::FetchProp { dst, obj, name, quiet: true });
