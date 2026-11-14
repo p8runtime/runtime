@@ -1,0 +1,17 @@
+a:15:{i:0;i:-9223372036854775808;i:1;i:9223372036854775807;i:2;i:-1;i:3;i:0;i:4;i:1234567890;i:-7;s:3:"neg";i:-9223372036854775808;s:3:"min";s:0:"";s:0:"";s:2:"é";s:4:"ü~x";s:1:"f";a:8:{i:0;d:0.1;i:1;d:-0;i:2;d:1.0E+100;i:3;d:-1.5E-7;i:4;d:NAN;i:5;d:INF;i:6;d:-INF;i:7;d:2;}s:1:"b";a:3:{i:0;b:1;i:1;b:0;i:2;N;}s:3:"ref";a:2:{i:0;i:5;i:1;i:5;}s:4:"long";s:1200:"abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab";s:4:"nest";a:2:{i:0;a:1:{i:0;a:0:{}}i:1;a:1:{i:0;a:1:{i:1;a:1:{i:2;a:0:{}}}}}s:3:"res";i:0;}
+i:0;
+i:0;
+d:1;
+s:0:"";
+s:1:"x";
+b:1;
+N;
+a:0:{}
+i:0;
+sleep
+
+Warning: serialize(): "missing" returned as member variable from __sleep() but does not exist in %s on line 20
+a:3:{i:0;i:1;s:1:"k";a:2:{i:0;b:1;i:1;O:1:"W":1:{s:1:"a";i:1;}}s:5:"after";i:3;}
+RuntimeException: no
+Serialization of 'Closure' is not allowed
+a:3:{i:0;i:1;i:1;O:8:"stdClass":0:{}i:2;a:1:{i:0;r:3;}}
