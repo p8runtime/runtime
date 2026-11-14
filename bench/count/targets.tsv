@@ -19,7 +19,7 @@ method_call	340	895	2.63	430	9	465	126427	38124910	58788555	waits for the rebuil
 call_return	133	407	3.06	173	4	234	232494	33091033	54403596	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
 call_empty	108	374	3.46	148	4	226	232494	33091033	52543644	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
 method_1arg	203	614	3.02	263	6	351	126427	38124910	44375877	waits for the rebuild	-	-	-	method call with arguments: InitMethod + SendVarMethod 129,575 + MethodCall
-callback_by_name	247	3075	12.45	327	8	2748	11345	11689336	31176060	claimed: claude/callback-by-name	3075	1596	-6,379,106	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
+callback_by_name	247	3075	12.45	327	8	2748	11345	11689336	31176060	claimed: claude/callback-by-name	3075	1596	-6,295,664call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
 property_read	102	179	1.75	142	4	37	734569	56842384	27179053	merged: PR #544	213	179	-23.3M	property read: P8_FETCH_PROP_R_REG 207,705 + P8_FETCH_PROP_R_THIS 526,864 runs (the case runs the REG form)
 builtin_call	86	207	2.41	126	4	81	322967	28412860	26160327	open	-	-	-	builtin run inside the loop (strlen, count, is_array ...): the Intrinsic arm
 nested_write	183	658	3.60	253	7	405	60395	39406434	24459975	merged: PR #542	720	658	-11.7M	nested array or property write: fast::write_path 60,395 calls, inclusive (AssignDimPath 31,173 + AssignPropDim 29,226)
