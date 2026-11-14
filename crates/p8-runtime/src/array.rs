@@ -205,6 +205,34 @@ impl Key {
     }
 }
 
+/// What one position of an array holds ([`PhpArray::value_here`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Here<T> {
+    /// An entry.
+    Entry(T),
+    /// An unset entry's place: the walk goes on past it.
+    Hole,
+    /// Past the last position.
+    End,
+}
+
+/// What one position of an array holds, with the key
+/// ([`PhpArray::entry_here`]). The key is read in place: an int, or the
+/// string the array holds (borrowed, so reading it copies no handle).
+/// One level, each case made where the array finds it: the reader's
+/// `match` is a jump from there, with no kind to work out in between.
+#[derive(Debug, Clone, Copy)]
+pub enum EntryHere<'a> {
+    /// An entry with an int key.
+    Int(i64, &'a Value),
+    /// An entry with a string key.
+    Str(&'a PhpStr, &'a Value),
+    /// An unset entry's place: the walk goes on past it.
+    Hole,
+    /// Past the last position.
+    End,
+}
+
 /// The keys of a record ([`PhpArray::record`]), each hashed now: made once
 /// (a thread-local of the builtin's) and shared by every record built from
 /// them. Distinct strings that are not integers (asserted).
@@ -1155,6 +1183,49 @@ impl PhpArray {
         }
     }
 
+    /// What position `pos` itself holds, with no walk: the value there, a
+    /// hole (an unset entry: the next entry is `value_at`'s to find), or
+    /// the end. foreach's step in the interpreter's loop reads this: one
+    /// bound and one test, and nothing copied.
+    #[inline(always)]
+    pub fn value_here(&self, pos: usize) -> Here<&Value> {
+        match &self.storage {
+            Storage::Packed(p) => match p.slots.get(pos) {
+                Some(x) if x.is_undef() => Here::Hole,
+                Some(x) => Here::Entry(x),
+                None => Here::End,
+            },
+            Storage::Hashed(h) => match h.buckets.get(pos) {
+                Some(b) if pos < h.used => {
+                    if b.next == UNSET { Here::Hole } else { Here::Entry(&b.value) }
+                }
+                _ => Here::End,
+            },
+        }
+    }
+
+    /// `value_here` with the key, read in place (a string key's handle is
+    /// not copied: the reader copies it once, into the value the loop's
+    /// key variable gets).
+    #[inline(always)]
+    pub fn entry_here(&self, pos: usize) -> EntryHere<'_> {
+        match &self.storage {
+            Storage::Packed(p) => match p.slots.get(pos) {
+                Some(x) if x.is_undef() => EntryHere::Hole,
+                Some(x) => EntryHere::Int(pos as i64, x),
+                None => EntryHere::End,
+            },
+            Storage::Hashed(h) => match h.buckets.get(pos) {
+                Some(b) if pos < h.used => match &b.key {
+                    _ if b.next == UNSET => EntryHere::Hole,
+                    Some(s) => EntryHere::Str(s, &b.value),
+                    None => EntryHere::Int(b.h as i64, &b.value),
+                },
+                _ => EntryHere::End,
+            },
+        }
+    }
+
     /// The last entry before position `pos`.
     pub fn entry_before(&self, pos: usize) -> Option<(usize, Key, &Value)> {
         match &self.storage {
@@ -1536,5 +1607,55 @@ mod tests {
         }
         assert_eq!(buffer(&g).1, 16);
         assert!(g.iter().map(|(_, v)| v.to_int()).eq(0..9));
+    }
+
+    #[test]
+    fn a_position_holds_an_entry_a_hole_or_nothing() {
+        // A list with its middle unset: the hole is said, not walked past.
+        let mut a = PhpArray::from_list(vec![int(10), int(20), int(30)]);
+        a.remove(&Key::Int(1));
+        assert!(matches!(a.storage, Storage::Packed(_)));
+        fn of<T, U>(here: Here<T>, f: impl FnOnce(T) -> U) -> Here<U> {
+            match here {
+                Here::Entry(x) => Here::Entry(f(x)),
+                Here::Hole => Here::Hole,
+                Here::End => Here::End,
+            }
+        }
+        fn keyed(here: EntryHere<'_>) -> Here<(Key, i64)> {
+            match here {
+                EntryHere::Int(i, v) => Here::Entry((Key::Int(i), v.to_int())),
+                EntryHere::Str(s, v) => Here::Entry((Key::Str(s.clone()), v.to_int())),
+                EntryHere::Hole => Here::Hole,
+                EntryHere::End => Here::End,
+            }
+        }
+        let values = |a: &PhpArray, n: usize| (0..n).map(|p| of(a.value_here(p), Value::to_int)).collect::<Vec<_>>();
+        let keys = |a: &PhpArray, n: usize| (0..n).map(|p| keyed(a.entry_here(p))).collect::<Vec<_>>();
+        assert_eq!(values(&a, 5), [Here::Entry(10), Here::Hole, Here::Entry(30), Here::End, Here::End]);
+        assert_eq!(keys(&a, 4), [Here::Entry((Key::Int(0), 10)), Here::Hole, Here::Entry((Key::Int(2), 30)), Here::End]);
+        assert_eq!(of(a.value_here(usize::MAX), Value::to_int), Here::End);
+        // A hashed array: string and int keys, an unset entry in the
+        // middle and one at the end (a position still taken), then room.
+        let mut h = PhpArray::new();
+        h.insert(Key::Str(PhpStr::from("a")), int(1));
+        h.insert(Key::Str(PhpStr::from("b")), int(2));
+        h.insert(Key::Int(-7), int(3));
+        h.insert(Key::Str(PhpStr::from("c")), int(4));
+        h.remove(&Key::Str(PhpStr::from("b")));
+        h.remove(&Key::Str(PhpStr::from("c")));
+        assert!(matches!(h.storage, Storage::Hashed(_)));
+        assert_eq!(values(&h, 6), [Here::Entry(1), Here::Hole, Here::Entry(3), Here::Hole, Here::End, Here::End]);
+        assert_eq!(
+            keys(&h, 5),
+            [Here::Entry((Key::Str(PhpStr::from("a")), 1)), Here::Hole, Here::Entry((Key::Int(-7), 3)), Here::Hole, Here::End]
+        );
+        // The key read in place is the array's own string, no handle
+        // of it made by the read.
+        let EntryHere::Str(k, _) = h.entry_here(0) else { panic!("a string key") };
+        let before = k.count();
+        let EntryHere::Str(again, _) = h.entry_here(0) else { panic!("a string key") };
+        assert_eq!((again.count(), again.as_bytes()), (before, &b"a"[..]));
+        assert!(matches!((PhpArray::new().value_here(0), PhpArray::new().entry_here(0)), (Here::End, EntryHere::End)));
     }
 }

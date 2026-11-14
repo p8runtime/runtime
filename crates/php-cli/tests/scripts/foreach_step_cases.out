@@ -1,0 +1,129 @@
+empty: |
+list: 1 "two" 3.5 null true [4] | 0=>1 1=>"two" 2=>3.5 3=>null 4=>true 5=>[4]
+hash: 1 "two" 3.5 null true [4] | "a"=>1 "b"=>"two" 7=>3.5 -3=>null ""=>true "n"=>[4]
+list, first unset: 11 12 13 14 15 16 | 1=>11 2=>12 3=>13 4=>14 5=>15 6=>16
+list, a run unset: 11 12 15 16 | 1=>11 2=>12 5=>15 6=>16
+list, last unset: 11 12 15 | 1=>11 2=>12 5=>15
+list, all unset: |
+list, pushed after: "next" | 7=>"next"
+hash, first unset: 11 12 13 14 15 16 | "b"=>11 5=>12 "c"=>13 "d"=>14 6=>15 "e"=>16
+hash, a run unset: 11 12 15 16 | "b"=>11 5=>12 6=>15 "e"=>16
+hash, last unset: 11 12 15 | "b"=>11 5=>12 6=>15
+hash, all unset: |
+hash, set after: "next" "pushed" | "z"=>"next" 7=>"pushed"
+sparse: "three" "one" "two" | 3=>"three" 1=>"one" 2=>"two"
+from one: "a" "b" "c" | 1=>"a" 2=>"b" 4=>"c"
+alpha! aaa? beta! bbb? 12! ccc? 
+array(3) {
+  ["alpha"]=>
+  string(3) "aaa"
+  ["beta"]=>
+  string(3) "bbb"
+  [12]=>
+  string(3) "ccc"
+}
+{"alpha":"aaa","beta":"bbb","12":"ccc"} [12] ["ccc"]
+body 1
+destruct made in body 1
+body 2
+destruct made in body 2
+body 3
+after
+destruct made in body 3
+body x 1
+destruct made in body x
+body y 2
+destruct made in body y
+body z 3
+after
+destruct made in body z
+body x 1
+destruct key made in body 1
+body y 2
+after
+destruct key made in body 2
+body 0 1
+destruct value of body 1
+destruct key of body 1
+body 1 2
+after
+destruct key of body 2
+destruct value of body 2
+value body
+destruct value 1
+value body
+destruct value 3
+value body
+after
+destruct value 6
+keyed value body
+destruct keyed value 1
+keyed value body
+destruct keyed value 3
+keyed value body
+after
+destruct keyed value 6
+key body
+destruct key 1
+key body
+destruct key 3
+key body
+after
+destruct key 6
+reference body
+destruct through the reference 10
+reference body
+destruct through the reference 20
+reference body
+after
+key reference body
+destruct through the key's reference 1
+key reference body
+destruct through the key's reference 3
+key reference body
+after
+keyed reference body
+destruct through the keyed value's reference 0
+keyed reference body
+destruct through the keyed value's reference 1
+keyed reference body
+after
+destruct through the reference 30
+destruct through the key's reference 6
+destruct through the keyed value's reference 3
+returned
+at first
+at second
+at 0 first
+at k second
+loop variable gone
+destruct first
+destruct second
+array gone
+string(5) "three"
+string(1) "r"
+5 6 7 
+m=5 n=6 
+destruct referenced value
+destruct referenced key
+body m 5
+body m 5
+destruct value at m
+body n 6
+after n
+destruct value at n
+0=>"one" "k"=>["two"] 1=>"plain" 
+["one",["two"],{"0":"one","k":["two"],"1":"plain"}]
+string(1) "a"
+string(1) "b"
+int(3)
+string(1) "a"
+string(1) "b"
+destruct same at a
+after
+destruct same at b
+a=1 b=2 {"a":1,"aa":10,"bb":20}
+00 10 11 20 21 22 30 31 32 33 
+p=1 q=two i=1 j=2 g=1 h=2 1 2 
+1786 1786 856858 7228 1786
+end
