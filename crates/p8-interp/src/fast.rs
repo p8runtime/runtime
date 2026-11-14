@@ -507,28 +507,48 @@ impl Context<'_> {
                         continue 'frame;
                     }};
                 }
-                // A foreach step over an array (`$key`: the key too). An
-                // object (a generator, an Iterator: its methods called)
-                // runs out of line on the arm's operands
-                // (`iter_next_object_ops`).
+                // A foreach step (`$key`: the key too). Over an array it
+                // is `iter_step`'s (`iter_step_key`'s), which answers what
+                // it did: the arm tests nothing itself, not the array
+                // and, when nothing was freed, no destructor due. What
+                // the step leaves (`Step::Rest`: a reference, an object)
+                // is as before: an object (a generator, an
+                // Iterator: its methods called) runs out of line on the
+                // arm's operands (`iter_next_object_ops`), an array is
+                // `iter_next`'s.
                 // (One arm per opcode, so that no arm reads the opcode
                 // again: kept for that, it would hold a register through
                 // every arm.)
                 macro_rules! iter_next {
                     ($key:expr) => {{
                         ops!(a, b, c, imm);
-                        if !w[rx!(a)].is_array() {
-                            if w[rx!(a)].is_object() {
-                                let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
-                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
+                        let step = if $key {
+                            iter_step_key(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c))
+                        } else {
+                            iter_step(&mut w[..], Reg::from(a), Reg::from(b))
+                        };
+                        if step == Step::Stepped {
+                            pc += 1;
+                        } else if step == Step::End {
+                            pc = imm as usize;
+                        } else {
+                            let next = if step == Step::Freed {
+                                pc + 1
+                            } else {
+                                if !w[rx!(a)].is_array() {
+                                    if w[rx!(a)].is_object() {
+                                        let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
+                                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
+                                    }
+                                    slow!();
+                                }
+                                if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize }
+                            };
+                            if self.ids.has_pending() {
+                                pending_at!(next, pc);
                             }
-                            slow!();
+                            pc = next;
                         }
-                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize };
-                        if self.ids.has_pending() {
-                            pending_at!(next, pc);
-                        }
-                        pc = next;
                     }};
                 }
                 // `!x` (`$not`) and a condition made a value: a bool, an int
@@ -1933,9 +1953,8 @@ impl Context<'_> {
                             let Some(o) = w[rx!(b)].as_object() else { miss!() };
                             o
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let found = match dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) {
-                            Some(entry) => cached_prop(entry, o, scope),
+                            Some(entry) => cached_prop(entry, o, || top.scope.as_ref()),
                             // (A dynamic property: `dynamic_prop`.)
                             None => dynamic_prop(o, &w[rx!(c)]),
                         };
@@ -2023,19 +2042,19 @@ impl Context<'_> {
                                 }
                             }
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let scope = top.scope.as_ref();
                         // `isset($o->$name)`: the entry made for this access
                         // (`dyn_entry`).
                         if dynamic {
-                            let Some(entry) = dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) else { general!() };
-                            let Some(v) = cached_prop(entry, o, scope) else { general!() };
+                            let Some(entry) = dyn_entry(o, &w[rx!(c)], scope) else { general!() };
+                            let Some(v) = cached_prop(entry, o, || scope) else { general!() };
                             done!(put(&mut w[rx!(a)], Value::bool(!v.is_null())));
                             continue;
                         }
                         let Some(site) = clo.props.get(imm as usize) else { general!() };
-                        let v = match cached_prop(site.get(), o, scope) {
+                        let v = match cached_prop(site.get(), o, || scope) {
                             Some(v) => v,
-                            None if refill_prop(site, o, &clo.consts[imm as usize], top.scope.as_ref()) => match cached_prop(site.get(), o, scope) {
+                            None if refill_prop(site, o, &clo.consts[imm as usize], scope) => match cached_prop(site.get(), o, || scope) {
                                 Some(v) => v,
                                 None => general!(),
                             },
@@ -2307,14 +2326,16 @@ fn assign_path(w: &mut [Value], var: usize, p: Path, val: Src<'_>, dst: Option<u
     if path.contains(&var) || !is_array || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
-    let v = copied(src(w, val))?;
+    let mut v = copied(src(w, val))?;
     // The root out of its register (or cell) while it is written (nothing
     // else reads it meanwhile), then back.
     let written = match &cell {
         Some(cell) => write_cell_path(cell, &w[path], p.append, &v, true),
         None => {
             let mut root = std::mem::take(&mut w[var]);
-            let written = write_path(&mut root, &w[path], p.append, v.clone(), None);
+            // (No result to give: the one copy goes into the array.)
+            let stored = if dst.is_some() { v.clone() } else { std::mem::take(&mut v) };
+            let written = write_path(&mut root, &w[path], p.append, stored, None);
             w[var] = root;
             written.map(|x| matches!(x, Wrote::Done(true)))
         }
@@ -2345,7 +2366,7 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
     if !keys.iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
-    let v = copied(&w[val])?;
+    let mut v = copied(&w[val])?;
     let cell = &o.slots()[slot];
     let mut root = cell.replace(Value::UNDEF);
     let untyped = p.ty.is_none();
@@ -2354,7 +2375,9 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
         // the array its cell holds, as `update_slot_dim` takes it.
         write_cell_path(rc, keys, path.append, &v, untyped)
     } else if root.is_array() || (root.is_null() && untyped) {
-        write_path(&mut root, keys, path.append, v.clone(), None).map(|x| matches!(x, Wrote::Done(true)))
+        // (No result to give: the one copy goes into the array.)
+        let stored = if dst.is_some() { v.clone() } else { std::mem::take(&mut v) };
+        write_path(&mut root, keys, path.append, stored, None).map(|x| matches!(x, Wrote::Done(true)))
     } else {
         None
     };
@@ -2373,17 +2396,19 @@ fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usiz
 /// `Some(Owner)`, and the caller puts the value in the cell in place of
 /// the root, as PHP's assignment through that reference replaces `$a`.
 fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
-    let key = |k: &Value| match k.as_int() {
-        Some(i) => Key::Int(i),
-        None => Key::from_string(k.cloned_str().expect("a string key")),
-    };
     let (last, levels) = if append { (None, keys) } else { keys.split_last().map(|(l, rest)| (Some(l), rest))? };
     let mut cur = root;
     for k in levels {
         if cur.is_null() {
             *cur = Value::array(PhpArray::new());
         }
-        cur = cur.array_mut()?.slot_mut(&key(k));
+        // (A string key: looked up as it is, a handle to it made only for
+        // an element that is not there yet.)
+        let arr = cur.array_mut()?;
+        cur = match k.as_int() {
+            Some(i) => arr.slot_mut(&Key::Int(i)),
+            None => arr.slot_str_mut(k.as_str().expect("a string key"), || k.cloned_str().expect("a string key")),
+        };
     }
     if cur.is_null() {
         *cur = Value::array(PhpArray::new());
@@ -2394,15 +2419,16 @@ fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: O
         arr.push(v).ok()?;
         return Some(Wrote::Done(false));
     };
-    let key = key(last);
+    let key = path_key(last);
     match arr.get_mut(&key) {
         Some(e) if is_owner(e, owner) => Some(Wrote::Owner),
         // An element bound by reference: the value goes into its cell (as
         // an assignment to a reference writes the referenced value).
         Some(e) if e.is_reference() => Some(Wrote::Done(write_ref(e.as_reference()?, v))),
         Some(e) => Some(Wrote::Done(put(e, v))),
+        // (Just looked for: added with no second lookup.)
         None => {
-            arr.insert(key, v);
+            arr.insert_absent(key, v);
             Some(Wrote::Done(false))
         }
     }
@@ -2492,18 +2518,21 @@ fn unset_dim(w: &mut [Value], var: usize, keys: usize, n: usize) -> Option<bool>
     on_path(w, var, keys, n, |root, keys| {
         let (last, levels) = keys.split_last()?;
         let mut cur = root;
+        // (A shared array is copied only when it has the key: looked for
+        // before the copy. One that is this path's own: one lookup.)
         for k in levels {
             let k = path_key(k);
-            if !cur.as_array()?.contains_key(&k) {
+            if cur.is_shared_array() && !cur.as_array()?.contains_key(&k) {
                 return Some(false);
             }
-            cur = cur.array_mut()?.get_mut(&k)?;
+            let Some(next) = cur.array_mut()?.get_mut(&k) else { return Some(false) };
+            cur = next;
             if !cur.is_array() {
                 return None;
             }
         }
         let k = path_key(last);
-        if !cur.as_array()?.contains_key(&k) {
+        if cur.is_shared_array() && !cur.as_array()?.contains_key(&k) {
             return Some(false);
         }
         Some(cur.array_mut()?.remove(&k).is_some())

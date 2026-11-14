@@ -1101,6 +1101,18 @@ impl SlotCells {
         }
     }
 
+    /// Cell `i` ([`Object::slot_at`]): of the ones in the object, any of
+    /// the INLINE_PROPS there, the padding past the count included (Null
+    /// as [`Props`] makes it, Undef as `copied` does), which no slot
+    /// number of the object's class names.
+    #[inline(always)]
+    fn at(&self, i: usize) -> Option<&Cell<Value>> {
+        match self {
+            SlotCells::Inline { cells, .. } => cells.get(i),
+            SlotCells::Heap(v) => v.get(i),
+        }
+    }
+
     /// Every value gone, and a buffer of their own kept for the next
     /// object or array (see [`crate::array::keep_values_buffer`]).
     fn release(&mut self) {
@@ -1144,6 +1156,19 @@ impl Object {
     #[inline(always)]
     pub fn slots(&self) -> &[Cell<Value>] {
         self.slots.cells()
+    }
+
+    /// Declared property slot `i`, for a read by a slot number that is
+    /// the class's own (a cache entry's, from [`Class::slot`]): the same
+    /// cell `slots().get(i)` gives, without reading the count of the ones
+    /// kept in the object, so the common object's read is one compare
+    /// with a constant. The object has one slot per property of its
+    /// class (`with_slots`, `with_defaults`), so a slot number of the
+    /// class never reaches the padding past the count; `slots()` is the
+    /// way to see every slot there is.
+    #[inline(always)]
+    pub fn slot_at(&self, i: usize) -> Option<&Cell<Value>> {
+        self.slots.at(i)
     }
 
     /// A copy of every declared property's value, in slot order.
@@ -1342,6 +1367,30 @@ mod props_tests {
             }
             s.release();
             assert_eq!(s.cells().len(), 0);
+        }
+    }
+
+    /// `at` is `cells().get()` for every slot there is, however the slots
+    /// were made, and None from INLINE_PROPS on (from the count on, in a
+    /// buffer of their own); between the count and INLINE_PROPS it gives
+    /// the padding, which holds no slot's value. After a release every
+    /// slot there was is Undef.
+    #[test]
+    fn a_slot_by_number_is_the_cell_or_nothing_set() {
+        for n in [0usize, 1, 3, 4, 5, 9] {
+            let values: Vec<Value> = (0..n as i64).map(|i| Value::int(i + 10)).collect();
+            for mut s in [SlotCells::from(Props::from_slice(&values)), SlotCells::copied(&values)] {
+                assert_eq!(s.cells().len(), n);
+                for i in 0..n {
+                    assert!(std::ptr::eq(s.at(i).expect("a slot"), &s.cells()[i]));
+                    assert_eq!(s.at(i).map(|c| c.peek(Value::to_int)), Some(i as i64 + 10));
+                }
+                let end = if n > INLINE_PROPS { n } else { INLINE_PROPS };
+                assert!((end..end + 6).all(|i| s.at(i).is_none()), "{n} slots");
+                assert!((n..end).all(|i| s.at(i).is_some_and(|c| c.peek(|v| v.is_undef() || v.is_null()))), "{n} slots, the padding");
+                s.release();
+                assert!((0..n).all(|i| s.at(i).is_none_or(|c| c.peek(Value::is_undef))), "{n} slots released");
+            }
         }
     }
 

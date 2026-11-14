@@ -270,6 +270,14 @@ fn free_last(r: Repr) {
     }
 }
 
+/// A shared array made the handle's own before a write (`Value::array_mut`
+/// found another holder): the copy, `Rc::make_mut`'s.
+#[cold]
+#[inline(never)]
+fn separate(a: &mut Rc<PhpArray>) {
+    Rc::make_mut(a);
+}
+
 /// A shared handle's drop: the count was just read and is known not to
 /// reach zero, so the `Rc` drop is the decrement alone.
 #[inline(always)]
@@ -299,6 +307,22 @@ impl Value {
         // (What is left is plain: the drop of `self` that follows tests
         // its tag and does nothing.)
         release_repr(mem::replace(&mut self.0, UNDEF_REPR))
+    }
+
+    /// Whether letting this value go frees what it holds: it is the last
+    /// handle of a string, an array, a reference or an object (`release`'s
+    /// own test of the count). For a caller that hands the free to
+    /// another function before it releases: a `release` straight after a
+    /// false answer is the decrement alone.
+    #[inline(always)]
+    pub fn is_last(&self) -> bool {
+        match &self.0 {
+            Repr::Str(s) => s.count() == 1,
+            Repr::Array(a) => Rc::strong_count(a) == 1,
+            Repr::Ref(c) => Rc::strong_count(c) == 1,
+            Repr::Object(o) => Rc::strong_count(o) == 1,
+            _ => false,
+        }
     }
 
     /// Whether `self` is `other` itself: the same scalar (a float by its
@@ -672,11 +696,28 @@ impl Value {
 
     /// The array, for writing: separated first if shared (`Rc::make_mut`,
     /// PHP's SEPARATE_ARRAY). A program-memory array is copied here too.
+    /// The test for "shared" is here, in the caller's code (three out of
+    /// four writes find the array their own); only the copy is a call.
     #[inline(always)]
     pub fn array_mut(&mut self) -> Option<&mut PhpArray> {
         match &mut self.0 {
-            Repr::Array(a) => Some(Rc::make_mut(a)),
+            Repr::Array(a) => {
+                if Rc::get_mut(a).is_none() {
+                    separate(a);
+                }
+                Rc::get_mut(a)
+            }
             _ => None,
+        }
+    }
+
+    /// Whether this is an array another holder shares (a write would copy
+    /// it first, `array_mut`).
+    #[inline(always)]
+    pub fn is_shared_array(&self) -> bool {
+        match &self.0 {
+            Repr::Array(a) => Rc::strong_count(a) != 1 || Rc::weak_count(a) != 0,
+            _ => false,
         }
     }
 
@@ -906,7 +947,7 @@ impl Value {
             },
             V::Array(a) => i64::from(!a.is_empty()),
             // A resource is its number.
-            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => i64::from(o.id),
+            V::Object(o) if resource_number(o).is_some() => resource_number(o).expect("checked"),
             V::Object(o) if o.class.cast_int.is_some() => o.class.cast_int.expect("checked")(o),
             V::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_int(),
             // PHP warns "could not be converted to int" (the engine reports it).
@@ -928,7 +969,7 @@ impl Value {
                 None => 0.0,
             },
             V::Array(a) => f64::from(u8::from(!a.is_empty())),
-            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => f64::from(o.id),
+            V::Object(o) if resource_number(o).is_some() => resource_number(o).expect("checked") as f64,
             V::Object(o) if o.class.cast_string.is_some() => Value::str(o.class.cast_string.expect("checked")(o)).to_float(),
             V::Object(_) => 1.0,
             V::Ref(cell) => cell.borrow().to_float(),
@@ -945,7 +986,7 @@ impl Value {
             V::Float(f) => PhpStr::from(float_to_string(f, Precision::ECHO, 'E')),
             V::Str(s) => PhpStr::clone(s),
             V::IStr(s) => s.to_php_str(),
-            V::Object(o) if o.class.flags & crate::object::CLASS_RESOURCE != 0 => PhpStr::from(format!("Resource id #{}", o.id)),
+            V::Object(o) if resource_number(o).is_some() => PhpStr::from(format!("Resource id #{}", resource_number(o).expect("checked"))),
             V::Object(o) if o.class.cast_string.is_some() => o.class.cast_string.expect("checked")(o),
             // An object's string comes from __toString, which the engine
             // calls; neither converts here.
@@ -1064,6 +1105,10 @@ impl Value {
                 if Rc::ptr_eq(a, b) {
                     return Some(Ordering::Equal);
                 }
+                // A resource is no object to PHP: it compares as its number.
+                if (a.class.flags | b.class.flags) & crate::object::CLASS_RESOURCE != 0 {
+                    return compare_resource_pair(a, b);
+                }
                 // Other classes, and enum cases, can't be compared.
                 if !Rc::ptr_eq(&a.class, &b.class) || a.class.flags & crate::object::CLASS_ENUM != 0 {
                     return None;
@@ -1095,9 +1140,56 @@ impl Value {
             (IStr(_) | Str(_), Int(_) | Float(_)) => compare_number_to_string(other, self.as_str().expect("a string")).reverse(),
             (Array(_), _) => Ordering::Greater,
             (_, Array(_)) => Ordering::Less,
-            (Object(_), _) => Ordering::Greater,
-            (_, Object(_)) => Ordering::Less,
+            // (What is left on the other side: an int, a float or a string.)
+            (Object(o), _) => match resource_number(o) {
+                Some(n) => compare_numbers(Number::Int(n), number_beside_resource(other)),
+                None => Ordering::Greater,
+            },
+            (_, Object(o)) => match resource_number(o) {
+                Some(n) => compare_numbers(number_beside_resource(self), Number::Int(n)),
+                None => Ordering::Less,
+            },
         })
+    }
+}
+
+/// A resource's number (PHP's handle: what `(int) $resource` gives and
+/// `Resource id #N` prints); None for any other object. The one place
+/// that says what a resource is as a number: the casts read it here, and
+/// so does `compare`, which every `==`, `<`, `<=>`, `switch`, sort and
+/// search goes through.
+#[inline]
+fn resource_number(o: &Object) -> Option<i64> {
+    (o.class.flags & crate::object::CLASS_RESOURCE != 0).then(|| i64::from(o.id))
+}
+
+/// A pair with a resource in it (zend_compare). Two resources compare as
+/// their numbers, so they are `==` only when they are the same resource,
+/// closed or not and of whatever kinds. Beside an object the object is
+/// greater (zend_std_compare_objects: no object casts to a resource),
+/// but an enum case compares with nothing.
+#[inline(never)]
+fn compare_resource_pair(a: &Object, b: &Object) -> Option<Ordering> {
+    match (resource_number(a), resource_number(b)) {
+        (Some(x), Some(y)) => Some(x.cmp(&y)),
+        (Some(_), None) if b.class.flags & crate::object::CLASS_ENUM == 0 => Some(Ordering::Less),
+        (None, Some(_)) if a.class.flags & crate::object::CLASS_ENUM == 0 => Some(Ordering::Greater),
+        _ => None,
+    }
+}
+
+/// What an int, a float or a string is beside a resource, which compares
+/// as its number (zend_compare's _zendi_convert_scalar_to_number_silent):
+/// a string is the number it begins with, whatever follows it, and 0 when
+/// it begins with none. Not how an int meets a string (`5 == "5abc"` is
+/// false; a resource numbered 5 `== "5abc"`).
+#[inline(never)]
+fn number_beside_resource(v: &Value) -> Number {
+    match v.view() {
+        V::Int(i) => Number::Int(i),
+        V::Float(f) => Number::Float(f),
+        V::IStr(_) | V::Str(_) => leading_numeric(v.as_str().expect("a string").as_bytes()).map_or(Number::Int(0), |(n, _)| n),
+        _ => unreachable!("a resource meets only numbers and strings here"),
     }
 }
 

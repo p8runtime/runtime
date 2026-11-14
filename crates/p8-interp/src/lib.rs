@@ -84,7 +84,7 @@ use sites::*;
 
 use p8_bytecode::{CastKind, ClassDef, Cmp, Function, Instr, Reg, Rare, const_index};
 pub use include::{LoadError, Loader};
-use p8_runtime::array::{Key, KeyIssue, PhpArray};
+use p8_runtime::array::{EntryHere, Here, Key, KeyIssue, PhpArray};
 use p8_runtime::ext::{Ctx, Imp, Registry, const_key};
 pub use p8_runtime::ext::Throw;
 use p8_runtime::number::{Precision, float_to_string};
@@ -2396,7 +2396,7 @@ impl Context<'_> {
                     // The name's constant: the cache entry reads and writes use.
                     let site = const_index(name).and_then(|i| clo.props.get(i));
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                        && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
+                        && let Some(x) = cached_prop(site.get(), o, || self.scope_class())
                     {
                         let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = ops::binary(op, &x, &y, &mut self.diags);
@@ -2446,7 +2446,7 @@ impl Context<'_> {
                     let target = self.prop_target(w, clo, obj)?;
                     let site = const_index(name).and_then(|i| clo.props.get(i));
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                        && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
+                        && let Some(old) = cached_prop(site.get(), o, || self.scope_class())
                     {
                         let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
@@ -3472,7 +3472,7 @@ impl Context<'_> {
         // The name's constant: its cache entry.
         let site = const_index(name).and_then(|i| clo.props.get(i));
         if let (Some(site), Some(o)) = (site, target.as_object())
-            && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+            && let Some(v) = cached_prop(site.get(), o, || self.scope_class())
         {
             w[dst as usize] = v;
             return Ok(Next::Go(at + 1));
@@ -7305,6 +7305,143 @@ fn iter_next(w: &mut [Value], iter: Reg, val: Reg, key: Reg, has_key: bool) -> b
 #[inline(always)]
 fn element(v: &Value) -> Value {
     if v.is_reference() { v.deref() } else { v.clone() }
+}
+
+/// What a foreach step in the loop did (`iter_step`, `iter_step_key`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum Step {
+    /// The element is in the loop's variables and the position is past
+    /// it. Nothing was freed: no destructor can be due.
+    Stepped,
+    /// No element is left. Nothing was written.
+    End,
+    /// Stepped, and an old loop value's last handle went or a variable
+    /// was written through a reference: the arm tests
+    /// `ids.has_pending()`.
+    Freed,
+    /// Not the step's case (below). Nothing was written: `iter_next`
+    /// does the whole step.
+    Rest,
+}
+
+/// `foreach ($a as $v)`'s step in the loop: PHP's FE_FETCH_R with no call
+/// on its path. What it reads it reads in place: the position (always an
+/// int over an array), the entry at that position itself (`value_here`:
+/// a bound and a tag test), the loop variable's old tag.
+///
+/// It makes no call it returns from. A call in the middle of a function
+/// costs every step the registers saved around it (`iter_next` saves six
+/// and keeps a frame: a third of its instructions); so each rare case is
+/// either answered `Rest` before anything is written (an element that is
+/// a reference, a position that is not an int, not an array: the arm
+/// calls `iter_next`), or is the last thing the step does and is another
+/// function's to finish (`step_ref`, `step_free`: a jump). A hole (an
+/// unset entry's place) is walked past here, a position at a time.
+#[inline(never)]
+pub(crate) fn iter_step(w: &mut [Value], iter: Reg, val: Reg) -> Step {
+    let (iter, val) = (iter as usize, val as usize);
+    let Some(pos) = w.get(iter + 1).and_then(Value::as_int) else { return Step::Rest };
+    let Some(a) = w.get(iter).and_then(Value::as_array) else { return Step::Rest };
+    if val >= w.len() {
+        return Step::Rest;
+    }
+    let mut pos = pos as usize;
+    let v = loop {
+        match a.value_here(pos) {
+            Here::Entry(v) if !v.is_reference() => break v.clone(),
+            Here::Hole => pos += 1,
+            Here::End => return Step::End,
+            Here::Entry(_) => return Step::Rest,
+        }
+    };
+    // The position is an int (read above): a store over it.
+    std::mem::forget(std::mem::replace(&mut w[iter + 1], Value::int(pos as i64 + 1)));
+    step_put(w, val, v)
+}
+
+/// `foreach ($a as $k => $v)`'s step in the loop: `iter_step` with the
+/// key, read in place and copied once (`entry_here`). The value is
+/// written first, then the key (`foreach ($a as $k => $k)` leaves the
+/// key), so the value's rare cases are not the last thing the step does:
+/// a loop variable holding a reference is answered `Rest` before
+/// anything is written, and its old value's last handle is `step_free_key`'s,
+/// which writes the key too.
+#[inline(never)]
+pub(crate) fn iter_step_key(w: &mut [Value], iter: Reg, val: Reg, key: Reg) -> Step {
+    let (iter, val, key) = (iter as usize, val as usize, key as usize);
+    let Some(pos) = w.get(iter + 1).and_then(Value::as_int) else { return Step::Rest };
+    let Some(a) = w.get(iter).and_then(Value::as_array) else { return Step::Rest };
+    if w.get(val).is_none_or(Value::is_reference) || key >= w.len() {
+        return Step::Rest;
+    }
+    let mut pos = pos as usize;
+    let (k, v) = loop {
+        match a.entry_here(pos) {
+            EntryHere::Int(i, v) if !v.is_reference() => break (Value::int(i), v.clone()),
+            EntryHere::Str(s, v) if !v.is_reference() => break (Value::str(s.clone()), v.clone()),
+            EntryHere::Hole => pos += 1,
+            EntryHere::End => return Step::End,
+            EntryHere::Int(..) | EntryHere::Str(..) => return Step::Rest,
+        }
+    };
+    std::mem::forget(std::mem::replace(&mut w[iter + 1], Value::int(pos as i64 + 1)));
+    let slot = &mut w[val];
+    if is_plain(slot) {
+        std::mem::forget(std::mem::replace(slot, v));
+    } else {
+        let old = std::mem::replace(slot, v);
+        if old.is_last() {
+            return step_free_key(old, &mut w[key], k);
+        }
+        let _ = old.release();
+    }
+    step_put(w, key, k)
+}
+
+/// The write a step ends with: `put_var` with each rare case a jump to
+/// the function that finishes the step.
+#[inline(always)]
+fn step_put(w: &mut [Value], reg: usize, v: Value) -> Step {
+    let slot = &mut w[reg];
+    if is_plain(slot) {
+        std::mem::forget(std::mem::replace(slot, v));
+        return Step::Stepped;
+    }
+    if slot.is_reference() {
+        return step_ref(slot, v);
+    }
+    let old = std::mem::replace(slot, v);
+    if old.is_last() {
+        return step_free(old);
+    }
+    // (Not the last handle: the decrement alone.)
+    let _ = old.release();
+    Step::Stepped
+}
+
+/// A step's last write, through the reference the variable holds
+/// (`global $v`, `$v = &$x` before the loop).
+#[cold]
+#[inline(never)]
+fn step_ref(slot: &mut Value, v: Value) -> Step {
+    if put_var(slot, v) { Step::Freed } else { Step::Stepped }
+}
+
+/// A step's last write freed the variable's old value.
+#[cold]
+#[inline(never)]
+fn step_free(old: Value) -> Step {
+    if old.release() { Step::Freed } else { Step::Stepped }
+}
+
+/// The loop value's old value was its last handle: its free, then the
+/// key's write.
+#[cold]
+#[inline(never)]
+fn step_free_key(old: Value, key: &mut Value, k: Value) -> Step {
+    let freed = old.release();
+    if put_var(key, k) || freed { Step::Freed } else { Step::Stepped }
 }
 
 /// Arithmetic on two numbers (and the bit operators on two ints), when no
