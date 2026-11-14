@@ -74,28 +74,35 @@ impl<'c> Writer<'c> {
             None => unreachable!("value() halts at an object when there is no Ctx"),
         }
     }
+
     /// `tag`, `n`'s decimal digits, then `end` (`i:7;`, `a:3:{`): built
-    /// in a buffer of its own, then appended in one piece.
-    fn tagged(&mut self, tag: &[u8; 2], n: i64, end: &[u8]) {
-        // (2 + 20 digits and a sign + an `end` of at most 2.)
-        let mut buf = [0u8; 26];
-        let mut at = buf.len() - end.len();
-        buf[at..].copy_from_slice(end);
+    /// in a buffer of its own, which is appended whole (a copy of a fixed
+    /// size, no call) and cut back to the bytes written.
+    fn tagged<const E: usize>(&mut self, tag: &[u8; 2], n: i64, end: &[u8; E]) {
+        // (2 + a sign + 19 digits + an `end` of at most 2: at most 24.)
+        let mut buf = [0u8; 24];
+        buf[..2].copy_from_slice(tag);
         let mut m = n.unsigned_abs();
-        loop {
-            at -= 1;
-            buf[at] = b'0' + (m % 10) as u8;
-            m /= 10;
-            if m == 0 {
-                break;
+        let sign = usize::from(n < 0);
+        buf[2] = b'-';
+        let stop = if m < 10 {
+            // (Most lengths and many ints: one digit, no count of them.)
+            buf[2 + sign] = b'0' + m as u8;
+            3 + sign
+        } else {
+            let stop = 3 + sign + m.ilog10() as usize;
+            let mut at = stop;
+            while m != 0 {
+                at -= 1;
+                buf[at] = b'0' + (m % 10) as u8;
+                m /= 10;
             }
-        }
-        if n < 0 {
-            at -= 1;
-            buf[at] = b'-';
-        }
-        buf[at - 2..at].copy_from_slice(tag);
-        self.out.extend_from_slice(&buf[at - 2..]);
+            stop
+        };
+        buf[stop..stop + E].copy_from_slice(end);
+        let len = self.out.len() + stop + E;
+        self.out.extend_from_slice(&buf);
+        self.out.truncate(len);
     }
 
     /// A length as written (a Vec's length always fits an i64).
