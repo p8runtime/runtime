@@ -644,6 +644,7 @@ impl Ids {
         Ids { monotonic: true, queue: Some(Rc::clone(objects)), ..Ids::default() }
     }
 
+    #[inline]
     pub fn take(&self) -> u32 {
         if let Some(id) = self.free.borrow_mut().pop() {
             return id;
@@ -724,15 +725,34 @@ impl Ids {
         self.all.borrow().iter().filter_map(std::rc::Weak::upgrade).collect()
     }
 
-    #[inline]
-    fn track(&self, o: &Rc<Object>) {
+    /// A new object's id, its entry in the table pointing at `me` (the
+    /// object's block, its value being made: see [`Object::made`]).
+    #[inline(always)]
+    fn enter(&self, me: &std::rc::Weak<Object>) -> u32 {
+        let id = self.take();
         let mut all = self.all.borrow_mut();
-        let i = o.id as usize;
+        let i = id as usize;
         if all.len() <= i {
             all.resize(i + 1, std::rc::Weak::new());
         }
         // (What it replaces is empty: the object that had the id emptied it.)
-        all[i] = Rc::downgrade(o);
+        all[i] = me.clone();
+        id
+    }
+
+    /// Object `id` of these (not monotonic) numbers went, its properties
+    /// gone: its entry empties ([`Ids::untrack`]), and its id goes back,
+    /// unless a destructor not yet run (one its properties queued, or one
+    /// queued before) would in PHP have run, and freed its object's handle,
+    /// before this one goes: then the id waits for those.
+    #[inline(always)]
+    fn gone(&self, id: u32) {
+        self.untrack(id);
+        if self.due.get() == 0 {
+            self.free.borrow_mut().push(id);
+        } else {
+            self.park(id);
+        }
     }
 
     /// Object `id` went: its entry empties, so its memory goes with it.
@@ -1089,7 +1109,16 @@ impl SlotCells {
             heap.extend_from_slice(values);
             return SlotCells::Heap(heap.into_iter().map(Cell::new).collect());
         }
-        let cells = std::array::from_fn(|i| Cell::new(values.get(i).cloned().unwrap_or(Value::UNDEF)));
+        // (By count: each copy a straight store, no per-cell bounds test.)
+        let c = |v: &Value| Cell::new(v.clone());
+        let u = || Cell::new(Value::UNDEF);
+        let cells = match values {
+            [] => [u(), u(), u(), u()],
+            [a] => [c(a), u(), u(), u()],
+            [a, b] => [c(a), c(b), u(), u()],
+            [a, b, d] => [c(a), c(b), c(d), u()],
+            [a, b, d, e, ..] => [c(a), c(b), c(d), c(e)],
+        };
         SlotCells::Inline { len: values.len() as u8, cells }
     }
 
@@ -1115,6 +1144,7 @@ impl SlotCells {
 
     /// Every value gone, and a buffer of their own kept for the next
     /// object or array (see [`crate::array::keep_values_buffer`]).
+    #[inline(always)]
     fn release(&mut self) {
         match self {
             SlotCells::Heap(v) => crate::array::keep_values_buffer(std::mem::take(v).into_iter().map(Cell::into_inner).collect()),
@@ -1211,7 +1241,7 @@ impl Object {
     /// property).
     pub fn with_slots(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: Props) -> Rc<Object> {
         debug_assert_eq!(slots.len(), class.properties.len());
-        Object::made(class, ids, data, SlotCells::from(slots))
+        Object::made(class, ids, data, || SlotCells::from(slots))
     }
 
     /// A new object whose slots start as copies of `defaults` (one value
@@ -1220,28 +1250,29 @@ impl Object {
     #[inline]
     pub fn with_defaults(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, defaults: &[Value]) -> Rc<Object> {
         debug_assert_eq!(defaults.len(), class.properties.len());
-        Object::made(class, ids, data, SlotCells::copied(defaults))
+        Object::made(class, ids, data, || SlotCells::copied(defaults))
     }
 
+    /// The object, made in its block (which is there first: `slots` is
+    /// called there, so the slots are written in place, not copied in),
+    /// its table entry taken with it.
     #[inline(always)]
-    fn made(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: SlotCells) -> Rc<Object> {
-        let o = Rc::new(Object {
+    fn made(class: Rc<Class>, ids: &Rc<Ids>, data: Option<Rc<dyn std::any::Any>>, slots: impl FnOnce() -> SlotCells) -> Rc<Object> {
+        Rc::new_cyclic(|me| Object {
             class,
             data: data.map(Data),
-            slots,
+            slots: slots(),
             ids: Rc::clone(ids),
             cold: std::cell::OnceCell::new(),
-            id: ids.take(),
+            id: ids.enter(me),
             destructed: Cell::new(false),
             lazy: Cell::new(0),
-        });
-        ids.track(&o);
-        o
+        })
     }
 
     /// A shallow copy (clone): same class, the properties copied, a new id.
     pub fn copy(&self) -> Rc<Object> {
-        let o = Rc::new(Object {
+        Rc::new_cyclic(|me| Object {
             class: Rc::clone(&self.class),
             data: match self.class.clone_data {
                 Some(clone) => Some(Data(clone(self))),
@@ -1257,76 +1288,88 @@ impl Object {
                 }
                 _ => std::cell::OnceCell::new(),
             },
-            id: self.ids.take(),
+            id: self.ids.enter(me),
             destructed: Cell::new(false),
             lazy: Cell::new(0),
+        })
+    }
+}
+
+impl Object {
+    /// The drop of an object whose destructor is due: it lives on (same
+    /// id, same properties, its own cold part, minus any lazy state) until
+    /// the interpreter has run it. Out of line: most objects' classes have
+    /// no destructor, and their drop stays small.
+    #[cold]
+    #[inline(never)]
+    fn revive(&mut self) {
+        // (Its entry in the table emptied: no weak reference left to keep
+        // this memory once it has gone; the revived object is untracked.)
+        self.ids.untrack(self.id);
+        let cold = std::mem::take(&mut self.cold);
+        let lazy = cold.get().and_then(|c| c.lazy_info.borrow_mut().take());
+        let revived = Rc::new(Object {
+            class: Rc::clone(&self.class),
+            data: self.data.take(),
+            slots: std::mem::take(&mut self.slots),
+            ids: Rc::clone(&self.ids),
+            cold,
+            id: self.id,
+            destructed: Cell::new(true),
+            lazy: Cell::new(0),
         });
-        self.ids.track(&o);
-        o
+        let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
+        queue.pending.borrow_mut().push_back(revived);
+        queue.due.set(queue.due.get() + 1);
+        queue.queued.set(queue.queued.get() + 1);
+        drop(lazy);
+    }
+
+    /// The dynamic properties and lazy state of a dropped object that has
+    /// a cold part: the dynamic ones emptied (before the declared, as
+    /// zend_object_std_dtor destroys `properties` before walking
+    /// `properties_table`), the lazy state handed back to go with `data`.
+    #[cold]
+    #[inline(never)]
+    fn drop_cold(cold: &mut Cold) -> Option<Box<Lazy>> {
+        let dynamic = cold.dynamic.get_mut();
+        if !dynamic.is_empty() {
+            drop(std::mem::take(dynamic));
+        }
+        cold.lazy_info.get_mut().take()
     }
 }
 
 impl Drop for Object {
     fn drop(&mut self) {
-        // (Its entry in the table emptied: no weak reference left to keep
-        // this memory once it has gone.)
-        self.ids.untrack(self.id);
         // A lazy object's destructor never runs (an initialized proxy's real
         // instance has its own), as zend_objects_destroy_object skips them.
         if self.class.flags & CLASS_DESTRUCTOR != 0 && !self.destructed.get() && self.lazy.get() == 0 {
-            // Its destructor is due: the object lives on (same id, same
-            // properties, its own cold part, minus any lazy state) until
-            // the interpreter has run it.
-            let cold = std::mem::take(&mut self.cold);
-            let lazy = cold.get().and_then(|c| c.lazy_info.borrow_mut().take());
-            let revived = Rc::new(Object {
-                class: Rc::clone(&self.class),
-                data: self.data.take(),
-                slots: std::mem::take(&mut self.slots),
-                ids: Rc::clone(&self.ids),
-                cold,
-                id: self.id,
-                destructed: Cell::new(true),
-                lazy: Cell::new(0),
-            });
-            let queue = self.ids.queue.as_deref().unwrap_or(&self.ids);
-            queue.pending.borrow_mut().push_back(revived);
-            queue.due.set(queue.due.get() + 1);
-            queue.queued.set(queue.queued.get() + 1);
-            drop(lazy);
+            self.revive();
             return;
         }
         if self.ids.monotonic {
+            self.ids.untrack(self.id);
             return;
         }
         // Its properties go before its id does (PHP frees an object, and
         // runs the destructors that brings, before its handle is free):
         // emptied in place, their storage freed with the object after.
         // (A buffer of their own kept for the next object or array.) The
-        // dynamic ones first, then the declared, as zend_object_std_dtor
-        // destroys `properties` before walking `properties_table`.
-        let cold = self.cold.get_mut().map(|c| &mut **c);
-        let lazy = if let Some(Cold { dynamic, lazy_info }) = cold {
-            let dynamic = dynamic.get_mut();
-            if !dynamic.is_empty() {
-                drop(std::mem::take(dynamic));
-            }
-            lazy_info.get_mut().take()
-        } else {
-            None
+        // dynamic ones first, then the declared.
+        let lazy = match self.cold.get_mut() {
+            Some(cold) => Object::drop_cold(cold),
+            None => None,
         };
         self.slots.release();
         if self.data.is_some() || lazy.is_some() {
             drop((self.data.take(), lazy));
         }
-        // A destructor not yet run (one these properties queued, or one
-        // queued before) would in PHP have run, and freed its object's
-        // handle, before this one goes: the id waits for those.
-        if self.ids.due.get() == 0 {
-            self.ids.give_back(self.id);
-        } else {
-            self.ids.park(self.id);
-        }
+        // Its entry in the table emptied (no weak reference left to keep
+        // this memory once it has gone; nothing upgrades the entry of an
+        // object being dropped, so emptying it last is the same as first),
+        // and its id back.
+        self.ids.gone(self.id);
     }
 }
 
