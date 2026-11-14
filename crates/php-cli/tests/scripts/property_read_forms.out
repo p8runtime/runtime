@@ -1,0 +1,168 @@
+P1 a1-----
+P6 a1b2c3d4e5f6
+P4 a1b2c3d4--
+P5 a1b2c3d4e5-
+P2 a1b2----
+P3 a1b2c3---
+P6 a1b2c3d4e5f6
+P1 a1-----
+P4 a1b2c3d4--
+sixth of P6: "f6"
+sixth of P6: "f6"
+sixth of P3: null
+sixth of P6: "f6"
+sixth of P4: null
+sixth of P1: null
+a1d4e5f6a0d4e0f6a1d4e1f6a2d4e2f6
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[7,"sss",[1,2]]
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[7,"sss",[1,2]]
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[null,true,7,0.5,"lit","sss",[1,2],"D"]
+["d",true,7,0.5,"lit","sss",[1,2],"d"]
+[7,"sss",[1,2]]
+[[1,2,0],"sss0",7,[1,2],"sss",7]
+[[1,2,1],"sss1",8,[1,2],"sss",7]
+[[1,2,2],"sss2",9,[1,2],"sss",7]
+destruct replaced 0
+after the read 0: 7
+destruct replaced 1
+after the read 1: 7
+0 0 0
+100 100 100
+200 200 200
+lit,d,none,no object;lit,d,none,no object;lit,d,none,no object;
+
+Deprecated: Creation of dynamic property V::$later is deprecated in %s on line 119
+lit200?lit2000lit2001
+ssslit
+ssslit
+Base: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
+Child: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
+Child: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
+Base: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
+child secret|base shared
+Base sees base secret / base secret
+Child sees child secret / child secret
+Base sees base secret / base secret
+Other sees other secret / other secret
+Base sees base secret / base secret
+Error: Cannot access private property Base::$secret
+Error: Cannot access private property Child::$secret
+Error: Cannot access protected property Base::$shared
+Error: Cannot access protected property Child::$shared
+base open
+base open
+Error: Cannot access private property Base::$secret
+Error: Cannot access private property Child::$secret
+bool(false)
+bool(false)
+bool(true)
+string(9) "base open"
+1null["f"]not yet unset Error: Typed property T::$late must not be accessed before initialization
+1null["f"]not yet unset Error: Typed property T::$late must not be accessed before initialization
+2null["f"]now now now
+gone 0: "gone"
+gone 0 from inside: "gone"
+gone 0 quiet: "gone"
+gone 0 quiet from inside: "gone"
+[2] Undefined property: U::$never
+never 0: null
+here 0: "here"
+[2] Undefined property: U::$gone
+gone 1: null
+[2] Undefined property: U::$gone
+gone 1 from inside: null
+gone 1 quiet: "quiet"
+gone 1 quiet from inside: "quiet"
+[2] Undefined property: U::$never
+never 1: null
+here 1: "here"
+[2] Undefined property: U::$gone
+gone 2: null
+[2] Undefined property: U::$gone
+gone 2 from inside: null
+gone 2 quiet: "quiet"
+gone 2 quiet from inside: "quiet"
+[2] Undefined property: U::$never
+never 2: null
+here 2: "here"
+gone 3: "back"
+gone 3 from inside: "back"
+gone 3 quiet: "back"
+gone 3 quiet from inside: "back"
+[2] Undefined property: U::$never
+never 3: null
+here 3: "here"
+gone 4: "back"
+gone 4 from inside: "back"
+gone 4 quiet: "back"
+gone 4 quiet from inside: "back"
+[2] Undefined property: U::$never
+never 4: null
+here 4: "here"
+std 0: "none"
+bag 0: "none"
+bag declared 0: "declared"
+std 1: "std extra"
+bag 1: ["bag extra"]
+bag declared 1: "declared"
+std 2: "std extra"
+bag 2: ["bag extra"]
+bag declared 2: "declared"
+std 3: "none"
+bag 3: "none"
+bag declared 3: "declared"
+[2] Undefined property: stdClass::$extra
+std undefined: null
+one site: Bag: "declared"
+one site: stdClass: "neither"
+one site: P1: "a1"
+one site: Bag: "declared"
+real __get(hidden) to be unset __get(missing) hidden,real,__get(missing)
+real __isset(hidden) __get(hidden) to be unset __isset(no) d
+real __get(hidden) __get(unset) __get(missing) hidden,real,__get(missing)
+real __isset(hidden) __get(hidden) __isset(unset) __get(unset) __isset(no) d
+real __get(hidden) __get(unset) __get(missing) hidden,real,__get(missing)
+real __isset(hidden) __get(hidden) __isset(unset) __get(unset) __isset(no) d
+plain (get) BACKING plain! (get) BACKING
+plain 0 (get) BACKING plain 0! (get) BACKING
+plain 1 (get) BACKING plain 1! (get) BACKING
+(L constructed) made x made x
+ghost: (L constructed) made x made x default y
+proxy: (L constructed) made x made x default y
+inside: (L constructed) made x made x
+plain again: made x made x
+object: "p of an object"
+object quiet: "p of an object"
+object safe: "p of an object"
+[2] Attempt to read property "p" on null
+NULL: null
+NULL quiet: "d"
+NULL safe: null
+[2] Attempt to read property "p" on int
+integer: null
+integer quiet: "d"
+[2] Attempt to read property "p" on string
+string: null
+string quiet: "d"
+[2] Attempt to read property "p" on array
+array: null
+array quiet: "d"
+[2] Attempt to read property "p" on float
+double: null
+double quiet: "d"
+object: "p of an object"
+object quiet: "p of an object"
+object safe: "p of an object"
+Error: Using $this when not in object context
+destruct held by V
+end

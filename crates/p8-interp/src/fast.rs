@@ -1953,9 +1953,8 @@ impl Context<'_> {
                             let Some(o) = w[rx!(b)].as_object() else { miss!() };
                             o
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let found = match dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) {
-                            Some(entry) => cached_prop(entry, o, scope),
+                            Some(entry) => cached_prop(entry, o, || top.scope.as_ref()),
                             // (A dynamic property: `dynamic_prop`.)
                             None => dynamic_prop(o, &w[rx!(c)]),
                         };
@@ -2043,19 +2042,19 @@ impl Context<'_> {
                                 }
                             }
                         };
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
+                        let scope = top.scope.as_ref();
                         // `isset($o->$name)`: the entry made for this access
                         // (`dyn_entry`).
                         if dynamic {
-                            let Some(entry) = dyn_entry(o, &w[rx!(c)], top.scope.as_ref()) else { general!() };
-                            let Some(v) = cached_prop(entry, o, scope) else { general!() };
+                            let Some(entry) = dyn_entry(o, &w[rx!(c)], scope) else { general!() };
+                            let Some(v) = cached_prop(entry, o, || scope) else { general!() };
                             done!(put(&mut w[rx!(a)], Value::bool(!v.is_null())));
                             continue;
                         }
                         let Some(site) = clo.props.get(imm as usize) else { general!() };
-                        let v = match cached_prop(site.get(), o, scope) {
+                        let v = match cached_prop(site.get(), o, || scope) {
                             Some(v) => v,
-                            None if refill_prop(site, o, &clo.consts[imm as usize], top.scope.as_ref()) => match cached_prop(site.get(), o, scope) {
+                            None if refill_prop(site, o, &clo.consts[imm as usize], scope) => match cached_prop(site.get(), o, || scope) {
                                 Some(v) => v,
                                 None => general!(),
                             },

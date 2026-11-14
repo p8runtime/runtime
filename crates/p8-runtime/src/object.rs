@@ -1101,6 +1101,17 @@ impl SlotCells {
         }
     }
 
+    /// Cell `i` ([`Object::slot_at`]): of the ones in the object, any of
+    /// the INLINE_PROPS there (one past the count is Undef, as it was
+    /// made and as `release` leaves it).
+    #[inline(always)]
+    fn at(&self, i: usize) -> Option<&Cell<Value>> {
+        match self {
+            SlotCells::Inline { cells, .. } => cells.get(i),
+            SlotCells::Heap(v) => v.get(i),
+        }
+    }
+
     /// Every value gone, and a buffer of their own kept for the next
     /// object or array (see [`crate::array::keep_values_buffer`]).
     fn release(&mut self) {
@@ -1144,6 +1155,17 @@ impl Object {
     #[inline(always)]
     pub fn slots(&self) -> &[Cell<Value>] {
         self.slots.cells()
+    }
+
+    /// Declared property slot `i`, for a read by a slot number that is
+    /// the class's own (a cache entry's): the same cell `slots().get(i)`
+    /// gives, without the count of the ones kept in the object (a cell
+    /// past it there is Undef, and nothing writes one: `slots()` ends at
+    /// the count), so the common object's read is one compare with a
+    /// constant.
+    #[inline(always)]
+    pub fn slot_at(&self, i: usize) -> Option<&Cell<Value>> {
+        self.slots.at(i)
     }
 
     /// A copy of every declared property's value, in slot order.
@@ -1342,6 +1364,26 @@ mod props_tests {
             }
             s.release();
             assert_eq!(s.cells().len(), 0);
+        }
+    }
+
+    /// `at` is `cells().get()` for every slot there is; past them it has
+    /// no value to give: None, or (in the object) a cell that is Undef,
+    /// before and after a release.
+    #[test]
+    fn a_slot_by_number_is_the_cell_or_nothing_set() {
+        for n in [0usize, 1, 3, 4, 5, 9] {
+            let values: Vec<Value> = (0..n as i64).map(|i| Value::int(i + 10)).collect();
+            let mut s = SlotCells::from(Props::from_slice(&values));
+            for i in 0..n {
+                assert!(std::ptr::eq(s.at(i).expect("a slot"), &s.cells()[i]));
+                assert_eq!(s.at(i).map(|c| c.peek(Value::to_int)), Some(i as i64 + 10));
+            }
+            let past = |s: &SlotCells| (n..n + 6).all(|i| s.at(i).is_none_or(|c| c.peek(Value::is_undef)));
+            assert!(past(&s), "{n} slots");
+            assert_eq!(s.at(n.max(INLINE_PROPS)).map(|c| c.peek(Value::to_int)), None);
+            s.release();
+            assert!((0..n + 6).all(|i| s.at(i).is_none_or(|c| c.peek(Value::is_undef))), "{n} slots released");
         }
     }
 
