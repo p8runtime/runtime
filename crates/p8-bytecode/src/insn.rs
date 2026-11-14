@@ -586,7 +586,16 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let this = obj == THIS;
             i(Op::InitMethod, recv, if this { 0 } else { obj }, Reg::from(this), u32::from(method))
         }
-        Instr::Jump { target } => i(Op::Jump, 0, 0, 0, target),
+        // A foreach's back edge (the jump to its own step, whose end is
+        // right after the jump): the step itself, so that a step is one
+        // dispatch, not two. Its registers are in the window as the
+        // step's are (else the plain jump).
+        Instr::Jump { target } => match code.get(target as usize) {
+            Some(&Instr::IterNext { iter, val, key, has_key, end }) if end as usize == pc + 1 && r(iter + 1).is_some() => {
+                i(if has_key { Op::IterLoopKey } else { Op::IterLoop }, iter, val, if has_key { key } else { 0 }, target).or_else(|| i(Op::Jump, 0, 0, 0, target))
+            }
+            _ => i(Op::Jump, 0, 0, 0, target),
+        },
         Instr::Compare { cmp, dst, a, b } => match cmp_c(cmp, a, b) {
             Some((cmp, a, kk)) => i(Op::CompareC, dst, a, 0, cmp_imm(cmp) | kk << 8),
             None => i(Op::Compare, dst, a, b, cmp_imm(cmp)),
