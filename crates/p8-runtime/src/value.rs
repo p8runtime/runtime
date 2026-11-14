@@ -964,8 +964,55 @@ impl Value {
         }
     }
 
-    /// `===` (zend_is_identical).
+    /// `===` (zend_is_identical): what the two kinds decide is decided
+    /// where it is asked (`identical_by_kind`: a caller comparing in a loop,
+    /// `in_array`, pays no call for it); the rest is out of line.
+    #[inline]
     pub fn identical(&self, other: &Value) -> bool {
+        match self.identical_by_kind(other) {
+            Some(same) => same,
+            None => self.identical_rest(other),
+        }
+    }
+
+    /// `===` where the two kinds decide it, or the two words do, with no
+    /// call and no frame: null, bools, ints, floats, program-memory
+    /// strings, objects, values of different kinds, an array compared
+    /// with itself, and two strings told the same or apart in place (one
+    /// handle, two known hashes, two lengths, two short strings' bytes).
+    /// None for the rest (`identical_rest`): a reference to look through,
+    /// an undefined variable (null to `identical`; the operators warn),
+    /// two arrays to walk, two strings whose bytes must be read.
+    #[inline(always)]
+    pub fn identical_by_kind(&self, other: &Value) -> Option<bool> {
+        match (&self.0, &other.0) {
+            (Repr::Null(_), Repr::Null(_)) => Some(true),
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => Some(a == b),
+            // (As floats, not bits: NAN is not itself, 0.0 is -0.0.)
+            (Repr::Float(a), Repr::Float(b)) => Some(f64::from_bits(*a as u64) == f64::from_bits(*b as u64)),
+            // One program-memory string per bytes: the same bytes are
+            // the same pointer.
+            (Repr::IStr(a), Repr::IStr(b)) => Some(std::ptr::eq(*a, *b)),
+            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => {
+                let (a, b) = (self.as_str()?, other.as_str()?);
+                if std::ptr::eq(a, b) {
+                    Some(true)
+                } else if a.hashes_differ(b) {
+                    Some(false)
+                } else {
+                    a.eq_in_place(b)
+                }
+            }
+            (Repr::Object(a), Repr::Object(b)) => Some(Rc::ptr_eq(a, b)),
+            (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b).then_some(true),
+            (Repr::Ref(_) | Repr::Undef(_), _) | (_, Repr::Ref(_) | Repr::Undef(_)) => None,
+            _ => Some(false),
+        }
+    }
+
+    /// `===` for every pair (what `identical_by_kind` leaves, in use).
+    #[inline(never)]
+    fn identical_rest(&self, other: &Value) -> bool {
         // (On the representation, not the view: a hot operator, and the
         // view's pair match measured +33 instructions per `===`.)
         match (&self.0, &other.0) {
@@ -988,6 +1035,45 @@ impl Value {
 
     /// `==` (zend_compare == 0, with strings compared as zend_fast_equal_strings).
     pub fn loose_eq(&self, other: &Value) -> bool {
+        match self.loose_eq_by_kind(other) {
+            Some(equal) => equal,
+            None => self.loose_eq_rest(other),
+        }
+    }
+
+    /// `==` where the two kinds decide it with no conversion, no call and
+    /// no frame: null, bools, ints, floats, an object compared with
+    /// itself, and two strings that are one handle or, when either starts
+    /// above '9' (no number does, so the bytes decide: the test
+    /// zend_fast_equal_strings makes), told the same or apart in place
+    /// (two lengths, two short strings' bytes). None for the rest
+    /// (`loose_eq_rest`): numeric strings, mixed kinds, arrays, objects,
+    /// references, undefined, two strings whose bytes must be read.
+    #[inline(always)]
+    pub fn loose_eq_by_kind(&self, other: &Value) -> Option<bool> {
+        match (&self.0, &other.0) {
+            (Repr::Null(_), Repr::Null(_)) => Some(true),
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => Some(a == b),
+            // (NAN equals nothing, 0.0 equals -0.0.)
+            (Repr::Float(a), Repr::Float(b)) => Some(f64::from_bits(*a as u64) == f64::from_bits(*b as u64)),
+            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => {
+                let (a, b) = (self.as_str()?, other.as_str()?);
+                if std::ptr::eq(a, b) {
+                    Some(true)
+                } else if a.first_byte() > b'9' || b.first_byte() > b'9' {
+                    a.eq_in_place(b)
+                } else {
+                    None
+                }
+            }
+            (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b).then_some(true),
+            _ => None,
+        }
+    }
+
+    /// `==` for every pair (what `loose_eq_by_kind` leaves, in use).
+    #[inline(never)]
+    fn loose_eq_rest(&self, other: &Value) -> bool {
         match (self.as_str(), other.as_str()) {
             (Some(a), Some(b)) => {
                 // (zendi_smart_str_equals: the second string is parsed

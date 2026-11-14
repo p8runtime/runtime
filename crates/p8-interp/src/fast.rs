@@ -3086,9 +3086,29 @@ fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<
 /// `num_test`, and every other pair of defined values as `step` compares
 /// them (`test_values`: nothing there warns). None for an undefined
 /// variable (`step` warns) or `<=>`.
+///
+/// `===`, `!==`, `==` and `!=` of two values their kinds decide (`$s ===
+/// ''`, `$x !== null`, `false === $found`, `$type == 'post'`: most of
+/// what gets here) are decided first, with no frame and no further call
+/// (`Value::identical_by_kind`, `loose_eq_by_kind`: neither decides an
+/// undefined variable or a reference); the rest is `test_rest`.
 #[cold]
 #[inline(never)]
 pub(crate) fn test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
+    let decided = match cmp {
+        Cmp::Identical | Cmp::NotIdentical => x.identical_by_kind(y),
+        Cmp::Eq | Cmp::NotEq => x.loose_eq_by_kind(y),
+        _ => None,
+    };
+    match decided {
+        Some(same) => Some(same == matches!(cmp, Cmp::Identical | Cmp::Eq)),
+        None => test_rest(cmp, x, y),
+    }
+}
+
+/// `test` for every pair and operator.
+#[inline(never)]
+fn test_rest(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
     if cmp == Cmp::Spaceship {
         return None;
     }

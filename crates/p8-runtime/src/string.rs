@@ -93,6 +93,33 @@ impl StrHead {
         }
     }
 
+    /// Whether two heads hold the same bytes, where a comparison operator
+    /// can tell with no call: the same head, two lengths that differ, two
+    /// short strings (`short_eq`). None for two strings of one length
+    /// with either on the heap (compare the slices).
+    #[inline(always)]
+    pub fn eq_in_place(&self, other: &StrHead) -> Option<bool> {
+        if std::ptr::eq(self, other) {
+            return Some(true);
+        }
+        match (&self.bytes, &other.bytes) {
+            (Bytes::Inline { len: a, buf: x }, Bytes::Inline { len: b, buf: y }) => Some(a == b && x == y),
+            // (The lengths read here, not through `as_slice`: no call.)
+            (Bytes::Inline { len, .. }, Bytes::Heap(v)) | (Bytes::Heap(v), Bytes::Inline { len, .. }) => {
+                (usize::from(*len) != v.len()).then_some(false)
+            }
+            (Bytes::Heap(v), Bytes::Heap(w)) => (v.len() != w.len()).then_some(false),
+        }
+    }
+
+    /// Whether both hashes are known and differ: two strings that are
+    /// then not the same bytes, told by two loads. (False says nothing.)
+    #[inline(always)]
+    pub fn hashes_differ(&self, other: &StrHead) -> bool {
+        let (a, b) = (self.hash.load(Ordering::Relaxed), other.hash.load(Ordering::Relaxed));
+        a != 0 && b != 0 && a != b
+    }
+
     /// `hash` the first time (zend_string_hash_func).
     #[cold]
     #[inline(never)]
