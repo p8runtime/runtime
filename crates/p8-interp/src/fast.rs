@@ -551,13 +551,14 @@ impl Context<'_> {
                         }
                     }};
                 }
-                // `!x` (`$not`) and a condition made a value, as `truth`
-                // decides (NAN and an undefined variable warn: `step`).
+                // `!x` (`$not`) and a condition made a value: a bool, an int
+                // and null inline, the rest as `truth` decides (NAN and an
+                // undefined variable warn: `step`).
                 macro_rules! truth {
                     ($not:expr) => {{
                         ops!(a, b, c, imm);
                         let v = &w[rx!(b)];
-                        let t = match v.as_bool() {
+                        let t = match v.truth_by_tag() {
                             Some(b) => b,
                             None => match truth(v) {
                                 Some(t) => t,
@@ -3122,6 +3123,28 @@ pub(crate) fn test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
     }
 }
 
+/// `x === y` when the tags do not decide it (`identical_by_tag`): two
+/// strings here, as `Value::identical` compares them (the same head or
+/// the same bytes), in one call from the handler; the rest is `test`'s.
+#[inline(never)]
+pub(crate) fn identical_rest(x: &Value, y: &Value) -> Option<bool> {
+    match (x.as_str(), y.as_str()) {
+        (Some(a), Some(b)) => Some(a.same(b)),
+        _ => test(Cmp::Identical, x, y),
+    }
+}
+
+/// `x == y` beyond two ints: two strings here, as `Value::loose_eq`
+/// compares them (`str_loose_eq`), in one call from the handler; the
+/// rest is `test`'s.
+#[inline(never)]
+pub(crate) fn loose_eq_rest(x: &Value, y: &Value) -> Option<bool> {
+    match (x.as_str(), y.as_str()) {
+        (Some(a), Some(b)) => Some(p8_runtime::value::str_loose_eq(a, b)),
+        _ => test(Cmp::Eq, x, y),
+    }
+}
+
 /// `dst = a op b` beyond two ints: floats, operands through references,
 /// `.` on strings. False (nothing done) when `step` must run it: a
 /// warning, an error, a conversion with side effects, an overflow.
@@ -3178,7 +3201,8 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, b: Src) -> bool {
     }
 }
 
-/// A condition that is not a bool: what i_zend_is_true says, when
+/// A condition the tag does not decide (`truth_by_tag`: a float, a
+/// string, an array, an object, a reference): what i_zend_is_true says, when
 /// nothing can warn (NAN, an undefined variable: None, `step`'s).
 #[cold]
 #[inline(never)]

@@ -1,0 +1,1477 @@
+== conditions
+true         T-ww2b-tao T-ww2b-tao
+false        Fn1-!f--1 Fn1-!f--1
+0            Fn1-!f--1 Fn1-!f--1
+1            T-ww2b-tao T-ww2b-tao
+-1           T-ww2b-tao T-ww2b-tao
+null         Fn1-!f--1 Fn1-!f--1
+0.0          Fn1-!f--1 Fn1-!f--1
+-0.0         Fn1-!f--1 Fn1-!f--1
+1.0          T-ww2b-tao T-ww2b-tao
+
+Warning: unexpected NAN value was coerced to bool in %s on line 59
+
+Warning: unexpected NAN value was coerced to bool in %s on line 60
+
+Warning: unexpected NAN value was coerced to bool in %s on line 62
+
+Warning: unexpected NAN value was coerced to bool in %s on line 62
+
+Warning: unexpected NAN value was coerced to bool in %s on line 64
+
+Warning: unexpected NAN value was coerced to bool in %s on line 64
+
+Warning: unexpected NAN value was coerced to bool in %s on line 66
+
+Warning: unexpected NAN value was coerced to bool in %s on line 67
+
+Warning: unexpected NAN value was coerced to bool in %s on line 69
+
+Warning: unexpected NAN value was coerced to bool in %s on line 69
+
+Warning: unexpected NAN value was coerced to bool in %s on line 69
+
+Warning: unexpected NAN value was coerced to bool in %s on line 69
+
+Warning: unexpected NAN value was coerced to bool in %s on line 76
+
+Warning: unexpected NAN value was coerced to bool in %s on line 77
+
+Warning: unexpected NAN value was coerced to bool in %s on line 79
+
+Warning: unexpected NAN value was coerced to bool in %s on line 79
+
+Warning: unexpected NAN value was coerced to bool in %s on line 81
+
+Warning: unexpected NAN value was coerced to bool in %s on line 81
+
+Warning: unexpected NAN value was coerced to bool in %s on line 83
+
+Warning: unexpected NAN value was coerced to bool in %s on line 84
+
+Warning: unexpected NAN value was coerced to bool in %s on line 86
+
+Warning: unexpected NAN value was coerced to bool in %s on line 86
+
+Warning: unexpected NAN value was coerced to bool in %s on line 86
+
+Warning: unexpected NAN value was coerced to bool in %s on line 86
+NAN          T-ww2b-tao T-ww2b-tao
+""           Fn1-!f--1 Fn1-!f--1
+"0"          Fn1-!f--1 Fn1-!f--1
+"0.0"        T-ww2b-tao T-ww2b-tao
+" "          T-ww2b-tao T-ww2b-tao
+"a"          T-ww2b-tao T-ww2b-tao
+"1"          T-ww2b-tao T-ww2b-tao
+"1e1"        T-ww2b-tao T-ww2b-tao
+"10"         T-ww2b-tao T-ww2b-tao
+"abc"        T-ww2b-tao T-ww2b-tao
+"ABC"        T-ww2b-tao T-ww2b-tao
+long         T-ww2b-tao T-ww2b-tao
+made ""      Fn1-!f--1 Fn1-!f--1
+made "0"     Fn1-!f--1 Fn1-!f--1
+made "a"     T-ww2b-tao T-ww2b-tao
+made "10"    T-ww2b-tao T-ww2b-tao
+made "abc"   T-ww2b-tao T-ww2b-tao
+made long    T-ww2b-tao T-ww2b-tao
+made long.   T-ww2b-tao T-ww2b-tao
+[]           Fn1-!f--1 Fn1-!f--1
+[0]          T-ww2b-tao T-ww2b-tao
+["0"]        T-ww2b-tao T-ww2b-tao
+[[]]         T-ww2b-tao T-ww2b-tao
+box          T-ww2b-tao T-ww2b-tao
+box2         T-ww2b-tao T-ww2b-tao
+object       T-ww2b-tao T-ww2b-tao
+== literals
+true         ..t........ nf0ea.A. ..t..atc.E.
+false        .f......... n.0ea.A. nf.ez...C.r
+0            ...0....... nf.ea.A. nf..z...C..
+1            ....1...... nf0ea.A1 ..t.....C..
+-1           ........... nf0ea.A. ..t.....C..
+null         n.......... .f0eaNA. nf.e....C.r
+0.0          .....d..... nf0ea.A. nf..z...C..
+-0.0         .....d..... nf0ea.A. nf..z...C..
+1.0          ........... nf0ea.A. ..t.....C..
+NAN          ........... nf0ea.A. ..t.....C..
+""           ......e.... nf0.a.A. nf.e....C..
+"0"          .......z... nf0ea.A. .f..z...C..
+"0.0"        ........... nf0ea.A. ..t.z...C..
+" "          ........... nf0ea.A. ..t.....C..
+"a"          ........a.. nf0e.... ..t..a..C..
+"1"          ........... nf0ea.A. ..t.....C..
+"1e1"        ........... nf0ea.A. ..t...t.CE.
+"10"         ........... nf0ea.A. ..t...t.CE.
+"abc"        ........... nf0ea.A. ..t....cC..
+"ABC"        ........... nf0ea.A. ..t........
+long         .........l. nf0ea.A. ..t.....C..
+made ""      ......e.... nf0.a.A. nf.e....C..
+made "0"     .......z... nf0ea.A. .f..z...C..
+made "a"     ........a.. nf0e.... ..t..a..C..
+made "10"    ........... nf0ea.A. ..t...t.CE.
+made "abc"   ........... nf0ea.A. ..t....cC..
+made long    .........l. nf0ea.A. ..t.....C..
+made long.   ........... nf0ea.A. ..t.....C..
+[]           ..........r nf0ea.A. nf......C.r
+[0]          ........... nf0ea.A. ..t.....C..
+["0"]        ........... nf0ea.A. ..t.....C..
+[[]]         ........... nf0ea.A. ..t.....C..
+box          ........... nf0ea.A. ..t.....C..
+box2         ........... nf0ea.A. ..t.....C..
+object       ........... nf0ea.A. ..t.....C..
+== pairs
+true
+  true         I.2010 I.21 I.  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  E.210 E.1 E.
+  -1           .N1201 .N10 .N  E.210 E.1 E.
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  E.210 E.1 E.
+  NAN          .N1201 .N10 .N  E.210 E.1 E.
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  E.210 E.1 E.
+  "a"          .N1201 .N10 .N  E.210 E.1 E.
+  "1"          .N1201 .N10 .N  E.210 E.1 E.
+  "1e1"        .N1201 .N10 .N  E.210 E.1 E.
+  "10"         .N1201 .N10 .N  E.210 E.1 E.
+  "abc"        .N1201 .N10 .N  E.210 E.1 E.
+  "ABC"        .N1201 .N10 .N  E.210 E.1 E.
+  long         .N1201 .N10 .N  E.210 E.1 E.
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  E.210 E.1 E.
+  made "10"    .N1201 .N10 .N  E.210 E.1 E.
+  made "abc"   .N1201 .N10 .N  E.210 E.1 E.
+  made long    .N1201 .N10 .N  E.210 E.1 E.
+  made long.   .N1201 .N10 .N  E.210 E.1 E.
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  E.210 E.1 E.
+  ["0"]        .N1201 .N10 .N  E.210 E.1 E.
+  [[]]         .N1201 .N10 .N  E.210 E.1 E.
+  box          .N1201 .N10 .N  E.210 E.1 E.
+  box2         .N1201 .N10 .N  E.210 E.1 E.
+  object       .N1201 .N10 .N  E.210 E.1 E.
+false
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        I.2010 I.21 I.  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  E.210 E.1 E.
+  "0"          .N1201 .N10 .N  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  E.210 E.1 E.
+  made "0"     .N1201 .N10 .N  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  E.210 E.1 E.
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+0
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            I.2010 I.21 I.  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+1
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            I.2010 I.21 I.  E.210 E.1 E.
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  E.210 E.1 E.
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  E.210 E.1 E.
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+-1
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           I.2010 I.21 I.  E.210 E.1 E.
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+null
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         I.2010 I.21 I.  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  E.210 E.1 E.
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  E.210 E.1 E.
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  E.210 E.1 E.
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+0.0
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          I.2010 I.21 I.  E.210 E.1 E.
+  -0.0         I.2010 I.21 I.  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+-0.0
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          I.2010 I.21 I.  E.210 E.1 E.
+  -0.0         I.2010 I.21 I.  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+1.0
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  E.210 E.1 E.
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          I.2010 I.21 I.  E.210 E.1 E.
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  E.210 E.1 E.
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+NAN
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  -
+  box2         .N1201 .N10 .N  -
+  object       .N1201 .N10 .N  -
+""
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           I.2010 I.21 I.  E.210 E.1 E.
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      I.2010 I.21 I.  E.210 E.1 E.
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"0"
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          I.2010 I.21 I.  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     I.2010 I.21 I.  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"0.0"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  E.210 E.1 E.
+  "0.0"        I.2010 I.21 I.  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+" "
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          I.2010 I.21 I.  E.210 E.1 E.
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"a"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          I.2010 I.21 I.  E.210 E.1 E.
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     I.2010 I.21 I.  E.210 E.1 E.
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"1"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  E.210 E.1 E.
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  E.210 E.1 E.
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          I.2010 I.21 I.  E.210 E.1 E.
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"1e1"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        I.2010 I.21 I.  E.210 E.1 E.
+  "10"         .N1201 .N10 .N  E.210 E.1 E.
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  E.210 E.1 E.
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"10"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  E.210 E.1 E.
+  "10"         I.2010 I.21 I.  E.210 E.1 E.
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    I.2010 I.21 I.  E.210 E.1 E.
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"abc"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        I.2010 I.21 I.  E.210 E.1 E.
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   I.2010 I.21 I.  E.210 E.1 E.
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+"ABC"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        I.2010 I.21 I.  E.210 E.1 E.
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+long
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         I.2010 I.21 I.  E.210 E.1 E.
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    I.2010 I.21 I.  E.210 E.1 E.
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made ""
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           I.2010 I.21 I.  E.210 E.1 E.
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      I.2010 I.21 I.  E.210 E.1 E.
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made "0"
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  E.210 E.1 E.
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  E.210 E.1 E.
+  -0.0         .N1201 .N10 .N  E.210 E.1 E.
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          I.2010 I.21 I.  E.210 E.1 E.
+  "0.0"        .N1201 .N10 .N  E.210 E.1 E.
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     I.2010 I.21 I.  E.210 E.1 E.
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made "a"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          I.2010 I.21 I.  E.210 E.1 E.
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     I.2010 I.21 I.  E.210 E.1 E.
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made "10"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  E.210 E.1 E.
+  "10"         I.2010 I.21 I.  E.210 E.1 E.
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    I.2010 I.21 I.  E.210 E.1 E.
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made "abc"
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        I.2010 I.21 I.  E.210 E.1 E.
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   I.2010 I.21 I.  E.210 E.1 E.
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made long
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         I.2010 I.21 I.  E.210 E.1 E.
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    I.2010 I.21 I.  E.210 E.1 E.
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+made long.
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   I.2010 I.21 I.  E.210 E.1 E.
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+[]
+  true         .N1201 .N10 .N  .D101 .D0 .D
+  false        .N1201 .N10 .N  E.210 E.1 E.
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  E.210 E.1 E.
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           I.2010 I.21 I.  E.210 E.1 E.
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+[0]
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          I.2010 I.21 I.  E.210 E.1 E.
+  ["0"]        .N1201 .N10 .N  E.210 E.1 E.
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+["0"]
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  E.210 E.1 E.
+  ["0"]        I.2010 I.21 I.  E.210 E.1 E.
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+[[]]
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  .D101 .D0 .D
+  1            .N1201 .N10 .N  .D101 .D0 .D
+  -1           .N1201 .N10 .N  .D101 .D0 .D
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  .D101 .D0 .D
+  -0.0         .N1201 .N10 .N  .D101 .D0 .D
+  1.0          .N1201 .N10 .N  .D101 .D0 .D
+  NAN          .N1201 .N10 .N  .D101 .D0 .D
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         I.2010 I.21 I.  E.210 E.1 E.
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       .N1201 .N10 .N  .D101 .D0 .D
+box
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  -
+  1            .N1201 .N10 .N  -
+  -1           .N1201 .N10 .N  -
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  -
+  -0.0         .N1201 .N10 .N  -
+  1.0          .N1201 .N10 .N  -
+  NAN          .N1201 .N10 .N  -
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          I.2010 I.21 I.  E.210 E.1 E.
+  box2         .N1201 .N10 .N  E.210 E.1 E.
+  object       .N1201 .N10 .N  .D101 .D0 .D
+box2
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  -
+  1            .N1201 .N10 .N  -
+  -1           .N1201 .N10 .N  -
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  -
+  -0.0         .N1201 .N10 .N  -
+  1.0          .N1201 .N10 .N  -
+  NAN          .N1201 .N10 .N  -
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  E.210 E.1 E.
+  box2         I.2010 I.21 I.  E.210 E.1 E.
+  object       .N1201 .N10 .N  .D101 .D0 .D
+object
+  true         .N1201 .N10 .N  E.210 E.1 E.
+  false        .N1201 .N10 .N  .D101 .D0 .D
+  0            .N1201 .N10 .N  -
+  1            .N1201 .N10 .N  -
+  -1           .N1201 .N10 .N  -
+  null         .N1201 .N10 .N  .D101 .D0 .D
+  0.0          .N1201 .N10 .N  -
+  -0.0         .N1201 .N10 .N  -
+  1.0          .N1201 .N10 .N  -
+  NAN          .N1201 .N10 .N  -
+  ""           .N1201 .N10 .N  .D101 .D0 .D
+  "0"          .N1201 .N10 .N  .D101 .D0 .D
+  "0.0"        .N1201 .N10 .N  .D101 .D0 .D
+  " "          .N1201 .N10 .N  .D101 .D0 .D
+  "a"          .N1201 .N10 .N  .D101 .D0 .D
+  "1"          .N1201 .N10 .N  .D101 .D0 .D
+  "1e1"        .N1201 .N10 .N  .D101 .D0 .D
+  "10"         .N1201 .N10 .N  .D101 .D0 .D
+  "abc"        .N1201 .N10 .N  .D101 .D0 .D
+  "ABC"        .N1201 .N10 .N  .D101 .D0 .D
+  long         .N1201 .N10 .N  .D101 .D0 .D
+  made ""      .N1201 .N10 .N  .D101 .D0 .D
+  made "0"     .N1201 .N10 .N  .D101 .D0 .D
+  made "a"     .N1201 .N10 .N  .D101 .D0 .D
+  made "10"    .N1201 .N10 .N  .D101 .D0 .D
+  made "abc"   .N1201 .N10 .N  .D101 .D0 .D
+  made long    .N1201 .N10 .N  .D101 .D0 .D
+  made long.   .N1201 .N10 .N  .D101 .D0 .D
+  []           .N1201 .N10 .N  .D101 .D0 .D
+  [0]          .N1201 .N10 .N  .D101 .D0 .D
+  ["0"]        .N1201 .N10 .N  .D101 .D0 .D
+  [[]]         .N1201 .N10 .N  .D101 .D0 .D
+  box          .N1201 .N10 .N  .D101 .D0 .D
+  box2         .N1201 .N10 .N  .D101 .D0 .D
+  object       I.2010 I.21 I.  E.210 E.1 E.
+== a value with itself, and one variable twice
+true         I.2010 I.21  E.210 E.1
+false        I.2010 I.21  E.210 E.1
+0            I.2010 I.21  E.210 E.1
+1            I.2010 I.21  E.210 E.1
+-1           I.2010 I.21  E.210 E.1
+null         I.2010 I.21  E.210 E.1
+0.0          I.2010 I.21  E.210 E.1
+-0.0         I.2010 I.21  E.210 E.1
+1.0          I.2010 I.21  E.210 E.1
+NAN          .N1201 .N10  .D101 .D0
+""           I.2010 I.21  E.210 E.1
+"0"          I.2010 I.21  E.210 E.1
+"0.0"        I.2010 I.21  E.210 E.1
+" "          I.2010 I.21  E.210 E.1
+"a"          I.2010 I.21  E.210 E.1
+"1"          I.2010 I.21  E.210 E.1
+"1e1"        I.2010 I.21  E.210 E.1
+"10"         I.2010 I.21  E.210 E.1
+"abc"        I.2010 I.21  E.210 E.1
+"ABC"        I.2010 I.21  E.210 E.1
+long         I.2010 I.21  E.210 E.1
+made ""      I.2010 I.21  E.210 E.1
+made "0"     I.2010 I.21  E.210 E.1
+made "a"     I.2010 I.21  E.210 E.1
+made "10"    I.2010 I.21  E.210 E.1
+made "abc"   I.2010 I.21  E.210 E.1
+made long    I.2010 I.21  E.210 E.1
+made long.   I.2010 I.21  E.210 E.1
+[]           I.2010 I.21  E.210 E.1
+[0]          I.2010 I.21  E.210 E.1
+["0"]        I.2010 I.21  E.210 E.1
+[[]]         I.2010 I.21  E.210 E.1
+box          I.2010 I.21  E.210 E.1
+box2         I.2010 I.21  E.210 E.1
+object       I.2010 I.21  E.210 E.1
+== found
+true         S. true 1 bool other
+false        Ss false 1 bool false
+0            Ss 0 1 int zero
+1            S. 1 1 int other
+-1           S. -1 1 other other
+null         Ss null 1 null null
+0.0          Ss 0.0 2 other float zero
+-0.0         Ss 0.0 2 other float zero
+1.0          S. 1.0 1 other other
+NAN          .. - 0 other other
+""           Ss "" 2 other empty
+"0"          Ss "0" 2 str string zero
+"0.0"        S. "0.0" 1 other other
+" "          S. " " 1 other other
+"a"          Ss "a" 2 str a
+"1"          S. "1" 1 other other
+"1e1"        S. "1e1" 1 other other
+"10"         S. "10" 2 other other
+"abc"        Ss "abc" 2 other other
+"ABC"        S. "ABC" 1 other other
+long         S. long 2 other other
+made ""      Ss "" 2 other empty
+made "0"     Ss "0" 2 str string zero
+made "a"     Ss "a" 2 str a
+made "10"    S. "10" 2 other other
+made "abc"   Ss "abc" 2 other other
+made long    S. long 2 other other
+made long.   S. made long. 1 other other
+[]           Ss [] 1 other array
+[0]          S. [0] 1 other other
+["0"]        S. ["0"] 1 other other
+[[]]         S. [[]] 1 other other
+box          S. box 1 other other
+box2         S. box2 1 other other
+object       S. object 1 other other
+== undefined
+
+Warning: Undefined variable $u in %s on line 244
+
+Warning: Undefined variable $u in %s on line 245
+
+Warning: Undefined variable $u in %s on line 246
+
+Warning: Undefined variable $u in %s on line 247
+
+Warning: Undefined variable $u in %s on line 248
+
+Warning: Undefined variable $u in %s on line 249
+
+Warning: Undefined variable $u in %s on line 250
+
+Warning: Undefined variable $u in %s on line 251
+
+Warning: Undefined variable $w in %s on line 251
+
+Warning: Undefined variable $u in %s on line 253
+
+Warning: Undefined variable $u in %s on line 254
+FnI.E..U..

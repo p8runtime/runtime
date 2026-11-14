@@ -18,7 +18,7 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{Src, WINDOW, Wrote, clear, copied, is_owner, is_set, isset_elem, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
+use crate::fast::{Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
 use crate::sites::{Plain, cached_prop, dynamic_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
@@ -163,12 +163,13 @@ pub(crate) fn this(hx: Hx, args::This { dst }: args::This) -> Ctl {
     Ctl::Next(put(&mut hx.w[r(dst)], this))
 }
 
-/// A condition: a bool inline, anything else through `truth` (what may
-/// warn, NAN and an undefined variable, is cold).
+/// A condition: a bool, an int and null inline (`truth_by_tag`),
+/// anything else through `truth` (what may warn, NAN and an undefined
+/// variable, is cold).
 #[inline(always)]
 pub(crate) fn jump_cond<S: spec::JumpCond>(hx: Hx, args::JumpCond { cond, target }: args::JumpCond) -> Ctl {
     let v = &hx.w[r(cond)];
-    let c = match v.as_bool() {
+    let c = match v.truth_by_tag() {
         Some(c) => c,
         None => match truth(v) {
             Some(c) => c,
@@ -178,9 +179,12 @@ pub(crate) fn jump_cond<S: spec::JumpCond>(hx: Hx, args::JumpCond { cond, target
     if c == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
-/// A compare-and-branch: two ints inline, anything else (floats,
-/// references, strings, null) through `test`; an undefined variable (its
-/// warning) is cold.
+/// A compare-and-branch. Inline: two ints, and for `===` whatever the
+/// two tags and a word decide (`identical_by_tag`: null, bools, two
+/// program-memory strings, two kinds). Two strings are one call
+/// (`identical_rest`, `loose_eq_rest`); anything else (floats,
+/// references, arrays, objects) goes through `test`; an undefined
+/// variable (its warning) is cold.
 #[inline(always)]
 pub(crate) fn jump_cmp<S: spec::JumpCmp>(hx: Hx, args::JumpCmp { a, b, target }: args::JumpCmp) -> Ctl {
     let cmp = match S::Cmp::ID {
@@ -192,14 +196,16 @@ pub(crate) fn jump_cmp<S: spec::JumpCmp>(hx: Hx, args::JumpCmp { a, b, target }:
         _ => Cmp::Identical,
     };
     let (x, y) = (&hx.w[r(a)], hx.v::<S::B>(b));
-    let t = if let (Some(x), Some(y)) = (x.as_int(), y.as_int()) {
-        int_test(cmp, x, y)
+    let t = if S::Cmp::ID == ID {
+        x.identical_by_tag(y).or_else(|| identical_rest(x, y))
+    } else if let (Some(x), Some(y)) = (x.as_int(), y.as_int()) {
+        Some(int_test(cmp, x, y))
+    } else if S::Cmp::ID == EQ {
+        loose_eq_rest(x, y)
     } else {
-        match test(cmp, x, y) {
-            Some(t) => t,
-            None => return Ctl::Cold,
-        }
+        test(cmp, x, y)
     };
+    let Some(t) = t else { return Ctl::Cold };
     if t == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
