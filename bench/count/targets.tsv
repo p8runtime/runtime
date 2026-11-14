@@ -32,7 +32,7 @@ array_literal	542	1396	2.58	622	8	774	15155	2180990	11729970	open	-	-	-	array li
 array_isset	133	216	1.62	173	4	43	268420	10912082	11542060	open	-	-	-	isset() on an array element: the three P8_ISSET_DIM arms
 call_typed	229	693	3.03	319	9	374	30740	4138313	11496760	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
 static_method	183	706	3.86	223	4	483	17367	3512328	8388261	open	-	-	-	static method call: StaticCall 6,576 + StaticCallVars 10,791 runs (cost includes SendVarStatic)
-serialize_small	1498	5559	3.71	1548	5	4011	1427	7031287	5723697	open	-	-	-	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
+serialize_small	1498	5559	3.71	1548	5	4011	1427	7031287	5723697	claimed: PR #551	5566	1558	-5,483,336	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
 str_replace_short	662	1383	2.09	732	7	651	8192	13585030	5332992	open	-	-	-	str_replace(): string::replace 8,192 calls, inclusive
 array_read_str	174	232	1.33	214	4	18	284926	15689828	5128668	open	-	-	-	array element read: the three P8_FETCH_DIM_R arms
 string_concat	792	1163	1.47	862	7	301	13264	7682042	3992464	open	-	-	-	concatenation: p8_interp::concat 26,527 calls, inclusive (count = calls / 2, the case concatenates twice)
