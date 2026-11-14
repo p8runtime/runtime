@@ -1,6 +1,6 @@
 # Targets for the cases in bench/count/cases, one row per case, ranked by score (largest first).
 # Counts are instructions per loop iteration from bench/count/count.sh (callgrind; the 22000-iteration run minus the 2000-iteration run, divided by 20000).
-# php = PHP 8.6.0RC5. p8 = main 163ee87c. Measured 14 Nov 2026 on addis.
+# php = PHP 8.6.0RC5. p8, by row: main 163ee87c, measured 14 Nov 2026 on addis; the rows PR #542 changed (nested_write and those its run moved by more than 1) are that PR's branch on 163ee87c; property_read is PR #544's branch on main 61c7f930.
 # ops = p8 operations executed per iteration of the case's loop, the callee's included (read from `p8 --dump`; a method body is counted from the same body written as a function, because --dump does not print methods).
 # target = php + 10 * ops. gap = p8 - target.
 # wp_count = how many times one WordPress request (the scoreboard's) does what one iteration of the case does. wp_cost = what the named routine costs in that request, in instructions.
@@ -17,10 +17,10 @@ call_2args	179	523	2.92	239	6	284	232494	33091033	66028296	waits for the rebuild
 call_1arg	159	481	3.03	209	5	272	232494	33091033	63238368	waits for the rebuild	-	-	-	function call: Call 183,958 (31,203 of them builtins by name) + CallRegs 48,536 runs
 method_call	340	895	2.63	430	9	465	126427	38124910	58788555	waits for the rebuild	-	-	-	method call with arguments, as method_1arg (its property update is AssignPropOp, 7,264 runs)
 call_return	133	407	3.06	173	4	234	232494	33091033	54403596	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
-property_read	102	215	2.11	142	4	73	734569	56842384	53623537	open	-	-	-	property read: P8_FETCH_PROP_R_REG 207,705 + P8_FETCH_PROP_R_THIS 526,864 runs (the case runs the REG form)
 call_empty	108	374	3.46	148	4	226	232494	33091033	52543644	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
 method_1arg	203	614	3.02	263	6	351	126427	38124910	44375877	waits for the rebuild	-	-	-	method call with arguments: InitMethod + SendVarMethod 129,575 + MethodCall
 callback_by_name	247	3075	12.45	327	8	2748	11345	11689336	31176060	open	-	-	-	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
+property_read	102	179	1.75	142	4	37	734569	56842384	27179053	merged: PR #544	213	179	-23.3M	property read: P8_FETCH_PROP_R_REG 207,705 + P8_FETCH_PROP_R_THIS 526,864 runs (the case runs the REG form)
 builtin_call	86	207	2.41	126	4	81	322967	28412860	26160327	open	-	-	-	builtin run inside the loop (strlen, count, is_array ...): the Intrinsic arm
 nested_write	183	658	3.60	253	7	405	60395	39406434	24459975	merged: PR #542	720	658	-11.7M	nested array or property write: fast::write_path 60,395 calls, inclusive (AssignDimPath 31,173 + AssignPropDim 29,226)
 new_object	669	1220	1.82	779	11	441	53997	21537795	23812677	open	-	-	-	new: New + Construct arms + classes::new_object 54,172 calls 10,484,935 inclusive

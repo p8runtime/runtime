@@ -548,42 +548,67 @@ pub(crate) fn write_slot(o: &p8_runtime::object::Object, slot: usize, plain: Pla
     }
 }
 
-/// A property read the name's cache entry answers, of an object or of
-/// one a reference holds (`global $wpdb; $wpdb->posts`); anything else is
-/// cold: a miss, an unset slot.
+/// A property read the name's cache entry answers for the object in the
+/// register (or `$this`). The arm holds that and nothing else: whatever
+/// the entry does not answer as it stands is `fetch_prop_miss`'s, one
+/// call out of line.
 #[inline(always)]
 pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj, site }: args::FetchProp) -> Ctl {
-    let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
+    let this = S::Obj::ID == THIS;
+    let found = match hx.clo.props.get(site as usize) {
+        Some(entry) => match if this { hx.top.this.as_ref() } else { hx.w[r(obj)].as_object() } {
+            Some(o) => cached_prop(entry.get(), o, || hx.top.scope.as_ref()),
+            None => None,
+        },
+        None => None,
+    };
+    // (One `Ctl::Next` for both: made in two places, the arm kept the
+    // `Ctl` in memory and built it there after every read.)
+    let released = match found {
+        Some(v) => put(&mut hx.w[r(dst)], v),
+        None => match fetch_prop_miss(hx.w, hx.clo, hx.top, dst, if this { p8_bytecode::THIS } else { obj as Reg }, site) {
+            Some(released) => released,
+            None => return Ctl::Cold,
+        },
+    };
+    Ctl::Next(released)
+}
+
+/// `fetch_prop` when the entry did not answer: an object a reference
+/// holds (`global $wpdb; $wpdb->posts`), read as one in a register is; a
+/// class or scope the entry has not seen, filled for this one
+/// (`refill_prop`) and read; a dynamic property (`dynamic_prop`).
+/// Anything else is cold: no entry, no object, an unset slot, magic, a
+/// lazy object. Out of line and of no kind (`obj` is the register or
+/// `p8_bytecode::THIS`): one copy for the four arms, which keep no
+/// handle of their own to drop and nothing of the scope ready for it.
+/// What it gives back is `put`'s answer for the read it made, or none
+/// for the cold method: one byte in a register (a `Ctl` comes back
+/// through memory, and the arm then stored one for its own read too).
+#[cold]
+#[inline(never)]
+fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32, obj: Reg, site: u32) -> Option<bool> {
+    let entry = clo.props.get(site as usize)?;
     let held;
-    let o = if S::Obj::ID == THIS {
-        let Some(o) = &hx.top.this else { return Ctl::Cold };
-        o
+    let o = if obj == p8_bytecode::THIS {
+        top.this.as_ref()?
     } else {
-        match hx.w[r(obj)].as_object() {
+        match w[r(u32::from(obj))].as_object() {
             Some(o) => o,
-            // (Its own handle, out of line: the reference's borrow ends.)
+            // (Its own handle: the reference's borrow ends.)
             None => {
-                held = ref_object(&hx.w[r(obj)]);
-                let Some(o) = &held else { return Ctl::Cold };
-                o
+                held = ref_object(&w[r(u32::from(obj))]);
+                held.as_ref()?
             }
         }
     };
-    let v = match cached_prop(entry.get(), o, hx.scope()) {
+    let scope = top.scope.as_ref();
+    let v = match cached_prop(entry.get(), o, || scope) {
         Some(v) => v,
-        // A class or scope the entry has not seen: filled for this one
-        // (`refill_prop`, out of line), then read.
-        None if refill_prop(entry, o, &hx.clo.consts[site as usize], hx.top.scope.as_ref()) => match cached_prop(entry.get(), o, hx.scope()) {
-            Some(v) => v,
-            None => return Ctl::Cold,
-        },
-        // A dynamic property (`dynamic_prop`, out of line).
-        None => match dynamic_prop(o, &hx.clo.consts[site as usize]) {
-            Some(v) => v,
-            None => return Ctl::Cold,
-        },
+        None if refill_prop(entry, o, &clo.consts[site as usize], scope) => cached_prop(entry.get(), o, || scope)?,
+        None => dynamic_prop(o, &clo.consts[site as usize])?,
     };
-    Ctl::Next(put(&mut hx.w[r(dst)], v))
+    Some(put(&mut w[r(dst)], v))
 }
 
 /// `$o->name = v` the name's cache entry answers, on a property with
