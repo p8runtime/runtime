@@ -341,6 +341,61 @@ impl Bytes {
     }
 }
 
+/// A short string (at most [`ShortBuild::ROOM`] bytes) built where it
+/// will be kept: in a short string's buffer, on the stack, its pieces
+/// written as fixed-size moves (no memcpy call), then made a string in
+/// its own allocation with no second copy ([`ShortBuild::finish`]).
+pub struct ShortBuild {
+    len: usize,
+    buf: [u8; INLINE],
+}
+
+impl Default for ShortBuild {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShortBuild {
+    /// The most bytes a short build holds.
+    pub const ROOM: usize = INLINE;
+
+    #[inline(always)]
+    pub fn new() -> Self {
+        ShortBuild { len: 0, buf: [0; INLINE] }
+    }
+
+    /// How many more bytes fit.
+    #[inline(always)]
+    pub fn room(&self) -> usize {
+        INLINE - self.len
+    }
+
+    /// Append `bytes`, which must fit ([`ShortBuild::room`]; more panics:
+    /// the write's range is checked).
+    #[inline(always)]
+    pub fn push(&mut self, bytes: &[u8]) {
+        put_short(&mut self.buf, self.len, bytes);
+        self.len += bytes.len();
+    }
+
+    /// The bytes so far.
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+
+    /// The string: the thread's shared one for zero or one bytes, else
+    /// one allocation holding the buffer as it is.
+    #[inline]
+    pub fn finish(self) -> PhpStr {
+        if self.len <= 1 {
+            return PhpStr::copy_of(self.as_bytes());
+        }
+        PhpStr(Inner::made(Bytes::Inline { len: self.len as u8, buf: self.buf }))
+    }
+}
+
 /// A PHP string value.
 #[derive(Clone)]
 pub struct PhpStr(Rc<Inner>);
@@ -417,17 +472,16 @@ impl PhpStr {
     }
 
     /// `parts` one after another, in one piece: a short result in the
-    /// string's own allocation, a longer one in a buffer of its size.
+    /// string's own allocation (written in its buffer, as `concat`), a
+    /// longer one in a buffer of its size.
     pub fn concat_all(parts: &[&[u8]]) -> Self {
         let len: usize = parts.iter().map(|p| p.len()).sum();
         if len <= INLINE {
-            let mut buf = [0; INLINE];
-            let mut at = 0;
+            let mut short = ShortBuild::new();
             for p in parts {
-                buf[at..at + p.len()].copy_from_slice(p);
-                at += p.len();
+                short.push(p);
             }
-            return Self::copy_of(&buf[..len]);
+            return short.finish();
         }
         let mut v = Vec::with_capacity(len);
         for p in parts {
