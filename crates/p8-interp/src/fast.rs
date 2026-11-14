@@ -624,34 +624,20 @@ impl Context<'_> {
                             }};
                         }
                         let x = &w[args];
-                        let r = match imm >> 16 {
-                            0 => match x.as_str() {
-                                Some(s) => Value::int(s.len() as i64),
-                                None => call!(),
-                            },
-                            1 => match x.as_array() {
-                                Some(arr) => Value::int(arr.len() as i64),
-                                None => call!(),
-                            },
-                            9 => {
-                                let Some(arr) = w[rk!(args + 1)].as_array() else { call!() };
-                                if let Some(k) = x.as_int() {
-                                    Value::bool(arr.contains_key(&Key::Int(k)))
-                                } else if let Some(s) = x.as_str() {
-                                    Value::bool(arr.get_str(s).is_some())
-                                } else {
-                                    call!()
-                                }
+                        let r = if imm >> 16 == 9 {
+                            let Some(arr) = w[rk!(args + 1)].as_array() else { call!() };
+                            if let Some(k) = x.as_int() {
+                                Value::bool(arr.contains_key(&Key::Int(k)))
+                            } else if let Some(s) = x.as_str() {
+                                Value::bool(arr.get_str(s).is_some())
+                            } else {
+                                call!()
                             }
-                            _ if x.is_undef() || x.is_reference() => call!(),
-                            2 => Value::bool(x.is_null()),
-                            3 => Value::bool(x.is_bool()),
-                            4 => Value::bool(x.is_int()),
-                            5 => Value::bool(x.is_float()),
-                            6 => Value::bool(x.is_str()),
-                            7 => Value::bool(x.is_array()),
-                            8 => Value::bool(x.as_object().is_some_and(|o| o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
-                            _ => call!(),
+                        } else {
+                            match intrinsic(imm >> 16, x) {
+                                Some(r) => r,
+                                None => call!(),
+                            }
                         };
                         // The arguments consumed may have been an object's last
                         // holder (`count([new D])`): a destructor due runs here.
@@ -661,6 +647,34 @@ impl Context<'_> {
                         }
                         released |= put(&mut w[rx!(dst)], r);
                         done!(released);
+                    }
+                    // `strlen($x)` (`Op::IntrinsicRegs`): the intrinsic reads
+                    // the register where it is, its result goes to the
+                    // argument register, and the Move into that register is
+                    // not run (the argument it held is consumed by the
+                    // intrinsic: nothing of it is left either way; the
+                    // value the register held before is released as the
+                    // Move would, at its pc). Anything else (a site not
+                    // resolved to the builtin, what `intrinsic` does not
+                    // answer) runs the Move as `Op::Move` does, and goes on
+                    // with the intrinsic (`Op::Intrinsic`).
+                    Op::IntrinsicRegs => {
+                        ops!(a, b, c, imm);
+                        let r = match clo.sites[(imm & 0xffff) as usize].get() {
+                            Some(&Callee::Builtin(_)) => intrinsic(imm >> 16, &w[rx!(b)]),
+                            _ => None,
+                        };
+                        if let Some(r) = r {
+                            let at = pc;
+                            pc += 2;
+                            if put(&mut w[rx!(a)], r) && self.ids.has_pending() {
+                                pending_at!(pc, at);
+                            }
+                        } else {
+                            let Some(v) = copied(&w[rx!(b)]) else { slow!() };
+                            let _ = put(&mut w[rx!(a)], v);
+                            done!(true);
+                        }
                     }
                     // `$o->m($v)`: an argument of the method InitMethod
                     // found, whose word (in a) has one bit for it: the
@@ -796,9 +810,15 @@ impl Context<'_> {
                     Op::IterNextKey => iter_next!(true),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
+                    // (`+=` is its own copy of the arm, the operator a
+                    // constant: no jump through `int_op`'s table.)
                     Op::AssignOp => {
                         ops!(a, b, c, imm);
-                        assign_op!(insn::binop(imm), a, reg_src!(b), Reg::from(b));
+                        if insn::binop(imm) == BinOp::Add {
+                            assign_op!(BinOp::Add, a, reg_src!(b), Reg::from(b));
+                        } else {
+                            assign_op!(insn::binop(imm), a, reg_src!(b), Reg::from(b));
+                        }
                     }
                     // `$s .= 'literal'`, `$n += 1`.
                     Op::AssignOpC => {
@@ -3408,6 +3428,28 @@ pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Va
         owner_write(cell, v.clone());
     }
     hit
+}
+
+/// Intrinsic `kind` (`insn::INTRINSICS`, one of one argument) of `x`, the
+/// plain case Op::Intrinsic and Op::IntrinsicRegs answer inline: strlen of
+/// a string, count of an array, a type test of a value (not undefined, not
+/// a reference). None for the rest (a Countable, a string converted, a
+/// warning, array_key_exists): the builtin's call.
+#[inline(always)]
+pub(crate) fn intrinsic(kind: u32, x: &Value) -> Option<Value> {
+    Some(match kind {
+        0 => Value::int(x.as_str()?.len() as i64),
+        1 => Value::int(x.as_array()?.len() as i64),
+        _ if x.is_undef() || x.is_reference() => return None,
+        2 => Value::bool(x.is_null()),
+        3 => Value::bool(x.is_bool()),
+        4 => Value::bool(x.is_int()),
+        5 => Value::bool(x.is_float()),
+        6 => Value::bool(x.is_str()),
+        7 => Value::bool(x.is_array()),
+        8 => Value::bool(x.as_object().is_some_and(|o| o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
+        _ => return None,
+    })
 }
 
 /// A copy of a register's value, as `step` makes one (strings and arrays

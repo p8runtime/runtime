@@ -508,8 +508,10 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             let when = Opnd::Flag(if when { kinds::T } else { kinds::F });
             enc::jump_cmp(enc::JumpCmp { cmp: Opnd::Flag(cmp_flag(cmp)?), when, a: o(a)?, b: o(b)?, target: Opnd::Imm(target) })
         }
-        // (The first of a call's argument moves is the call: `call_regs`.)
-        Instr::Move { dst, src } => match call_regs(code, pc) {
+        // (The first of a call's argument moves is the call: `call_regs`;
+        // an intrinsic's one argument move is the intrinsic:
+        // `intrinsic_regs`.)
+        Instr::Move { dst, src } => match call_regs(code, pc).or_else(|| intrinsic_regs(code, pc)) {
             Some(call) => Some(call),
             None => enc::mov(enc::Mov { dst: o(dst)?, src: o(src)? }),
         },
@@ -884,6 +886,27 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
     }
 }
 
+/// `Op::IntrinsicRegs` at `pc`: the `Move` of a register (not a
+/// constant) into the one argument register of the intrinsic of one
+/// argument right after it (strlen .. is_object, `INTRINSICS`), whose
+/// result goes to that register too: a = that register, b = the Move's
+/// source, imm the intrinsic's (`Op::Intrinsic`'s). The `Instr`s stay as
+/// they are (the Move and the intrinsic keep their pcs), so a jump to the
+/// intrinsic runs it alone.
+fn intrinsic_regs(code: &[Instr], pc: usize) -> Option<Insn> {
+    let Instr::Move { dst: base, src } = code[pc] else { return None };
+    let Some(&Instr::Rare { op, a, b, c: 1, class }) = code.get(pc + 1) else { return None };
+    if !op.is_intrinsic() || a != base || b != base || const_index(src).is_some() {
+        return None;
+    }
+    let kind = INTRINSICS.iter().position(|&k| k == op)? as u32;
+    // (array_key_exists takes two.)
+    if INTRINSICS[kind as usize] == Rare::ArrayKeyExists {
+        return None;
+    }
+    Some(Insn { op: Op::IntrinsicRegs, a: r(base)?, b: r(src)?, c: 0, imm: u32::from(class) | kind << 16 })
+}
+
 /// The most arguments `Op::CallRegs` passes.
 pub const CALL_REGS: usize = 3;
 
@@ -965,6 +988,33 @@ mod tests {
         // Not consecutive: the Moves stay.
         assert_eq!(at(5).op, Op::P8_MOVE_REG);
         assert_eq!(at(6).op, Op::P8_MOVE_REG);
+    }
+
+    #[test]
+    fn a_move_into_an_intrinsic_becomes_one_intrinsic() {
+        let rare = |op, a, b, c| Instr::Rare { op, a, b, c, class: 3 };
+        let code = [
+            Instr::Move { dst: 10, src: 2 },
+            rare(Rare::Strlen, 10, 10, 1),
+            Instr::Move { dst: 10, src: 4 },
+            rare(Rare::IsArray, 10, 10, 1),
+            // The result elsewhere, a constant, two arguments: the Moves stay.
+            Instr::Move { dst: 10, src: 2 },
+            rare(Rare::Count, 11, 10, 1),
+            Instr::Move { dst: 10, src: crate::const_operand(1) },
+            rare(Rare::Strlen, 10, 10, 1),
+            Instr::Move { dst: 10, src: 2 },
+            Instr::Move { dst: 11, src: 3 },
+            rare(Rare::ArrayKeyExists, 10, 10, 2),
+        ];
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 0).unwrap();
+        assert_eq!(at(0), Insn { op: Op::IntrinsicRegs, a: 10, b: 2, c: 0, imm: 3 });
+        assert_eq!(at(1), Insn { op: Op::Intrinsic, a: 10, b: 10, c: 1, imm: 3 });
+        assert_eq!(at(2), Insn { op: Op::IntrinsicRegs, a: 10, b: 4, c: 0, imm: 3 | 7 << 16 });
+        for pc in [4, 6, 8, 9] {
+            assert_ne!(at(pc).op, Op::IntrinsicRegs, "pc {pc}");
+        }
     }
 
     #[test]

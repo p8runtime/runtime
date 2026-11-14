@@ -114,6 +114,12 @@ hand VerifyArgs native=verify_args
 hand VerifyReturn native=verify_return
 /// a = intrinsic (imm >> 16, `INTRINSICS`) of the c arguments at b; call site imm & 0xffff
 hand Intrinsic
+/// `strlen($x)` .. `is_object($x)`: a = intrinsic (imm as Intrinsic's) of
+/// register b, whose `Instr`s are the `Move` of b into a and the
+/// intrinsic (one argument at a, result to a) that follows: the intrinsic
+/// reads b where it is, and pc goes past it. Anything else runs the Move
+/// (and the intrinsic after it) as it is.
+hand IntrinsicRegs
 /// pass variable c into b as argument imm of the method whose word (InitMethod's) is in a
 hand SendVarMethod
 /// pc = imm
