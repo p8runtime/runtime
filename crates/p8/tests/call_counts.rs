@@ -108,6 +108,29 @@ fn a_holding_assert_is_not_lent_the_registers() {
     assert_eq!(out, "AssertionError: assert($n < 0) 20");
 }
 
+/// serialize() of a value with no object in it is answered from its
+/// argument: the registers are not lent to it. One with an object deep in
+/// it (whose __serialize is PHP code) is lent them, and that PHP code
+/// runs once a call.
+#[test]
+fn serialize_of_a_value_with_no_object_is_not_lent_the_registers() {
+    let plain = flat(
+        "$a = ['id' => 7, 'name' => 'post', 'ok' => true, 'f' => 1.5, -3 => [null, [&$n]]];
+         $t = 0;
+         for ($i = 0; $i < $n; $i++) { $t += strlen(serialize($a)); $t += strlen(serialize($i)); }
+         echo serialize($a), ' ', $t;",
+        Count::BuiltinLent,
+    );
+    assert_eq!(plain, "a:5:{s:2:\"id\";i:7;s:4:\"name\";s:4:\"post\";s:2:\"ok\";b:1;s:1:\"f\";d:1.5;i:-3;a:2:{i:0;N;i:1;a:1:{i:0;i:20;}}} 2170");
+    let object = "class M { function __serialize(): array { echo 's'; return [1]; } }
+         $a = [1, [2, new M]];
+         for ($i = 0; $i < $n; $i++) { serialize($a); }
+         echo ' ', serialize($a);";
+    let (few, many) = (run(object, 20, Count::BuiltinLent), run(object, 120, Count::BuiltinLent));
+    assert_eq!(few.0, format!("{} s{}", "s".repeat(20), "a:2:{i:0;i:1;i:1;a:2:{i:0;i:2;i:1;O:1:\"M\":1:{i:0;i:1;}}}"));
+    assert_eq!(many.1 - few.1, 100, "an object in it: lent each call, {} at n = 20, {} at n = 120", few.1, many.1);
+}
+
 /// A builtin that calls back into PHP (array_map, array_filter, usort),
 /// called again and again: its entry for traces is the last call's, used
 /// again, not a new one each call; and a trace from its callback shows it.

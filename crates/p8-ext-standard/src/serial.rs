@@ -6,10 +6,9 @@
 //! $PHP_SRC_PATH/ext/standard/var_unserializer.re
 
 use crate::arg;
-use p8_runtime::array::{Key, PhpArray};
+use p8_runtime::array::{EntryHere, Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
-use p8_runtime::number::{Precision, float_to_string};
-use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
+use p8_runtime::number::{Precision, float_to_string};use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
 use std::rc::Rc;
@@ -28,35 +27,125 @@ fn method(o: &Rc<Object>, name: &[u8]) -> Value {
 }
 
 struct Writer<'c> {
-    ctx: &'c mut dyn Ctx,
+    /// None: writing from the arguments alone (serialize()'s quick
+    /// result), which stops at the first object ([`Halt::Object`]).
+    ctx: Option<&'c mut dyn Ctx>,
     out: Vec<u8>,
     /// Values written so far (r:N counts them from 1).
     count: usize,
     objects: Vec<(*const Object, usize)>,
 }
 
-impl Writer<'_> {
+/// Why writing stopped.
+enum Halt {
+    /// What PHP code (__serialize, __sleep, a lazy object's initializer)
+    /// threw, or an error.
+    Threw(Throw),
+    /// An object, met with no Ctx to write it with.
+    Object,
+}
+
+impl From<Throw> for Halt {
+    fn from(t: Throw) -> Self {
+        Halt::Threw(t)
+    }
+}
+
+impl Halt {
+    /// The Throw of a Writer that has a Ctx (it never halts at an object).
+    fn thrown(self) -> Throw {
+        match self {
+            Halt::Threw(t) => t,
+            Halt::Object => unreachable!("a Writer with a Ctx writes every object"),
+        }
+    }
+}
+
+impl<'c> Writer<'c> {
+    fn new(ctx: Option<&'c mut dyn Ctx>, out: Vec<u8>) -> Self {
+        Writer { ctx, out, count: 0, objects: Vec::new() }
+    }
+
+    /// The Ctx objects are written with (object() runs only with one:
+    /// value() halts at an object without one).
+    fn ctx(&mut self) -> &mut dyn Ctx {
+        match &mut self.ctx {
+            Some(ctx) => &mut **ctx,
+            None => unreachable!("value() halts at an object when there is no Ctx"),
+        }
+    }
+
+    /// `tag`, `n`'s decimal digits, then `end` (`i:7;`, `a:3:{`): built
+    /// in a buffer of its own, which is appended whole (a copy of a fixed
+    /// size, no call) and cut back to the bytes written.
+    fn tagged<const E: usize>(&mut self, tag: &[u8; 2], n: i64, end: &[u8; E]) {
+        // (2 + a sign + 19 digits + an `end` of at most 2: at most 24.)
+        let mut buf = [0u8; 24];
+        buf[..2].copy_from_slice(tag);
+        let mut m = n.unsigned_abs();
+        let sign = usize::from(n < 0);
+        buf[2] = b'-';
+        let stop = if m < 10 {
+            // (Most lengths and many ints: one digit, no count of them.)
+            buf[2 + sign] = b'0' + m as u8;
+            3 + sign
+        } else {
+            let stop = 3 + sign + m.ilog10() as usize;
+            let mut at = stop;
+            while m != 0 {
+                at -= 1;
+                buf[at] = b'0' + (m % 10) as u8;
+                m /= 10;
+            }
+            stop
+        };
+        buf[stop..stop + E].copy_from_slice(end);
+        let len = self.out.len() + stop + E;
+        self.out.extend_from_slice(&buf);
+        self.out.truncate(len);
+    }
+
+    /// A length as written (a Vec's length always fits an i64).
+    fn len(n: usize) -> i64 {
+        i64::try_from(n).expect("a length fits an i64")
+    }
+
     fn string(&mut self, s: &[u8]) {
-        self.out.extend_from_slice(format!("s:{}:\"", s.len()).as_bytes());
+        self.tagged(b"s:", Self::len(s.len()), b":\"");
         self.out.extend_from_slice(s);
         self.out.extend_from_slice(b"\";");
     }
 
-    fn key(&mut self, k: &Key) {
-        match k {
-            Key::Int(i) => self.out.extend_from_slice(format!("i:{i};").as_bytes()),
-            Key::Str(s) => self.string(s.as_bytes()),
+    /// `a`'s entries, key then value, in order, and the closing `}` (each
+    /// key read in place: a string key's handle is not copied).
+    fn entries(&mut self, a: &PhpArray) -> Result<(), Halt> {
+        let mut pos = 0;
+        loop {
+            match a.entry_here(pos) {
+                EntryHere::Int(i, v) => {
+                    self.tagged(b"i:", i, b";");
+                    self.value(v)?;
+                }
+                EntryHere::Str(s, v) => {
+                    self.string(s.as_bytes());
+                    self.value(v)?;
+                }
+                EntryHere::Hole => {}
+                EntryHere::End => break,
+            }
+            pos += 1;
         }
+        self.out.push(b'}');
+        Ok(())
     }
 
-    fn value(&mut self, v: &Value) -> Result<(), Throw> {
+    fn value(&mut self, v: &Value) -> Result<(), Halt> {
         self.count += 1;
         match v.kind() {
             Kind::Null | Kind::Undef => self.out.extend_from_slice(b"N;"),
             Kind::Bool => self.out.extend_from_slice(if v.as_bool().expect("a bool") { b"b:1;" } else { b"b:0;" }),
             Kind::Int => {
-                let i = v.as_int().expect("an int");
-                self.out.extend_from_slice(format!("i:{i};").as_bytes());
+                self.tagged(b"i:", v.as_int().expect("an int"), b";");
             }
             Kind::Float => {
                 self.out.extend_from_slice(b"d:");
@@ -71,18 +160,16 @@ impl Writer<'_> {
             }
             Kind::Array => {
                 let a = v.as_array().expect("an array");
-                self.out.extend_from_slice(format!("a:{}:{{", a.len()).as_bytes());
-                for (k, v) in a.iter() {
-                    self.key(&k);
-                    self.value(v)?;
-                }
-                self.out.push(b'}');
+                self.tagged(b"a:", Self::len(a.len()), b":{");
+                self.entries(a)?;
             }
             Kind::Object => {
                 let o = v.as_object().expect("an object");
                 if o.class.flags & CLASS_RESOURCE != 0 {
                     // a resource is written as 0
                     self.out.extend_from_slice(b"i:0;");
+                } else if self.ctx.is_none() {
+                    return Err(Halt::Object);
                 } else {
                     self.object(o)?;
                 }
@@ -91,18 +178,18 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn object(&mut self, o: &Rc<Object>) -> Result<(), Throw> {
+    fn object(&mut self, o: &Rc<Object>) -> Result<(), Halt> {
         // A lazy object is initialized first (unless it asked not to be).
         let lazy;
         let o = if o.lazy.get() != 0 && o.lazy_info().as_ref().is_none_or(|l| l.options & 8 == 0 || !o.is_uninit_lazy()) {
-            lazy = self.ctx.lazy_initialize(o)?;
+            lazy = self.ctx().lazy_initialize(o)?;
             &lazy
         } else {
             o
         };
         let ptr = Rc::as_ptr(o);
         if let Some(&(_, n)) = self.objects.iter().find(|(p, _)| *p == ptr) {
-            self.out.extend_from_slice(format!("r:{n};").as_bytes());
+            self.tagged(b"r:", Self::len(n), b";");
             return Ok(());
         }
         self.objects.push((ptr, self.count));
@@ -110,38 +197,33 @@ impl Writer<'_> {
         if o.class.flags & CLASS_ENUM != 0 {
             let case = o.class.read(o, b"name", &o.class.lower).to_php_string().unwrap_or_else(PhpStr::empty);
             let body = [name.as_slice(), b":", case.as_bytes()].concat();
-            self.out.extend_from_slice(format!("E:{}:\"", body.len()).as_bytes());
+            self.tagged(b"E:", Self::len(body.len()), b":\"");
             self.out.extend_from_slice(&body);
             self.out.extend_from_slice(b"\";");
             return Ok(());
         }
         if o.class.lower == b"closure" || o.class.lower == b"generator" || o.class.flags & p8_runtime::object::CLASS_NOT_SERIALIZABLE != 0 {
-            return Err(self.ctx.throw("Exception", format!("Serialization of '{}' is not allowed", text(&name))));
+            return Err(self.ctx().throw("Exception", format!("Serialization of '{}' is not allowed", text(&name))).into());
         }
         let header = |w: &mut Self, n: usize| {
-            w.out.extend_from_slice(format!("O:{}:\"", name.len()).as_bytes());
+            w.tagged(b"O:", Self::len(name.len()), b":\"");
             w.out.extend_from_slice(&name);
-            w.out.extend_from_slice(format!("\":{n}:{{").as_bytes());
+            w.tagged(b"\":", Self::len(n), b":{");
         };
         if o.class.method(b"__serialize").is_some() {
-            let data = self.ctx.call(&method(o, b"__serialize"), &mut [])?;
+            let data = self.ctx().call(&method(o, b"__serialize"), &mut [])?;
             let Ok(a) = data.into_array() else {
-                return Err(self.ctx.throw("TypeError", format!("{}::__serialize() must return an array", text(&name))));
+                return Err(self.ctx().throw("TypeError", format!("{}::__serialize() must return an array", text(&name))).into());
             };
             header(self, a.len());
-            for (k, v) in a.iter() {
-                self.key(&k);
-                self.value(v)?;
-            }
-            self.out.push(b'}');
-            return Ok(());
+            return self.entries(&a);
         }
         // __sleep: only the properties it names.
         let only: Option<Vec<PhpStr>> = if o.class.method(b"__sleep").is_some() {
-            match self.ctx.call(&method(o, b"__sleep"), &mut [])?.into_array() {
+            match self.ctx().call(&method(o, b"__sleep"), &mut [])?.into_array() {
                 Ok(a) => Some(a.values().map(|v| v.to_php_string().unwrap_or_else(PhpStr::empty)).collect()),
                 Err(_) => {
-                    self.ctx.warn("serialize(): __sleep should return an array only containing the names of instance-variables to serialize");
+                    self.ctx().warn("serialize(): __sleep should return an array only containing the names of instance-variables to serialize");
                     self.out.extend_from_slice(b"N;");
                     return Ok(());
                 }
@@ -188,7 +270,7 @@ impl Writer<'_> {
                     match find(n).or_else(|| find(&private)).or_else(|| find(&protected)) {
                         Some((_, v)) if v.is_undef() => {}
                         Some(found) => out.push(found),
-                        None => self.ctx.warn(&format!("serialize(): \"{}\" returned as member variable from __sleep() but does not exist", text(n))),
+                        None => self.ctx().warn(&format!("serialize(): \"{}\" returned as member variable from __sleep() but does not exist", text(n))),
                     }
                 }
                 out
@@ -206,8 +288,8 @@ impl Writer<'_> {
 
 /// `v` as serialize() writes it.
 pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw> {
-    let mut w = Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() };
-    w.value(v)?;
+    let mut w = Writer::new(Some(ctx), Vec::new());
+    w.value(v).map_err(Halt::thrown)?;
     Ok(w.out)
 }
 
@@ -232,7 +314,7 @@ pub struct Serializer<'c> {
 
 impl<'c> Serializer<'c> {
     pub fn new(ctx: &'c mut dyn Ctx) -> Serializer<'c> {
-        Serializer { w: Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() } }
+        Serializer { w: Writer::new(Some(ctx), Vec::new()) }
     }
 
     /// Bytes written as they are (a variable's name and its delimiter).
@@ -241,7 +323,7 @@ impl<'c> Serializer<'c> {
     }
 
     pub fn value(&mut self, v: &Value) -> Result<(), Throw> {
-        self.w.value(v)
+        self.w.value(v).map_err(Halt::thrown)
     }
 
     pub fn finish(self) -> Vec<u8> {
@@ -289,9 +371,20 @@ impl<'a> Unserializer<'a> {
 
 fn serialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let v = arg(args, 0);
-    let mut w = Writer { ctx, out: Vec::new(), count: 0, objects: Vec::new() };
-    w.value(&v)?;
-    Ok(Value::str(PhpStr::new(w.out)))
+    let mut w = Writer::new(Some(ctx), PhpStr::scratch(64));
+    w.value(&v).map_err(Halt::thrown)?;
+    Ok(Value::str(PhpStr::from_scratch(w.out)))
+}
+
+/// serialize()'s result read from its argument alone, when it holds no
+/// object (the only values whose writing can run PHP code, warn or
+/// throw): the call is then made with no lent registers and no frame.
+/// None for an object anywhere in it (the call is made).
+pub(crate) fn serialize_quick(args: &[Value]) -> Option<Value> {
+    let [v] = args else { return None };
+    let mut w = Writer::new(None, PhpStr::scratch(64));
+    w.value(v).ok()?;
+    Some(Value::str(PhpStr::from_scratch(w.out)))
 }
 
 struct Reader<'a> {
