@@ -3192,9 +3192,29 @@ fn loose_eq_slow(a: &p8_runtime::string::StrHead, b: &p8_runtime::string::StrHea
 /// `dst = a op b` beyond two ints: floats, operands through references,
 /// `.` on strings. False (nothing done) when `step` must run it: a
 /// warning, an error, a conversion with side effects, an overflow.
+///
+/// Two ints the arm's own case does not take (`&`, `|`, `^`, the shifts:
+/// BinaryC's) are written here first with no call made, so with no
+/// registers saved; the rest is `arith_rest`'s.
 #[cold]
 #[inline(never)]
 fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Src) -> bool {
+    if op == BinOp::Concat {
+        return concat(w, dst, a, b);
+    }
+    if let (Some(x), Some(y)) = (w[usize::from(a)].as_int(), src(w, b).as_int())
+        && let Some(r) = int_op(op, x, y)
+        && is_plain(&w[usize::from(dst)])
+    {
+        std::mem::forget(std::mem::replace(&mut w[usize::from(dst)], Value::int(r)));
+        return true;
+    }
+    arith_rest(w, op, dst, a, b)
+}
+
+/// `arith` past two ints.
+#[inline(never)]
+fn arith_rest(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Src) -> bool {
     match num_pair(op, &w[usize::from(a)], src(w, b)) {
         Some(r) => {
             // (Reported as released whatever the old value: the arm tests pending.)
@@ -3206,9 +3226,13 @@ fn arith(w: &mut [Value], op: BinOp, dst: Reg, a: Reg, b: Src) -> bool {
 }
 
 /// `arith` with the literal on the left (`K op b`: BinaryC's CONST_LEFT).
+/// (`.` is no number operator: straight to `concat_left`.)
 #[cold]
 #[inline(never)]
 fn arith_left(w: &mut [Value], op: BinOp, dst: Reg, x: &Value, b: Reg) -> bool {
+    if op == BinOp::Concat {
+        return concat_left(w, dst, x, b);
+    }
     match num_pair(op, x, &w[usize::from(b)]) {
         Some(r) => {
             let _ = put_var(&mut w[usize::from(dst)], r);

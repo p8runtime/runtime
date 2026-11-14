@@ -380,55 +380,21 @@ fn isset_scalar(c: &Value, key: &Value) -> Option<bool> {
 pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key, val, dst }: args::AssignDim) -> Ctl {
     let kv = hx.v::<S::Key>(key);
     let v = if S::Key::ID == KSTR || (S::Key::ID == REG && kv.is_str()) {
-        // The key's value copied out of the frame (a literal or a count: no
-        // string copied), so the array can be written while it is borrowed.
-        let key = kv.clone();
-        let (Some(s), Some(v)) = (key.as_str(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
-        // One lookup, as zend_hash_lookup: the slot is written in place, or
-        // the key added with no second search. (A shared array is separated
-        // first: the cold write would separate it too.) A variable bound by
-        // reference: the array its cell holds.
-        let slot = &mut hx.w[r(var)];
-        let cell = slot.as_reference().map(Rc::clone);
-        let (stored, result) = if S::Res::ID == USED { (v.clone(), Some(v)) } else { (v, None) };
-        // The value back when the element found is bound to the cell the
-        // array is borrowed from (`$a['k'] = &$a`, `is_owner`): written
-        // below, once that borrow is over.
-        let owned = {
-            let mut held;
-            let root: &mut Value = match &cell {
-                Some(cell) => {
-                    held = cell.borrow_mut();
-                    &mut held
-                }
-                None => slot,
-            };
-            let Some(a) = root.array_mut() else { return Ctl::Cold };
-            // (A KSTR literal is never a canonical integer: lowering's promise.)
-            let found = if S::Key::ID == KSTR { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
-            match found {
-                Some(e) if is_owner(e, cell.as_deref()) => Some(stored),
-                // An element bound by reference: the value goes into its cell.
-                Some(e) if e.is_reference() => {
-                    let _ = write_ref(e.as_reference().expect("a reference"), stored);
-                    None
-                }
-                // (The old element's release: tested below, as for any write.)
-                Some(e) => {
-                    *e = stored;
-                    None
-                }
-                None => {
-                    let s = key.cloned_str().expect("a string");
-                    a.insert_absent(if S::Key::ID == KSTR { Key::Str(s) } else { Key::from_string(s) }, stored);
-                    None
-                }
-            }
-        };
-        if let (Some(v), Some(cell)) = (owned, &cell) {
-            owner_write(cell, v);
+        let Some(v) = copied(hx.v::<S::Val>(val)) else { return Ctl::Cold };
+        // The key out of the frame, so the array can be written while it
+        // is borrowed: a literal copied (no count), a register's string
+        // moved out of it (no count either) and put back below, whatever
+        // the write did.
+        let key_at = r(key);
+        let key = if S::Key::ID == REG { std::mem::replace(&mut hx.w[key_at], Value::UNDEF) } else { kv.clone() };
+        let done = assign_str_elem(&mut hx.w[r(var)], &key, v, S::Key::ID == KSTR, S::Res::ID == USED);
+        if S::Key::ID == REG {
+            std::mem::forget(std::mem::replace(&mut hx.w[key_at], key));
         }
-        result
+        match done {
+            Some(result) => result,
+            None => return Ctl::Cold,
+        }
     } else {
         // (Any defined value, copied: a string, an array shares its
         // storage until either is written.)
@@ -468,6 +434,59 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key,
             Ctl::Skip(true)
         }
     }
+}
+
+/// `assign_dim`'s write under a string key (`key`, a string value; `kstr`:
+/// a literal lowering promised is no canonical integer) into the variable
+/// in `slot`: the value `v` (back too when `used`). None (nothing written)
+/// when the variable holds no array (the cold path's).
+#[inline(always)]
+fn assign_str_elem(slot: &mut Value, key: &Value, v: Value, kstr: bool, used: bool) -> Option<Option<Value>> {
+    let s = key.as_str()?;
+    // One lookup, as zend_hash_lookup: the slot is written in place, or
+    // the key added with no second search. (A shared array is separated
+    // first: the cold write would separate it too.) A variable bound by
+    // reference: the array its cell holds.
+    let cell = slot.as_reference().map(Rc::clone);
+    let (stored, result) = if used { (v.clone(), Some(v)) } else { (v, None) };
+    // The value back when the element found is bound to the cell the
+    // array is borrowed from (`$a['k'] = &$a`, `is_owner`): written
+    // below, once that borrow is over.
+    let owned = {
+        let mut held;
+        let root: &mut Value = match &cell {
+            Some(cell) => {
+                held = cell.borrow_mut();
+                &mut held
+            }
+            None => slot,
+        };
+        let a = root.array_mut()?;
+        // (A KSTR literal is never a canonical integer: lowering's promise.)
+        let found = if kstr { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
+        match found {
+            Some(e) if is_owner(e, cell.as_deref()) => Some(stored),
+            // An element bound by reference: the value goes into its cell.
+            Some(e) if e.is_reference() => {
+                let _ = write_ref(e.as_reference().expect("a reference"), stored);
+                None
+            }
+            // (The old element's release: tested below, as for any write.)
+            Some(e) => {
+                *e = stored;
+                None
+            }
+            None => {
+                let s = key.cloned_str().expect("a string");
+                a.insert_absent(if kstr { Key::Str(s) } else { Key::from_string(s) }, stored);
+                None
+            }
+        }
+    };
+    if let (Some(v), Some(cell)) = (owned, &cell) {
+        owner_write(cell, v);
+    }
+    Some(result)
 }
 
 /// `$a[] = v`, `$a` an array (separated if shared; through a reference,

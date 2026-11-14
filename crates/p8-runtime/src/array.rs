@@ -925,8 +925,10 @@ impl PhpArray {
     }
 
     /// `get_mut` of the key a string names, with no handle to it made
-    /// (see [`get_str`](Self::get_str)).
-    #[inline]
+    /// (see [`get_str`](Self::get_str)): a write `$a[$k] = v` under a key
+    /// held in a variable. One call: a small table's scan is in it (no
+    /// second call to `find`).
+    #[inline(never)]
     pub fn get_str_mut(&mut self, s: &StrHead) -> Option<&mut Value> {
         if let Some(i) = canonical_int(s) {
             return self.get_int_mut(i);
@@ -934,7 +936,14 @@ impl PhpArray {
         match &mut self.storage {
             Storage::Packed(_) => None,
             Storage::Hashed(h) => {
-                let i = h.find(s.hash(), Probe::Str(s))?;
+                let (hash, key) = (s.hash(), Probe::Str(s));
+                let i = if h.small() {
+                    // (Counted as `find` counts its lookups.)
+                    crate::counts::bump(crate::counts::Count::Find);
+                    h.scan(hash, key)
+                } else {
+                    h.find(hash, key)
+                }?;
                 Some(&mut h.buckets[i].value)
             }
         }
