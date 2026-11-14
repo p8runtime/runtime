@@ -140,7 +140,11 @@ impl StrHead {
     #[inline(never)]
     fn compute_hash(&self) -> u64 {
         crate::counts::bump(crate::counts::Count::Hash);
-        let h = hash_bytes(self.as_bytes()).max(1);
+        let h = match &self.bytes {
+            Bytes::Inline { len, buf } => hash_inline(*len, buf),
+            Bytes::Heap(v) => hash_bytes(v),
+        }
+        .max(1);
         self.hash.store(h, Ordering::Relaxed);
         h
     }
@@ -447,7 +451,7 @@ impl PhpStr {
     /// A string in its own allocation (`bytes` at most INLINE long).
     fn inline(bytes: &[u8]) -> PhpStr {
         let mut buf = [0; INLINE];
-        buf[..bytes.len()].copy_from_slice(bytes);
+        put_short(&mut buf, 0, bytes);
         PhpStr(Inner::made(Bytes::Inline { len: bytes.len() as u8, buf }))
     }
 
@@ -463,11 +467,16 @@ impl PhpStr {
     /// `a` then `b`, in one allocation when short (no buffer to build it in).
     pub fn concat(a: &[u8], b: &[u8]) -> Self {
         let len = a.len() + b.len();
+        if len <= 1 {
+            return Self::copy_of(if a.is_empty() { b } else { a });
+        }
         if len <= INLINE {
+            // Written in the string's buffer itself (no second copy, no
+            // memcpy call: `put_short`).
             let mut buf = [0; INLINE];
-            buf[..a.len()].copy_from_slice(a);
-            buf[a.len()..len].copy_from_slice(b);
-            return Self::copy_of(&buf[..len]);
+            put_short(&mut buf, 0, a);
+            put_short(&mut buf, a.len(), b);
+            return PhpStr(Inner::made(Bytes::Inline { len: len as u8, buf }));
         }
         let mut v = Vec::with_capacity(len);
         v.extend_from_slice(a);
@@ -477,23 +486,7 @@ impl PhpStr {
 
     /// An int's decimal digits, in one allocation (no buffer to build them in).
     pub fn from_int(i: i64) -> Self {
-        let mut buf = [0u8; 20];
-        let mut at = buf.len();
-        let mut n = i.unsigned_abs();
-        loop {
-            at -= 1;
-            buf[at] = b'0' + (n % 10) as u8;
-            n /= 10;
-            if n == 0 {
-                break;
-            }
-        }
-        if i < 0 {
-            // i64::MIN has 19 digits: room for the sign.
-            at -= 1;
-            buf[at] = b'-';
-        }
-        Self::copy_of(&buf[at..])
+        Self::copy_of(int_digits(i, &mut [0; 20]))
     }
 
     pub fn empty() -> Self {
@@ -580,23 +573,115 @@ fn grown(len: usize, more: usize) -> usize {
 /// each word folded in with a multiply, then the bits mixed so that the
 /// low and high ones both depend on every byte (hash tables use both).
 fn hash_bytes(bytes: &[u8]) -> u64 {
-    const K: u64 = 0x9e37_79b9_7f4a_7c15;
-    let mut h = (bytes.len() as u64).wrapping_mul(K);
+    let mut h = hash_start(bytes.len());
     let (words, rest) = bytes.as_chunks::<8>();
     for w in words {
-        h = (h ^ u64::from_le_bytes(*w)).wrapping_mul(K).rotate_left(29);
+        h = hash_word(h, *w);
     }
     if !rest.is_empty() {
         let mut last = [0u8; 8];
-        last[..rest.len()].copy_from_slice(rest);
-        h = (h ^ u64::from_le_bytes(last)).wrapping_mul(K).rotate_left(29);
+        put_short(&mut last, 0, rest);
+        h = hash_word(h, last);
     }
-    // MurmurHash3's finalizer.
+    hash_end(h)
+}
+
+/// `hash_bytes` of a short string's bytes, read from its buffer, which is
+/// zero past its length: the last word is the buffer's next eight bytes
+/// as they are, with no copy of the tail (the same hash).
+#[inline(always)]
+fn hash_inline(len: u8, buf: &[u8; INLINE]) -> u64 {
+    const { assert!(INLINE == 22) };
+    let b = buf;
+    let mut h = hash_start(usize::from(len));
+    if len > 0 {
+        h = hash_word(h, [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    }
+    if len > 8 {
+        h = hash_word(h, [b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
+    }
+    if len > 16 {
+        h = hash_word(h, [b[16], b[17], b[18], b[19], b[20], b[21], 0, 0]);
+    }
+    hash_end(h)
+}
+
+const HASH_K: u64 = 0x9e37_79b9_7f4a_7c15;
+
+#[inline(always)]
+fn hash_start(len: usize) -> u64 {
+    (len as u64).wrapping_mul(HASH_K)
+}
+
+#[inline(always)]
+fn hash_word(h: u64, w: [u8; 8]) -> u64 {
+    (h ^ u64::from_le_bytes(w)).wrapping_mul(HASH_K).rotate_left(29)
+}
+
+/// MurmurHash3's finalizer.
+#[inline(always)]
+fn hash_end(mut h: u64) -> u64 {
     h ^= h >> 33;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
     h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
     h ^ (h >> 33)
+}
+
+/// `dst[at..at + src.len()] = src` for a short `src` (at most 22 bytes:
+/// a short string's), as fixed-size moves of 8, 4, 2 or 1 bytes (the
+/// first and last ones of a size overlapping), not a memcpy call: every
+/// byte written is inside the range.
+#[inline(always)]
+fn put_short(dst: &mut [u8], at: usize, src: &[u8]) {
+    let n = src.len();
+    debug_assert!(n <= 24, "put_short of {n} bytes");
+    let dst = &mut dst[at..at + n];
+    if n >= 8 {
+        ends::<8>(dst, src);
+        if n > 16 {
+            ends::<8>(&mut dst[8..16], &src[8..16]);
+        }
+    } else if n >= 4 {
+        ends::<4>(dst, src);
+    } else if n >= 2 {
+        ends::<2>(dst, src);
+    } else if n == 1 {
+        dst[0] = src[0];
+    }
+}
+
+/// The first and the last `N` bytes of `src` (as long as `dst`, at least
+/// `N`) to `dst`, each as one array move.
+#[inline(always)]
+fn ends<const N: usize>(dst: &mut [u8], src: &[u8]) {
+    if let (Some(d), Some(s)) = (dst.first_chunk_mut::<N>(), src.first_chunk::<N>()) {
+        *d = *s;
+    }
+    if let (Some(d), Some(s)) = (dst.last_chunk_mut::<N>(), src.last_chunk::<N>()) {
+        *d = *s;
+    }
+}
+
+/// An int's decimal digits (a `-` first if negative), written at the end
+/// of `buf`: the text `(string) $i` gives, with nothing allocated.
+pub fn int_digits(i: i64, buf: &mut [u8; 20]) -> &[u8] {
+    let mut at = buf.len();
+    let mut n = i.unsigned_abs();
+    loop {
+        at -= 1;
+        buf[at] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if i < 0 {
+        // i64::MIN has 19 digits: room for the sign.
+        at -= 1;
+        buf[at] = b'-';
+    }
+    &buf[at..]
 }
 
 impl PartialEq for PhpStr {
@@ -634,6 +719,27 @@ impl fmt::Debug for PhpStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A short string's hash, read from its buffer, is the hash of its
+    /// bytes (a program-memory string's, a heap one's), and a short
+    /// concat holds exactly the bytes joined, at every length.
+    #[test]
+    fn short_strings_hash_and_join_as_bytes() {
+        let all: Vec<u8> = (1..=INLINE as u8 + 2).map(|b| b.wrapping_mul(37) | 1).collect();
+        for n in 0..=INLINE {
+            let s = PhpStr::from(&all[..n]);
+            assert_eq!(s.hash(), hash_bytes(&all[..n]).max(1), "length {n}");
+            assert_eq!(s.hash(), PhpStr::new(all[..n].to_vec()).hash(), "length {n}");
+            for cut in 0..=n {
+                let j = PhpStr::concat(&all[..cut], &all[cut..n]);
+                assert_eq!(j.as_bytes(), &all[..n], "length {n} cut {cut}");
+                assert_eq!(j.hash(), s.hash(), "length {n} cut {cut}");
+            }
+        }
+        for i in [0, 7, -7, 10, -10, 123_456_789, i64::MAX, i64::MIN] {
+            assert_eq!(int_digits(i, &mut [0; 20]), i.to_string().as_bytes());
+        }
+    }
 
     #[test]
     fn copies_on_write_and_rehashes() {
