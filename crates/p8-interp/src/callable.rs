@@ -546,6 +546,100 @@ impl Context<'_> {
         r
     }
 
+    /// A call site's call_user_func("f", ...) or call_user_func_array("f",
+    /// [...]) (builtin `i`, its `argc` arguments at absolute register
+    /// `start`, its result to `dst` above `base`) when "f" names a function
+    /// of PHP code: every check the builtin's path makes (its arguments'
+    /// count and types, zend_is_callable) passes for it, so the function is
+    /// looked up once and run on the arguments as they come out of the
+    /// registers, with no list made for the builtin. The builtin runs as
+    /// on that path (its entry in traces, its name for messages). None:
+    /// anything else, which goes the builtin's way.
+    pub(crate) fn call_by_name(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, start: usize, argc: usize, dst: p8_bytecode::Reg) -> Option<Result<(), Throw>> {
+        let array = i == self.user_calls[1];
+        if argc == 0 || (array && (argc != 2 || regs[start + 1].as_array().is_none())) {
+            return None;
+        }
+        let head = regs[start].as_str()?;
+        let name = head.as_bytes();
+        // A name found before, by the string's address: the entry holds
+        // its string (an interned one lives for good), so no other string
+        // has that address. A function, once declared, stays: what a name
+        // found is found again.
+        let slot = (std::ptr::from_ref(head) as usize >> 4) % crate::isolate::NAMED_CALLS;
+        let (held, found) = &self.named_calls[slot];
+        let f = if held.as_str().is_some_and(|s| std::ptr::eq(s, head)) {
+            *found
+        } else {
+            if name.windows(2).any(|w| w == b"::") {
+                return None;
+            }
+            let Some(crate::sites::Callee::User(f)) = self.function_named(name) else { return None };
+            self.named_calls[slot] = (regs[start].clone(), f);
+            f
+        };
+        p8_runtime::counts::bump(p8_runtime::counts::Count::BuiltinLent);
+        let func = self.closure_at(f);
+        // Its frames show this call's line.
+        if let Some(top) = self.frames.last_mut() {
+            top.pc = self.pc as u32;
+        }
+        self.push_native(if array { "call_user_func_array" } else { "call_user_func" }, None, &regs[start..start + argc], false);
+        let entry = self.natives.len - 1;
+        let outer = self.running_builtin.replace(i);
+        let r = self.run_by_name(regs, func, array, start, argc);
+        self.running_builtin = outer;
+        // The arguments as the call was given them, for the trace of an
+        // error it raised: its entry's (read through, as recorded anyway).
+        let mut given = Vec::new();
+        if self.natives.len == entry + 1 {
+            std::mem::swap(&mut given, &mut self.natives.slots[entry].args);
+        }
+        let r = self.builtin_done(i, &given, r);
+        if self.natives.len == entry + 1 {
+            std::mem::swap(&mut given, &mut self.natives.slots[entry].args);
+        }
+        self.pop_native();
+        // What the builtin's path held until now: the callable (and the list).
+        for r in &mut regs[start..start + argc] {
+            *r = Value::UNDEF;
+        }
+        Some(r.map(|v| regs[base + dst as usize] = v))
+    }
+
+    /// `call_by_name`'s run of `func`: the arguments after the callable
+    /// (`argc` with it, at `start`) moved into the callee's registers by
+    /// value (call_user_func), or the list's values as they are
+    /// (call_user_func_array: a reference stays one where the parameter
+    /// takes one), as `run_nested_at` places them.
+    fn run_by_name(&mut self, regs: &mut Vec<Value>, func: Rc<Closure>, array: bool, start: usize, argc: usize) -> Result<Value, Throw> {
+        let at = self.nested_at();
+        if array {
+            let list = regs[start + 1].clone();
+            let list = list.as_array().expect("an array");
+            self.nested_room(regs, at, list.len())?;
+            for (n, a) in list.values().enumerate() {
+                let by_ref = func.code.param_by_ref(n);
+                if by_ref && !a.is_reference() {
+                    self.by_value_warning(&func.code, n);
+                }
+                regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
+            }
+            let m = MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None };
+            return self.run_placed(regs, m, list.len(), at);
+        }
+        self.nested_room(regs, at, argc - 1)?;
+        for n in 0..argc - 1 {
+            let a = std::mem::replace(&mut regs[start + 1 + n], Value::UNDEF);
+            if func.code.param_by_ref(n) {
+                self.by_value_warning(&func.code, n);
+            }
+            regs[at + n] = if a.is_reference() { a.deref() } else { a };
+        }
+        let m = MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None };
+        self.run_placed(regs, m, argc - 1, at)
+    }
+
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
     pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
@@ -588,11 +682,18 @@ impl Context<'_> {
     }
 
     pub(crate) fn run_nested(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
+        let at = self.nested_at();
+        self.run_nested_at(regs, m, args, at)
+    }
+
+    /// Where a nested run's registers start: above the running frame's
+    /// and any nested run's result.
+    fn nested_at(&self) -> usize {
         let at = match self.frames.last() {
             Some(top) => top.base as usize + top.func.code.nregs as usize,
             None => 0,
         };
-        self.run_nested_at(regs, m, args, at.max(self.result_reg))
+        at.max(self.result_reg)
     }
 
     fn run_nested_at(&mut self, regs: &mut Vec<Value>, mut m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
@@ -602,16 +703,7 @@ impl Context<'_> {
             let mut repacked = [Value::str(name), Value::array(p8_runtime::array::PhpArray::from_list(packed))];
             return self.run_nested_at(regs, m, &mut repacked, at);
         }
-        // Each nested run takes native stack: stop before it runs out.
-        if self.stack_exhausted() {
-            return Err(self.throw(
-                "Error",
-                format!("Maximum call stack size of {STACK_LIMIT} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"),
-            ));
-        }
-        if regs.len() < at + args.len() + 1 {
-            regs.resize(at + args.len() + 1, Value::UNDEF);
-        }
+        self.nested_room(regs, at, args.len())?;
         let by_ref = |n: usize| match &m.func {
             Code::User(f) => f.code.param_by_ref(n),
             Code::Native(..) => false,
@@ -619,22 +711,49 @@ impl Context<'_> {
         // A value where the parameter takes a reference: PHP warns
         // (zend_call_function) and passes the value.
         if let Code::User(f) = &m.func {
-            let code = &f.code;
             for (n, a) in args.iter().enumerate() {
                 if by_ref(n) && !a.is_reference() {
-                    let name = match &code.class {
-                        Some(class) => format!("{}::{}", text(class.as_bytes()), text(code.name.as_bytes())),
-                        None => text(code.name.as_bytes()),
-                    };
-                    let param = code.params.get(n).or(code.params.last()).map(|p| text(p.name.as_bytes())).unwrap_or_default();
-                    self.warn(format!("{name}(): Argument #{} (${param}) must be passed by reference, value given", n + 1));
+                    self.by_value_warning(&f.code, n);
                 }
             }
         }
         for (n, a) in args.iter().enumerate() {
             regs[at + n] = if a.is_reference() && by_ref(n) { a.clone() } else { a.deref() };
         }
-        let argc = args.len() as u8;
+        self.run_placed(regs, m, args.len(), at)
+    }
+
+    /// Room for a nested run at `at` with `argc` arguments: Err when the
+    /// native stack is near its end (each nested run takes some).
+    fn nested_room(&mut self, regs: &mut Vec<Value>, at: usize, argc: usize) -> Result<(), Throw> {
+        if self.stack_exhausted() {
+            return Err(self.throw(
+                "Error",
+                format!("Maximum call stack size of {STACK_LIMIT} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"),
+            ));
+        }
+        if regs.len() < at + argc + 1 {
+            regs.resize(at + argc + 1, Value::UNDEF);
+        }
+        Ok(())
+    }
+
+    /// A value given for `code`'s parameter `n`, which takes a reference:
+    /// PHP's warning (zend_call_function).
+    #[cold]
+    fn by_value_warning(&mut self, code: &Function, n: usize) {
+        let name = match &code.class {
+            Some(class) => format!("{}::{}", text(class.as_bytes()), text(code.name.as_bytes())),
+            None => text(code.name.as_bytes()),
+        };
+        let param = code.params.get(n).or(code.params.last()).map(|p| text(p.name.as_bytes())).unwrap_or_default();
+        self.warn(format!("{name}(): Argument #{} (${param}) must be passed by reference, value given", n + 1));
+    }
+
+    /// The nested run of `m` on the `argc` arguments placed at `at` (see
+    /// `run_nested_at`), to its return: its result.
+    fn run_placed(&mut self, regs: &mut Vec<Value>, m: MethodFrame, argc: usize, at: usize) -> Result<Value, Throw> {
+        let argc = argc as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
         let caller_pc = self.frames.last().map_or(0, |f| f.pc);
         // The callee's result lands in its first register (written after

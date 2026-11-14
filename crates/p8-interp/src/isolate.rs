@@ -170,6 +170,9 @@ pub(crate) const OB_FLUSH: i64 = 4;
 pub(crate) const OB_FINAL: i64 = 8;
 
 /// No interrupt pending.
+/// How many names `Context::named_calls` holds.
+pub(crate) const NAMED_CALLS: usize = 16;
+
 pub(crate) const NO_INTERRUPT: u64 = 0;
 /// InterruptHandle::terminate (other values: a timeout of that many seconds).
 pub(crate) const TERMINATE: u64 = u64::MAX;
@@ -347,6 +350,7 @@ impl Isolate {
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
         let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
+        let user_calls = [b"call_user_func".as_slice(), b"call_user_func_array"].map(|n| self.registry.lookup(n).unwrap_or(usize::MAX));
         Context {
             stop,
             isolate: self,
@@ -417,6 +421,8 @@ impl Isolate {
             lambdas: HashMap::default(),
             natives: Natives::default(),
             running_builtin: None,
+            user_calls,
+            named_calls: std::array::from_fn(|_| (Value::UNDEF, 0)),
             statics: HashMap::default(),
             magic_guard: Vec::new(),
             reinit: Vec::new(),
@@ -608,6 +614,14 @@ pub struct Context<'i> {
     pub(crate) natives: Natives,
     /// The builtin running now, innermost (its name for its messages).
     pub(crate) running_builtin: Option<usize>,
+    /// The builtins call_user_func and call_user_func_array (usize::MAX:
+    /// not registered), which a call site runs on a function's name
+    /// directly (`call_by_name`).
+    pub(crate) user_calls: [usize; 2],
+    /// The functions of PHP code `call_by_name` found by name, each with
+    /// the string that named it (held, so its address names no other),
+    /// by that address: a name called again (a hook's) is not looked up.
+    pub(crate) named_calls: [(Value, u32); NAMED_CALLS],
     /// `static` variables, by function (its code's address) and index.
     pub(crate) statics: HashMap<usize, FunctionStatics>,
     /// The magic property methods running: (object, property, which), so
