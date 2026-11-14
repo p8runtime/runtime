@@ -1,0 +1,298 @@
+kinds: resource stream, resource stream, resource stream, resource (closed), resource (closed), resource stream-context, resource stream, resource stream, resource process, resource stream,
+
+a, a                              == .. . <= . >=  0 | == .. . <= . >=  0
+a, b                              .. != < <= . .. -1 | .. != . .. > >=  1
+a, same as a                      == .. . <= . >=  0 | == .. . <= . >=  0
+a, closed                         .. != < <= . .. -1 | .. != . .. > >=  1
+a, closed2                        .. != < <= . .. -1 | .. != . .. > >=  1
+a, context                        .. != < <= . .. -1 | .. != . .. > >=  1
+a, dir                            .. != < <= . .. -1 | .. != . .. > >=  1
+a, pipe                           .. != < <= . .. -1 | .. != . .. > >=  1
+a, process                        .. != < <= . .. -1 | .. != . .. > >=  1
+a, late                           .. != < <= . .. -1 | .. != . .. > >=  1
+b, b                              == .. . <= . >=  0 | == .. . <= . >=  0
+b, same as a                      .. != . .. > >=  1 | .. != < <= . .. -1
+b, closed                         .. != < <= . .. -1 | .. != . .. > >=  1
+b, closed2                        .. != < <= . .. -1 | .. != . .. > >=  1
+b, context                        .. != < <= . .. -1 | .. != . .. > >=  1
+b, dir                            .. != < <= . .. -1 | .. != . .. > >=  1
+b, pipe                           .. != < <= . .. -1 | .. != . .. > >=  1
+b, process                        .. != < <= . .. -1 | .. != . .. > >=  1
+b, late                           .. != < <= . .. -1 | .. != . .. > >=  1
+same as a, same as a              == .. . <= . >=  0 | == .. . <= . >=  0
+closed, same as a                 .. != . .. > >=  1 | .. != < <= . .. -1
+closed, closed                    == .. . <= . >=  0 | == .. . <= . >=  0
+closed, closed2                   .. != < <= . .. -1 | .. != . .. > >=  1
+closed, context                   .. != < <= . .. -1 | .. != . .. > >=  1
+closed, dir                       .. != < <= . .. -1 | .. != . .. > >=  1
+closed, pipe                      .. != < <= . .. -1 | .. != . .. > >=  1
+closed, process                   .. != < <= . .. -1 | .. != . .. > >=  1
+closed, late                      .. != < <= . .. -1 | .. != . .. > >=  1
+closed2, same as a                .. != . .. > >=  1 | .. != < <= . .. -1
+closed2, closed2                  == .. . <= . >=  0 | == .. . <= . >=  0
+closed2, context                  .. != < <= . .. -1 | .. != . .. > >=  1
+closed2, dir                      .. != < <= . .. -1 | .. != . .. > >=  1
+closed2, pipe                     .. != < <= . .. -1 | .. != . .. > >=  1
+closed2, process                  .. != < <= . .. -1 | .. != . .. > >=  1
+closed2, late                     .. != < <= . .. -1 | .. != . .. > >=  1
+context, same as a                .. != . .. > >=  1 | .. != < <= . .. -1
+context, context                  == .. . <= . >=  0 | == .. . <= . >=  0
+context, dir                      .. != < <= . .. -1 | .. != . .. > >=  1
+context, pipe                     .. != < <= . .. -1 | .. != . .. > >=  1
+context, process                  .. != < <= . .. -1 | .. != . .. > >=  1
+context, late                     .. != < <= . .. -1 | .. != . .. > >=  1
+dir, same as a                    .. != . .. > >=  1 | .. != < <= . .. -1
+dir, dir                          == .. . <= . >=  0 | == .. . <= . >=  0
+dir, pipe                         .. != < <= . .. -1 | .. != . .. > >=  1
+dir, process                      .. != < <= . .. -1 | .. != . .. > >=  1
+dir, late                         .. != < <= . .. -1 | .. != . .. > >=  1
+pipe, same as a                   .. != . .. > >=  1 | .. != < <= . .. -1
+pipe, pipe                        == .. . <= . >=  0 | == .. . <= . >=  0
+pipe, process                     .. != < <= . .. -1 | .. != . .. > >=  1
+process, same as a                .. != . .. > >=  1 | .. != < <= . .. -1
+process, process                  == .. . <= . >=  0 | == .. . <= . >=  0
+late, same as a                   .. != . .. > >=  1 | .. != < <= . .. -1
+late, pipe                        .. != . .. > >=  1 | .. != < <= . .. -1
+late, process                     .. != . .. > >=  1 | .. != < <= . .. -1
+late, late                        == .. . <= . >=  0 | == .. . <= . >=  0
+
+a, null                           .. != . .. > >=  1 | .. != < <= . .. -1
+a, true                           == .. . <= . >=  0 | == .. . <= . >=  0
+a, false                          .. != . .. > >=  1 | .. != < <= . .. -1
+a, 0                              .. != . .. > >=  1 | .. != < <= . .. -1
+a, -1                             .. != . .. > >=  1 | .. != < <= . .. -1
+a, n                              == .. . <= . >=  0 | == .. . <= . >=  0
+a, n - 1                          .. != . .. > >=  1 | .. != < <= . .. -1
+a, n + 1                          .. != < <= . .. -1 | .. != . .. > >=  1
+a, PHP_INT_MAX                    .. != < <= . .. -1 | .. != . .. > >=  1
+a, 0.0                            .. != . .. > >=  1 | .. != < <= . .. -1
+a, n.0                            == .. . <= . >=  0 | == .. . <= . >=  0
+a, n + 0.5                        .. != < <= . .. -1 | .. != . .. > >=  1
+a, n - 0.5                        .. != . .. > >=  1 | .. != < <= . .. -1
+a, NAN                            .. != . .. . ..  1 | .. != . .. . ..  1
+a, INF                            .. != < <= . .. -1 | .. != . .. > >=  1
+a, -INF                           .. != . .. > >=  1 | .. != < <= . .. -1
+a, ""                             .. != . .. > >=  1 | .. != < <= . .. -1
+a, "0"                            .. != . .. > >=  1 | .. != < <= . .. -1
+a, "abc"                          .. != . .. > >=  1 | .. != < <= . .. -1
+a, "n"                            == .. . <= . >=  0 | == .. . <= . >=  0
+a, " n"                           == .. . <= . >=  0 | == .. . <= . >=  0
+a, "n "                           == .. . <= . >=  0 | == .. . <= . >=  0
+a, "nabc"                         == .. . <= . >=  0 | == .. . <= . >=  0
+a, "n.0"                          == .. . <= . >=  0 | == .. . <= . >=  0
+a, "n.5"                          .. != < <= . .. -1 | .. != . .. > >=  1
+a, "1e3"                          .. != < <= . .. -1 | .. != . .. > >=  1
+a, "-1"                           .. != . .. > >=  1 | .. != < <= . .. -1
+a, "Resource id #n"               .. != . .. > >=  1 | .. != < <= . .. -1
+a, (string) itself                .. != . .. > >=  1 | .. != < <= . .. -1
+a, []                             .. != < <= . .. -1 | .. != . .. > >=  1
+a, [0]                            .. != < <= . .. -1 | .. != . .. > >=  1
+a, [n]                            .. != < <= . .. -1 | .. != . .. > >=  1
+a, [itself]                       .. != < <= . .. -1 | .. != . .. > >=  1
+a, stdClass                       .. != < <= . .. -1 | .. != . .. > >=  1
+a, Text                           .. != < <= . .. -1 | .. != . .. > >=  1
+a, closure                        .. != < <= . .. -1 | .. != . .. > >=  1
+a, ArrayObject                    .. != < <= . .. -1 | .. != . .. > >=  1
+a, enum case                      .. != . .. . ..  1 | .. != . .. . ..  1
+a, backed enum case               .. != . .. . ..  1 | .. != . .. . ..  1
+
+closed, null                      .. != . .. > >=  1 | .. != < <= . .. -1
+closed, true                      == .. . <= . >=  0 | == .. . <= . >=  0
+closed, false                     .. != . .. > >=  1 | .. != < <= . .. -1
+closed, 0                         .. != . .. > >=  1 | .. != < <= . .. -1
+closed, -1                        .. != . .. > >=  1 | .. != < <= . .. -1
+closed, n                         == .. . <= . >=  0 | == .. . <= . >=  0
+closed, n - 1                     .. != . .. > >=  1 | .. != < <= . .. -1
+closed, n + 1                     .. != < <= . .. -1 | .. != . .. > >=  1
+closed, PHP_INT_MAX               .. != < <= . .. -1 | .. != . .. > >=  1
+closed, 0.0                       .. != . .. > >=  1 | .. != < <= . .. -1
+closed, n.0                       == .. . <= . >=  0 | == .. . <= . >=  0
+closed, n + 0.5                   .. != < <= . .. -1 | .. != . .. > >=  1
+closed, n - 0.5                   .. != . .. > >=  1 | .. != < <= . .. -1
+closed, NAN                       .. != . .. . ..  1 | .. != . .. . ..  1
+closed, INF                       .. != < <= . .. -1 | .. != . .. > >=  1
+closed, -INF                      .. != . .. > >=  1 | .. != < <= . .. -1
+closed, ""                        .. != . .. > >=  1 | .. != < <= . .. -1
+closed, "0"                       .. != . .. > >=  1 | .. != < <= . .. -1
+closed, "abc"                     .. != . .. > >=  1 | .. != < <= . .. -1
+closed, "n"                       == .. . <= . >=  0 | == .. . <= . >=  0
+closed, " n"                      == .. . <= . >=  0 | == .. . <= . >=  0
+closed, "n "                      == .. . <= . >=  0 | == .. . <= . >=  0
+closed, "nabc"                    == .. . <= . >=  0 | == .. . <= . >=  0
+closed, "n.0"                     == .. . <= . >=  0 | == .. . <= . >=  0
+closed, "n.5"                     .. != < <= . .. -1 | .. != . .. > >=  1
+closed, "1e3"                     .. != < <= . .. -1 | .. != . .. > >=  1
+closed, "-1"                      .. != . .. > >=  1 | .. != < <= . .. -1
+closed, "Resource id #n"          .. != . .. > >=  1 | .. != < <= . .. -1
+closed, (string) itself           .. != . .. > >=  1 | .. != < <= . .. -1
+closed, []                        .. != < <= . .. -1 | .. != . .. > >=  1
+closed, [0]                       .. != < <= . .. -1 | .. != . .. > >=  1
+closed, [n]                       .. != < <= . .. -1 | .. != . .. > >=  1
+closed, [itself]                  .. != < <= . .. -1 | .. != . .. > >=  1
+closed, stdClass                  .. != < <= . .. -1 | .. != . .. > >=  1
+closed, Text                      .. != < <= . .. -1 | .. != . .. > >=  1
+closed, closure                   .. != < <= . .. -1 | .. != . .. > >=  1
+closed, ArrayObject               .. != < <= . .. -1 | .. != . .. > >=  1
+closed, enum case                 .. != . .. . ..  1 | .. != . .. . ..  1
+closed, backed enum case          .. != . .. . ..  1 | .. != . .. . ..  1
+
+process, null                     .. != . .. > >=  1 | .. != < <= . .. -1
+process, true                     == .. . <= . >=  0 | == .. . <= . >=  0
+process, false                    .. != . .. > >=  1 | .. != < <= . .. -1
+process, 0                        .. != . .. > >=  1 | .. != < <= . .. -1
+process, -1                       .. != . .. > >=  1 | .. != < <= . .. -1
+process, n                        == .. . <= . >=  0 | == .. . <= . >=  0
+process, n - 1                    .. != . .. > >=  1 | .. != < <= . .. -1
+process, n + 1                    .. != < <= . .. -1 | .. != . .. > >=  1
+process, PHP_INT_MAX              .. != < <= . .. -1 | .. != . .. > >=  1
+process, 0.0                      .. != . .. > >=  1 | .. != < <= . .. -1
+process, n.0                      == .. . <= . >=  0 | == .. . <= . >=  0
+process, n + 0.5                  .. != < <= . .. -1 | .. != . .. > >=  1
+process, n - 0.5                  .. != . .. > >=  1 | .. != < <= . .. -1
+process, NAN                      .. != . .. . ..  1 | .. != . .. . ..  1
+process, INF                      .. != < <= . .. -1 | .. != . .. > >=  1
+process, -INF                     .. != . .. > >=  1 | .. != < <= . .. -1
+process, ""                       .. != . .. > >=  1 | .. != < <= . .. -1
+process, "0"                      .. != . .. > >=  1 | .. != < <= . .. -1
+process, "abc"                    .. != . .. > >=  1 | .. != < <= . .. -1
+process, "n"                      == .. . <= . >=  0 | == .. . <= . >=  0
+process, " n"                     == .. . <= . >=  0 | == .. . <= . >=  0
+process, "n "                     == .. . <= . >=  0 | == .. . <= . >=  0
+process, "nabc"                   == .. . <= . >=  0 | == .. . <= . >=  0
+process, "n.0"                    == .. . <= . >=  0 | == .. . <= . >=  0
+process, "n.5"                    .. != < <= . .. -1 | .. != . .. > >=  1
+process, "1e3"                    .. != < <= . .. -1 | .. != . .. > >=  1
+process, "-1"                     .. != . .. > >=  1 | .. != < <= . .. -1
+process, "Resource id #n"         .. != . .. > >=  1 | .. != < <= . .. -1
+process, (string) itself          .. != . .. > >=  1 | .. != < <= . .. -1
+process, []                       .. != < <= . .. -1 | .. != . .. > >=  1
+process, [0]                      .. != < <= . .. -1 | .. != . .. > >=  1
+process, [n]                      .. != < <= . .. -1 | .. != . .. > >=  1
+process, [itself]                 .. != < <= . .. -1 | .. != . .. > >=  1
+process, stdClass                 .. != < <= . .. -1 | .. != . .. > >=  1
+process, Text                     .. != < <= . .. -1 | .. != . .. > >=  1
+process, closure                  .. != < <= . .. -1 | .. != . .. > >=  1
+process, ArrayObject              .. != < <= . .. -1 | .. != . .. > >=  1
+process, enum case                .. != . .. . ..  1 | .. != . .. . ..  1
+process, backed enum case         .. != . .. . ..  1 | .. != . .. . ..  1
+
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+int(1)
+bool(false)
+bool(true)
+bool(true)
+int(-1)
+bool(false)
+bool(true)
+bool(true)
+int(1)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+int(1)
+bool(false)
+bool(true)
+bool(true)
+int(-1)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+int(-1)
+int(1)
+bool(false)
+bool(true)
+
+the first, the second, the second, the second, neither, neither, the second, the first, the second, the second
+b
+b
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+int(0)
+string(5) "empty"
+
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+int(2)
+int(2)
+bool(false)
+int(2)
+int(1)
+int(2)
+0,2,4 / 0,2
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+int(-1)
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+
+sort: a, b, closed, closed2, context, process, late
+rsort: late, process, context, closed2, closed, b, a
+usort: a, b, closed, closed2, context, process, late
+asort: a, b, late
+sort with ints: 0, b's number - 1, a, b, late
+array_unique: a, b, closed, closed2 / a, b, closed, closed2
+max, min: b, b, late, a, a, a, a, resource, integer, integer, string, array, NULL
+
+bool(false)
+bool(true)
+int(2)
+int(1)
+bool(false)
+pipe 2 ended
+pipe 1 ended
+array(2) {
+  [1]=>
+  string(11) "out
+got on
+"
+  [2]=>
+  string(4) "err
+"
+}
+int(0)
