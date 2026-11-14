@@ -301,6 +301,22 @@ impl Value {
         release_repr(mem::replace(&mut self.0, UNDEF_REPR))
     }
 
+    /// Whether letting this value go frees what it holds: it is the last
+    /// handle of a string, an array, a reference or an object (`release`'s
+    /// own test of the count). For a caller that hands the free to
+    /// another function before it releases: a `release` straight after a
+    /// false answer is the decrement alone.
+    #[inline(always)]
+    pub fn is_last(&self) -> bool {
+        match &self.0 {
+            Repr::Str(s) => s.count() == 1,
+            Repr::Array(a) => Rc::strong_count(a) == 1,
+            Repr::Ref(c) => Rc::strong_count(c) == 1,
+            Repr::Object(o) => Rc::strong_count(o) == 1,
+            _ => false,
+        }
+    }
+
     /// Whether `self` is `other` itself: the same scalar (a float by its
     /// bits) or the same handle (one string, array, reference or object,
     /// not equal contents). A register already holding a frame's constant

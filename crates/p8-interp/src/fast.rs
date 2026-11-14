@@ -507,28 +507,48 @@ impl Context<'_> {
                         continue 'frame;
                     }};
                 }
-                // A foreach step over an array (`$key`: the key too). An
-                // object (a generator, an Iterator: its methods called)
-                // runs out of line on the arm's operands
-                // (`iter_next_object_ops`).
+                // A foreach step (`$key`: the key too). Over an array it
+                // is `iter_step`'s (`iter_step_key`'s), which answers what
+                // it did: the arm tests nothing itself, not the array
+                // and, when nothing was freed, no destructor due. What
+                // the step leaves (`Step::Rest`: a reference, an object)
+                // is as before: an object (a generator, an
+                // Iterator: its methods called) runs out of line on the
+                // arm's operands (`iter_next_object_ops`), an array is
+                // `iter_next`'s.
                 // (One arm per opcode, so that no arm reads the opcode
                 // again: kept for that, it would hold a register through
                 // every arm.)
                 macro_rules! iter_next {
                     ($key:expr) => {{
                         ops!(a, b, c, imm);
-                        if !w[rx!(a)].is_array() {
-                            if w[rx!(a)].is_object() {
-                                let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
-                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
+                        let step = if $key {
+                            iter_step_key(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c))
+                        } else {
+                            iter_step(&mut w[..], Reg::from(a), Reg::from(b))
+                        };
+                        if step == Step::Stepped {
+                            pc += 1;
+                        } else if step == Step::End {
+                            pc = imm as usize;
+                        } else {
+                            let next = if step == Step::Freed {
+                                pc + 1
+                            } else {
+                                if !w[rx!(a)].is_array() {
+                                    if w[rx!(a)].is_object() {
+                                        let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
+                                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
+                                    }
+                                    slow!();
+                                }
+                                if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize }
+                            };
+                            if self.ids.has_pending() {
+                                pending_at!(next, pc);
                             }
-                            slow!();
+                            pc = next;
                         }
-                        let next = if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize };
-                        if self.ids.has_pending() {
-                            pending_at!(next, pc);
-                        }
-                        pc = next;
                     }};
                 }
                 // `!x` (`$not`) and a condition made a value, as `truth`
