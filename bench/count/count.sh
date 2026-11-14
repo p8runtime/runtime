@@ -59,13 +59,13 @@ for i in "${!paths[@]}"; do
     for f in "${cases[@]}"; do printf '%s\0%s\0%s\0' "$i" "${paths[$i]}" "$f"; done
 done | xargs -0 -n 3 -P "$jobs" bash -c 'one "$@"' _
 
-printf '%-18s' case
+printf '%-24s' case
 for l in "${labels[@]}"; do printf '%12s' "$l"; done
 echo
 status=0
 for f in "${cases[@]}"; do
     name=$(basename "$f" .php)
-    printf '%-18s' "$name"
+    printf '%-24s' "$name"
     for i in "${!paths[@]}"; do
         v=$(cat "$out/$i.$name")
         if [ "$i" != 0 ] && ! cmp -s "$out/0.$name.$HIGH.txt" "$out/$i.$name.$HIGH.txt"; then v=WRONG; fi
