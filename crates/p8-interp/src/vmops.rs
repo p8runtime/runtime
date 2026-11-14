@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::fast::{Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
-use crate::sites::{Plain, cached_prop, dynamic_prop, plain_slot, refill_prop};
+use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -58,7 +58,8 @@ fn r(x: u32) -> usize {
     x as usize & (WINDOW - 1)
 }
 
-/// A literal kind.
+/// A literal kind. (Inline always: a build of many codegen units called it.)
+#[inline(always)]
 const fn is_k(kind: u8) -> bool {
     kind == K || kind == KINT || kind == KSTR
 }
@@ -631,10 +632,17 @@ fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32
 }
 
 /// `$o->name = v` the name's cache entry answers, on a property with
-/// nothing to check (`plain_slot`): the slots borrowed once, nothing
-/// cloned but the value, and that only when the result is USED. An unset
-/// slot of a class with __set and its kin, and anything `plain_slot`
-/// declines, is cold. TAKE: the value's temporary is released after.
+/// nothing to check: nothing cloned but the value, and that only when the
+/// result is USED. The entry says whether the property is one with
+/// nothing to check (`PropSite::plain_write`, the class's), so the
+/// common write asks nothing of the property, the class's flags or the
+/// slot's state: the entry's class and scope, the object not lazy, a
+/// defined value that is no reference, then the store (`store_slot`).
+/// The rest, out of line (`assign_prop_guarded`): an entry for another
+/// class or scope, filled again; a typed, readonly or set-visibility
+/// property, or a class with __set and its kin, through `plain_slot`'s
+/// tests. What neither takes is cold. TAKE: the value's temporary is
+/// released after.
 #[inline(always)]
 pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, val, dst, site }: args::AssignProp) -> Ctl {
     let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
@@ -646,31 +654,90 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
         o
     };
     let v = hx.v::<S::Val>(val);
-    let scope = (hx.scope(), hx.top.scope.as_deref());
-    let found = match plain_slot(entry.get(), o, scope, v, hx.reinit) {
-        Some(found) => Some(found),
-        // A class or scope the entry has not seen: filled for this one
-        // (`refill_prop`, out of line), then asked again.
-        None if refill_prop(entry, o, &hx.clo.consts[site as usize], hx.top.scope.as_ref()) => plain_slot(entry.get(), o, scope, v, hx.reinit),
-        None => None,
-    };
-    let Some((slot, plain)) = found else { return Ctl::Cold };
-    if !write_slot(o, slot, plain, v) {
+    let e = entry.get();
+    let mut released = if e.class == Rc::as_ptr(&o.class) as usize
+        && e.plain_write
+        && (e.scope == 0 || e.scope == hx.scope())
+        && o.lazy.get() == 0
+        && !v.is_undef()
+        && !v.is_reference()
+        && let Some(cell) = o.slot_at(e.slot as usize)
+    {
+        store_slot(cell, v.clone())
+    } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {        // (What it released is not told: the test after is made.)
+        true
+    } else {
         return Ctl::Cold;
-    }
+    };
     let ctl = if S::Res::ID == USED {
         let v = hx.v::<S::Val>(val).clone();
-        let _ = put(&mut hx.w[r(dst)], v);
-        Ctl::Next(true)
+        released |= put(&mut hx.w[r(dst)], v);
+        Ctl::Next(released)
     } else {
         // (What the skipped Free does: a stale value there goes now.)
-        let _ = clear(&mut hx.w[r(dst)]);
-        Ctl::Skip(true)
+        released |= clear(&mut hx.w[r(dst)]);
+        Ctl::Skip(released)
     };
     if S::Mode::ID == TAKE {
+        // (The slot holds a count of the value: this frees nothing.)
         let _ = clear(&mut hx.w[r(val)]);
     }
     ctl
+}
+
+/// `v` stored in a property's slot as a write to a variable is: through
+/// the reference the slot holds, if it holds one. Whether the old value's
+/// release freed memory (`put`). The new value goes in at once and the
+/// old one's tag is tested as it comes out: a plain one is forgotten,
+/// one holding memory released, and a reference (rare: `$r = &$o->p`)
+/// put back and written through (`store_through`).
+#[inline(always)]
+fn store_slot(cell: &std::cell::Cell<Value>, v: Value) -> bool {
+    let old = cell.replace(v);
+    if old.is_plain() {
+        std::mem::forget(old);
+        false
+    } else if old.is_reference() {
+        store_through(cell, old)
+    } else {
+        old.release()
+    }
+}
+
+/// `store_slot` when the slot held a reference: the reference back in
+/// the slot, the new value written through it.
+#[cold]
+#[inline(never)]
+fn store_through(cell: &std::cell::Cell<Value>, reference: Value) -> bool {
+    let v = cell.replace(reference);
+    let reference = cell.replace(Value::UNDEF);
+    let released = match reference.as_reference() {
+        Some(r) => write_ref(r, v),
+        // (Never: `store_slot` saw a reference.)
+        None => v.release(),
+    };
+    p8_runtime::object::put_slot(cell, reference);
+    released
+}
+
+/// `assign_prop` when the entry's plain store does not apply: the entry
+/// filled again for a class or scope it has not seen (`refill_prop`), and
+/// the write made when `plain_slot` finds it one with nothing to report
+/// (a typed property's value plainly of its type, a readonly property's
+/// first write from its class, a set visibility its class passes, a set
+/// slot of a class with __set). False: nothing written (the cold path's).
+#[inline(never)]
+fn assign_prop_guarded(entry: &std::cell::Cell<PropSite>, o: &p8_runtime::object::Object, v: &Value, name: &Value, scope: Option<&Rc<Class>>, reinit: bool) -> bool {
+    let at = (scope.map_or(0, |c| Rc::as_ptr(c) as usize), scope.map(|c| &**c));
+    let found = match plain_slot(entry.get(), o, at, v, reinit) {
+        Some(found) => Some(found),
+        None if refill_prop(entry, o, name, scope) => plain_slot(entry.get(), o, at, v, reinit),
+        None => None,
+    };
+    match found {
+        Some((slot, plain)) => write_slot(o, slot, plain, v),
+        None => false,
+    }
 }
 
 /// `return src`: the value moved out of its register when nothing reads
