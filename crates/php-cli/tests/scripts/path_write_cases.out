@@ -1,0 +1,98 @@
+nested: {"x":{"y":"replaced","z":{"w":2},"9223372036854775808":"one past it: a string"},"3":{"4":"int keys"},"5":{" 6":"a numeric string is an int key, one with a space is not"},"007":{"-0":"not canonical: strings"},"-8":{"9223372036854775807":"negative, and the largest int"},"":{"":"empty"},"1":["bool keys"]}
+array(7) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  int(3)
+  [2]=>
+  int(5)
+  [3]=>
+  string(3) "007"
+  [4]=>
+  int(-8)
+  [5]=>
+  string(0) ""
+  [6]=>
+  int(1)
+}
+array(3) {
+  [0]=>
+  string(1) "y"
+  [1]=>
+  string(1) "z"
+  [2]=>
+  string(19) "9223372036854775808"
+}
+array(1) {
+  [0]=>
+  int(9223372036854775807)
+}
+from null: {"a":{"b":{"0":1,"1":2,"10":3,"11":4,"s":5,"12":6},"c":{"-5":7,"-4":8}}}
+list, next: [[10,11,12,13]]
+list, a gap: [{"0":10,"1":11,"2":12,"3":13,"5":15}]
+list, then a hash: [{"0":10,"1":11,"2":12,"3":13,"5":15,"6":16,"k":"now a hash","4":14,"7":17}]
+far key: [{"0":1,"1":2,"1000000":3,"1000001":4}]
+hash, int keys: {"p":{"a":1,"7":2,"8":3,"2":4,"9":5,"-1":6}}
+many: 80 39 -39 117
+many, next key: 118
+written: {"a":{"b":{"c":2,"new":3},"n":{"m":4}},"l":["first",2,3,4]}
+copy: {"a":{"b":{"c":1}},"l":[1,2,3]}
+inner copy: {"b":{"c":1}}
+deep copy: {"c":1}
+copy written: {"a":{"b":{"c":"in the copy"}},"l":{"0":1,"2":3}}
+original after: {"a":{"b":{"c":2,"new":3},"n":{"m":4}},"l":["first",2,3,4]}
+result: [[1,2,3],{"a":{"b":[1,2]}}]
+result of a push: ["pushed",{"a":{"b":[1,2],"c":["pushed"]}}]
+result in an expression: 21 4
+result of a property write: [["v","w"],{"k":{"j":["v"]}}]
+float(1.5)
+unset, nothing there: {"a":{"b":1,"c":2},"l":[1,2,3]}
+unset: {"a":{"c":2},"l":{"1":2}}
+unset, the copy: {"a":{"b":1,"c":2},"l":[1,2,3]}
+push after unset: {"a":{"c":2},"l":{"1":2,"3":"after the unsets"}}
+unset, its own: {"a":{"b":{"d":2}}}
+unset below a scalar: Cannot unset offset in a non-array variable
+after it: {"a":{"b":{"d":2}}}
+through a reference: {"k":{"v":1,"w":2}}
+element reference: ["written through the element","written through the element"]
+level reference: [{"k":{"v":"written through the element","w":2,"x":{"y":3,"z":4}}},{"v":"written through the element","w":2,"x":{"y":3,"z":4}}]
+after the reference is gone: [{"y":3,"z":5},{"y":3,"z":4}]
+by-reference parameter: {"k":{"v":"written through the element","x":{"y":3,"z":5}},"in":{"fn":[1]}}
+element bound to the root: "the root replaced"
+static: [{"n":{"a":[0],"b":[1]}},{"n":{"a":[0,2],"b":[1]}}]
+from a constant: {"rows":[[1],["changed",4],[5,6]],"name":"table"}
+the constant: {"rows":[[1,2],[3,4]],"name":"table"}
+property: [{"x":{"y":2,"0":3}},{"made":{"here":4}},{"x":{"y":1}},{"x":{"y":1}},{"x":{"y":1,"z":5}},{"x":{"y":"local"}}]
+property, a copy held: [{"x":{"y":2,"0":3}},{"x":{"y":6}}]
+foreach by value: {"a":[1,10],"b":[2,20],"c":{"1":30},"newa":{"n":"a"},"newb":{"n":"b"},"newc":{"n":"c"}}
+foreach by reference: {"a":{"0":1,"seen":true,"also":"a"},"b":{"0":2,"seen":true,"also":"b"},"z":{"added":1,"seen":true,"also":"z"}}
+foreach over a property: {"x":{"y":"in the loop"},"more":{"x":{"y":1}}}
+hooks: [{"1":{"early":{"function":"early","accepted_args":1}},"10":{"init":{"function":"init","accepted_args":1},"init2":{"function":"init2","accepted_args":1}},"20":{"late":{"function":"late","accepted_args":1}}},[1,10,20]]
+hooks, the copies: [0,1,2,3]
+destruct in p
+after the property is replaced
+end of isset_then_assign
+destruct in p again
+after the property is replaced
+end of isset_then_path
+destruct in t
+after the array is replaced
+end of isset_then_dim
+destruct in p, a third time
+after the property is replaced
+end of isset_then_steps
+the box: [{"a":{"abc":"3abc","abcabc":"abc"}},4,"3abc"]
+offsetSet "k"
+destruct given to a sink
+after the sink
+after the array write
+destruct kept in an array
+after the second write
+destruct holder temporary
+destruct in a temporary holder
+after the temporary holder
+destruct in a local holder
+end of discarded
+destruct replaces it
+destruct holder local
+done
