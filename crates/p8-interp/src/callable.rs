@@ -554,7 +554,9 @@ impl Context<'_> {
     /// looked up once and run on the arguments as they come out of the
     /// registers, with no list made for the builtin. The builtin runs as
     /// on that path (its entry in traces, its name for messages). None:
-    /// anything else, which goes the builtin's way.
+    /// anything else, which goes the builtin's way. (Out of line: the
+    /// path every other builtin call takes keeps its own, smaller frame.)
+    #[inline(never)]
     pub(crate) fn call_by_name(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, start: usize, argc: usize, dst: p8_bytecode::Reg) -> Option<Result<(), Throw>> {
         let array = i == self.user_calls[1];
         if argc == 0 || (array && (argc != 2 || regs[start + 1].as_array().is_none())) {
@@ -725,6 +727,7 @@ impl Context<'_> {
 
     /// Room for a nested run at `at` with `argc` arguments: Err when the
     /// native stack is near its end (each nested run takes some).
+    #[inline(always)]
     fn nested_room(&mut self, regs: &mut Vec<Value>, at: usize, argc: usize) -> Result<(), Throw> {
         if self.stack_exhausted() {
             return Err(self.throw(
@@ -751,7 +754,9 @@ impl Context<'_> {
     }
 
     /// The nested run of `m` on the `argc` arguments placed at `at` (see
-    /// `run_nested_at`), to its return: its result.
+    /// `run_nested_at`), to its return: its result. (In line: it is
+    /// `run_nested_at`'s body, which every callback's run takes.)
+    #[inline(always)]
     fn run_placed(&mut self, regs: &mut Vec<Value>, m: MethodFrame, argc: usize, at: usize) -> Result<Value, Throw> {
         let argc = argc as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
