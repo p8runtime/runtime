@@ -551,6 +551,40 @@ impl Context<'_> {
                         }
                     }};
                 }
+                // A foreach's back edge, its step fused in (`$key`: the
+                // key too): the jump's interrupt test, then the step of
+                // the IterNext(Key) at `imm` (the jump's target), its
+                // operands this instruction's. Stepped: on into the body
+                // (`imm + 1`); the end: past the loop (the next
+                // instruction, the step's end). A freed value: its
+                // destructor at the step's pc, as there. Anything else
+                // (`Step::Rest`: an object, a reference) wrote nothing and
+                // is the step's own arm's (pc = imm), as the jump was.
+                macro_rules! iter_loop {
+                    ($key:expr) => {{
+                        ops!(a, b, c, imm);
+                        if self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
+                            slow!();
+                        }
+                        let step = if $key {
+                            iter_step_key_here(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c))
+                        } else {
+                            iter_step_here(&mut w[..], Reg::from(a), Reg::from(b))
+                        };
+                        if step == Step::Stepped {
+                            pc = imm as usize + 1;
+                        } else if step == Step::End {
+                            pc += 1;
+                        } else if step == Step::Freed {
+                            if self.ids.has_pending() {
+                                pending_at!(imm as usize + 1, imm as usize);
+                            }
+                            pc = imm as usize + 1;
+                        } else {
+                            pc = imm as usize;
+                        }
+                    }};
+                }
                 // `!x` (`$not`) and a condition made a value: a bool, an int
                 // and null inline, the rest as `truth` decides (NAN and an
                 // undefined variable warn: `step`).
@@ -808,6 +842,8 @@ impl Context<'_> {
                     // this instruction.
                     Op::IterNext => iter_next!(false),
                     Op::IterNextKey => iter_next!(true),
+                    Op::IterLoop => iter_loop!(false),
+                    Op::IterLoopKey => iter_loop!(true),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
                     // (`+=` is its own copy of the arm, the operator a
