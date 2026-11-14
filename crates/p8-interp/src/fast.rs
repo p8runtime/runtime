@@ -3114,11 +3114,27 @@ pub(crate) fn identical_rest(x: &Value, y: &Value) -> Option<bool> {
     }
 }
 
-/// `x == y` beyond two ints: two strings here, as `Value::loose_eq`
-/// compares them (`str_loose_eq`), in one call from the handler; the
-/// rest is `test`'s.
+/// `x == y` beyond two ints, in one call from the handler. Two strings
+/// are decided here, with no frame and no call, where their bytes
+/// decide and are known in place (`StrHead::loose_eq_in_place`: either
+/// first byte above '9', with two short strings or two lengths that
+/// differ). That is nearly every `$var == 'literal'`. The rest is
+/// `loose_eq_slow`'s.
 #[inline(never)]
 pub(crate) fn loose_eq_rest(x: &Value, y: &Value) -> Option<bool> {
+    if let (Some(a), Some(b)) = (x.as_str(), y.as_str())
+        && let Some(same) = a.loose_eq_in_place(b)
+    {
+        return Some(same);
+    }
+    loose_eq_slow(x, y)
+}
+
+/// `loose_eq_rest` for every pair: two strings as `Value::loose_eq`
+/// compares them (`str_loose_eq`: numeric strings as numbers, bytes
+/// otherwise); the rest is `test`'s.
+#[inline(never)]
+fn loose_eq_slow(x: &Value, y: &Value) -> Option<bool> {
     match (x.as_str(), y.as_str()) {
         (Some(a), Some(b)) => Some(p8_runtime::value::str_loose_eq(a, b)),
         _ => test(Cmp::Eq, x, y),
