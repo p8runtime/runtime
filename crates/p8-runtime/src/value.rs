@@ -993,6 +993,12 @@ impl Value {
 
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
+        // (Two strings first: the branch handlers decide theirs before
+        // they call, so what comes here is mostly in_array's needle
+        // against a haystack of strings.)
+        if let (Some(a), Some(b)) = (self.as_str(), other.as_str()) {
+            return a.same(b);
+        }
         if let Some(same) = self.identical_by_tag(other) {
             return same;
         }
@@ -1004,7 +1010,6 @@ impl Value {
             (Repr::Null(_) | Repr::Undef(_), Repr::Null(_) | Repr::Undef(_)) => true,
             // (As floats, not bits: NAN is not itself, 0.0 is -0.0.)
             (Repr::Float(a), Repr::Float(b)) => f64::from_bits(*a as u64) == f64::from_bits(*b as u64),
-            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str().is_some_and(|a| other.as_str().is_some_and(|b| a.same(b))),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
             (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
