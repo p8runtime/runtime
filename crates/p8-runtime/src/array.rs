@@ -974,7 +974,36 @@ impl PhpArray {
         debug_assert!(!self.contains_key(&key), "insert_absent of a present key");
         match (&mut self.storage, key) {
             (Storage::Hashed(h), Key::Str(s)) => h.insert_new(s.hash(), Some(s), value),
-            (_, key) => self.insert(key, value),
+            // (An int key: the next key `$a[] = v` uses moves, as `insert` moves it.)
+            (Storage::Hashed(h), Key::Int(k)) => {
+                h.insert_new(k as u64, None, value);
+                self.note_int_key(k);
+            }
+            (Storage::Packed(_), key) => self.insert(key, value),
+        }
+    }
+
+    /// [`slot_mut`](Self::slot_mut) of the key a string names
+    /// (`Key::from_string`), with no handle to the string made when the
+    /// element is there (a write through `$a['k'][...]` nearly always
+    /// finds it); `owned` gives the string as a key when it is not.
+    pub fn slot_str_mut(&mut self, s: &StrHead, owned: impl FnOnce() -> PhpStr) -> &mut Value {
+        if let Some(i) = canonical_int(s) {
+            return self.slot_mut(&Key::Int(i));
+        }
+        let at = match &self.storage {
+            Storage::Packed(_) => None,
+            Storage::Hashed(h) => h.find(s.hash(), Probe::Str(s)),
+        };
+        let Some(i) = at else {
+            let key = Key::Str(owned());
+            self.insert_absent(key.clone(), Value::NULL);
+            return self.get_mut(&key).expect("just inserted");
+        };
+        match &mut self.storage {
+            // (Not reached: a position found is a hash's.)
+            Storage::Packed(p) => &mut p.slots[i],
+            Storage::Hashed(h) => &mut h.buckets[i].value,
         }
     }
 

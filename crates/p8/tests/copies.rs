@@ -123,3 +123,28 @@ fn a_quiet_property_read_keeps_no_copy_for_the_next_write() {
     assert_eq!(one, r#"{"k0":9,"x":0}"#);
     assert_eq!(many, r#"{"k0":9,"k1":9,"k2":9,"x":0}"#);
 }
+
+/// The array an `isset()` looked into is let go before the next statement
+/// even when a later statement of the function is a write with a result
+/// nobody reads (`$this->priorities = ...`): the write two levels down, in
+/// between, changes the property's array in place. The shape of a hook
+/// table's `add_filter`.
+#[test]
+fn a_later_write_keeps_no_copy_of_what_isset_read() {
+    let (one, many) = no_copies_per_iteration(
+        "class Hooks {
+             public $callbacks = [];
+             public $priorities = [];
+             function add($name, $priority) {
+                 $existed = isset($this->callbacks[$priority]);
+                 $this->callbacks[$priority][$name] = ['function' => $name, 'accepted_args' => 1];
+                 $this->priorities = array_keys($this->callbacks);
+             }
+         }
+         $h = new Hooks();
+         for ($i = 0; $i < $n; $i++) { $h->add('f' . ($i % 5), $i % 7); }
+         echo count($h->callbacks), ' ', count($h->callbacks[0]), ' ', json_encode($h->priorities);",
+    );
+    assert_eq!(one, "1 1 [0]");
+    assert_eq!(many, "7 5 [0,1,2,3,4,5,6]");
+}

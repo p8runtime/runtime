@@ -270,6 +270,14 @@ fn free_last(r: Repr) {
     }
 }
 
+/// A shared array made the handle's own before a write (`Value::array_mut`
+/// found another holder): the copy, `Rc::make_mut`'s.
+#[cold]
+#[inline(never)]
+fn separate(a: &mut Rc<PhpArray>) {
+    Rc::make_mut(a);
+}
+
 /// A shared handle's drop: the count was just read and is known not to
 /// reach zero, so the `Rc` drop is the decrement alone.
 #[inline(always)]
@@ -688,11 +696,28 @@ impl Value {
 
     /// The array, for writing: separated first if shared (`Rc::make_mut`,
     /// PHP's SEPARATE_ARRAY). A program-memory array is copied here too.
+    /// The test for "shared" is here, in the caller's code (three out of
+    /// four writes find the array their own); only the copy is a call.
     #[inline(always)]
     pub fn array_mut(&mut self) -> Option<&mut PhpArray> {
         match &mut self.0 {
-            Repr::Array(a) => Some(Rc::make_mut(a)),
+            Repr::Array(a) => {
+                if Rc::get_mut(a).is_none() {
+                    separate(a);
+                }
+                Rc::get_mut(a)
+            }
             _ => None,
+        }
+    }
+
+    /// Whether this is an array another holder shares (a write would copy
+    /// it first, `array_mut`).
+    #[inline(always)]
+    pub fn is_shared_array(&self) -> bool {
+        match &self.0 {
+            Repr::Array(a) => Rc::strong_count(a) != 1 || Rc::weak_count(a) != 0,
+            _ => false,
         }
     }
 

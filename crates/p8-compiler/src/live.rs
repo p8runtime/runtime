@@ -229,10 +229,17 @@ impl Frame<'_> {
             }
             // (The keys' block, with one more for an append: a use too many
             // is only a later free.)
+            // The result of a write (here and below: a property's, a static
+            // property's, a step's) is a definition: every handler writes
+            // it or throws. What the register held before is an earlier
+            // expression's and is freed at that one's last use; kept until
+            // this result's Free, an array there would be shared when a
+            // write in between reaches it, and copied.
             AssignDim { var, keys, n, val, dst, .. } | AssignDimOp { var, keys, n, val, dst, .. } => {
                 u!(var, val);
                 o.uses |= self.range(keys, n as usize + 1);
-                w!(var, dst);
+                w!(var);
+                def!(dst);
             }
             IssetDim { dst, var, keys, n } => {
                 u!(var);
@@ -404,7 +411,8 @@ impl Frame<'_> {
             DimIncDec { var, keys, n, dst, .. } => {
                 u!(var);
                 o.uses |= self.range(keys, n as usize + 1);
-                w!(var, dst);
+                w!(var);
+                def!(dst);
             }
             ArrayUnpack { arr, src } => {
                 u!(arr, src);
@@ -419,15 +427,15 @@ impl Frame<'_> {
                 if take {
                     o.clean |= b(val);
                 }
-                w!(dst);
+                def!(dst);
             }
             AssignPropOp { obj, name, val, dst, .. } => {
                 u!(obj, name, val);
-                w!(dst);
+                def!(dst);
             }
             PropIncDec { obj, name, dst, .. } => {
                 u!(obj, name);
-                w!(dst);
+                def!(dst);
             }
             // The object (or nothing), the name's place, the keys.
             // (The name's place, base + 1, only when the name is there,
@@ -447,7 +455,7 @@ impl Frame<'_> {
                 u!(name, val);
                 o.uses |= block;
                 o.dirty |= block;
-                w!(dst);
+                def!(dst);
             }
             IssetProp { dst, obj, name } => {
                 u!(obj, name);
@@ -462,7 +470,7 @@ impl Frame<'_> {
             AssignStaticProp { class, name, val, dst } | AssignStaticPropOp { class, name, val, dst, .. } => {
                 o.uses |= self.class(class);
                 u!(name, val);
-                w!(dst);
+                def!(dst);
             }
             InstanceOf { dst, src, class } => {
                 u!(src);
@@ -525,6 +533,17 @@ fn flow(instr: &Instr) -> (bool, Option<u32>) {
             | Instr::Rare { op: RareOp::ReturnRef | RareOp::ThrowError, .. }
     );
     (falls, target)
+}
+
+/// Whether `free` is the Free of the result of `write`, an array or
+/// property write whose handler writes no result when that Free is the
+/// next instruction (the ones lowering asks `res` about).
+fn frees_result(write: &Instr, free: &Instr) -> bool {
+    let Instr::Free { reg } = *free else { return false };
+    match *write {
+        Instr::AssignDim { dst, .. } | Instr::AssignProp { dst, .. } | Instr::AssignPropDim { dst, .. } => dst == reg,
+        _ => false,
+    }
 }
 
 /// The analysed function's code and the tables that hold pcs, rewritten
@@ -684,14 +703,26 @@ pub(crate) fn free_temps(
         let mut m = s.frees[pc];
         // A free belongs to what came before it (the last use).
         let line = lines[pc.saturating_sub(1)];
+        // The Free of a write's unused result stays right after the write:
+        // lowering then has the handler write no result at all (`res` in
+        // p8-bytecode's insn.rs looks at the next instruction only). The
+        // frees of the write's keys and value go after it; it reads none
+        // of them.
+        let first = m != 0 && pc > 0 && frees_result(&code[pc - 1], &code[pc]);
+        if first {
+            new_code.push(code[pc]);
+            new_lines.push(lines[pc]);
+        }
         while m != 0 {
             let i = m.trailing_zeros() as usize;
             m &= m - 1;
             new_code.push(Instr::Free { reg: (tbase + i) as Reg });
             new_lines.push(line);
         }
-        new_code.push(code[pc]);
-        new_lines.push(lines[pc]);
+        if !first {
+            new_code.push(code[pc]);
+            new_lines.push(lines[pc]);
+        }
     }
     at.push(new_code.len() as u32);
     for i in &mut new_code {
