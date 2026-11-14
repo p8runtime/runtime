@@ -18,3 +18,21 @@ fn max_execution_time_stops_a_loop() {
     assert_eq!(out.status.code(), Some(255));
     assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "stopped after {took:?}");
 }
+
+/// The same for a foreach over an array whose body has no loop (a hash of
+/// a long string, a million times): the loop's back edge, which is its
+/// step, is where the limit is noticed. (PHP 8.6 notices it inside the
+/// hash() call, and its trace has that call's frame: the error line is
+/// the same.)
+#[test]
+fn max_execution_time_stops_a_foreach() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/time_limit/foreach.php");
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_p8")).args(["-d", "max_execution_time=1"]).arg(&script).output().expect("run p8");
+    let took = started.elapsed();
+    let shown = std::fs::canonicalize(&script).expect("canonical path");
+    let got = String::from_utf8_lossy(&out.stdout).replace(&*shown.to_string_lossy(), "%s");
+    assert!(got.starts_with("\nFatal error: Maximum execution time of 1 second exceeded in %s on line 5\nStack trace:\n"), "{got}");
+    assert_eq!(out.status.code(), Some(255));
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "stopped after {took:?}");
+}

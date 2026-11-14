@@ -7394,6 +7394,13 @@ pub(crate) enum Step {
 /// unset entry's place) is walked past here, a position at a time.
 #[inline(never)]
 pub(crate) fn iter_step(w: &mut [Value], iter: Reg, val: Reg) -> Step {
+    iter_step_here(w, iter, val)
+}
+
+/// `iter_step` itself, inlined where it is called: into it, and into the
+/// loop's back edge (IterLoop), as `iter_step_key_here` is.
+#[inline(always)]
+pub(crate) fn iter_step_here(w: &mut [Value], iter: Reg, val: Reg) -> Step {
     let (iter, val) = (iter as usize, val as usize);
     let Some(pos) = w.get(iter + 1).and_then(Value::as_int) else { return Step::Rest };
     let Some(a) = w.get(iter).and_then(Value::as_array) else { return Step::Rest };
@@ -7423,6 +7430,14 @@ pub(crate) fn iter_step(w: &mut [Value], iter: Reg, val: Reg) -> Step {
 /// which writes the key too.
 #[inline(never)]
 pub(crate) fn iter_step_key(w: &mut [Value], iter: Reg, val: Reg, key: Reg) -> Step {
+    iter_step_key_here(w, iter, val, key)
+}
+
+/// `iter_step_key` itself, inlined where it is called: into it, and into
+/// the loop's back edge (IterLoopKey), which is most steps, so that a
+/// step there is no call.
+#[inline(always)]
+pub(crate) fn iter_step_key_here(w: &mut [Value], iter: Reg, val: Reg, key: Reg) -> Step {
     let (iter, val, key) = (iter as usize, val as usize, key as usize);
     let Some(pos) = w.get(iter + 1).and_then(Value::as_int) else { return Step::Rest };
     let Some(a) = w.get(iter).and_then(Value::as_array) else { return Step::Rest };

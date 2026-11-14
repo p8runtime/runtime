@@ -145,6 +145,10 @@ hand AssignDimOp
 /// next of iterator a: value to b (and key to c for IterNextKey), or jump to imm
 hand IterNext
 hand IterNextKey
+/// a foreach's back edge (`Jump` to its IterNext(Key) at imm, the loop's
+/// end right after it): that step, then pc = imm + 1, or on past the end
+hand IterLoop
+hand IterLoopKey
 /// a (op imm) = b
 hand AssignOp native=assign_op
 /// a's step (imm: INC, POST) into b
