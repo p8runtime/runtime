@@ -531,13 +531,14 @@ impl Context<'_> {
                         pc = next;
                     }};
                 }
-                // `!x` (`$not`) and a condition made a value, as `truth`
-                // decides (NAN and an undefined variable warn: `step`).
+                // `!x` (`$not`) and a condition made a value: a bool, an int
+                // and null inline, the rest as `truth` decides (NAN and an
+                // undefined variable warn: `step`).
                 macro_rules! truth {
                     ($not:expr) => {{
                         ops!(a, b, c, imm);
                         let v = &w[rx!(b)];
-                        let t = match v.as_bool() {
+                        let t = match v.truth_by_tag() {
                             Some(b) => b,
                             None => match truth(v) {
                                 Some(t) => t,
@@ -3086,29 +3087,9 @@ fn step_ref(cell: &RefCell<Value>, step: fn(i64, i64) -> Option<i64>) -> Option<
 /// `num_test`, and every other pair of defined values as `step` compares
 /// them (`test_values`: nothing there warns). None for an undefined
 /// variable (`step` warns) or `<=>`.
-///
-/// `===`, `!==`, `==` and `!=` of two values their kinds decide (`$s ===
-/// ''`, `$x !== null`, `false === $found`, `$type == 'post'`: most of
-/// what gets here) are decided first, with no frame and no further call
-/// (`Value::identical_by_kind`, `loose_eq_by_kind`: neither decides an
-/// undefined variable or a reference); the rest is `test_rest`.
 #[cold]
 #[inline(never)]
 pub(crate) fn test(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
-    let decided = match cmp {
-        Cmp::Identical | Cmp::NotIdentical => x.identical_by_kind(y),
-        Cmp::Eq | Cmp::NotEq => x.loose_eq_by_kind(y),
-        _ => None,
-    };
-    match decided {
-        Some(same) => Some(same == matches!(cmp, Cmp::Identical | Cmp::Eq)),
-        None => test_rest(cmp, x, y),
-    }
-}
-
-/// `test` for every pair and operator.
-#[inline(never)]
-fn test_rest(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
     if cmp == Cmp::Spaceship {
         return None;
     }
@@ -3119,6 +3100,28 @@ fn test_rest(cmp: Cmp, x: &Value, y: &Value) -> Option<bool> {
         Some(num_test(cmp, &x, &y).unwrap_or_else(|| test_values(cmp, &x, &y)))
     } else {
         Some(num_test(cmp, x, y).unwrap_or_else(|| test_values(cmp, x, y)))
+    }
+}
+
+/// `x === y` when the tags do not decide it (`identical_by_tag`): two
+/// strings here, as `Value::identical` compares them (the same head or
+/// the same bytes), in one call from the handler; the rest is `test`'s.
+#[inline(never)]
+pub(crate) fn identical_rest(x: &Value, y: &Value) -> Option<bool> {
+    match (x.as_str(), y.as_str()) {
+        (Some(a), Some(b)) => Some(a.same(b)),
+        _ => test(Cmp::Identical, x, y),
+    }
+}
+
+/// `x == y` beyond two ints: two strings here, as `Value::loose_eq`
+/// compares them (`str_loose_eq`), in one call from the handler; the
+/// rest is `test`'s.
+#[inline(never)]
+pub(crate) fn loose_eq_rest(x: &Value, y: &Value) -> Option<bool> {
+    match (x.as_str(), y.as_str()) {
+        (Some(a), Some(b)) => Some(p8_runtime::value::str_loose_eq(a, b)),
+        _ => test(Cmp::Eq, x, y),
     }
 }
 
@@ -3178,7 +3181,8 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, b: Src) -> bool {
     }
 }
 
-/// A condition that is not a bool: what i_zend_is_true says, when
+/// A condition the tag does not decide (`truth_by_tag`: a float, a
+/// string, an array, an object, a reference): what i_zend_is_true says, when
 /// nothing can warn (NAN, an undefined variable: None, `step`'s).
 #[cold]
 #[inline(never)]

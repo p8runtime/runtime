@@ -74,6 +74,13 @@ pub(crate) struct Scratch {
     back_target: Vec<bool>,
 }
 
+impl Scratch {
+    /// The entries its vectors have room for.
+    pub(crate) fn room(&self) -> usize {
+        self.ops.capacity() + self.live.capacity() + self.out.capacity() + self.inflow.capacity() + self.frees.capacity() + self.exc.capacity() + self.back_target.capacity()
+    }
+}
+
 impl Frame<'_> {
     fn bit(&self, r: Reg) -> u64 {
         let r = r as usize;
