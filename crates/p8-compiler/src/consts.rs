@@ -22,6 +22,13 @@ pub(crate) struct Scratch {
     lines: Vec<u32>,
 }
 
+impl Scratch {
+    /// The entries its vectors have room for.
+    pub(crate) fn room(&self) -> usize {
+        self.at.capacity() + self.code.capacity() + self.lines.capacity()
+    }
+}
+
 /// Place the constants of `code`: the loads go in before their
 /// instructions, into the temporaries from `scratch` on (one per load an
 /// instruction needs, reused by the next instruction), and every pc the

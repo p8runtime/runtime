@@ -1,0 +1,14 @@
+file one: alpha|beta|7
+one: alpha beta gamma x
+alpha,ALPHA,betabeta,12,1.5
+file two: gamma|7|alpha|beta
+two: gamma alpha beta zeta y
+betabeta,ZETA,beta,1.5,12,1
+file three: word70|beta|zeta
+three: word1 word35 word70
+2896,07drow,beta,alpha
+one: alpha beta gamma z
+alpha,ALPHA,betabeta,12,1.5
+alpha-gamma
+12
+beta/alpha/DELTA
