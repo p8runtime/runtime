@@ -1,6 +1,6 @@
 # Targets for the cases in bench/count/cases, one row per case, ranked by score (largest first).
 # Counts are instructions per loop iteration from bench/count/count.sh (callgrind; the 22000-iteration run minus the 2000-iteration run, divided by 20000).
-# php = PHP 8.6.0RC5. p8, by row: main 163ee87c, measured 14 Nov 2026 on addis; the rows PR #542 changed (nested_write and those its run moved by more than 1) are that PR's branch on 163ee87c; property_read is PR #544's branch on main 61c7f930.
+# php = PHP 8.6.0RC5. p8, by row: main 163ee87c, measured 14 Nov 2026 on addis; the rows PR #542 changed (nested_write and those its run moved by more than 1) are that PR's branch on 163ee87c; property_read is PR #544's branch on main 61c7f930; compare_loose_str is PR #533's branch on main 87315ca9 (before = main 87315ca9).
 # ops = p8 operations executed per iteration of the case's loop, the callee's included (read from `p8 --dump`; a method body is counted from the same body written as a function, because --dump does not print methods).
 # target = php + 10 * ops. gap = p8 - target.
 # wp_count = how many times one WordPress request (the scoreboard's) does what one iteration of the case does. wp_cost = what the named routine costs in that request, in instructions.
@@ -33,11 +33,11 @@ array_literal	542	1396	2.58	622	8	774	15155	2180990	11729970	open	-	-	-	array li
 array_isset	133	216	1.62	173	4	43	268420	10912082	11542060	open	-	-	-	isset() on an array element: the three P8_ISSET_DIM arms
 call_typed	229	693	3.03	319	9	374	30740	4138313	11496760	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
 static_method	183	706	3.86	223	4	483	17367	3512328	8388261	open	-	-	-	static method call: StaticCall 6,576 + StaticCallVars 10,791 runs (cost includes SendVarStatic)
-compare_loose_str	60	116	1.93	80	2	36	190965	8767455	6874740	claimed: PR #533	-	-	-	== or != in a condition that reaches loose_eq_rest: 190,965 calls, of 196,096 P8_JUMP_CMP_EQ runs
 serialize_small	1498	5559	3.71	1548	5	4011	1427	7031287	5723697	open	-	-	-	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
 str_replace_short	662	1383	2.09	732	7	651	8192	13585030	5332992	open	-	-	-	str_replace(): string::replace 8,192 calls, inclusive
 array_read_str	174	232	1.33	214	4	18	284926	15689828	5128668	open	-	-	-	array element read: the three P8_FETCH_DIM_R arms
 string_concat	792	1163	1.47	862	7	301	13264	7682042	3992464	open	-	-	-	concatenation: p8_interp::concat 26,527 calls, inclusive (count = calls / 2, the case concatenates twice)
+compare_loose_str	60	86	1.43	80	2	6	190965	8767455	1145790	claimed: PR #533	118	86	-3.55M	== or != in a condition that reaches loose_eq_rest: 190,965 calls, of 196,096 P8_JUMP_CMP_EQ runs
 bit_and	87	217	2.49	127	4	90	10362	1162241	932580	open	-	-	-	binary operator other than add, sub or concat: Binary 14,637 + BinaryC 22,252 runs less 26,527 concatenations (cost is both arms, concat included)
 assign	53	77	1.45	73	2	4	156921	3850686	627684	open	-	-	-	a variable or constant assigned to a variable: P8_ASSIGN_REG 7,810 + P8_ASSIGN_K 149,111 runs
 array_write_read	204	418	2.05	254	5	164	3406	476900	558584	open	-	-	-	array write under a constant string key (the read is counted under array_read_str)

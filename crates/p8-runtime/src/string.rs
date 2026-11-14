@@ -104,6 +104,29 @@ impl StrHead {
         }
     }
 
+    /// `==` of two strings (zend_fast_equal_strings) where it is known
+    /// with no call. A string whose first byte is above '9' is no number,
+    /// so the bytes decide, and they are known in place for two short
+    /// strings (length and buffer, as `short_eq`) and for two lengths
+    /// that differ. None otherwise: both may be numbers, or a heap
+    /// string's bytes must be read (`value::str_loose_eq`).
+    #[inline(always)]
+    pub fn loose_eq_in_place(&self, other: &StrHead) -> Option<bool> {
+        match (&self.bytes, &other.bytes) {
+            (Bytes::Inline { len: a, buf: x }, Bytes::Inline { len: b, buf: y }) => {
+                (x[0] > b'9' || y[0] > b'9').then(|| a == b && x == y)
+            }
+            // (The lengths read here, not through `as_slice`: no call.)
+            (Bytes::Inline { len, .. }, Bytes::Heap(v)) | (Bytes::Heap(v), Bytes::Inline { len, .. }) => {
+                (usize::from(*len) != v.len() && (self.first_byte() > b'9' || other.first_byte() > b'9'))
+                    .then_some(false)
+            }
+            (Bytes::Heap(v), Bytes::Heap(w)) => {
+                (v.len() != w.len() && (self.first_byte() > b'9' || other.first_byte() > b'9')).then_some(false)
+            }
+        }
+    }
+
     /// `===` of two strings (zend_string_equals): the same head, or the
     /// same bytes. No hash is read: computing one costs more than the
     /// compare it would save.
