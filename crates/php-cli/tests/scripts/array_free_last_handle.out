@@ -1,0 +1,73 @@
+-- every size, list and hash
+~list0
+~hash0
+after 0
+~list1
+~hash1
+after 1
+~list7
+~hash7
+after 7
+~list8
+~hash8
+after 8
+~list9
+~hash9
+after 9
+~list16
+~hash16
+after 16
+~list17
+~hash17
+after 17
+~list40
+~hash40
+after 40
+empty gone
+-- a hash with holes
+~b
+b unset
+~a
+~c
+~d
+after holes
+-- a list with holes, turned into a hash
+~l1
+~l0
+~l2
+~l7
+~ls
+after mixed
+-- a destructor that throws while the array goes
+~Tt0
+~Tt1
+~Tt2
+caught: from t1
+after throw
+-- a destructor keeps its object alive
+~Rr0
+~Rr1
+kept: 2 r0 r1
+after keep
+-- a destructor frees another array and makes new ones
+~F
+~o0
+~o1
+made 20 m19
+~f1
+made after: 20 5
+-- weak references and WeakMap entries
+held: alive 1
+~w0
+freed: cleared 0
+-- object ids reused after the array goes
+same ids
+-- references held by an array outlive it
+x=2 y=10,11
+p->list=1,2,3
+-- cycles through references, collected
+~c0
+collected: none
+-- many frees leave memory where it was
+no growth
+end

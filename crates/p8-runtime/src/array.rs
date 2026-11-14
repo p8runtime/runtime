@@ -59,8 +59,10 @@ fn take<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, n: usize) -> 
 }
 
 /// Keep `v` for a later array when it is a pooled size (emptied first:
-/// its values go now, as they would with the buffer).
-#[inline]
+/// its values go now, as they would with the buffer). Always inline: the
+/// array's free ([`free`]) is its hot caller, and a call there was a
+/// second prologue per array.
+#[inline(always)]
 fn give<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, mut v: Vec<T>) {
     let size = v.capacity();
     if size != 8 && size != 16 {
@@ -100,6 +102,30 @@ impl Drop for Hashed {
     fn drop(&mut self) {
         give(&BUCKETS, std::mem::take(&mut self.buckets));
     }
+}
+
+/// The last handle of an array goes (PHP's `rc_dtor_func` reaching
+/// `zend_array_destroy`): in this one function, the array taken out of
+/// its `Rc`, its values released in one walk of its buffer and the
+/// buffer kept for the next array ([`give`]); an empty array only frees
+/// its box. Letting the `Rc` drop instead went through four more
+/// out-of-line layers (`Rc::drop_slow`, the `Storage` glue, `Packed`'s or
+/// `Hashed`'s `Drop`, each with its own prologue: ~100 instructions an
+/// array before the first value). The values go in the same order and at
+/// the same point as there, so destructors are queued as they were; only
+/// the array's own box is freed before its values rather than after.
+#[inline(never)]
+pub(crate) fn free(a: std::rc::Rc<PhpArray>) {
+    // (No weak handles to arrays exist; with one, `into_inner` still gives
+    // the array when this was the last strong handle.)
+    let Some(mut array) = std::rc::Rc::into_inner(a) else { return };
+    match &mut array.storage {
+        Storage::Packed(p) => give(&VALUES, std::mem::take(&mut p.slots)),
+        Storage::Hashed(h) => give(&BUCKETS, std::mem::take(&mut h.buckets)),
+    }
+    // What is left holds nothing (an empty Vec): its `Drop` would only
+    // give back an empty buffer.
+    std::mem::forget(array);
 }
 
 
