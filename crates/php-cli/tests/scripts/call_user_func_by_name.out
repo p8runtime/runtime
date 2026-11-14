@@ -1,0 +1,39 @@
+10
+5 9 13
+
+Warning: inc(): Argument #1 ($x) must be passed by reference, value given in %s on line 22
+int(2)
+int(1)
+int(2)
+int(2)
+
+Warning: inc(): Argument #1 ($x) must be passed by reference, value given in %s on line 28
+int(6)
+int(5)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(3) "two"
+  [2]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+}
+array(2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+}
+123
+012
+720 12
+RuntimeException: from the callback at line 10
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, function "later" not found or invalid function name
+later 2
+TypeError: call_user_func_array(): Argument #2 ($args) must be of type array, string given
+ArgumentCountError: Too few arguments to function add(), 1 passed in %s on line 57 and exactly 2 expected
+BUILTIN abab
+42 2

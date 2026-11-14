@@ -5059,7 +5059,8 @@ impl Context<'_> {
         match natives.slots.get_mut(natives.len) {
             Some(n) => {
                 (n.depth, n.name, n.method, n.top) = (depth, name, method, top);
-                n.args.extend(args.iter().map(Value::deref));
+                // (A reference read through; the rest copied in line.)
+                n.args.extend(args.iter().map(|a| if a.is_reference() { a.deref() } else { a.clone() }));
             }
             None => {
                 p8_runtime::counts::bump(p8_runtime::counts::Count::NativeEntry);
@@ -5184,6 +5185,13 @@ impl Context<'_> {
     #[inline(never)]
     fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
+        // call_user_func / call_user_func_array on the name of a function
+        // of PHP code: run from the registers (callable.rs).
+        if self.user_calls.contains(&i)
+            && let Some(r) = self.call_by_name(regs, base, i, start, argc as usize, dst)
+        {
+            return r;
+        }
         // Arguments that leave the builtin nothing to do (a holding
         // assert()): its result, as the builtin would give it.
         if let Some(quick) = self.isolate.registry.call(i).quick
@@ -5282,13 +5290,21 @@ impl Context<'_> {
             }
         }
         let outer = self.running_builtin.replace(i);
-        let mut r = match call.run {
+        let r = match call.run {
             Imp::Moved(run) => run(self, args),
             // The adapter: a borrowed builtin, its arguments checked and
             // converted in place above, lent as they are now.
             Imp::Lent(run) => run(self, args).map_err(|_| self.take_fault()),
         };
         self.running_builtin = outer;
+        self.builtin_done(i, args, r)
+    }
+
+    /// What follows builtin `i`'s run on `args` that gave `r`: a throw
+    /// from a header callback, the call recorded for the trace of an
+    /// error it raised, its messages shown.
+    #[inline(always)]
+    pub(crate) fn builtin_done(&mut self, i: usize, args: &[Value], mut r: Result<Value, Throw>) -> Result<Value, Throw> {
         // (Checked before it is taken: taking moves the whole slot.)
         if self.header_throw.is_some()
             && let Some(t) = self.header_throw.take()

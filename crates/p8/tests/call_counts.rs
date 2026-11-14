@@ -127,6 +127,23 @@ fn a_builtin_calling_back_uses_its_trace_entry_again() {
     assert_eq!(out, "479 array_map/2");
 }
 
+/// call_user_func('add', ..) and call_user_func_array('add', [..]) called
+/// again and again on one name (WordPress's hooks): the function is found
+/// by its name once, not twice per call (the builtin's callable check and
+/// its call each looked it up).
+#[test]
+fn a_function_called_by_name_again_and_again_is_looked_up_once() {
+    let out = flat(
+        "function add($a, $b) { return $a + $b; }
+         $s = 0;
+         for ($i = 0; $i < $n; $i++) { $s = call_user_func('add', $s, $i); }
+         for ($i = 0; $i < $n; $i++) { $s = call_user_func_array('ADD', [$s, $i]); }
+         echo $s;",
+        Count::NameLookup,
+    );
+    assert_eq!(out, "380");
+}
+
 /// foreach over an Iterator: `valid`, `current`, `key` and `next` are
 /// looked up by name once (then found as a call site finds them), not at
 /// every element; from a method of another class too.
