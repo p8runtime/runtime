@@ -3147,27 +3147,26 @@ pub(crate) fn identical_rest(x: &Value, y: &Value) -> Option<bool> {
 /// are decided here, with no frame and no call, where their bytes
 /// decide and are known in place (`StrHead::loose_eq_in_place`: either
 /// first byte above '9', with two short strings or two lengths that
-/// differ). That is nearly every `$var == 'literal'`. The rest is
-/// `loose_eq_slow`'s.
+/// differ). That is nearly every `$var == 'literal'`; two other strings
+/// are `loose_eq_slow`'s. Any other pair goes to `test` as before, with
+/// no check or call added.
 #[inline(never)]
 pub(crate) fn loose_eq_rest(x: &Value, y: &Value) -> Option<bool> {
-    if let (Some(a), Some(b)) = (x.as_str(), y.as_str())
-        && let Some(same) = a.loose_eq_in_place(b)
-    {
-        return Some(same);
-    }
-    loose_eq_slow(x, y)
-}
-
-/// `loose_eq_rest` for every pair: two strings as `Value::loose_eq`
-/// compares them (`str_loose_eq`: numeric strings as numbers, bytes
-/// otherwise); the rest is `test`'s.
-#[inline(never)]
-fn loose_eq_slow(x: &Value, y: &Value) -> Option<bool> {
     match (x.as_str(), y.as_str()) {
-        (Some(a), Some(b)) => Some(p8_runtime::value::str_loose_eq(a, b)),
+        (Some(a), Some(b)) => match a.loose_eq_in_place(b) {
+            Some(same) => Some(same),
+            None => Some(loose_eq_slow(a, b)),
+        },
         _ => test(Cmp::Eq, x, y),
     }
+}
+
+/// Two strings as `Value::loose_eq` compares them (`str_loose_eq`:
+/// numeric strings as numbers, bytes otherwise), out of line so that
+/// `loose_eq_rest` keeps no frame.
+#[inline(never)]
+fn loose_eq_slow(a: &p8_runtime::string::StrHead, b: &p8_runtime::string::StrHead) -> bool {
+    p8_runtime::value::str_loose_eq(a, b)
 }
 
 /// `dst = a op b` beyond two ints: floats, operands through references,
