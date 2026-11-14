@@ -45,6 +45,21 @@ Deprecated: Creation of dynamic property V::$later is deprecated in %s on line 1
 lit200?lit2000lit2001
 ssslit
 ssslit
+first 0 | changed inside
+first 0 | changed inside
+1 | 0
+0/0 | changed after
+first 0/first 0 | changed after
+first 1 | changed inside
+first 1 | changed inside
+2 | 1
+1/1 | changed after
+first 1/first 1 | changed after
+first 2 | changed inside
+first 2 | changed inside
+3 | 2
+2/2 | changed after
+first 2/first 2 | changed after
 Base: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
 Child: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared
 Child: base secret ; base secret|base shared|base open ; base secret/base shared ; child secret/base shared

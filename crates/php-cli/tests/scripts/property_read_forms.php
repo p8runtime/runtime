@@ -127,6 +127,48 @@ for ($i = 0; $i < 2; $i++) {
 }
 unset($bound);
 
+// A property holding a reference, read where a reference handed on
+// would show: sent to a function that changes the variable, appended and
+// stored under a key before the variable changes. The value it had.
+class Rf {
+    public $p = 'declared';
+    private $s = 'private';
+    function bind(&$to): void { $this->s = &$to; }
+    function sent() { return rf_then_change($this->s); }
+    function stored(): string {
+        $b = [];
+        $b[] = $this->s;
+        $b['k'] = $this->s;
+        $GLOBALS['shared'] = 'changed after';
+        return $b[0] . '/' . $b['k'];
+    }
+}
+function rf_then_change($v) {
+    $GLOBALS['shared'] = 'changed inside';
+    return $v;
+}
+function rf_bump($v) { $v++; return $v; }
+$shared = 'first';
+$rf = new Rf;
+$rf->p = &$shared;
+$rf->bind($shared);
+for ($i = 0; $i < 3; $i++) {
+    $shared = "first $i";
+    echo rf_then_change($rf->p), ' | ', $shared, "\n";
+    $shared = "first $i";
+    echo $rf->sent(), ' | ', $shared, "\n";
+    $shared = $i;
+    echo rf_bump($rf->p), ' | ', $shared, "\n";
+    $b = [];
+    $b[] = $rf->p;
+    $b['k'] = $rf->p;
+    $shared = 'changed after';
+    echo $b[0], '/', $b['k'], ' | ', $shared, "\n";
+    $shared = "first $i";
+    echo $rf->stored(), ' | ', $shared, "\n";
+}
+unset($rf);
+
 // Visibility: each scope its own private property through one site; a
 // protected one from inside, from a subclass, from a static method, from
 // a closure bound to each scope in turn; refused from outside each time.
