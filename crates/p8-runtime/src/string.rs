@@ -93,6 +93,25 @@ impl StrHead {
         }
     }
 
+    /// Whether two heads hold the same bytes (zend_string_equal_content):
+    /// two short strings by their buffers (`short_eq`), anything else as
+    /// slices (the lengths, then the bytes).
+    #[inline]
+    pub fn content_eq(&self, other: &StrHead) -> bool {
+        match self.short_eq(other) {
+            Some(same) => same,
+            None => self.as_bytes() == other.as_bytes(),
+        }
+    }
+
+    /// `===` of two strings (zend_string_equals): the same head, or the
+    /// same bytes. No hash is read: computing one costs more than the
+    /// compare it would save.
+    #[inline]
+    pub fn same(&self, other: &StrHead) -> bool {
+        std::ptr::eq(self, other) || self.content_eq(other)
+    }
+
     /// `hash` the first time (zend_string_hash_func).
     #[cold]
     #[inline(never)]

@@ -964,40 +964,69 @@ impl Value {
         }
     }
 
+    /// `===` where the two tags and one word decide it, which is all PHP's
+    /// handlers look at inline (fast_is_identical_function): values of
+    /// two kinds are not identical, null is null, two bools, two ints and
+    /// two program-memory strings (one per bytes: the same bytes are the
+    /// same pointer) are their words compared. None where the values
+    /// themselves must be looked at: two floats (NAN is not itself, 0.0
+    /// is -0.0), two strings with a heap one among them, two arrays, two
+    /// objects, and a reference or an undefined variable on either side.
+    #[inline(always)]
+    pub fn identical_by_tag(&self, other: &Value) -> Option<bool> {
+        match (&self.0, &other.0) {
+            (Repr::Null(_), Repr::Null(_)) => Some(true),
+            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => Some(a == b),
+            (Repr::IStr(a), Repr::IStr(b)) => Some(std::ptr::eq(*a, *b)),
+            _ => {
+                // (The pair's kinds as a set, one bit per tag as `tag`
+                // numbers them: undefined 4 and a reference 8, the two
+                // strings 5 and 6.)
+                const LOOK: u32 = 1 << 4 | 1 << 8;
+                const STRINGS: u32 = 1 << 5 | 1 << 6;
+                let (a, b) = (self.tag(), other.tag());
+                let kinds = 1u32 << a | 1u32 << b;
+                if a == b || kinds & LOOK != 0 || kinds == STRINGS { None } else { Some(false) }
+            }
+        }
+    }
+
     /// `===` (zend_is_identical).
     pub fn identical(&self, other: &Value) -> bool {
+        if let Some(same) = self.identical_by_tag(other) {
+            return same;
+        }
         // (On the representation, not the view: a hot operator, and the
         // view's pair match measured +33 instructions per `===`.)
         match (&self.0, &other.0) {
-            // One program-memory string per bytes: the same bytes are
-            // the same pointer.
-            (Repr::IStr(a), Repr::IStr(b)) => std::ptr::eq(*a, *b),
-            (Repr::Str(a), Repr::Str(b)) => a == b,
             (Repr::Ref(a), _) => a.borrow().identical(other),
             (_, Repr::Ref(b)) => self.identical(&b.borrow()),
             (Repr::Null(_) | Repr::Undef(_), Repr::Null(_) | Repr::Undef(_)) => true,
-            (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => a == b,
             // (As floats, not bits: NAN is not itself, 0.0 is -0.0.)
             (Repr::Float(a), Repr::Float(b)) => f64::from_bits(*a as u64) == f64::from_bits(*b as u64),
-            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str() == other.as_str(),
+            (Repr::IStr(_) | Repr::Str(_), Repr::IStr(_) | Repr::Str(_)) => self.as_str().is_some_and(|a| other.as_str().is_some_and(|b| a.same(b))),
             (Repr::Array(a), Repr::Array(b)) => Rc::ptr_eq(a, b) || a.identical(b),
             (Repr::Object(a), Repr::Object(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
 
+    /// A condition where the tag and one word decide it (i_zend_is_true's
+    /// inline cases): a bool, an int (non-zero), null (false). None for
+    /// what must be looked at (`to_bool`) or may warn.
+    #[inline(always)]
+    pub fn truth_by_tag(&self) -> Option<bool> {
+        match self.0 {
+            Repr::Bool(w) | Repr::Int(w) => Some(w != 0),
+            Repr::Null(_) => Some(false),
+            _ => None,
+        }
+    }
+
     /// `==` (zend_compare == 0, with strings compared as zend_fast_equal_strings).
     pub fn loose_eq(&self, other: &Value) -> bool {
         match (self.as_str(), other.as_str()) {
-            (Some(a), Some(b)) => {
-                // (zendi_smart_str_equals: the second string is parsed
-                // only when the first is numeric.)
-                std::ptr::eq(a, b)
-                    || match numeric_string(a.as_bytes()).and_then(|x| Some((x, numeric_string(b.as_bytes())?))) {
-                        Some((x, y)) => compare_numbers(x, y) == Ordering::Equal,
-                        None => a.as_bytes() == b.as_bytes(),
-                    }
-            }
+            (Some(a), Some(b)) => str_loose_eq(a, b),
             _ => self.compare(other) == Some(Ordering::Equal),
         }
     }
@@ -1065,6 +1094,24 @@ impl Value {
             (_, Object(_)) => Ordering::Less,
         })
     }
+}
+
+/// `==` of two strings (zend_fast_equal_strings): the same head; two
+/// numeric strings as numbers (zendi_smart_str_equals: the second string
+/// is parsed only when the first is numeric, and a first byte above '9',
+/// or none, is no number); anything else by its bytes.
+#[inline]
+pub fn str_loose_eq(a: &StrHead, b: &StrHead) -> bool {
+    if std::ptr::eq(a, b) {
+        return true;
+    }
+    if a.first_byte() <= b'9'
+        && let Some(x) = numeric_string(a.as_bytes())
+        && let Some(y) = numeric_string(b.as_bytes())
+    {
+        return compare_numbers(x, y) == Ordering::Equal;
+    }
+    a.content_eq(b)
 }
 
 /// zend_dval_to_lval_cap: a float from a numeric string saturates.
@@ -1150,6 +1197,75 @@ mod tests {
         m.str_mut().expect("a string").clear();
         assert!(m.as_str().expect("a string").is_empty());
         assert_eq!(lit.as_str().expect("a string").as_bytes(), b"10 program-memory apples");
+    }
+
+    /// What the tags decide (`identical_by_tag`, `truth_by_tag`) is what
+    /// the whole comparison says, and the pairs left to it are the ones
+    /// documented: floats, a heap string, arrays, references, undefined.
+    #[test]
+    fn the_tags_decide_what_the_values_would() {
+        let lit = |s: &[u8]| Value::istr(IStr::intern(s).expect("room"));
+        let values = [
+            Value::NULL,
+            Value::UNDEF,
+            Value::TRUE,
+            Value::FALSE,
+            Value::int(0),
+            Value::int(1),
+            Value::float(0.0),
+            Value::float(-0.0),
+            Value::float(1.0),
+            Value::float(f64::NAN),
+            lit(b""),
+            lit(b"0"),
+            lit(b"tags"),
+            Value::str(""),
+            Value::str("0"),
+            Value::str("tags"),
+            Value::array(PhpArray::new()),
+            Value::new_reference(Value::int(1)),
+            Value::new_reference(Value::NULL),
+        ];
+        let look = |v: &Value| matches!(v.0, Repr::Undef(_) | Repr::Ref(_));
+        for x in &values {
+            for y in &values {
+                let expected = match (&x.0, &y.0) {
+                    _ if look(x) || look(y) => None,
+                    (Repr::Null(_), Repr::Null(_)) => Some(true),
+                    (Repr::Bool(a), Repr::Bool(b)) | (Repr::Int(a), Repr::Int(b)) => Some(a == b),
+                    (Repr::IStr(_), Repr::IStr(_)) => Some(x.as_str().map(StrHead::as_bytes) == y.as_str().map(StrHead::as_bytes)),
+                    _ if x.is_str() && y.is_str() => None,
+                    _ if mem::discriminant(&x.0) == mem::discriminant(&y.0) => None,
+                    _ => Some(false),
+                };
+                assert_eq!(x.identical_by_tag(y), expected, "{x:?} === {y:?}");
+                // The whole comparison, stated apart from it.
+                let whole = match (x.deref().view(), y.deref().view()) {
+                    (V::Null | V::Undef, V::Null | V::Undef) => true,
+                    (V::Bool(a), V::Bool(b)) => a == b,
+                    (V::Int(a), V::Int(b)) => a == b,
+                    (V::Float(a), V::Float(b)) => a == b,
+                    (V::Array(a), V::Array(b)) => a.is_empty() && b.is_empty(),
+                    _ => match (x.deref().as_str(), y.deref().as_str()) {
+                        (Some(a), Some(b)) => a.as_bytes() == b.as_bytes(),
+                        _ => false,
+                    },
+                };
+                assert_eq!(x.identical(y), whole, "{x:?} === {y:?}");
+                assert_eq!(expected.unwrap_or(whole), whole, "{x:?} === {y:?}");
+            }
+            let truth = match x.0 {
+                Repr::Null(_) => Some(false),
+                Repr::Bool(_) | Repr::Int(_) => Some(x.to_bool()),
+                _ => None,
+            };
+            assert_eq!(x.truth_by_tag(), truth, "{x:?}");
+        }
+        // `==` of two strings: numbers when both are numeric, bytes otherwise.
+        let eq = |a: &str, b: &str| Value::str(a).loose_eq(&Value::str(b));
+        assert!(eq("1e1", "10") && eq(" 1", "1") && eq("0.0", "0") && eq("abc", "abc") && eq("", ""));
+        assert!(!eq("abc", "ABC") && !eq("1", "1x") && !eq("", "0") && !eq("1 ", "1x") && !eq("a", " a"));
+        assert!(lit(b"10").loose_eq(&Value::str("1e1")) && lit(b"tags").loose_eq(&Value::str("tags")) && !eq("0x1A", "26"));
     }
 
     /// A payload that keeps [`Repr`] a scalar pair to rustc: one 8-byte
