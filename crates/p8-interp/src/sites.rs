@@ -539,31 +539,51 @@ fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
 /// its most frequent instructions after moves and jumps, and a call
 /// returned the value through memory. (An empty entry's class is 0, no
 /// class's address: the class compare alone turns it away.)
+///
+/// `scope` gives the running code's class and is asked only for an entry
+/// that names a scope (a public property's names none): handed over as a
+/// value, the frame's class was loaded and compared for every read, the
+/// public ones too. The slot's value is taken out and put back here, with no function
+/// between (`Slot::peek` with one: the loop kept it out of line in the
+/// register form's arm, a call per read with the value spilled around
+/// it), and the plain test comes first: a plain value is two words
+/// copied, and neither unset nor a reference is asked of anything else
+/// before it. A value holding memory moves to a local of its own
+/// (`held`), so only that one needs an address: the plain one stays in
+/// registers.
 #[inline(always)]
-pub(crate) fn cached_prop(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<Value> {
-    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+pub(crate) fn cached_prop<'a>(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: impl FnOnce() -> Option<&'a Rc<Class>>) -> Option<Value> {
+    if site.class != Rc::as_ptr(&o.class) as usize || o.lazy.get() != 0 {
         return None;
     }
-    p8_runtime::object::Slot::peek(o.slots().get(site.slot as usize)?, slot_copy)
-}
-
-/// `cached_prop`'s look at the slot: None for an unset one, else a copy
-/// of the value (of the referenced one, for a reference). A named
-/// function, inline always: as a closure, the loop kept it out of line,
-/// a call per read with the slot's value spilled around it (1,054,873
-/// reads on WordPress's front page, ~15 instructions each in the call).
-#[inline(always)]
-fn slot_copy(v: &Value) -> Option<Value> {
-    if v.is_undef() {
-        None
-    } else if let Some(cell) = v.as_reference() {
-        Some(ref_copy(cell))
+    if site.scope != 0 {
+        match scope() {
+            Some(c) if Rc::as_ptr(c) as usize == site.scope => {}
+            _ => return None,
+        }
+    }
+    let cell = o.slot_at(site.slot as usize)?;
+    let v = cell.replace(Value::UNDEF);
+    if v.is_plain() {
+        if v.is_undef() {
+            // (Unset: the cell holds what it held.)
+            return None;
+        }
+        let copy = v.clone();
+        p8_runtime::object::put_slot(cell, v);
+        Some(copy)
     } else {
-        Some(v.clone())
+        let held = v;
+        let copy = match held.as_reference() {
+            Some(r) => ref_copy(r),
+            None => held.clone(),
+        };
+        p8_runtime::object::put_slot(cell, held);
+        Some(copy)
     }
 }
 
-/// A copy of the value a property's reference holds (`slot_copy`'s rare
+/// A copy of the value a property's reference holds (`cached_prop`'s rare
 /// case, out of line: the borrow's checks stay out of every arm).
 #[inline(never)]
 fn ref_copy(cell: &RefCell<Value>) -> Value {
@@ -833,7 +853,14 @@ impl Context<'_> {
     /// private or protected property's cache entry is valid for.
     #[inline]
     pub(crate) fn scope_addr(&self) -> usize {
-        self.frames.last().and_then(|f| f.scope.as_ref()).map_or(0, |c| Rc::as_ptr(c) as usize)
+        self.scope_class().map_or(0, |c| Rc::as_ptr(c) as usize)
+    }
+
+    /// The running code's class itself (`scope_addr` is its address), as
+    /// `cached_prop` takes it.
+    #[inline]
+    pub(crate) fn scope_class(&self) -> Option<&Rc<Class>> {
+        self.frames.last().and_then(|f| f.scope.as_ref())
     }
 
     /// The frame a cached method call makes: the same class from the same

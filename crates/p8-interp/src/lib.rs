@@ -2396,7 +2396,7 @@ impl Context<'_> {
                     // The name's constant: the cache entry reads and writes use.
                     let site = const_index(name).and_then(|i| clo.props.get(i));
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                        && let Some(x) = cached_prop(site.get(), o, self.scope_addr())
+                        && let Some(x) = cached_prop(site.get(), o, || self.scope_class())
                     {
                         let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = ops::binary(op, &x, &y, &mut self.diags);
@@ -2446,7 +2446,7 @@ impl Context<'_> {
                     let target = self.prop_target(w, clo, obj)?;
                     let site = const_index(name).and_then(|i| clo.props.get(i));
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
-                        && let Some(old) = cached_prop(site.get(), o, self.scope_addr())
+                        && let Some(old) = cached_prop(site.get(), o, || self.scope_class())
                     {
                         let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
@@ -3472,7 +3472,7 @@ impl Context<'_> {
         // The name's constant: its cache entry.
         let site = const_index(name).and_then(|i| clo.props.get(i));
         if let (Some(site), Some(o)) = (site, target.as_object())
-            && let Some(v) = cached_prop(site.get(), o, self.scope_addr())
+            && let Some(v) = cached_prop(site.get(), o, || self.scope_class())
         {
             w[dst as usize] = v;
             return Ok(Next::Go(at + 1));
