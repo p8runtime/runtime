@@ -249,7 +249,7 @@ fn release_repr(r: Repr) -> bool {
 /// The last handle of a string, array, reference or object goes: its
 /// free, out of line, by its kind (PHP's `rc_dtor_func`). The count is
 /// known to be 1 here, so each `Rc` drop is the free. An array's values
-/// go in one walk of its buffer (its `Drop`: PHP's `zend_array_destroy`),
+/// go in one walk of its buffer ([`crate::array::free`]: PHP's `zend_array_destroy`),
 /// each a tag test and, for one holding memory, `release_heap`; the
 /// buffer then goes back to its pool. (An explicit walk releasing each
 /// value with the decrement inline was measured worse on WordPress:
@@ -262,7 +262,7 @@ fn free_last(r: Repr) {
         Repr::Str(s) => drop(ManuallyDrop::into_inner(s)),
         Repr::Array(a) => {
             crate::counts::bump(crate::counts::Count::ArrayFreed);
-            drop(ManuallyDrop::into_inner(a))
+            crate::array::free(ManuallyDrop::into_inner(a))
         }
         Repr::Ref(c) => drop(ManuallyDrop::into_inner(c)),
         Repr::Object(o) => drop(ManuallyDrop::into_inner(o)),
