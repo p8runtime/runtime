@@ -810,9 +810,15 @@ impl Context<'_> {
                     Op::IterNextKey => iter_next!(true),
                     // $var op= number, $var holding a number (two ints inline,
                     // the rest through `assign_op`); $str .= string
+                    // (`+=` is its own copy of the arm, the operator a
+                    // constant: no jump through `int_op`'s table.)
                     Op::AssignOp => {
                         ops!(a, b, c, imm);
-                        assign_op!(insn::binop(imm), a, reg_src!(b), Reg::from(b));
+                        if insn::binop(imm) == BinOp::Add {
+                            assign_op!(BinOp::Add, a, reg_src!(b), Reg::from(b));
+                        } else {
+                            assign_op!(insn::binop(imm), a, reg_src!(b), Reg::from(b));
+                        }
                     }
                     // `$s .= 'literal'`, `$n += 1`.
                     Op::AssignOpC => {
