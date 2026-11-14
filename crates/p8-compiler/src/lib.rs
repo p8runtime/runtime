@@ -902,6 +902,81 @@ struct Scratch {
     live: live::Scratch,
 }
 
+thread_local! {
+    /// The scratch of the last compiler that ran on this thread, for the
+    /// next: a file's first functions find their tables with room, as the
+    /// file's later ones do (each of a WordPress page's 537 files grew
+    /// its tables again: 2.8k rehashes of the constants alone).
+    static KEPT: std::cell::Cell<Scratch> = std::cell::Cell::new(Scratch::default());
+}
+
+/// Tables kept for the next compiler at most, and the room a kept table
+/// (or a pass's scratch) keeps at most. Emptying a table costs its whole
+/// room (each function's `finish` empties its tables), so a table keeps
+/// the room of a common function, not that of the largest one the thread
+/// compiled: kept at 4096, every later function paid for it (WordPress
+/// compiled 7M instructions more, in memset and finish).
+const KEEP_TABLES: usize = 8;
+const KEEP_ROOM: usize = 64;
+const KEEP_PASS_ROOM: usize = 1 << 17;
+
+impl Tables {
+    fn shrink(&mut self) {
+        self.const_index.shrink_to(KEEP_ROOM);
+        self.cvs.shrink_to(KEEP_ROOM);
+        for s in &mut self.site_index {
+            s.shrink_to(KEEP_ROOM);
+        }
+        self.class_index.shrink_to(KEEP_ROOM);
+    }
+}
+
+impl Scratch {
+    /// This thread's kept scratch (empty tables with room), taken.
+    fn take() -> Scratch {
+        KEPT.try_with(|k| k.take()).unwrap_or_default()
+    }
+
+    /// Kept for the thread's next compiler: its emptied tables (the
+    /// finished functions'; one still in use when a compile failed is
+    /// not here) within the bounds above.
+    fn keep(mut self) {
+        self.tables.truncate(KEEP_TABLES);
+        self.tables.iter_mut().for_each(Tables::shrink);
+        if self.loads.room() > KEEP_PASS_ROOM {
+            self.loads = consts::Scratch::default();
+        }
+        if self.live.room() > KEEP_PASS_ROOM {
+            self.live = live::Scratch::default();
+        }
+        // (A thread being torn down has no slot: nothing is kept.)
+        let _ = KEPT.try_with(|k| k.set(self));
+    }
+}
+
+/// A compiler's scratch, given back to the thread when the compiler is
+/// done (a failed compile included).
+struct Lent(Scratch);
+
+impl std::ops::Deref for Lent {
+    type Target = Scratch;
+    fn deref(&self) -> &Scratch {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Lent {
+    fn deref_mut(&mut self) -> &mut Scratch {
+        &mut self.0
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        std::mem::take(&mut self.0).keep();
+    }
+}
+
 /// Apply `f` to every register an instruction names.
 pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
     use Instr::*;
@@ -1241,8 +1316,9 @@ pub struct Compiler<'src> {
     /// The temporaries holding references a spread call's list was given
     /// (freed after the call).
     spread_refs: Vec<Reg>,
-    /// Scratch for laying out each function's constants.
-    scratch: Scratch,
+    /// Scratch for laying out each function's constants, and the name
+    /// tables: the thread's, lent for this compile (`Lent`).
+    scratch: Lent,
     /// The assignment being compiled is a statement's: its value is not
     /// used, so the variable itself can stand for it.
     unused_result: bool,
@@ -1393,7 +1469,7 @@ impl<'src> Compiler<'src> {
             source,
             superglobals: None,
             spread_refs: Vec::new(),
-            scratch: Scratch::default(),
+            scratch: Lent(Scratch::take()),
             unused_result: false,
             null_jumps: Vec::new(),
             chain_inner: false,
