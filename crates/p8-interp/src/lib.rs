@@ -7166,8 +7166,9 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
         return true;
     }
     let y = src(w, b);
-    if let (Some(p), Some(q)) = (x.as_str(), y.as_str()) {
-        w[dst as usize] = Value::str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
+    let (mut dx, mut dy) = ([0; 20], [0; 20]);
+    if let (Some(p), Some(q)) = (text_of(x, &mut dx), text_of(y, &mut dy)) {
+        w[dst as usize] = Value::str(PhpStr::concat(p, q));
         return true;
     }
     // Built in the thread's buffer: a short result is one allocation.
@@ -7178,10 +7179,46 @@ fn concat(w: &mut [Value], dst: Reg, a: Reg, b: Src) -> bool {
     true
 }
 
+/// The text of a string or an int operand of `.` (an int's digits written
+/// in `digits`): the two joined with no buffer to build them in
+/// (`PhpStr::concat`). None for any other value (`push_string`'s).
+#[inline(always)]
+fn text_of<'a>(v: &'a Value, digits: &'a mut [u8; 20]) -> Option<&'a [u8]> {
+    match v.as_int() {
+        Some(i) => Some(p8_runtime::string::int_digits(i, digits)),
+        None => v.as_str().map(|s| s.as_bytes()),
+    }
+}
+
 /// `concat` with a literal on the left (`"prefix" . $s`): nothing to
 /// append to in place.
+///
+/// The common case first, with nothing else tested: a string literal and
+/// a string or an int (`"k" . $i`), into a register that is no
+/// reference.
 #[inline(never)]
 fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
+    if let Some(p) = x.as_str()
+        && !w[dst as usize].is_reference()
+    {
+        let mut digits = [0; 20];
+        let y = &w[b as usize];
+        let q = match y.as_int() {
+            Some(i) => Some(p8_runtime::string::int_digits(i, &mut digits)),
+            None => y.as_str().map(|s| s.as_bytes()),
+        };
+        if let Some(q) = q {
+            let s = PhpStr::concat(p.as_bytes(), q);
+            w[dst as usize] = Value::str(s);
+            return true;
+        }
+    }
+    concat_left_rest(w, dst, x, b)
+}
+
+/// `concat_left` past a string and a string or an int.
+#[inline(never)]
+fn concat_left_rest(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     let y = &w[b as usize];
     if y.is_reference() {
         let y = y.deref();
@@ -7190,8 +7227,9 @@ fn concat_left(w: &mut [Value], dst: Reg, x: &Value, b: Reg) -> bool {
     if !silent_str(x) || !silent_str(y) || w[dst as usize].is_reference() {
         return false;
     }
-    if let (Some(p), Some(q)) = (x.as_str(), y.as_str()) {
-        w[dst as usize] = Value::str(PhpStr::concat(p.as_bytes(), q.as_bytes()));
+    let (mut dx, mut dy) = ([0; 20], [0; 20]);
+    if let (Some(p), Some(q)) = (text_of(x, &mut dx), text_of(y, &mut dy)) {
+        w[dst as usize] = Value::str(PhpStr::concat(p, q));
         return true;
     }
     let mut diags = Vec::new();
