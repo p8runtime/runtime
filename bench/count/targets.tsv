@@ -12,35 +12,35 @@
 # Not covered by any case (runs per request, own cost): P8_FREE 1,908,710 (22.9M); P8_MOVE_REG 578,835 (22.7M); P8_JUMP_COND_F and _T 920,991 (13.6M); P8_ASSIGN_TAKE 505,457 (13.2M);
 #   P8_FETCH_PROP_IS_THIS and _REG 321,086 (24.6M); P8_FETCH_DIM_IS_REG and _KSTR 161,289 (8.6M); the four return arms 323,459 (56.9M, part of every call case).
 case	php	p8	ratio	target	ops	gap	wp_count	wp_cost	score	status	before	after	wp_change	wp_routine
-function_call	193	556	2.88	263	7	293	232494	33091033	68120742	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
-call_2args	179	519	2.90	239	6	280	232494	33091033	65098320	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
-call_1arg	159	477	3.00	209	5	268	232494	33091033	62308392	waits for the rebuild	-	-	-	function call: Call 183,958 (31,203 of them builtins by name) + CallRegs 48,536 runs
-method_call	340	891	2.62	430	9	461	126427	38124910	58282847	waits for the rebuild	-	-	-	method call with arguments, as method_1arg (its property update is AssignPropOp, 7,264 runs)
+function_call	193	559	2.90	263	7	296	232494	33091033	68818224	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
+call_2args	179	523	2.92	239	6	284	232494	33091033	66028296	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
+call_1arg	159	481	3.03	209	5	272	232494	33091033	63238368	waits for the rebuild	-	-	-	function call: Call 183,958 (31,203 of them builtins by name) + CallRegs 48,536 runs
+method_call	340	895	2.63	430	9	465	126427	38124910	58788555	waits for the rebuild	-	-	-	method call with arguments, as method_1arg (its property update is AssignPropOp, 7,264 runs)
 call_return	133	407	3.06	173	4	234	232494	33091033	54403596	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
 property_read	102	215	2.11	142	4	73	734569	56842384	53623537	open	-	-	-	property read: P8_FETCH_PROP_R_REG 207,705 + P8_FETCH_PROP_R_THIS 526,864 runs (the case runs the REG form)
 call_empty	108	374	3.46	148	4	226	232494	33091033	52543644	waits for the rebuild	-	-	-	function call: Call + CallRegs, as call_1arg
-method_1arg	203	607	2.99	263	6	344	126427	38124910	43490888	waits for the rebuild	-	-	-	method call with arguments: InitMethod + SendVarMethod 129,575 + MethodCall
-callback_by_name	247	3089	12.51	327	8	2762	11345	11689336	31334890	open	-	-	-	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
-nested_write	183	720	3.93	253	7	467	60395	39406434	28204465	claimed: claude/write-path-copies	-	-	-	nested array or property write: fast::write_path 60,395 calls, inclusive (AssignDimPath 31,173 + AssignPropDim 29,226)
-builtin_call	86	209	2.43	126	4	83	322967	28412860	26806261	open	-	-	-	builtin run inside the loop (strlen, count, is_array ...): the Intrinsic arm
-new_object	669	1217	1.82	779	11	438	53997	21537795	23650686	open	-	-	-	new: New + Construct arms + classes::new_object 54,172 calls 10,484,935 inclusive
-array_key_built	500	1026	2.05	560	6	466	45425	5290039	21168050	open	-	-	-	array write under a key held in a variable: the P8_ASSIGN_DIM_REG arms
-property_read_this	222	600	2.70	282	6	318	51154	8845777	16266972	open	-	-	-	getter: a method call without arguments that reads $this (MethodCallNow; the read itself is counted under property_read)
-method_empty	145	451	3.11	185	4	266	51154	8845777	13606964	waits for the rebuild	-	-	-	method call without arguments: MethodCallNow
-foreach_array	1237	1948	1.57	1587	35	361	36097	30535224	13031017	open	-	-	-	foreach: 135,708 loops, 360,965 steps (count = steps / 10; cost = the three Iter arms + iter_step 12,983,352 + iter_step_key 6,104,266)
-array_literal	542	1432	2.64	622	8	810	15155	2180990	12275550	open	-	-	-	array literal: NewArray runs, with ArraySet 3,231 + ArraySetC 14,804 element writes
+method_1arg	203	614	3.02	263	6	351	126427	38124910	44375877	waits for the rebuild	-	-	-	method call with arguments: InitMethod + SendVarMethod 129,575 + MethodCall
+callback_by_name	247	3075	12.45	327	8	2748	11345	11689336	31176060	open	-	-	-	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
+builtin_call	86	207	2.41	126	4	81	322967	28412860	26160327	open	-	-	-	builtin run inside the loop (strlen, count, is_array ...): the Intrinsic arm
+nested_write	183	658	3.60	253	7	405	60395	39406434	24459975	merged: PR #542	720	658	-11.7M	nested array or property write: fast::write_path 60,395 calls, inclusive (AssignDimPath 31,173 + AssignPropDim 29,226)
+new_object	669	1220	1.82	779	11	441	53997	21537795	23812677	open	-	-	-	new: New + Construct arms + classes::new_object 54,172 calls 10,484,935 inclusive
+array_key_built	500	973	1.95	560	6	413	45425	5290039	18760525	open	-	-	-	array write under a key held in a variable: the P8_ASSIGN_DIM_REG arms
+property_read_this	222	606	2.73	282	6	324	51154	8845777	16573896	open	-	-	-	getter: a method call without arguments that reads $this (MethodCallNow; the read itself is counted under property_read)
+method_empty	145	457	3.15	185	4	272	51154	8845777	13913888	waits for the rebuild	-	-	-	method call without arguments: MethodCallNow
+foreach_array	1237	1946	1.57	1587	35	359	36097	30535224	12958823	open	-	-	-	foreach: 135,708 loops, 360,965 steps (count = steps / 10; cost = the three Iter arms + iter_step 12,983,352 + iter_step_key 6,104,266)
 property_write	81	171	2.11	111	3	60	200020	21972538	12001200	open	-	-	-	property write: the eight P8_ASSIGN_PROP arms (195,995 of the runs are on $this; the case runs a REG form)
+array_literal	542	1396	2.58	622	8	774	15155	2180990	11729970	open	-	-	-	array literal: NewArray runs, with ArraySet 3,231 + ArraySetC 14,804 element writes
 array_isset	133	216	1.62	173	4	43	268420	10912082	11542060	open	-	-	-	isset() on an array element: the three P8_ISSET_DIM arms
-call_typed	229	688	3.00	319	9	369	30740	4138313	11343060	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
-static_method	183	702	3.84	223	4	479	17367	3512328	8318793	open	-	-	-	static method call: StaticCall 6,576 + StaticCallVars 10,791 runs (cost includes SendVarStatic)
+call_typed	229	693	3.03	319	9	374	30740	4138313	11496760	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
+static_method	183	706	3.86	223	4	483	17367	3512328	8388261	open	-	-	-	static method call: StaticCall 6,576 + StaticCallVars 10,791 runs (cost includes SendVarStatic)
 compare_loose_str	60	116	1.93	80	2	36	190965	8767455	6874740	claimed: PR #533	-	-	-	== or != in a condition that reaches loose_eq_rest: 190,965 calls, of 196,096 P8_JUMP_CMP_EQ runs
-serialize_small	1498	5557	3.71	1548	5	4009	1427	7031287	5720843	open	-	-	-	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
-str_replace_short	662	1395	2.11	732	7	663	8192	13585030	5431296	open	-	-	-	str_replace(): string::replace 8,192 calls, inclusive
+serialize_small	1498	5559	3.71	1548	5	4011	1427	7031287	5723697	open	-	-	-	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
+str_replace_short	662	1383	2.09	732	7	651	8192	13585030	5332992	open	-	-	-	str_replace(): string::replace 8,192 calls, inclusive
 array_read_str	174	232	1.33	214	4	18	284926	15689828	5128668	open	-	-	-	array element read: the three P8_FETCH_DIM_R arms
 string_concat	792	1163	1.47	862	7	301	13264	7682042	3992464	open	-	-	-	concatenation: p8_interp::concat 26,527 calls, inclusive (count = calls / 2, the case concatenates twice)
 bit_and	87	217	2.49	127	4	90	10362	1162241	932580	open	-	-	-	binary operator other than add, sub or concat: Binary 14,637 + BinaryC 22,252 runs less 26,527 concatenations (cost is both arms, concat included)
 assign	53	77	1.45	73	2	4	156921	3850686	627684	open	-	-	-	a variable or constant assigned to a variable: P8_ASSIGN_REG 7,810 + P8_ASSIGN_K 149,111 runs
-array_write_read	204	416	2.04	254	5	162	3406	476900	551772	open	-	-	-	array write under a constant string key (the read is counted under array_read_str)
+array_write_read	204	418	2.05	254	5	164	3406	476900	558584	open	-	-	-	array write under a constant string key (the read is counted under array_read_str)
 property_add_assign	148	244	1.65	178	3	66	7264	476988	479424	open	-	-	-	compound assignment to a property: AssignPropOp
 compare_identical_str	79	110	1.39	109	3	1	418377	12194948	418377	open	-	-	-	=== or !== in a condition: the four P8_JUMP_CMP_ID arms (Value::identical 223,195 calls 6,479,772 own on top)
 string_append	304	435	1.43	355	5.08	80	4664	161697	373120	open	-	-	-	.= on a string: append_str 4,664 calls, own cost
