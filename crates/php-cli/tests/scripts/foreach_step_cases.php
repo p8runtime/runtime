@@ -135,7 +135,9 @@ function at_the_step(): void {
     $target = null;
     $r = &$target;
     foreach ([1, 2, 3] as $r) {
-        $n += $r;
+        // Not `$n += $r`: reading through the reference would itself
+        // run a destructor left due.
+        $n += 10;
         echo "reference body\n";
         $target = new D("through the reference $n");
     }

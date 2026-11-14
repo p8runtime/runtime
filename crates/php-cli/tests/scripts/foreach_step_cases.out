@@ -71,9 +71,9 @@ key body
 after
 destruct key 6
 reference body
-destruct through the reference 1
+destruct through the reference 10
 reference body
-destruct through the reference 3
+destruct through the reference 20
 reference body
 after
 key reference body
@@ -88,7 +88,7 @@ keyed reference body
 destruct through the keyed value's reference 1
 keyed reference body
 after
-destruct through the reference 6
+destruct through the reference 30
 destruct through the key's reference 6
 destruct through the keyed value's reference 3
 returned
