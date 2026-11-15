@@ -206,6 +206,10 @@ pub trait Ctx {
     /// Call a PHP callable (only from a builtin that takes a callable:
     /// the engine lends it what running PHP code needs).
     fn call(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw>;
+    /// [`Ctx::call`] on an argument list as call_user_func_array passes
+    /// one: its values in order (a reference stays one where the callee
+    /// takes one), its string keys named arguments.
+    fn call_list(&mut self, callable: &Value, list: &crate::array::PhpArray) -> Result<Value, Throw>;
     /// is_callable(): whether `v` names something that can be called.
     fn is_callable(&mut self, v: &Value) -> bool;
     /// Why `v` cannot be called from the running code, as PHP words it
