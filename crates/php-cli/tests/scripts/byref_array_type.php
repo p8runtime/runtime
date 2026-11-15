@@ -88,3 +88,11 @@ $m = 5;
 var_dump(preg_match('/b/', 'abc', $m), $m);
 $c = "x";
 var_dump(str_replace('a', 'b', 'aaa', $c), $c);
+
+// $GLOBALS to a by-reference array parameter: the globals' array.
+$marker = "global marker";
+function from_globals(): string {
+    extract($GLOBALS, EXTR_SKIP);
+    return $marker ?? "none";
+}
+echo from_globals(), "\n";

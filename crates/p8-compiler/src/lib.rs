@@ -6411,8 +6411,11 @@ impl<'src> Compiler<'src> {
             }
             match arg.value {
                 Expr::Variable { name, .. }
-                    if modes[n] != Some(false) && self.text(*name).starts_with(b"$") && self.text(*name) != b"$this" =>
+                    if modes[n] != Some(false) && self.text(*name).starts_with(b"$") && !matches!(self.text(*name), b"$this" | b"$GLOBALS") =>
                 {
+                    // (`$GLOBALS` as a whole is a read-only copy, sent as
+                    // a value: `extract($GLOBALS)`, as the other calls'
+                    // arguments send it.)
                     let var = f.cv(&self.text(*name)[1..]);
                     f.emit(Instr::SendVar { site, n: n as u8, arg: *r, var });
                 }

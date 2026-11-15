@@ -55,3 +55,4 @@ array(1) {
 }
 string(3) "bbb"
 int(3)
+global marker
