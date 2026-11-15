@@ -401,7 +401,8 @@ impl<'a> Parser<'a> {
                     if k.as_bytes().first() == Some(&0) {
                         return Err(Fail::Code(9));
                     }
-                    o.dynamic_mut().insert(Key::Str(k), v);
+                    // A numeric name is stored as its integer key, as a property write makes it.
+                    o.dynamic_mut().insert(Key::from_string(k), v);
                 }
                 Ok(Value::object(o))
             }
