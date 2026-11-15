@@ -1536,6 +1536,22 @@ impl Context<'_> {
     /// and destructors it made due.
     #[inline(never)]
     fn went(&mut self, regs: &mut Vec<Value>, at: usize, ran: Result<Next, Throw>) -> Result<Flow, Throw> {
+        // The common answer, the next pc with nothing raised or due:
+        // here, with no frame of its own (`went_rest` the others).
+        if let Ok(Next::Go(next)) = ran
+            && self.fiber_suspended.is_none()
+            && self.pending_errors.is_empty()
+            && !self.ids.has_pending()
+        {
+            return Ok(Flow::Go(next));
+        }
+        self.went_rest(regs, at, ran)
+    }
+
+    /// `went` for the rest: a frame switch, a fiber suspended, an
+    /// exception, an autoload, errors or destructors due.
+    #[inline(never)]
+    fn went_rest(&mut self, regs: &mut Vec<Value>, at: usize, ran: Result<Next, Throw>) -> Result<Flow, Throw> {
         let mut pc = at;
         match ran {
             Ok(Next::Go(next)) => {
