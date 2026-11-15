@@ -5192,7 +5192,21 @@ impl<'src> Compiler<'src> {
                 let dst = f.temp();
                 // A list literal's elements are all pushed: room for them.
                 let list = items.iter().all(|i| i.key.is_none() && !i.unpack && !i.by_ref);
-                let n = if list { u16::try_from(items.len()).unwrap_or(0) } else { 0 };
+                // A keyed one whose first key is a string literal (no
+                // number) is a hash from its first element: made one,
+                // with room for every element, as PHP's INIT_ARRAY sizes
+                // a literal's table (not a list made a hash at that key,
+                // then grown). As `Frozen`'s arrays decide it.
+                let keyed = items.first().and_then(|i| i.key).and_then(|k| self.literal(k)).is_some_and(|k| matches!(&k, Frozen::Str(s) if int_key(s.as_bytes()).is_none()));
+                // (Room beyond 15 bits is left to growth.)
+                let room = u16::try_from(items.len()).unwrap_or(u16::MAX).min(!p8_bytecode::NEW_ARRAY_KEYED);
+                let n = if list {
+                    room
+                } else if keyed {
+                    p8_bytecode::NEW_ARRAY_KEYED | room
+                } else {
+                    0
+                };
                 f.emit(Instr::NewArray { dst, n });
                 // Each element is added before the next is made: its
                 // temporaries go back after it (as PHP's ADD_ARRAY_ELEMENT
