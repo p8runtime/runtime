@@ -599,7 +599,7 @@ impl Context<'_> {
         {
             let target = &self.closures[f as usize];
             let n = argc - 1;
-            if crate::fast::direct(target.shape, &target.code, n as u8) && !(0..n).any(|k| target.code.param_by_ref(k)) {
+            if crate::fast::direct(target.shape, &target.code, n as u8) && !target.code.params.iter().any(|p| p.by_ref) {
                 for r in &mut regs[at..at + n] {
                     if r.is_reference() {
                         *r = r.deref();
@@ -613,6 +613,18 @@ impl Context<'_> {
                 return Ok(Next::Switch);
             }
         }
+        self.user_call_frame(regs, base, i, (args, argc as u8, dst), pc)
+    }
+
+    /// `user_call` past its common case (out of line: that case keeps a
+    /// small frame of its own): the callback found and checked, its
+    /// arguments placed, its frame pushed (call_method), or a builtin
+    /// called.
+    #[inline(never)]
+    fn user_call_frame(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
+        let array = i == self.user_call_twins[1];
+        let (start, argc) = (base + args as usize, argc as usize);
+        let at = start + 1;
         // The callback, as INIT_USER_CALL finds it (zend_is_callable_ex).
         let target = match self.named_function(&regs[start]) {
             Some(f) => {
