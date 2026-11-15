@@ -78,6 +78,25 @@ fn descriptor(ctx: &mut dyn Ctx, fd: i64, spec: &Value) -> Result<Option<(Stdio,
     }))
 }
 
+/// One entry of proc_open()'s $env_vars as the child's variable (name,
+/// value), as php_array_to_envp makes it: an empty value is left out; a
+/// non-empty string key is the name; any other key (a list, as Symfony
+/// Process passes its environment) makes the value the whole entry,
+/// "NAME=value". (An entry with no '=' names no variable: left out.)
+fn env_entry<'a>(key: &'a Key, value: &'a PhpStr) -> Option<(&'a [u8], &'a [u8])> {
+    let value = value.as_bytes();
+    if value.is_empty() {
+        return None;
+    }
+    match key {
+        Key::Str(name) if !name.as_bytes().is_empty() => Some((name.as_bytes(), value)),
+        _ => {
+            let at = value.iter().position(|&b| b == b'=')?;
+            Some((&value[..at], &value[at + 1..]))
+        }
+    }
+}
+
 /// proc_open(array|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null)
 fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let command = arg(args, 0);
@@ -110,7 +129,9 @@ fn proc_open(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     {
         cmd.env_clear();
         for (k, v) in env.iter() {
-            cmd.env(std::ffi::OsStr::from_bytes(k.into_value().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()), std::ffi::OsStr::from_bytes(v.deref().to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()));
+            if let Some((name, value)) = env_entry(&k, &v.deref().to_php_string().unwrap_or_else(PhpStr::empty)) {
+                cmd.env(std::ffi::OsStr::from_bytes(name), std::ffi::OsStr::from_bytes(value));
+            }
         }
     }
     let Ok(spec) = arg(args, 1).into_array() else {
