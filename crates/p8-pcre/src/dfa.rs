@@ -48,6 +48,11 @@ enum Node {
 const MAX_NODES: usize = 2000;
 /// The most states a pattern's DFA may hold before it is cleared.
 const MAX_STATES: usize = 512;
+/// The longest subject (from the start offset) that a search with a
+/// memchr-able first byte runs anchored at each candidate start, with no
+/// unanchored pass first: a candidate whose run fails late costs at most
+/// this much again.
+const SHORT_SUBJECT: usize = 128;
 /// How many times a pattern's DFA may be cleared before it gives up.
 const MAX_RESETS: u32 = 4;
 
@@ -171,6 +176,8 @@ impl Dfa {
                 }
                 Inst::SubEnd | Inst::SubEndAt if pc <= look_end => nodes.push(Node::Jmp(next)),
                 Inst::Char(c) => nodes.push(Node::Atom(Atom::Char(*c), next)),
+                // The run's Chars follow it: this is the first of them.
+                Inst::Lit { at, .. } => nodes.push(Node::Atom(Atom::Char(p.lits[*at as usize] as u32), next)),
                 Inst::CharNc(c) => nodes.push(Node::Atom(Atom::CharNc(*c), next)),
                 Inst::CharNcR(c) => nodes.push(Node::Atom(Atom::CharNcR(*c), next)),
                 Inst::Any => nodes.push(Node::Atom(Atom::Any, next)),
@@ -552,11 +559,20 @@ impl Dfa {
         if anchored {
             return Ok(self.find_end(p, s, start, start, no_empty, true)?.map(|end| (start, end)));
         }
-        let Some(end) = self.find_end(p, s, start, start, no_empty, false)? else { return Ok(None) };
+        // A short subject whose match starts with a byte that memchr finds:
+        // each candidate start, anchored, at once. (The pass below first
+        // finds the end, then runs at the candidate starts again.)
+        let sparse = matches!(p.first, First::One(_) | First::Two(..) | First::Three(..) | First::Text(_));
+        let short = sparse && s.len() - start <= SHORT_SUBJECT;
+        let (mut at, end) = if short {
+            (start, s.len())
+        } else {
+            let Some(end) = self.find_end(p, s, start, start, no_empty, false)? else { return Ok(None) };
+            (self.restart_at, end)
+        };
         // The leftmost start that matches: the backtracker's. A start
         // whose match ends at `end` is the one the unanchored search found;
         // nothing was alive at `restart_at`, so it is there or later.
-        let mut at = self.restart_at;
         loop {
             if !matches!(p.first, crate::compile::First::Any) {
                 match crate::exec::next_start(p, s, at) {
@@ -574,6 +590,10 @@ impl Dfa {
                 break;
             }
             at += if p.utf { crate::decode(s, at, true).1 } else { 1 };
+        }
+        if short {
+            // No start matches.
+            return Ok(None);
         }
         // Unreachable when the DFA agrees with itself; the machine decides.
         Err(Overflow)

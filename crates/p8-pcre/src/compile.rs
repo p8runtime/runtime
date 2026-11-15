@@ -27,6 +27,12 @@ pub(crate) enum RepeatKind {
 pub(crate) enum Inst {
     Match,
     Char(u32),
+    /// The first of `len` (two or more) single-byte `Char`s in a row:
+    /// they match as one comparison with `Prog::lits[at..at + len]`, then
+    /// go on after the last. The `Char`s stay in place behind it, for
+    /// jumps into the run and for the DFA, which reads this as `Char` of
+    /// the first byte (see [`literal_runs`]).
+    Lit { at: u32, len: u32 },
     CharNc(u32),
     CharNcR(u32),
     Any,
@@ -80,28 +86,48 @@ pub(crate) struct ClassSet {
 
 impl ClassSet {
     fn new(set: Set, ucp_case: bool) -> ClassSet {
+        // The first 256 characters' answers, item by item: what
+        // `test_items` says for each (the class is any of its items), with
+        // the case work done only for a caseless range.
         let mut low = [0u64; 4];
-        if !set.nocase && set.items.iter().all(|i| matches!(i, Item::Range(..))) {
-            // Plain ranges: filled directly, not tested character by character.
-            for item in &set.items {
-                let Item::Range(lo, hi) = *item else { unreachable!() };
-                for c in lo..=hi.min(255) {
-                    low[c as usize / 64] |= 1 << (c % 64);
+        let mut put = |c: u32| low[c as usize / 64] |= 1 << (c % 64);
+        for item in &set.items {
+            match *item {
+                Item::Range(lo, hi) => {
+                    (lo..=hi.min(255)).for_each(&mut put);
+                    if !set.nocase {
+                        continue;
+                    }
+                    if ucp_case {
+                        // The characters outside it whose other cases
+                        // are in it (test_items's caseless test).
+                        for c in (0..256u32).filter(|c| !item_matches(item, *c)) {
+                            if Self::case_in(item, c, set.restrict) {
+                                put(c);
+                            }
+                        }
+                    } else {
+                        for c in (b'A'..=b'Z').chain(b'a'..=b'z') {
+                            if item_matches(item, c as u32 ^ 0x20) {
+                                put(c as u32);
+                            }
+                        }
+                    }
                 }
-            }
-            if set.negated {
-                low.iter_mut().for_each(|w| *w = !*w);
-            }
-            return ClassSet { set, low };
-        }
-        let mut cs = ClassSet { set, low };
-        for c in 0..256u32 {
-            if cs.test_items(c, ucp_case) != cs.set.negated {
-                low[c as usize / 64] |= 1 << (c % 64);
+                _ => (0..256u32).filter(|c| item_matches(item, *c)).for_each(&mut put),
             }
         }
-        cs.low = low;
-        cs
+        if set.negated {
+            low.iter_mut().for_each(|w| *w = !*w);
+        }
+        ClassSet { set, low }
+    }
+
+    /// Whether another case of `c` is in the range `item` (Unicode case
+    /// folding; `restrict` keeps ASCII and non-ASCII apart).
+    fn case_in(item: &Item, c: u32, restrict: bool) -> bool {
+        let ok = |v: u32| v != c && (!restrict || (v < 128) == (c < 128)) && item_matches(item, v);
+        ok(unicode::other_case(c)) || unicode::case_set(c).iter().any(|&v| ok(v))
     }
 
     pub(crate) fn matches(&self, c: u32, utf: bool) -> bool {
@@ -111,7 +137,7 @@ impl ClassSet {
         self.test_items(c, utf) != self.set.negated
     }
 
-    fn test_items(&self, c: u32, unicode_case: bool) -> bool {
+    pub(crate) fn test_items(&self, c: u32, unicode_case: bool) -> bool {
         self.set.items.iter().any(|item| {
             if item_matches(item, c) {
                 return true;
@@ -120,10 +146,8 @@ impl ClassSet {
                 return false;
             }
             let Item::Range(..) = item else { return false };
-            let restrict = self.set.restrict;
-            let ok = |v: u32| v != c && (!restrict || (v < 128) == (c < 128)) && item_matches(item, v);
             if unicode_case {
-                ok(unicode::other_case(c)) || unicode::case_set(c).iter().any(|&v| ok(v))
+                Self::case_in(item, c, self.set.restrict)
             } else if c < 128 && (c as u8).is_ascii_alphabetic() {
                 item_matches(item, c ^ 0x20)
             } else {
@@ -156,6 +180,8 @@ pub(crate) fn is_vspace(c: u32) -> bool {
 
 pub(crate) struct Prog {
     pub insts: Vec<Inst>,
+    /// The bytes `Inst::Lit` compares with.
+    pub lits: Vec<u8>,
     pub sets: Vec<ClassSet>,
     pub marks: Vec<Vec<u8>>,
     pub slots: usize,
@@ -262,6 +288,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
             *t = target;
         }
     }
+    let lits = literal_runs(&mut c.insts, parsed.utf);
     let dotstar = if names_groups(&parsed.node) { None } else { dot_star(&parsed.node) };
     let anchored = anchored_opt || starts_anchored(&parsed.node) || dotstar == Some(true);
     let startline = !anchored && dotstar == Some(false);
@@ -285,6 +312,7 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
     };
     Ok(Prog {
         insts: c.insts,
+        lits,
         sets: c.sets,
         marks: c.marks,
         slots: (parsed.groups + 1) * 2,
@@ -305,6 +333,30 @@ pub(crate) fn compile(parsed: Parsed, anchored_opt: bool, pattern_len: usize) ->
         stack: Default::default(),
         dfa: None,
     })
+}
+
+/// Marks each run of two or more single-byte `Char`s with an `Inst::Lit`
+/// in place of its first (see [`Inst::Lit`]): the bytes they compare with.
+/// A `Char` is one byte when it is ASCII, or any character outside UTF
+/// mode; then it matches exactly when the subject's byte there is it (in
+/// UTF mode no other byte decodes to an ASCII character).
+fn literal_runs(insts: &mut [Inst], utf: bool) -> Vec<u8> {
+    let byte = |i: &Inst| match i {
+        Inst::Char(c) if *c < 128 || (!utf && *c < 256) => Some(*c as u8),
+        _ => None,
+    };
+    let mut lits = Vec::new();
+    let mut pc = 0;
+    while pc < insts.len() {
+        let run = insts[pc..].iter().map_while(byte).count();
+        if run >= 2 {
+            let at = lits.len() as u32;
+            lits.extend(insts[pc..pc + run].iter().filter_map(byte));
+            insts[pc] = Inst::Lit { at, len: run as u32 };
+        }
+        pc += run.max(1);
+    }
+    lits
 }
 
 fn check_refs(node: &Node, c: &Compiler, at: usize) -> Result<(), CompileError> {
@@ -414,10 +466,36 @@ pub(crate) enum Required {
     Caseless(Box<[u8]>),
 }
 
+/// Below this many bytes a haystack is searched for a needle by memchr of
+/// its first byte (memmem's vector searcher costs more to start than that
+/// takes).
+const SHORT_HAYSTACK: usize = 64;
+
+/// `finder`'s needle (two or more bytes) in `s`.
+#[inline]
+pub(crate) fn find_text(finder: &memchr::memmem::Finder<'static>, s: &[u8]) -> Option<usize> {
+    if s.len() >= SHORT_HAYSTACK {
+        return finder.find(s);
+    }
+    let needle = finder.needle();
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let mut at = 0;
+    while s.len() - at >= needle.len() {
+        let i = at + memchr::memchr(needle[0], &s[at..=s.len() - needle.len()])?;
+        if s[i..].starts_with(needle) {
+            return Some(i);
+        }
+        at = i + 1;
+    }
+    None
+}
+
 impl Required {
     pub(crate) fn find(&self, s: &[u8]) -> Option<usize> {
         match self {
-            Required::Exact(f) => f.find(s),
+            Required::Exact(f) => find_text(f, s),
             Required::Caseless(lit) => {
                 let (lo, up) = (lit[0], lit[0].to_ascii_uppercase());
                 let mut at = 0;
