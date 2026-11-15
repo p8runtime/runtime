@@ -18,3 +18,16 @@ unset($o->{"3"});
 var_dump(isset($o->{3}));
 echo json_encode(json_decode("{\"1\":1,\"b\":{\"2\":[3]}}")), "\n";
 var_dump(json_decode("{\"5\":{\"6\":true}}")->{5}->{"6"});
+// foreach names a numeric property by a string, written either way.
+$w = new stdClass();
+$w->{5} = "five";
+$w->b = "bee";
+foreach ($w as $k => $v) {
+    var_dump($k);
+}
+foreach ($w as $k => &$v) {
+    var_dump($k);
+    $v .= "!";
+}
+unset($v);
+var_dump($w->{5}, array_keys((array)$w));

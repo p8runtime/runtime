@@ -43,3 +43,14 @@ int(5)
 bool(false)
 {"1":1,"b":{"2":[3]}}
 bool(true)
+string(1) "5"
+string(1) "b"
+string(1) "5"
+string(1) "b"
+string(5) "five!"
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  string(1) "b"
+}

@@ -555,7 +555,16 @@ impl Context<'_> {
                     }
                 }
             }
-            let props = self.visible_props(&object);
+            let mut props = self.visible_props(&object);
+            // A property's name is a string, a numeric one too (a property
+            // table's keys are): foreach gives "3", not 3.
+            if props.iter().any(|(k, _)| matches!(k, Key::Int(_))) {
+                let mut named = PhpArray::hashed(props.len());
+                for (k, v) in props.iter() {
+                    named.insert(prop_name_key(k), v.clone());
+                }
+                props = named;
+            }
             return Ok((!props.is_empty()).then(|| Value::array(props)));
         }
     }
@@ -638,7 +647,7 @@ impl Context<'_> {
             }
             if let Some(slot) = o.dynamic_mut().get_mut(&key) {
                 let cell = crate::refs::make_ref(slot);
-                return Some((p, key, cell));
+                return Some((p, prop_name_key(key), cell));
             }
         }
         None
@@ -669,5 +678,14 @@ impl Context<'_> {
             out.insert(k, v.deref());
         }
         out
+    }
+}
+
+/// A property's key as foreach names it: a numeric one's name as a
+/// string, as the property table holds it ("3", where the object keeps 3).
+fn prop_name_key(k: Key) -> Key {
+    match k {
+        Key::Int(i) => Key::Str(p8_runtime::string::PhpStr::from(i.to_string())),
+        k => k,
     }
 }
