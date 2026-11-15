@@ -1382,10 +1382,7 @@ impl Context<'_> {
         self.pc = pc + 1;
         let ran = if self.user_call_twins.contains(&i) {
             // ZEND_INIT_USER_CALL: the callback's frame, run by this loop.
-            self.user_call(regs, base, i, (args, argc, dst), pc + 1).map(|next| match next {
-                Next::Go(next) => next,
-                Next::Switch => self.frames.last().expect("a frame").pc as usize,
-            })
+            self.user_call_at(regs, base, i, (args, argc, dst), pc + 1)
         } else {
             self.call_builtin(regs, base, i, args, argc, dst).map(|()| pc + 1)
         };

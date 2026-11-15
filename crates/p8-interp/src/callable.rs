@@ -126,7 +126,9 @@ impl Context<'_> {
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
 
-    /// What calling a Closure object calls.
+    /// What calling a Closure object calls. (In line: resolve_callable's
+    /// first case, on every callback's call.)
+    #[inline(always)]
     fn closure_target(&self, o: &Rc<Object>) -> Option<Target> {
         let data = closure_data(o)?;
         Some(match &data.func {
@@ -570,6 +572,18 @@ impl Context<'_> {
         Some(f)
     }
 
+    /// `user_call` from the loop's call of a builtin (`builtin_call`):
+    /// the pc to go on at, the callee's first when its frame was pushed.
+    /// (Out of line: every other builtin's call keeps `builtin_call`'s
+    /// frame as small as it was.)
+    #[inline(never)]
+    pub(crate) fn user_call_at(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, call: (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<usize, Throw> {
+        Ok(match self.user_call(regs, base, i, call, pc)? {
+            Next::Go(next) => next,
+            Next::Switch => self.frames.last().map_or(pc, |f| f.pc as usize),
+        })
+    }
+
     /// A call site PHP compiles to ZEND_INIT_USER_CALL
     /// (`Site::user_call`): call_user_func(callback, ...) or
     /// call_user_func_array(callback, args), `i` the builtin's twin, its
@@ -579,8 +593,10 @@ impl Context<'_> {
     /// call_user_func frame, in a trace or anywhere. A function of PHP
     /// code gets its frame on the arguments where they are, after the
     /// callback's register, and the caller's loop runs it (Next::Switch),
-    /// as it runs a plain call; a builtin is called from here.
-    #[inline(never)]
+    /// as it runs a plain call; a builtin is called from here. (In line
+    /// in its two callers, `user_call_at` and `call_site`, both out of
+    /// line themselves.)
+    #[inline(always)]
     pub(crate) fn user_call(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
         // (As the loop's call of a function: an interrupt is raised here.)
         if self.stop.load(std::sync::atomic::Ordering::Relaxed) != crate::isolate::NO_INTERRUPT {

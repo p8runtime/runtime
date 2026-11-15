@@ -460,7 +460,9 @@ impl FnBuilder<'_> {
     }
 
     /// The site of the name spelled `display`; a new one's name, symbol
-    /// and spelling from `make`, and whether it is new.
+    /// and spelling from `make`, and whether it is new. (In line: a call's
+    /// compile looks a site up for every call.)
+    #[inline(always)]
     fn site(&mut self, constant: bool, display: &[u8], make: impl FnOnce() -> (Text, Sym, Text)) -> (u16, bool) {
         // One site per spelling: a call's messages name it as written
         // (`$o->foobar()` after `$o->FooBar()` says "foobar").
