@@ -114,6 +114,66 @@ fn errors() {
 
 /// The required-literal prefilter rejects only subjects that cannot match
 /// (both engines run behind it, so their agreement does not test it).
+/// Runs of single-byte characters match as one comparison (Inst::Lit),
+/// with jumps into the middle of a run and the subject ending inside one.
+#[test]
+fn literal_runs() {
+    let lits = |pat: &str, o: &Options| Regex::new(pat.as_bytes(), o).unwrap().prog.insts.iter().filter(|i| matches!(i, compile::Inst::Lit { .. })).count();
+    assert_eq!(lits("^/users/(\\d+)/posts/(\\d+)", &Options::default()), 2);
+    assert_eq!(lits("abc", &Options { caseless: true, ..Options::default() }), 0, "caseless characters are not bytes");
+    assert_eq!(lits("a€b", &utf()), 0, "a non-ASCII character in UTF mode is not one byte");
+    assert_eq!(lits("ab€cd", &utf()), 2);
+    assert_eq!(whole("^/users/(\\d+)/posts", "/users/42/posts/1").as_deref(), Some("/users/42/posts"));
+    assert_eq!(whole("abcd", "xabcabcdx").as_deref(), Some("abcd"));
+    assert_eq!(whole("abcd", "xabc"), None);
+    assert_eq!(whole("(?:ab|b)cd", "xbcd").as_deref(), Some("bcd"));
+    assert_eq!(whole("x(?:abc)+y", "xabcabcy").as_deref(), Some("xabcabcy"));
+    assert_eq!(whole("x(?:abc)+y", "xabcaby"), None);
+    assert_eq!(m_opts("ab€cd", "xab€cd", &utf()).unwrap()[0].as_deref(), Some("ab€cd"));
+    let latin1 = "\u{e9}t\u{e9}";
+    assert_eq!(lits(latin1, &Options::default()), 1, "outside UTF mode every character is a byte");
+}
+
+/// A class's table of the first 256 characters, made item by item, says
+/// what testing each character against its items says.
+#[test]
+fn class_tables() {
+    let classes = [
+        r"[a-z]", r"[A-Z0-9_]", r"[^a-z]", r"[\w-]", r"[^\s<>]", r"[\d.,]", r"[[:alpha:]]", r"[[:^punct:]x]", r"[\p{L}\p{N}]",
+        r"[\p{Lu}]", r"[^\p{Ll}]", r"[k-z]", r"[\x{e0}-\x{ff}]", r"[\x{100}-\x{17f}]", r"[\h\v]", r"[^\H]", r"[µſ]", r"[\x{3bc}]", r"[a-c\W]",
+    ];
+    for class in classes {
+        for (flags, o) in [
+            ("", Options::default()),
+            ("i", Options { caseless: true, ..Options::default() }),
+            ("u", utf()),
+            ("iu", Options { caseless: true, ..utf() }),
+            ("iur", Options { caseless: true, caseless_restrict: true, ..utf() }),
+        ] {
+            let Ok(re) = Regex::new(class.as_bytes(), &o) else { continue };
+            for set in &re.prog.sets {
+                for c in 0..256u32 {
+                    let want = set.test_items(c, re.prog.utf) != set.set.negated;
+                    assert_eq!(set.matches(c, re.prog.utf), want, "{class} /{flags}: {c:#x}");
+                }
+            }
+        }
+    }
+}
+
+/// A short haystack is searched by its needle's first byte.
+#[test]
+fn short_haystacks() {
+    let f = memchr::memmem::Finder::new(b"{{").into_owned();
+    for (hay, want) in [("", None), ("{", None), ("{{", Some(0)), ("a{b{{", Some(3)), ("{a{", None), ("xx{{", Some(2))] {
+        assert_eq!(compile::find_text(&f, hay.as_bytes()), want, "{hay:?}");
+    }
+    let long = format!("{}{{{{", "{".repeat(70));
+    assert_eq!(compile::find_text(&f, long.as_bytes()), Some(0));
+    let long = format!("{}{{{{", "x".repeat(70));
+    assert_eq!(compile::find_text(&f, long.as_bytes()), Some(70));
+}
+
 #[test]
 fn required_literal() {
     let req = |pat: &str, o: &Options| Regex::new(pat.as_bytes(), o).unwrap().prog.required.is_some();
@@ -161,6 +221,12 @@ fn dfa_agrees_with_machine() {
     };
     let cases: &[(&str, &str, &[&str])] = &[
         ("abc", "", &["xxabcxx", "ab", "", "abcabc"]),
+        // Short subjects with a first byte memchr finds: each candidate
+        // start, anchored, failing late before one matches.
+        ("q[^q]*q", "", &["xqabq", "qqq", "qab", "aqbqcq"]),
+        (r"\{\{\s*(\w+)\s*\}\}", "", &["Hello {{ name }}, {{x}}", "{{ a }", "{{{{b}}", "{ {{c}}"]),
+        ("(?:xy|z)w", "", &["xyzw xyw", "zzw", "xyz"]),
+        ("[ab]c+", "", &["aabbcc", "cab", "bc"]),
         ("a|ab|abc", "", &["abc", "xabcx"]),
         ("(a|ab)(c|bcd)(d*)", "", &["abcd", "abcdd"]),
         ("x*", "", &["axxb", "", "xxx"]),
@@ -305,6 +371,51 @@ fn dfa_agrees_with_machine() {
         let re = Regex::new(pat.as_bytes(), &Options::default()).unwrap_or_else(|e| panic!("{pat}: {e}"));
         assert!(re.prog.dfa.is_none(), "{pat}: has a DFA");
     }
+}
+
+/// A search with captures in a subject of 32 to 127 bytes tries the
+/// machine alone first: every capture is what the DFA path gives, from
+/// every start; one that runs over the machine's budget is the DFA path's.
+#[test]
+fn machine_first_agrees_with_dfa_path() {
+    let pad = |n: usize| "x ".repeat(n);
+    let subjects = [
+        format!("Hello {{{{ name }}}}, you have {{{{ count }}}} items {}", pad(4)),
+        format!("{}/users/42/posts/126?page=6", pad(16)),
+        format!("{}[tag a=\"1\" b=\"2\"] and [b] {}", pad(10), pad(12)),
+        format!("{}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac", pad(8)),
+        format!("{}12-34 56-78 {}", pad(30), pad(20)),
+    ];
+    let patterns = [r"\{\{\s*(\w+)\s*\}\}", r"/users/(\d+)/posts/(\d+)(?:\?page=(\d+))?$", r"\[(\w+)(?:\s+(\w+)=([^\]]*))?\]", r"(a|aa)*([bc])", r"(a*)*[cd]", r"(\d+)-(\d+)", r"(x)?( )", r"(q)|(x)"];
+    for pat in patterns {
+        let re = Regex::new(pat.as_bytes(), &Options::default()).unwrap_or_else(|e| panic!("{pat}: {e}"));
+        assert!(re.prog.dfa.is_some() && re.prog.slots > 2, "{pat}");
+        for subject in &subjects {
+            let s = subject.as_bytes();
+            assert!((32..128).contains(&s.len()), "{subject:?}");
+            for start in 0..=s.len() {
+                for not_empty_atstart in [false, true] {
+                    let opts = MatchOptions { not_empty_atstart, ..MatchOptions::default() };
+                    let groups = |caps: &Captures| (0..re.groups() + 1).map(|i| caps.get(i)).collect::<Vec<_>>();
+                    let mut a = Captures::default();
+                    let a = crate::exec::exec_into(&re.prog, s, start, &opts, &mut a).unwrap().then(|| groups(&a));
+                    let mut b = Captures::default();
+                    let b = crate::exec::exec_into_dfa(&re.prog, s, start, &opts, &mut b, true).unwrap().then(|| groups(&b));
+                    assert_eq!(a, b, "{pat:?} on {subject:?} from {start} (not_empty_atstart {not_empty_atstart})");
+                }
+            }
+        }
+    }
+    // Over the budget (the machine alone would backtrack for long): the
+    // DFA path's answer, not a limit.
+    let re = Regex::new(br"(a|aa)*([bc])", &Options::default()).unwrap();
+    assert!(re.prog.required.is_none());
+    let s = "a".repeat(100);
+    let mut caps = Captures::default();
+    assert_eq!(crate::exec::exec_into(&re.prog, s.as_bytes(), 0, &MatchOptions::default(), &mut caps), Ok(false));
+    let s = format!("{}c", "a".repeat(100));
+    assert_eq!(crate::exec::exec_into(&re.prog, s.as_bytes(), 0, &MatchOptions::default(), &mut caps), Ok(true));
+    assert_eq!((caps.get(0), caps.get(2)), (Some((0, 101)), Some((100, 101))));
 }
 
 #[test]

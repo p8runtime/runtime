@@ -238,24 +238,37 @@ struct Compiled {
 thread_local! {
     /// PHP's per-request pattern cache, by the pattern string.
     static CACHE: RefCell<HashMap<Vec<u8>, Rc<Compiled>>> = RefCell::new(HashMap::default());
-    /// The pattern string last looked up, and what it compiled to: a
+    /// The pattern strings last looked up, and what they compiled to: a
     /// literal pattern is the same string at each call, found again by
-    /// its address without hashing it. (Holding the string keeps its
-    /// buffer, so the address can't be another string's meanwhile.)
-    static LAST: RefCell<Option<(PhpStr, Rc<Compiled>)>> = const { RefCell::new(None) };
+    /// its address without hashing it. Several, because code alternates
+    /// patterns (a router's match, then a template's replace). (Holding a
+    /// string keeps its buffer, so the address can't be another string's
+    /// meanwhile.)
+    static RECENT: RefCell<Recent> = const { RefCell::new(Recent { entries: [const { None }; RECENT_LEN], next: 0 }) };
+}
+
+/// How many pattern strings [`RECENT`] holds.
+const RECENT_LEN: usize = 8;
+
+struct Recent {
+    entries: [Option<(PhpStr, Rc<Compiled>)>; RECENT_LEN],
+    /// The entry the next miss replaces (round robin).
+    next: usize,
 }
 
 /// [`compiled`] for a pattern string.
 fn compiled_str(ctx: &mut dyn Ctx, regex: &PhpStr) -> Option<Rc<Compiled>> {
-    let hit = LAST.with(|l| match &*l.borrow() {
-        Some((s, c)) if PhpStr::ptr_eq(s, regex) => Some(Rc::clone(c)),
-        _ => None,
-    });
+    let hit = RECENT.with(|r| r.borrow().entries.iter().flatten().find(|(s, _)| PhpStr::ptr_eq(s, regex)).map(|(_, c)| Rc::clone(c)));
     if hit.is_some() {
         return hit;
     }
     let c = compiled(ctx, regex.as_bytes())?;
-    LAST.with(|l| *l.borrow_mut() = Some((regex.clone(), Rc::clone(&c))));
+    RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let at = r.next;
+        r.entries[at] = Some((regex.clone(), Rc::clone(&c)));
+        r.next = (at + 1) % RECENT_LEN;
+    });
     Some(c)
 }
 
@@ -548,11 +561,18 @@ fn subpat_array(c: &Compiled, subject: &PhpStr, m: &Captures, flags: i64) -> Php
     let num = c.re.groups() + 1;
     let count = m.len();
     let end = if unmatched_as_null { num } else { count };
-    // A list when no group has a name: its room made once.
-    let mut arr = if c.named { PhpArray::new() } else { PhpArray::list_with_capacity(end) };
-    for i in 0..end {
+    let value = |i: usize| {
         let g = if i < count { m.get(i) } else { None };
         let v = if offset_capture { offset_pair(s, g, unmatched_as_null) } else if i < count { group_value(subject, m, i, unmatched_as_null) } else { Value::NULL };
+        (g, v)
+    };
+    if !c.named && m.mark.is_none() {
+        // A list: its values made in place, the array made from them.
+        return PhpArray::from_list((0..end).map(|i| value(i).1).collect());
+    }
+    let mut arr = PhpArray::new();
+    for i in 0..end {
+        let (g, v) = value(i);
         if let Some(name) = &c.names[i] {
             add_named(&mut arr, name, v.clone(), g.is_none());
         }
@@ -927,9 +947,10 @@ fn replace_common(ctx: &mut dyn Ctx, args: &mut [Value], filter: bool) -> Result
     }
     let limit = limit_arg(args, 3);
     let mut count = 0usize;
-    // The patterns, each with its replacement.
-    let mut pairs: Vec<(PhpStr, PhpStr)> = Vec::new();
-    match regex.as_array() {
+    // The patterns, each with its replacement (one pattern: no Vec made).
+    let mut many: Vec<(PhpStr, PhpStr)> = Vec::new();
+    let one: [(PhpStr, PhpStr); 1];
+    let pairs: &[(PhpStr, PhpStr)] = match regex.as_array() {
         Some(patterns) => {
             let mut reps = replacement.as_array().map(|r| r.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>().into_iter());
             let fixed = if replacement.is_array() { None } else { Some(to_str(ctx, &replacement)?) };
@@ -943,15 +964,19 @@ fn replace_common(ctx: &mut dyn Ctx, args: &mut [Value], filter: bool) -> Result
                     (None, Some(f)) => f.clone(),
                     (None, None) => PhpStr::empty(),
                 };
-                pairs.push((p, r));
+                many.push((p, r));
             }
+            &many
         }
-        None => pairs.push((to_str(ctx, &regex)?, to_str(ctx, &replacement)?)),
-    }
+        None => {
+            one = [(to_str(ctx, &regex)?, to_str(ctx, &replacement)?)];
+            &one
+        }
+    };
     let result = each_subject(ctx, &subject, |ctx, s| {
         let before = count;
         let mut cur = s.clone();
-        for (p, r) in &pairs {
+        for (p, r) in pairs {
             match replace_with(ctx, p, &cur, &Replacement::Text(r.as_bytes()), limit, &mut count)? {
                 Some(next) => cur = next,
                 None => return Ok(None),
@@ -968,19 +993,24 @@ fn preg_replace_callback(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
     let limit = limit_arg(args, 3);
     let flags = int_arg(args, 5, 0);
     let mut count = 0usize;
-    let patterns: Vec<PhpStr> = match regex.as_array() {
+    // (One pattern: no Vec made.)
+    let mut many: Vec<PhpStr> = Vec::new();
+    let one: [PhpStr; 1];
+    let patterns: &[PhpStr] = match regex.as_array() {
         Some(a) => {
-            let mut v = Vec::new();
             for (_, p) in a.iter() {
-                v.push(to_str(ctx, p)?);
+                many.push(to_str(ctx, p)?);
             }
-            v
+            &many
         }
-        None => vec![to_str(ctx, &regex)?],
+        None => {
+            one = [to_str(ctx, &regex)?];
+            &one
+        }
     };
     let result = each_subject(ctx, &subject, |ctx, s| {
         let mut cur = s.clone();
-        for p in &patterns {
+        for p in patterns {
             match replace_with(ctx, p, &cur, &Replacement::Callback(&callback, flags), limit, &mut count)? {
                 Some(next) => cur = next,
                 None => return Ok(None),
