@@ -22,7 +22,11 @@ pub(crate) fn path_has_object(root: &Value, keys: &[Value], append: bool) -> boo
     // The containers written into: root, root[k0], ... (and the last
     // one's element too when appending). Looked at in place (borrowed
     // through references), nothing copied.
-    let walk = if append { keys.len() } else { keys.len().saturating_sub(1) };
+    let walk = if append {
+        keys.len()
+    } else {
+        keys.len().saturating_sub(1)
+    };
     fn reaches(cur: &Value, keys: &[Value]) -> bool {
         if let Some(cell) = cur.as_reference() {
             reaches(&cell.borrow(), keys)
@@ -53,7 +57,13 @@ pub(crate) enum DimOp {
 
 impl Context<'_> {
     /// Call ArrayAccess method `name` of `o` with `args`.
-    pub(crate) fn aa_call(&mut self, regs: &mut Vec<Value>, o: &Rc<Object>, name: &str, args: &mut [Value]) -> Result<Value, Throw> {
+    pub(crate) fn aa_call(
+        &mut self,
+        regs: &mut Vec<Value>,
+        o: &Rc<Object>,
+        name: &str,
+        args: &mut [Value],
+    ) -> Result<Value, Throw> {
         // An internal class that reads dimensions without being ArrayAccess
         // (DOMNodeList: PHP's read_dimension/has_dimension handlers): its
         // native `$[]::get` and `$[]::has`. Writes stay errors.
@@ -71,9 +81,19 @@ impl Context<'_> {
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            return Err(self.throw("Error", format!("Cannot use object of type {} as array", String::from_utf8_lossy(o.class.name.as_bytes()))));
+            return Err(self.throw(
+                "Error",
+                format!(
+                    "Cannot use object of type {} as array",
+                    String::from_utf8_lossy(o.class.name.as_bytes())
+                ),
+            ));
         }
-        let m = self.method_frame(&Value::object(Rc::clone(o)), self.method_key(name.as_bytes()), name.as_bytes())?;
+        let m = self.method_frame(
+            &Value::object(Rc::clone(o)),
+            self.method_key(name.as_bytes()),
+            name.as_bytes(),
+        )?;
         match m.func {
             Code::Native(native, _) => {
                 let this = m.this.clone();
@@ -87,8 +107,18 @@ impl Context<'_> {
     }
 
     /// `$o[k]` (quiet: for isset/??, offsetExists asked first).
-    pub(crate) fn aa_get(&mut self, regs: &mut Vec<Value>, o: &Rc<Object>, key: Value, quiet: bool) -> Result<Value, Throw> {
-        if quiet && !self.aa_call(regs, o, "offsetExists", &mut [key.clone()])?.to_bool() {
+    pub(crate) fn aa_get(
+        &mut self,
+        regs: &mut Vec<Value>,
+        o: &Rc<Object>,
+        key: Value,
+        quiet: bool,
+    ) -> Result<Value, Throw> {
+        if quiet
+            && !self
+                .aa_call(regs, o, "offsetExists", &mut [key.clone()])?
+                .to_bool()
+        {
             return Ok(Value::NULL);
         }
         self.aa_call(regs, o, "offsetGet", &mut [key])
@@ -96,7 +126,14 @@ impl Context<'_> {
 
     /// A write (or op=, ++/--, unset) down a path that reaches an object;
     /// the expression's value.
-    pub(crate) fn aa_write(&mut self, regs: &mut Vec<Value>, root: &Value, keys: &[Value], append: bool, op: DimOp) -> Result<Value, Throw> {
+    pub(crate) fn aa_write(
+        &mut self,
+        regs: &mut Vec<Value>,
+        root: &Value,
+        keys: &[Value],
+        append: bool,
+        op: DimOp,
+    ) -> Result<Value, Throw> {
         let mut cur = root.deref();
         let walk = if append { keys.len() } else { keys.len() - 1 };
         for (i, k) in keys[..walk].iter().enumerate() {
@@ -106,7 +143,9 @@ impl Context<'_> {
                 // spl_array_get_dimension_ptr): what is under it is changed
                 // in place; one not there is the class's own error.
                 Ok(o) if writes_in_place(&o, &op) => {
-                    let mut entry = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref();
+                    let mut entry = self
+                        .aa_call(regs, &o, "offsetGet", &mut [k.clone()])?
+                        .deref();
                     if entry.is_object() {
                         return self.aa_write(regs, &entry, &keys[i + 1..], append, op);
                     }
@@ -115,22 +154,37 @@ impl Context<'_> {
                     return Ok(r);
                 }
                 Ok(o) => {
-                    let got = self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref();
-                    if got.is_object() { got } else { return self.no_effect(&o, op) }
+                    let got = self
+                        .aa_call(regs, &o, "offsetGet", &mut [k.clone()])?
+                        .deref();
+                    if got.is_object() {
+                        got
+                    } else {
+                        return self.no_effect(&o, op);
+                    }
                 }
                 Err(cur) => match cur.into_array() {
-                    Ok(a) => match Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref)) {
+                    Ok(a) => match Key::from_value(k)
+                        .ok()
+                        .and_then(|(k, _)| a.get(&k).map(Value::deref))
+                    {
                         Some(v) => v,
                         None => return Ok(Value::NULL),
                     },
-                    Err(_) => return Err(self.throw("Error", "Cannot use a scalar value as an array")),
+                    Err(_) => {
+                        return Err(self.throw("Error", "Cannot use a scalar value as an array"));
+                    }
                 },
             };
         }
         let Ok(o) = cur.into_object() else {
             return Err(self.throw("Error", "Cannot use a scalar value as an array"));
         };
-        let key = if append { Value::NULL } else { keys[keys.len() - 1].clone() };
+        let key = if append {
+            Value::NULL
+        } else {
+            keys[keys.len() - 1].clone()
+        };
         match op {
             DimOp::Set(v) => {
                 self.aa_call(regs, &o, "offsetSet", &mut [key, v.clone()])?;
@@ -148,9 +202,16 @@ impl Context<'_> {
             // and offsetSet is not called.
             DimOp::IncDec { inc, post } => {
                 let old = self.aa_call(regs, &o, "offsetGet", &mut [key])?.deref();
-                let message = format!("Indirect modification of overloaded element of {} has no effect", String::from_utf8_lossy(o.class.name.as_bytes()));
+                let message = format!(
+                    "Indirect modification of overloaded element of {} has no effect",
+                    String::from_utf8_lossy(o.class.name.as_bytes())
+                );
                 self.notice(&message);
-                let r = if inc { p8_runtime::ops::increment(&old, &mut self.diags) } else { p8_runtime::ops::decrement(&old, &mut self.diags) };
+                let r = if inc {
+                    p8_runtime::ops::increment(&old, &mut self.diags)
+                } else {
+                    p8_runtime::ops::decrement(&old, &mut self.diags)
+                };
                 self.report_diags();
                 let new = r.map_err(|e| self.op_error(e))?;
                 Ok(if post { old } else { new })
@@ -166,7 +227,14 @@ impl Context<'_> {
     /// container holds; see writes_in_place),
     /// arrays made where there are none, as an assignment to a variable's
     /// elements does; the expression's value.
-    fn write_in(&mut self, regs: &mut Vec<Value>, target: &mut Value, keys: &[Value], append: bool, op: DimOp) -> Result<Value, Throw> {
+    fn write_in(
+        &mut self,
+        regs: &mut Vec<Value>,
+        target: &mut Value,
+        keys: &[Value],
+        append: bool,
+        op: DimOp,
+    ) -> Result<Value, Throw> {
         if target.is_null_or_undef() {
             *target = Value::array(p8_runtime::array::PhpArray::new());
         }
@@ -180,7 +248,9 @@ impl Context<'_> {
         let arr = target.array_mut().expect("an array");
         let last = if append { keys.len() + 1 } else { keys.len() };
         if last > 1 {
-            let k = Key::from_value(&keys[0]).map_err(|_| self.throw("TypeError", "Illegal offset type"))?.0;
+            let k = Key::from_value(&keys[0])
+                .map_err(|_| self.throw("TypeError", "Illegal offset type"))?
+                .0;
             if arr.get(&k).is_none() {
                 arr.insert(k.clone(), Value::NULL);
             }
@@ -192,13 +262,20 @@ impl Context<'_> {
             return Ok(r);
         }
         if append {
-            let DimOp::Set(v) = op else { return Err(self.throw("Error", "Cannot use [] for reading")) };
+            let DimOp::Set(v) = op else {
+                return Err(self.throw("Error", "Cannot use [] for reading"));
+            };
             if arr.push(v.clone()).is_err() {
-                return Err(self.throw("Error", "Cannot add element to the array as the next element is already occupied"));
+                return Err(self.throw(
+                    "Error",
+                    "Cannot add element to the array as the next element is already occupied",
+                ));
             }
             return Ok(v);
         }
-        let k = Key::from_value(&keys[0]).map_err(|_| self.throw("TypeError", "Illegal offset type"))?.0;
+        let k = Key::from_value(&keys[0])
+            .map_err(|_| self.throw("TypeError", "Illegal offset type"))?
+            .0;
         Ok(match op {
             DimOp::Set(v) => {
                 arr.insert(k, v.clone());
@@ -214,7 +291,11 @@ impl Context<'_> {
             }
             DimOp::IncDec { inc, post } => {
                 let old = arr.get(&k).map(Value::deref).unwrap_or(Value::NULL);
-                let r = if inc { p8_runtime::ops::increment(&old, &mut self.diags) } else { p8_runtime::ops::decrement(&old, &mut self.diags) };
+                let r = if inc {
+                    p8_runtime::ops::increment(&old, &mut self.diags)
+                } else {
+                    p8_runtime::ops::decrement(&old, &mut self.diags)
+                };
                 self.report_diags();
                 let new = r.map_err(|e| self.op_error(e))?;
                 arr.insert(k, new.clone());
@@ -230,7 +311,10 @@ impl Context<'_> {
     /// A nested write through an element offsetGet returned (not an
     /// object): it changes nothing.
     fn no_effect(&mut self, o: &Object, op: DimOp) -> Result<Value, Throw> {
-        let message = format!("Indirect modification of overloaded element of {} has no effect", String::from_utf8_lossy(o.class.name.as_bytes()));
+        let message = format!(
+            "Indirect modification of overloaded element of {} has no effect",
+            String::from_utf8_lossy(o.class.name.as_bytes())
+        );
         self.notice(&message);
         Ok(match op {
             DimOp::Set(v) | DimOp::Op(_, v) => v,
@@ -240,21 +324,34 @@ impl Context<'_> {
 
     /// `isset($o[k]...)` down a path that reaches an object: offsetExists
     /// decides at an object (then its offsetGet goes on).
-    pub(crate) fn aa_isset(&mut self, regs: &mut Vec<Value>, root: &Value, keys: &[Value]) -> Result<bool, Throw> {
+    pub(crate) fn aa_isset(
+        &mut self,
+        regs: &mut Vec<Value>,
+        root: &Value,
+        keys: &[Value],
+    ) -> Result<bool, Throw> {
         let mut cur = root.deref();
         for (i, k) in keys.iter().enumerate() {
             let last = i + 1 == keys.len();
             cur = match cur.into_object() {
                 Ok(o) => {
-                    if !self.aa_call(regs, &o, "offsetExists", &mut [k.clone()])?.to_bool() {
+                    if !self
+                        .aa_call(regs, &o, "offsetExists", &mut [k.clone()])?
+                        .to_bool()
+                    {
                         return Ok(false);
                     }
                     if last {
                         return Ok(true);
                     }
-                    self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?.deref()
+                    self.aa_call(regs, &o, "offsetGet", &mut [k.clone()])?
+                        .deref()
                 }
-                Err(cur) => match cur.as_array().and_then(|a| Key::from_value(k).ok().and_then(|(k, _)| a.get(&k).map(Value::deref))) {
+                Err(cur) => match cur.as_array().and_then(|a| {
+                    Key::from_value(k)
+                        .ok()
+                        .and_then(|(k, _)| a.get(&k).map(Value::deref))
+                }) {
                     Some(v) => v,
                     None => return Ok(false),
                 },
@@ -269,7 +366,10 @@ impl Context<'_> {
 /// ArrayIterator, unless a subclass's own offsetGet() answers (then it is
 /// the usual copy). WeakMap's unset reads plainly: nothing changes there.
 fn writes_in_place(o: &Object, op: &DimOp) -> bool {
-    let native_get = o.class.method(b"offsetget").is_some_and(|m| m.native.is_some());
+    let native_get = o
+        .class
+        .method(b"offsetget")
+        .is_some_and(|m| m.native.is_some());
     if o.class.is_a(b"weakmap") {
         return !matches!(op, DimOp::Unset);
     }

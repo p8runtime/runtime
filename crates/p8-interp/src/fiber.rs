@@ -80,7 +80,12 @@ impl Context<'_> {
         self.exception(&|_| Value::UNDEF, t)
     }
 
-    pub(crate) fn fiber_op(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
+    pub(crate) fn fiber_op(
+        &mut self,
+        fiber: Option<&Rc<Object>>,
+        op: u8,
+        args: &mut [Value],
+    ) -> Result<Value, Throw> {
         // Stack traces show the Fiber method (and the fiber's frames as
         // called from it), as PHP's do for internal calls.
         let name = match op {
@@ -97,7 +102,12 @@ impl Context<'_> {
         r
     }
 
-    fn fiber_op_inner(&mut self, fiber: Option<&Rc<Object>>, op: u8, args: &mut [Value]) -> Result<Value, Throw> {
+    fn fiber_op_inner(
+        &mut self,
+        fiber: Option<&Rc<Object>>,
+        op: u8,
+        args: &mut [Value],
+    ) -> Result<Value, Throw> {
         match op {
             SUSPEND => self.fiber_suspend(args.first().map(Value::deref).unwrap_or(Value::NULL)),
             DESTROY => {
@@ -108,7 +118,10 @@ impl Context<'_> {
                 // A suspended fiber destroyed: unwound by an exit no catch
                 // matches (a plain object, not Throwable), its finally blocks run.
                 state(fiber).borrow_mut().closing = true;
-                let marker = Ctx::new_object(self, &Rc::clone(&self.classes[&self.isolate.known.stdclass]));
+                let marker = Ctx::new_object(
+                    self,
+                    &Rc::clone(&self.classes[&self.isolate.known.stdclass]),
+                );
                 self.fiber_exit = Some(Rc::clone(&marker));
                 let r = self.fiber_resume(fiber, Value::object(Rc::clone(&marker)), true);
                 self.fiber_exit = None;
@@ -117,7 +130,10 @@ impl Context<'_> {
                     other => other,
                 }
             }
-            CURRENT => Ok(self.fibers.last().map_or(Value::NULL, |r| Value::object(Rc::clone(&r.fiber)))),
+            CURRENT => Ok(self
+                .fibers
+                .last()
+                .map_or(Value::NULL, |r| Value::object(Rc::clone(&r.fiber)))),
             START => self.fiber_start(fiber.expect("a Fiber method"), args),
             _ => {
                 let fiber = fiber.expect("a Fiber method");
@@ -135,7 +151,12 @@ impl Context<'_> {
         // Resolved where start() was called (the registers are lent): a
         // class it names is autoloaded there.
         let m = match self.resolve_callable(&callable)? {
-            crate::callable::Target::Frame(m @ MethodFrame { func: Code::User(_), .. }) => m,
+            crate::callable::Target::Frame(
+                m @ MethodFrame {
+                    func: Code::User(_),
+                    ..
+                },
+            ) => m,
             _ => {
                 // A builtin: it runs to its end (nothing in it suspends).
                 state(fiber).borrow_mut().status = Status::Running;
@@ -159,7 +180,12 @@ impl Context<'_> {
 
     /// Starts `fiber` on a method's frame: a new task, its arguments in
     /// its own registers.
-    fn fiber_start_frame(&mut self, fiber: &Rc<Object>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
+    fn fiber_start_frame(
+        &mut self,
+        fiber: &Rc<Object>,
+        m: MethodFrame,
+        args: &mut [Value],
+    ) -> Result<Value, Throw> {
         let at = FIRST_REG;
         let mut task = Task::default();
         // (Its stack is charged against the request's memory_limit too.)
@@ -186,7 +212,12 @@ impl Context<'_> {
     /// to whoever kept it (Fiber::getCurrent()) and the collector goes on.
     pub(crate) fn destruct_in_fiber(&mut self, m: MethodFrame) -> Result<(), Throw> {
         let fiber = self.isolate.known.fiber;
-        let class = match self.classes.get(&fiber).cloned().or_else(|| self.builtin_on_demand(fiber)) {
+        let class = match self
+            .classes
+            .get(&fiber)
+            .cloned()
+            .or_else(|| self.builtin_on_demand(fiber))
+        {
             Some(c) => c,
             None => return Ok(()),
         };
@@ -194,7 +225,12 @@ impl Context<'_> {
         self.fiber_start_frame(&fiber, m, &mut []).map(|_| ())
     }
 
-    fn fiber_resume(&mut self, fiber: &Rc<Object>, value: Value, throw: bool) -> Result<Value, Throw> {
+    fn fiber_resume(
+        &mut self,
+        fiber: &Rc<Object>,
+        value: Value,
+        throw: bool,
+    ) -> Result<Value, Throw> {
         if state(fiber).borrow().status != Status::Suspended {
             return Err(self.fiber_error("Cannot resume a fiber that is not suspended"));
         }
@@ -229,7 +265,10 @@ impl Context<'_> {
     /// Switch to `fiber`'s task; the running one waits in its FiberRun.
     fn enter_fiber(&mut self, fiber: &Rc<Object>, mut task: Task) {
         self.switch_task(&mut task);
-        self.fibers.push(FiberRun { fiber: Rc::clone(fiber), resumer: task });
+        self.fibers.push(FiberRun {
+            fiber: Rc::clone(fiber),
+            resumer: task,
+        });
     }
 
     /// Runs the fiber's frames until they return, throw, or suspend.
@@ -254,7 +293,11 @@ impl Context<'_> {
         s.status = Status::Terminated;
         let r = match r {
             Ok(()) => {
-                let v = task.regs.get_mut(FIRST_REG).map(std::mem::take).unwrap_or_default();
+                let v = task
+                    .regs
+                    .get_mut(FIRST_REG)
+                    .map(std::mem::take)
+                    .unwrap_or_default();
                 s.returned = Some(v.deref());
                 Ok(Value::NULL)
             }
@@ -295,7 +338,10 @@ impl Context<'_> {
 /// called Fiber::suspend() goes on).
 fn call_dst(code: &[Instr], pc: usize) -> Option<p8_bytecode::Reg> {
     match code.get(pc.checked_sub(1)?)? {
-        Instr::StaticCall { dst, .. } | Instr::Call { dst, .. } | Instr::MethodCall { dst, .. } | Instr::MethodCallNow { dst, .. } => Some(*dst),
+        Instr::StaticCall { dst, .. }
+        | Instr::Call { dst, .. }
+        | Instr::MethodCall { dst, .. }
+        | Instr::MethodCallNow { dst, .. } => Some(*dst),
         _ => None,
     }
 }
@@ -305,7 +351,13 @@ fn call_dst(code: &[Instr], pc: usize) -> Option<p8_bytecode::Reg> {
 fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = args.first().map(Value::deref).unwrap_or(Value::NULL);
     if !ctx.is_callable(&callable) {
-        return Err(ctx.throw("TypeError", format!("Fiber::__construct(): Argument #1 ($callback) must be a valid callback, {}", p8_runtime::args::value_name(&callable))));
+        return Err(ctx.throw(
+            "TypeError",
+            format!(
+                "Fiber::__construct(): Argument #1 ($callback) must be a valid callback, {}",
+                p8_runtime::args::value_name(&callable)
+            ),
+        ));
     }
     if !state(this).borrow().callable.is_null() {
         return Err(ctx.throw("FiberError", "Cannot call constructor twice".into()));
@@ -343,7 +395,10 @@ fn get_return(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
         _ => "The fiber has not returned",
     };
     drop(s);
-    Err(ctx.throw("FiberError", format!("Cannot get fiber return value: {why}")))
+    Err(ctx.throw(
+        "FiberError",
+        format!("Cannot get fiber return value: {why}"),
+    ))
 }
 
 fn status_is(this: &Object, f: impl Fn(Status) -> bool) -> Value {
@@ -367,12 +422,24 @@ fn is_terminated(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<
 }
 
 /// The Fiber's cleanup when it is destroyed (before any __destruct).
-pub(crate) fn destroy(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
+pub(crate) fn destroy(
+    ctx: &mut dyn Ctx,
+    this: &Rc<Object>,
+    args: &mut [Value],
+) -> Result<Value, Throw> {
     ctx.fiber_op(Some(this), DESTROY, args)
 }
 
-fn fiber_error_construct(ctx: &mut dyn Ctx, _: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
-    Err(ctx.throw("Error", "The \"FiberError\" class is reserved for internal use and cannot be manually instantiated".into()))
+fn fiber_error_construct(
+    ctx: &mut dyn Ctx,
+    _: &Rc<Object>,
+    _: &mut [Value],
+) -> Result<Value, Throw> {
+    Err(ctx.throw(
+        "Error",
+        "The \"FiberError\" class is reserved for internal use and cannot be manually instantiated"
+            .into(),
+    ))
 }
 
 pub(crate) const CLASSES: &[ClassSpec] = &[
@@ -428,16 +495,32 @@ mod tests {
     }
 
     fn probe(_: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-        let Ok(f) = args[0].deref().into_object() else { panic!("probe(a Fiber)") };
+        let Ok(f) = args[0].deref().into_object() else {
+            panic!("probe(a Fiber)")
+        };
         let s = state(&f).borrow();
         assert_eq!(s.status, Status::Suspended);
         let t = &s.task;
-        let bases = t.frames.slots[..t.frames.len()].iter().map(|fr| fr.base).collect();
-        SHAPES.with(|v| v.borrow_mut().push((t.regs.as_ptr() as usize, t.regs.len(), t.frames.slots.as_ptr() as usize, bases)));
+        let bases = t.frames.slots[..t.frames.len()]
+            .iter()
+            .map(|fr| fr.base)
+            .collect();
+        SHAPES.with(|v| {
+            v.borrow_mut().push((
+                t.regs.as_ptr() as usize,
+                t.regs.len(),
+                t.frames.slots.as_ptr() as usize,
+                bases,
+            ))
+        });
         Ok(Value::NULL)
     }
 
-    static PROBE: [Builtin; 1] = [Builtin { name: "probe", run: probe, by_ref: &[] }];
+    static PROBE: [Builtin; 1] = [Builtin {
+        name: "probe",
+        run: probe,
+        by_ref: &[],
+    }];
 
     /// A fiber suspended deep in a large stack keeps its task: resuming
     /// it (from callers at many depths) and suspending it again moves the
@@ -482,7 +565,10 @@ mod tests {
         assert_eq!(first.3[0] as usize, FIRST_REG);
         assert!(first.1 > 202 * 6, "a large register file: {}", first.1);
         for s in &shapes {
-            assert_eq!(s, first, "the task moved back as it was, not copied or shifted");
+            assert_eq!(
+                s, first,
+                "the task moved back as it was, not copied or shifted"
+            );
         }
     }
 }

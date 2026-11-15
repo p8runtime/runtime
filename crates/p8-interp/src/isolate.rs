@@ -27,7 +27,10 @@ pub(crate) struct FunctionStatics {
 
 impl FunctionStatics {
     pub(crate) fn new(func: &Arc<p8_bytecode::Function>) -> FunctionStatics {
-        FunctionStatics { _func: Arc::clone(func), cells: HashMap::default() }
+        FunctionStatics {
+            _func: Arc::clone(func),
+            cells: HashMap::default(),
+        }
     }
 }
 
@@ -131,9 +134,13 @@ impl Output<'_> {
 
 /// How ob_list_handlers() names a buffer's handler.
 pub(crate) fn handler_name(handler: &Option<Value>) -> String {
-    let Some(handler) = handler else { return "default output handler".into() };
+    let Some(handler) = handler else {
+        return "default output handler".into();
+    };
     match handler.kind() {
-        Kind::Str => String::from_utf8_lossy(handler.as_str().expect("a string").as_bytes()).into_owned(),
+        Kind::Str => {
+            String::from_utf8_lossy(handler.as_str().expect("a string").as_bytes()).into_owned()
+        }
         Kind::Object => {
             let o = handler.as_object().expect("an object");
             if o.class.lower == b"closure" {
@@ -143,7 +150,10 @@ pub(crate) fn handler_name(handler: &Option<Value>) -> String {
                     None => "Closure::__invoke".into(),
                 }
             } else {
-                format!("{}::__invoke", String::from_utf8_lossy(o.class.name.as_bytes()))
+                format!(
+                    "{}::__invoke",
+                    String::from_utf8_lossy(o.class.name.as_bytes())
+                )
             }
         }
         Kind::Array => {
@@ -152,11 +162,17 @@ pub(crate) fn handler_name(handler: &Option<Value>) -> String {
             let class = match parts.first() {
                 Some(v) => match v.as_object() {
                     Some(o) => String::from_utf8_lossy(o.class.name.as_bytes()).into_owned(),
-                    None => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
+                    None => String::from_utf8_lossy(
+                        v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes(),
+                    )
+                    .into_owned(),
                 },
                 None => String::new(),
             };
-            let method = parts.get(1).map_or_else(String::new, |m| String::from_utf8_lossy(m.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned());
+            let method = parts.get(1).map_or_else(String::new, |m| {
+                String::from_utf8_lossy(m.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes())
+                    .into_owned()
+            });
             format!("{class}::{method}")
         }
         _ => "???".into(),
@@ -188,7 +204,8 @@ pub struct InterruptHandle(Arc<AtomicU64>);
 impl InterruptHandle {
     /// End the request with PHP's max_execution_time error.
     pub fn timeout(&self, seconds: u64) {
-        self.0.store(seconds.clamp(1, OUT_OF_MEMORY - 1), AtomicOrdering::Relaxed);
+        self.0
+            .store(seconds.clamp(1, OUT_OF_MEMORY - 1), AtomicOrdering::Relaxed);
     }
 
     /// End the request (the host is shutting it down).
@@ -275,14 +292,23 @@ impl Isolate {
             on_demand: builtin_classes::on_demand(&registry),
             known: {
                 let s = registry.symbols();
-                Known { closure: s.intern(b"closure"), generator: s.intern(b"generator"), stdclass: s.intern(b"stdclass"), error: s.intern(b"error"), fiber: s.intern(b"fiber") }
+                Known {
+                    closure: s.intern(b"closure"),
+                    generator: s.intern(b"generator"),
+                    stdclass: s.intern(b"stdclass"),
+                    error: s.intern(b"error"),
+                    fiber: s.intern(b"fiber"),
+                }
             },
             names,
             ini_texts: RefCell::new(HashMap::default()),
             // Sized for an application's constants from the start (a
             // WordPress page thaws tens of thousands): the table grew
             // through 27 rehashes otherwise.
-            thawed: RefCell::new(HashMap::with_capacity_and_hasher(1 << 15, Default::default())),
+            thawed: RefCell::new(HashMap::with_capacity_and_hasher(
+                1 << 15,
+                Default::default(),
+            )),
             unbuilt: Closure::unbuilt(&registry),
             partials: RefCell::new(HashMap::default()),
             native: None,
@@ -314,7 +340,8 @@ impl Isolate {
             thawed.clear();
         }
         let v = match f {
-            Frozen::Str(t) if program => p8_runtime::string::IStr::intern(t.as_bytes()).map_or_else(|| f.to_value(), Value::istr),
+            Frozen::Str(t) if program => p8_runtime::string::IStr::intern(t.as_bytes())
+                .map_or_else(|| f.to_value(), Value::istr),
             _ => f.to_value(),
         };
         thawed.insert(at, (f.clone(), v.clone()));
@@ -323,7 +350,11 @@ impl Isolate {
 
     /// An ini default (a registry's static text) as a string, shared.
     pub(crate) fn ini_text(&self, text: &'static [u8]) -> PhpStr {
-        self.ini_texts.borrow_mut().entry((text.as_ptr() as usize, text.len())).or_insert_with(|| PhpStr::from(text)).clone()
+        self.ini_texts
+            .borrow_mut()
+            .entry((text.as_ptr() as usize, text.len()))
+            .or_insert_with(|| PhpStr::from(text))
+            .clone()
     }
 
     pub fn registry(&self) -> &Arc<Registry> {
@@ -341,16 +372,25 @@ impl Isolate {
         self.interrupt.store(NO_INTERRUPT, AtomicOrdering::Relaxed);
         let stop = Arc::clone(&self.interrupt);
         let default = |name: &[u8]| self.registry.ini_default(name).flatten();
-        let limit = StackLimit::new(Arc::clone(&stop), default(b"memory_limit"), default(b"memory_hard_limit_percent"));
+        let limit = StackLimit::new(
+            Arc::clone(&stop),
+            default(b"memory_limit"),
+            default(b"memory_hard_limit_percent"),
+        );
         // The register file an earlier request left (at most one VM stack
         // page: `release_request`) is this request's storage from the
         // start, charged as such.
         let reg_bytes = self.regs.capacity() * std::mem::size_of::<Value>();
-        let frames = Frames { limit: Some(Rc::new(limit)), reg_bytes, ..Frames::default() };
+        let frames = Frames {
+            limit: Some(Rc::new(limit)),
+            reg_bytes,
+            ..Frames::default()
+        };
         let classes = self.builtin_classes.clone();
         let ids = Rc::new(Ids::default());
         let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
-        let user_calls = [b"call_user_func".as_slice(), b"call_user_func_array"].map(|n| self.registry.lookup(n).unwrap_or(usize::MAX));
+        let user_calls = [b"call_user_func".as_slice(), b"call_user_func_array"]
+            .map(|n| self.registry.lookup(n).unwrap_or(usize::MAX));
         let user_call_twins = user_calls.map(|i| self.registry.twin(i).unwrap_or(usize::MAX));
         Context {
             stop,
@@ -362,7 +402,14 @@ impl Isolate {
             constants: p8_runtime::fast::IndexMap::default(),
             globals: p8_runtime::fast::IndexMap::default(),
             main_cvs: None,
-            out: Output { buffers: Vec::new(), host, started: false, response: Default::default(), head_sent: false, running: None },
+            out: Output {
+                buffers: Vec::new(),
+                host,
+                started: false,
+                response: Default::default(),
+                head_sent: false,
+                running: None,
+            },
             request: None,
             main_return: None,
             carry: None,

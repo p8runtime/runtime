@@ -87,7 +87,12 @@ pub(crate) struct Shape {
 impl Shape {
     fn of(code: &Function) -> Shape {
         let nparams = code.params.len() as u32;
-        Shape { need: u32::from(code.nregs).max(crate::fast::WINDOW as u32), nparams, ncv: u32::from(code.ncv), exact: if code.is_generator { u32::MAX } else { nparams } }
+        Shape {
+            need: u32::from(code.nregs).max(crate::fast::WINDOW as u32),
+            nparams,
+            ncv: u32::from(code.ncv),
+            exact: if code.is_generator { u32::MAX } else { nparams },
+        }
     }
 }
 
@@ -150,7 +155,11 @@ impl ClassMemo {
     /// is the class accepted last (an object's verdict depends on its
     /// class alone).
     #[inline(always)]
-    pub(crate) fn quick(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
+    pub(crate) fn quick(
+        memo: Option<&ClassMemo>,
+        ty: &p8_runtime::types::TypeDecl,
+        v: &Value,
+    ) -> bool {
         match (v.as_object(), memo) {
             (Some(o), Some(m)) => m.addr.get() == Rc::as_ptr(&o.class) as usize || m.learn(ty, o),
             _ => ty.quick(v),
@@ -176,13 +185,28 @@ impl Closure {
         Closure::with_consts(code, |c| isolate.thaw(c, program))
     }
 
-    fn with_consts(code: Arc<Function>, thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value) -> Rc<Closure> {
+    fn with_consts(
+        code: Arc<Function>,
+        thaw: impl Fn(&p8_runtime::frozen::Frozen) -> Value,
+    ) -> Rc<Closure> {
         let consts = code.consts.iter().map(&thaw).collect();
         let sites = code.sites.iter().map(|_| OnceCell::new()).collect();
-        let props = code.consts.iter().map(|_| Cell::new(PropSite::default())).collect();
+        let props = code
+            .consts
+            .iter()
+            .map(|_| Cell::new(PropSite::default()))
+            .collect();
         let methods = code.sites.iter().map(|_| MethodSlot::default()).collect();
-        let news = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
-        let class_refs = code.classes.iter().map(|_| RefCell::new(std::rc::Weak::new())).collect();
+        let news = code
+            .classes
+            .iter()
+            .map(|_| RefCell::new(std::rc::Weak::new()))
+            .collect();
+        let class_refs = code
+            .classes
+            .iter()
+            .map(|_| RefCell::new(std::rc::Weak::new()))
+            .collect();
         let defaults = if code.params.iter().any(|p| p.default.is_some()) {
             code.params
                 .iter()
@@ -190,7 +214,10 @@ impl Closure {
                     let v = p.default.as_ref().map(&thaw)?;
                     // An int default of a `float` parameter is a float (the
                     // one conversion PHP makes of a default).
-                    let float = p.ty.as_ref().is_some_and(|t| t.mask & p8_runtime::types::T_FLOAT != 0 && t.mask & p8_runtime::types::T_INT == 0);
+                    let float = p.ty.as_ref().is_some_and(|t| {
+                        t.mask & p8_runtime::types::T_FLOAT != 0
+                            && t.mask & p8_runtime::types::T_INT == 0
+                    });
                     Some(match v.as_int() {
                         Some(i) if float => Value::float(i as f64),
                         _ => v,
@@ -200,16 +227,36 @@ impl Closure {
         } else {
             Box::default()
         };
-        let names_class = |t: &Option<p8_runtime::types::TypeDecl>| t.as_ref().is_some_and(|t| !t.lower.is_empty());
-        let type_memo = if code.params.iter().any(|p| names_class(&p.ty)) || names_class(&code.ret_type) {
-            (0..=code.params.len()).map(|_| ClassMemo::default()).collect()
-        } else {
-            Box::default()
+        let names_class = |t: &Option<p8_runtime::types::TypeDecl>| {
+            t.as_ref().is_some_and(|t| !t.lower.is_empty())
         };
+        let type_memo =
+            if code.params.iter().any(|p| names_class(&p.ty)) || names_class(&code.ret_type) {
+                (0..=code.params.len())
+                    .map(|_| ClassMemo::default())
+                    .collect()
+            } else {
+                Box::default()
+            };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
         let shape = Shape::of(&code);
-        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new(), shape })
+        Rc::new(Closure {
+            code,
+            consts,
+            sites,
+            props,
+            methods,
+            index: Cell::new(u32::MAX),
+            news,
+            class_refs,
+            defaults,
+            type_memo,
+            class_consts,
+            statics,
+            globals: OnceCell::new(),
+            shape,
+        })
     }
 
     /// The stand-in for a declared function or method whose closure has not
@@ -285,7 +332,12 @@ mod grow {
         /// what an entry not made yet is pushed as: the one replacement
         /// there is, once per entry. A made entry stays what it is.
         #[inline]
-        pub(crate) fn made_at(&mut self, i: usize, stand_in: &Rc<T>, make: impl FnOnce() -> Rc<T>) -> &Rc<T> {
+        pub(crate) fn made_at(
+            &mut self,
+            i: usize,
+            stand_in: &Rc<T>,
+            make: impl FnOnce() -> Rc<T>,
+        ) -> &Rc<T> {
             let slot = &mut self.0[i];
             if Rc::ptr_eq(slot, stand_in) {
                 *slot = make();
@@ -429,7 +481,9 @@ pub(crate) struct UserMethod {
 /// the last a by-reference variadic one when `rest`.
 fn word_refs(params: usize, rest: bool, by_ref: impl Fn(usize) -> bool) -> i64 {
     use p8_bytecode::callee::{ASK, REF_BITS, REF_SHIFT, REST_REF};
-    let bits = (0..REF_BITS as usize).filter(|&n| by_ref(n)).fold(0i64, |m, n| m | 1 << (REF_SHIFT as usize + n));
+    let bits = (0..REF_BITS as usize)
+        .filter(|&n| by_ref(n))
+        .fold(0i64, |m, n| m | 1 << (REF_SHIFT as usize + n));
     bits | if rest { REST_REF } else { 0 } | if params > REF_BITS as usize { ASK } else { 0 }
 }
 
@@ -441,23 +495,54 @@ impl UserMethod {
     /// The record of `code` (at `index` in `closures`) as the method of
     /// `class` called from `scope`, declared `up` parents up; None when it
     /// does not fit (deeper than `up` holds).
-    fn new(class: &Class, scope: Option<&Rc<Class>>, index: u32, up: usize, code: &Function) -> Option<UserMethod> {
+    fn new(
+        class: &Class,
+        scope: Option<&Rc<Class>>,
+        index: u32,
+        up: usize,
+        code: &Function,
+    ) -> Option<UserMethod> {
         let rest_by_ref = code.params.last().is_some_and(|p| p.variadic && p.by_ref);
         let up = u16::try_from(up).ok()?;
         // FAST: the loop's call may push the frame from the word (a record
         // is only made of a PHP method run on the receiver as `$this`),
         // when the word has room for `up`; the argument count is the
         // call's to test.
-        let enter = if u32::from(up) <= callee::UP_MAX { callee::FAST | i64::from(up) << callee::UP_SHIFT } else { 0 };
-        let word = word_refs(code.params.len(), rest_by_ref, |n| code.param_by_ref(n)) | callee::USER | enter | i64::from(index);
-        Some(UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), word, code: index, up, is_static: false })
+        let enter = if u32::from(up) <= callee::UP_MAX {
+            callee::FAST | i64::from(up) << callee::UP_SHIFT
+        } else {
+            0
+        };
+        let word = word_refs(code.params.len(), rest_by_ref, |n| code.param_by_ref(n))
+            | callee::USER
+            | enter
+            | i64::from(index);
+        Some(UserMethod {
+            class: class.id.get(),
+            scope: scope.map_or(0, |c| c.id.get()),
+            word,
+            code: index,
+            up,
+            is_static: false,
+        })
     }
 
     /// The record of `code` as the method a static-syntax call on `target`
     /// from `scope` runs (the rest as `new`), static or not.
-    fn for_static(target: &Class, scope: Option<&Rc<Class>>, index: u32, up: usize, code: &Function, is_static: bool) -> Option<UserMethod> {
+    fn for_static(
+        target: &Class,
+        scope: Option<&Rc<Class>>,
+        index: u32,
+        up: usize,
+        code: &Function,
+        is_static: bool,
+    ) -> Option<UserMethod> {
         let of_class = Self::new(target, scope, index, up, code)?;
-        Some(UserMethod { class: of_class.class | Self::STATIC_SYNTAX, is_static, ..of_class })
+        Some(UserMethod {
+            class: of_class.class | Self::STATIC_SYNTAX,
+            is_static,
+            ..of_class
+        })
     }
 
     /// The record of a method found on an object of `class` from `scope`
@@ -465,14 +550,21 @@ impl UserMethod {
     /// InitMethod to hand on. `code` names nothing.
     fn unentered(class: &Class, scope: Option<&Rc<Class>>, word: i64) -> UserMethod {
         debug_assert!(word & callee::FAST == 0);
-        UserMethod { class: class.id.get(), scope: scope.map_or(0, |c| c.id.get()), code: u32::MAX, word, ..UserMethod::default() }
+        UserMethod {
+            class: class.id.get(),
+            scope: scope.map_or(0, |c| c.id.get()),
+            code: u32::MAX,
+            word,
+            ..UserMethod::default()
+        }
     }
 
     /// Whether this is the record of a static-syntax call on `target` from
     /// code of `scope`.
     #[inline(always)]
     pub(crate) fn is_static_for(self, target: &Class, scope: Option<&Rc<Class>>) -> bool {
-        self.class == target.id.get() | Self::STATIC_SYNTAX && self.scope == scope.map_or(0, |c| c.id.get())
+        self.class == target.id.get() | Self::STATIC_SYNTAX
+            && self.scope == scope.map_or(0, |c| c.id.get())
     }
 
     /// Whether this is the record of a call on an object of `class` from
@@ -528,16 +620,33 @@ pub(crate) enum MethodCode {
 /// `name` declared by `declaring` takes by reference, from its stub
 /// signature (as `method_takes_ref` finds it).
 fn native_refs(declaring: &Class, name: &PhpStr) -> u64 {
-    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
-    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| s.params.iter().take(64).enumerate().filter(|(_, p)| p.by_ref).fold(0, |m, (i, _)| m | 1 << i))
+    let stub = format!(
+        "{}::{}",
+        String::from_utf8_lossy(declaring.name.as_bytes()),
+        String::from_utf8_lossy(name.as_bytes())
+    );
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| {
+        s.params
+            .iter()
+            .take(64)
+            .enumerate()
+            .filter(|(_, p)| p.by_ref)
+            .fold(0, |m, (i, _)| m | 1 << i)
+    })
 }
 
 /// The callee's word of builtin method `name` declared by `declaring`:
 /// what its stub signature takes by reference.
 fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
-    let stub = format!("{}::{}", String::from_utf8_lossy(declaring.name.as_bytes()), String::from_utf8_lossy(name.as_bytes()));
+    let stub = format!(
+        "{}::{}",
+        String::from_utf8_lossy(declaring.name.as_bytes()),
+        String::from_utf8_lossy(name.as_bytes())
+    );
     // (No builtin method has a parameter past the word's bits to ask about.)
-    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| word_refs(0, false, |n| s.params.get(n).is_some_and(|p| p.by_ref)))
+    p8_runtime::stubs::lookup(stub.as_bytes()).map_or(0, |s| {
+        word_refs(0, false, |n| s.params.get(n).is_some_and(|p| p.by_ref))
+    })
 }
 
 /// A property read the cache answers: the same class, a scope that may
@@ -559,7 +668,11 @@ fn native_word(declaring: &Class, name: &PhpStr) -> i64 {
 /// (`held`), so only that one needs an address: the plain one stays in
 /// registers.
 #[inline(always)]
-pub(crate) fn cached_prop<'a>(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: impl FnOnce() -> Option<&'a Rc<Class>>) -> Option<Value> {
+pub(crate) fn cached_prop<'a>(
+    site: PropSite,
+    o: &Rc<p8_runtime::object::Object>,
+    scope: impl FnOnce() -> Option<&'a Rc<Class>>,
+) -> Option<Value> {
     if site.class != Rc::as_ptr(&o.class) as usize || o.lazy.get() != 0 {
         return None;
     }
@@ -602,15 +715,37 @@ fn ref_copy(cell: &RefCell<Value>) -> Value {
 /// one. Any scope may use a public property's entry, unless a parent's
 /// private one of the same name is there too (which one a scope sees then
 /// depends on it). `remember_prop` and the loop's refill share it.
-pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usize, prop: &p8_runtime::object::Property, scope: usize) -> Option<PropSite> {
+pub(crate) fn prop_entry(
+    o: &p8_runtime::object::Object,
+    name: &[u8],
+    slot: usize,
+    prop: &p8_runtime::object::Property,
+    scope: usize,
+) -> Option<PropSite> {
     if prop.hooks != 0 {
         return None;
     }
-    let shared = o.class.slots.get(name).is_some_and(|slots| slots.len() == 1);
-    let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { scope };
+    let shared = o
+        .class
+        .slots
+        .get(name)
+        .is_some_and(|slots| slots.len() == 1);
+    let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared {
+        0
+    } else {
+        scope
+    };
     let class = Rc::as_ptr(&o.class) as usize;
-    let plain = !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
-    Some(PropSite { class, scope, slot: slot as u32, plain_write: if plain { class } else { 0 } })
+    let plain = !prop.readonly
+        && prop.set_visibility.is_none()
+        && prop.ty_decl.is_none()
+        && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
+    Some(PropSite {
+        class,
+        scope,
+        slot: slot as u32,
+        plain_write: if plain { class } else { 0 },
+    })
 }
 
 /// The declared slot of property `name` of `o` that code in `scope` sees
@@ -618,7 +753,11 @@ pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usiz
 /// in the object's chain), from the class alone: None when it cannot say
 /// (no such declared property, one this scope may not see: the full path,
 /// with its error or magic).
-pub(crate) fn visible_slot<'o>(o: &'o p8_runtime::object::Object, name: &[u8], scope: Option<&Rc<Class>>) -> Option<(usize, &'o p8_runtime::object::Property)> {
+pub(crate) fn visible_slot<'o>(
+    o: &'o p8_runtime::object::Object,
+    name: &[u8],
+    scope: Option<&Rc<Class>>,
+) -> Option<(usize, &'o p8_runtime::object::Property)> {
     let slot = o.class.slot(name, scope.map(|s| s.lower.as_slice()))?;
     let prop = &o.class.properties[slot];
     let mut c = Some(&o.class);
@@ -629,7 +768,8 @@ pub(crate) fn visible_slot<'o>(o: &'o p8_runtime::object::Object, name: &[u8], s
         }
         c = k.parent.as_ref();
     };
-    p8_runtime::object::visible(prop.visibility, declaring, scope.map(|s| &**s)).then_some((slot, prop))
+    p8_runtime::object::visible(prop.visibility, declaring, scope.map(|s| &**s))
+        .then_some((slot, prop))
 }
 
 /// The entry a property access with the name in a register (`$o->$name`)
@@ -637,10 +777,20 @@ pub(crate) fn visible_slot<'o>(o: &'o p8_runtime::object::Object, name: &[u8], s
 /// the loop's dynamic-name arms read and write through it as the cached
 /// ones do. None when the class alone cannot say.
 #[inline(never)]
-pub(crate) fn dyn_entry(o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) -> Option<PropSite> {
+pub(crate) fn dyn_entry(
+    o: &p8_runtime::object::Object,
+    name: &Value,
+    scope: Option<&Rc<Class>>,
+) -> Option<PropSite> {
     let name = name.as_str()?;
     let (slot, prop) = visible_slot(o, name.as_bytes(), scope)?;
-    prop_entry(o, name.as_bytes(), slot, prop, scope.map_or(0, |c| Rc::as_ptr(c) as usize))
+    prop_entry(
+        o,
+        name.as_bytes(),
+        slot,
+        prop,
+        scope.map_or(0, |c| Rc::as_ptr(c) as usize),
+    )
 }
 
 /// A read of property `name` that is no declared one of `o`'s class: the
@@ -654,7 +804,11 @@ pub(crate) fn dynamic_prop(o: &p8_runtime::object::Object, name: &Value) -> Opti
         return None;
     }
     let name = name.as_str()?;
-    if o.class.properties.iter().any(|p| p.name.as_bytes() == name.as_bytes()) {
+    if o.class
+        .properties
+        .iter()
+        .any(|p| p.name.as_bytes() == name.as_bytes())
+    {
         return None;
     }
     let v = o.dynamic().get_str(name)?.deref();
@@ -664,9 +818,16 @@ pub(crate) fn dynamic_prop(o: &p8_runtime::object::Object, name: &Value) -> Opti
 /// `refill_prop` when the entry does not answer for `o`'s class and this
 /// scope, for the hand arms that go on to their own path test.
 #[inline(always)]
-pub(crate) fn refill_if_missed(site: &Cell<PropSite>, o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) {
+pub(crate) fn refill_if_missed(
+    site: &Cell<PropSite>,
+    o: &p8_runtime::object::Object,
+    name: &Value,
+    scope: Option<&Rc<Class>>,
+) {
     let e = site.get();
-    if e.class != Rc::as_ptr(&o.class) as usize || (e.scope != 0 && e.scope != scope.map_or(0, |c| Rc::as_ptr(c) as usize)) {
+    if e.class != Rc::as_ptr(&o.class) as usize
+        || (e.scope != 0 && e.scope != scope.map_or(0, |c| Rc::as_ptr(c) as usize))
+    {
         let _ = refill_prop(site, o, name, scope);
     }
 }
@@ -682,15 +843,24 @@ pub(crate) fn refill_if_missed(site: &Cell<PropSite>, o: &p8_runtime::object::Ob
 /// with its error or magic).
 #[cold]
 #[inline(never)]
-pub(crate) fn refill_prop(site: &Cell<PropSite>, o: &p8_runtime::object::Object, name: &Value, scope: Option<&Rc<Class>>) -> bool {
+pub(crate) fn refill_prop(
+    site: &Cell<PropSite>,
+    o: &p8_runtime::object::Object,
+    name: &Value,
+    scope: Option<&Rc<Class>>,
+) -> bool {
     let scope_addr = scope.map_or(0, |c| Rc::as_ptr(c) as usize);
     let e = site.get();
     if e.class == Rc::as_ptr(&o.class) as usize && (e.scope == 0 || e.scope == scope_addr) {
         return false;
     }
-    let Some(name) = name.as_str() else { return false };
+    let Some(name) = name.as_str() else {
+        return false;
+    };
     let name = name.as_bytes();
-    let Some((slot, prop)) = visible_slot(o, name, scope) else { return false };
+    let Some((slot, prop)) = visible_slot(o, name, scope) else {
+        return false;
+    };
     match prop_entry(o, name, slot, prop, scope_addr) {
         Some(entry) => {
             site.set(entry);
@@ -704,8 +874,15 @@ pub(crate) fn refill_prop(site: &Cell<PropSite>, o: &p8_runtime::object::Object,
 /// a read; an unset slot only in a class without __set and its kin (writing
 /// one there may be theirs).
 #[inline]
-pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, scope: usize) -> Option<usize> {
-    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
+pub(crate) fn cached_slot(
+    site: PropSite,
+    o: &Rc<p8_runtime::object::Object>,
+    scope: usize,
+) -> Option<usize> {
+    if site.class != Rc::as_ptr(&o.class) as usize
+        || (site.scope != 0 && site.scope != scope)
+        || o.lazy.get() != 0
+    {
         return None;
     }
     let slot = site.slot as usize;
@@ -725,8 +902,17 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
 /// `write_slot`'s rules where they pass with nothing to report. Everything
 /// else is the full write's.
 #[inline(always)]
-pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: (usize, Option<&Class>), v: &Value, reinit: bool) -> Option<(usize, Plain)> {
-    if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope.0) || o.lazy.get() != 0 {
+pub(crate) fn plain_slot(
+    site: PropSite,
+    o: &p8_runtime::object::Object,
+    scope: (usize, Option<&Class>),
+    v: &Value,
+    reinit: bool,
+) -> Option<(usize, Plain)> {
+    if site.class != Rc::as_ptr(&o.class) as usize
+        || (site.scope != 0 && site.scope != scope.0)
+        || o.lazy.get() != 0
+    {
         return None;
     }
     if v.is_undef() || v.is_reference() {
@@ -741,7 +927,13 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
 /// that is no plain store's: `assign_prop`): untyped or plainly of its
 /// type, its readonly state and set visibility (`guarded_write`).
 #[inline(always)]
-pub(crate) fn plain_prop(o: &p8_runtime::object::Object, slot: usize, scope: Option<&Class>, v: &Value, reinit: bool) -> Option<Plain> {
+pub(crate) fn plain_prop(
+    o: &p8_runtime::object::Object,
+    slot: usize,
+    scope: Option<&Class>,
+    v: &Value,
+    reinit: bool,
+) -> Option<Plain> {
     let prop = o.class.properties.get(slot)?;
     let mut plain = Plain::Any;
     if prop.readonly || prop.set_visibility.is_some() {
@@ -769,7 +961,11 @@ pub(crate) enum Plain {
 /// from its declaring class (and a readonly one with no clone being
 /// re-initialized). Out of line: the common property has neither.
 #[inline(never)]
-fn guarded_write(prop: &p8_runtime::object::Property, scope: Option<&Class>, reinit: bool) -> Option<Plain> {
+fn guarded_write(
+    prop: &p8_runtime::object::Property,
+    scope: Option<&Class>,
+    reinit: bool,
+) -> Option<Plain> {
     let scope = scope?;
     if scope.lower != prop.declaring {
         return None;
@@ -788,17 +984,30 @@ impl Context<'_> {
     /// ASSIGN_STATIC_PROP and FETCH_STATIC_PROP_W is; else `static_cell`'s,
     /// kept there. The class is not resolved for a hit: a named class
     /// reference is its index, `static` and `self` the frame's classes.
-    pub(crate) fn static_cell_at(&mut self, clo: &Closure, class: u16, name_reg: Reg, name: &Value, w: &[Value]) -> Result<Rc<RefCell<Value>>, Throw> {
+    pub(crate) fn static_cell_at(
+        &mut self,
+        clo: &Closure,
+        class: u16,
+        name_reg: Reg,
+        name: &Value,
+        w: &[Value],
+    ) -> Result<Rc<RefCell<Value>>, Throw> {
         let site = const_index(name_reg).and_then(|i| clo.statics.get(i));
         if let Some(site) = site
             && let Some(frame) = self.frames.last()
         {
             let key = match clo.code.classes[class as usize] {
-                p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => Some(class as usize + 1),
+                p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => {
+                    Some(class as usize + 1)
+                }
                 // As `class_key` (through `class_at` and `scope`): the called
                 // class, `$this`'s class in a method entered with one.
-                p8_bytecode::ClassRef::Static => frame.called_class().map(|c| Rc::as_ptr(c) as usize),
-                p8_bytecode::ClassRef::Scope => frame.scope.as_ref().map(|c| Rc::as_ptr(c) as usize),
+                p8_bytecode::ClassRef::Static => {
+                    frame.called_class().map(|c| Rc::as_ptr(c) as usize)
+                }
+                p8_bytecode::ClassRef::Scope => {
+                    frame.scope.as_ref().map(|c| Rc::as_ptr(c) as usize)
+                }
                 p8_bytecode::ClassRef::ParentScope | p8_bytecode::ClassRef::Dynamic(_) => None,
             };
             let s = site.borrow();
@@ -813,7 +1022,12 @@ impl Context<'_> {
         if let Some(site) = site
             && let Some((_, (key, keep))) = self.class_key(clo, class, w)
         {
-            *site.borrow_mut() = StaticSite { key, scope: self.scope_addr(), _keep: keep, cell: Some(Rc::clone(&cell)) };
+            *site.borrow_mut() = StaticSite {
+                key,
+                scope: self.scope_addr(),
+                _keep: keep,
+                cell: Some(Rc::clone(&cell)),
+            };
         }
         Ok(cell)
     }
@@ -821,8 +1035,16 @@ impl Context<'_> {
     /// `class_of` through the closure's cache: a named class reference
     /// is looked up by name once.
     #[inline]
-    pub(crate) fn class_at(&mut self, clo: &Closure, i: u16, w: &[Value]) -> Result<Rc<Class>, Throw> {
-        let named = matches!(clo.code.classes[i as usize], p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..));
+    pub(crate) fn class_at(
+        &mut self,
+        clo: &Closure,
+        i: u16,
+        w: &[Value],
+    ) -> Result<Rc<Class>, Throw> {
+        let named = matches!(
+            clo.code.classes[i as usize],
+            p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..)
+        );
         if named && let Some(c) = clo.class_refs[i as usize].borrow().upgrade() {
             return Ok(c);
         }
@@ -837,7 +1059,12 @@ impl Context<'_> {
     /// when the site's cache knows the method it calls on `class` from
     /// this scope (the call made last time): no lookup by name.
     #[inline]
-    pub(crate) fn cached_takes_ref(&self, site: &RefCell<Option<MethodSite>>, class: &Rc<Class>, n: usize) -> Option<bool> {
+    pub(crate) fn cached_takes_ref(
+        &self,
+        site: &RefCell<Option<MethodSite>>,
+        class: &Rc<Class>,
+        n: usize,
+    ) -> Option<bool> {
         let site = site.borrow();
         let s = site.as_ref()?;
         if s.class != Rc::as_ptr(class) as usize || s.scope != self.scope_addr() {
@@ -866,7 +1093,13 @@ impl Context<'_> {
     /// Out of line: an inlined copy would hold registers through the
     /// loop's other arms.
     #[inline(never)]
-    pub(crate) fn static_takes_ref_out(&self, clo: &Closure, class: u16, method: usize, n: usize) -> Option<bool> {
+    pub(crate) fn static_takes_ref_out(
+        &self,
+        clo: &Closure,
+        class: u16,
+        method: usize,
+        n: usize,
+    ) -> Option<bool> {
         let target = self.static_target(clo, class)?;
         self.cached_takes_ref(&clo.methods[method], &target, n)
     }
@@ -888,7 +1121,11 @@ impl Context<'_> {
     /// The frame a cached method call makes: the same class from the same
     /// scope, and its code and declaring class still there.
     #[inline]
-    pub(crate) fn cached_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>) -> Option<crate::classes::MethodFrame> {
+    pub(crate) fn cached_method(
+        &self,
+        site: &RefCell<Option<MethodSite>>,
+        o: &Rc<p8_runtime::object::Object>,
+    ) -> Option<crate::classes::MethodFrame> {
         let site = site.borrow();
         let s = site.as_ref()?;
         if s.class != Rc::as_ptr(&o.class) as usize || s.scope != self.scope_addr() {
@@ -900,12 +1137,22 @@ impl Context<'_> {
             MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
         let this = (!s.is_static).then(|| Rc::clone(o));
-        Some(crate::classes::MethodFrame::method(func, this, declaring, Rc::clone(&o.class)))
+        Some(crate::classes::MethodFrame::method(
+            func,
+            this,
+            declaring,
+            Rc::clone(&o.class),
+        ))
     }
 
     /// After a full method lookup: remember an ordinary call (the object's
     /// own class's method, not __call or a forwarded inner iterator's).
-    pub(crate) fn remember_method(&self, site: &RefCell<Option<MethodSite>>, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+    pub(crate) fn remember_method(
+        &self,
+        site: &RefCell<Option<MethodSite>>,
+        o: &Rc<p8_runtime::object::Object>,
+        m: &crate::classes::MethodFrame,
+    ) {
         let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
         let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
         if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
@@ -914,7 +1161,9 @@ impl Context<'_> {
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
+            crate::classes::Code::Native(n, name) => {
+                MethodCode::Native(*n, name.clone(), Cell::new(None))
+            }
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(&o.class) as usize,
@@ -929,17 +1178,28 @@ impl Context<'_> {
     /// numbers for the loop's arms (`UserMethod`), when it is an ordinary
     /// call of a PHP method with `$this` (what `remember_method` keeps,
     /// less native and static methods, which the arms do not run).
-    pub(crate) fn remember_user_method(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) {
+    pub(crate) fn remember_user_method(
+        &self,
+        slot: &MethodSlot,
+        o: &Rc<p8_runtime::object::Object>,
+        m: &crate::classes::MethodFrame,
+    ) {
         let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
         let on_this = m.this.as_ref().is_some_and(|t| Rc::ptr_eq(t, o));
         if m.trampoline.is_some() || !own_class || !on_this || m.closure.is_some() {
             return;
         }
-        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else { return };
+        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else {
+            return;
+        };
         // (Its index: only a declared method's closure has one, and the
         // context's closure there is this one.)
         let index = code.index.get();
-        if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
+        if !self
+            .closures
+            .get(index as usize)
+            .is_some_and(|c| Rc::ptr_eq(c, code))
+        {
             return;
         }
         let (mut class, mut up) = (&o.class, 0);
@@ -963,7 +1223,12 @@ impl Context<'_> {
     /// what the sends need of it, and kept as a record of that word alone
     /// (`UserMethod::unentered`); not kept for a call an inner iterator
     /// takes, nor a Closure's `__invoke`: those are found again each time.
-    pub(crate) fn callee_word(&self, slot: &MethodSlot, o: &Rc<p8_runtime::object::Object>, m: &crate::classes::MethodFrame) -> i64 {
+    pub(crate) fn callee_word(
+        &self,
+        slot: &MethodSlot,
+        o: &Rc<p8_runtime::object::Object>,
+        m: &crate::classes::MethodFrame,
+    ) -> i64 {
         let scope = self.frames.last().and_then(|f| f.scope.as_ref());
         self.remember_user_method(slot, o, m);
         let q = slot.user.get();
@@ -979,7 +1244,11 @@ impl Context<'_> {
             && let Some(f) = crate::callable::closure_data(o).and_then(|d| d.func.user())
         {
             let f = &*f.code;
-            return word_refs(0, f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
+            return word_refs(
+                0,
+                f.params.last().is_some_and(|p| p.variadic && p.by_ref),
+                |n| f.param_by_ref(n),
+            );
         }
         let own_class = m.called.as_ref().is_some_and(|c| Rc::ptr_eq(c, &o.class));
         let on_this = m.this.as_ref().is_none_or(|t| Rc::ptr_eq(t, o));
@@ -988,14 +1257,28 @@ impl Context<'_> {
             _ if m.trampoline.is_some() => 0,
             (crate::classes::Code::User(code), _) => {
                 let f = &*code.code;
-                let refs = word_refs(f.params.len(), f.params.last().is_some_and(|p| p.variadic && p.by_ref), |n| f.param_by_ref(n));
+                let refs = word_refs(
+                    f.params.len(),
+                    f.params.last().is_some_and(|p| p.variadic && p.by_ref),
+                    |n| f.param_by_ref(n),
+                );
                 // (Its index: only a declared method's closure has one,
                 // and the context's closure there is this one. With none
                 // to name it by there is nothing to ask past the bits.)
                 let index = code.index.get();
-                if self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) { refs | callee::USER | i64::from(index) } else { refs & !callee::ASK }
+                if self
+                    .closures
+                    .get(index as usize)
+                    .is_some_and(|c| Rc::ptr_eq(c, code))
+                {
+                    refs | callee::USER | i64::from(index)
+                } else {
+                    refs & !callee::ASK
+                }
             }
-            (crate::classes::Code::Native(_, name), Some(declaring)) => native_word(declaring, name),
+            (crate::classes::Code::Native(_, name), Some(declaring)) => {
+                native_word(declaring, name)
+            }
             (crate::classes::Code::Native(..), None) => 0,
         };
         if own_class && on_this && m.closure.is_none() {
@@ -1011,14 +1294,29 @@ impl Context<'_> {
     /// keeps, less native methods, which the arms do not run). Never for a
     /// hook's `parent::$p::get()` site: that one is `static_call_ops`'s
     /// every time.
-    pub(crate) fn remember_static_user(&self, clo: &Closure, method: usize, target: &Rc<Class>, m: &crate::classes::MethodFrame) {
-        if m.trampoline.is_some() || m.closure.is_some() || clo.code.sites[method].display.as_bytes().first() == Some(&b'$') {
+    pub(crate) fn remember_static_user(
+        &self,
+        clo: &Closure,
+        method: usize,
+        target: &Rc<Class>,
+        m: &crate::classes::MethodFrame,
+    ) {
+        if m.trampoline.is_some()
+            || m.closure.is_some()
+            || clo.code.sites[method].display.as_bytes().first() == Some(&b'$')
+        {
             return;
         }
-        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else { return };
+        let (Some(declaring), crate::classes::Code::User(code)) = (&m.scope, &m.func) else {
+            return;
+        };
         // (Its index: as `remember_user_method` takes it.)
         let index = code.index.get();
-        if !self.closures.get(index as usize).is_some_and(|c| Rc::ptr_eq(c, code)) {
+        if !self
+            .closures
+            .get(index as usize)
+            .is_some_and(|c| Rc::ptr_eq(c, code))
+        {
             return;
         }
         let (mut class, mut up) = (target, 0);
@@ -1027,7 +1325,9 @@ impl Context<'_> {
             (class, up) = (parent, up + 1);
         }
         let scope = self.frames.last().and_then(|f| f.scope.as_ref());
-        if let Some(user) = UserMethod::for_static(target, scope, index, up, &code.code, m.this.is_none()) {
+        if let Some(user) =
+            UserMethod::for_static(target, scope, index, up, &code.code, m.this.is_none())
+        {
             clo.methods[method].user.set(user);
         }
     }
@@ -1045,13 +1345,20 @@ impl Context<'_> {
     /// native method, another class or scope, an instance method with no
     /// `$this` of the class's kind (the error).
     #[inline(never)]
-    pub(crate) fn static_site(&self, clo: &Closure, class: u16, method: usize) -> Option<StaticHit> {
+    pub(crate) fn static_site(
+        &self,
+        clo: &Closure,
+        class: u16,
+        method: usize,
+    ) -> Option<StaticHit> {
         use p8_bytecode::ClassRef;
         let q = clo.methods[method].user.get();
         let top = self.frames.last()?;
         let kind = &clo.code.classes[class as usize];
         let target = match kind {
-            ClassRef::Named(..) | ClassRef::Forward(..) => SiteClass::Named(clo.class_refs[class as usize].borrow().upgrade()?),
+            ClassRef::Named(..) | ClassRef::Forward(..) => {
+                SiteClass::Named(clo.class_refs[class as usize].borrow().upgrade()?)
+            }
             ClassRef::Scope => SiteClass::There(top.scope.as_ref()?),
             ClassRef::ParentScope => SiteClass::There(top.scope.as_ref()?.parent.as_ref()?),
             ClassRef::Static => SiteClass::There(top.called_class()?),
@@ -1071,7 +1378,12 @@ impl Context<'_> {
             Some(class) => Rc::clone(class),
             None => target.counted(),
         };
-        Some(StaticHit { code: q.code, this: this.cloned(), scope, called })
+        Some(StaticHit {
+            code: q.code,
+            this: this.cloned(),
+            scope,
+            called,
+        })
     }
 
     /// The class a static-syntax site's class reference names, when it is
@@ -1079,9 +1391,15 @@ impl Context<'_> {
     /// its parent, the called class); None for the rest (a class in a
     /// register, a name not resolved yet).
     #[inline]
-    pub(crate) fn static_target(&self, clo: &Closure, class: u16) -> Option<Rc<p8_runtime::object::Class>> {
+    pub(crate) fn static_target(
+        &self,
+        clo: &Closure,
+        class: u16,
+    ) -> Option<Rc<p8_runtime::object::Class>> {
         Some(match &clo.code.classes[class as usize] {
-            p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => clo.class_refs[class as usize].borrow().upgrade()?,
+            p8_bytecode::ClassRef::Named(..) | p8_bytecode::ClassRef::Forward(..) => {
+                clo.class_refs[class as usize].borrow().upgrade()?
+            }
             p8_bytecode::ClassRef::Scope => self.scope().0?,
             p8_bytecode::ClassRef::ParentScope => self.scope().0?.parent.clone()?,
             p8_bytecode::ClassRef::Static => self.scope().1?,
@@ -1089,7 +1407,13 @@ impl Context<'_> {
         })
     }
 
-    pub(crate) fn cached_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, func: &Function, class: u16) -> Option<crate::classes::MethodFrame> {
+    pub(crate) fn cached_static(
+        &self,
+        site: &RefCell<Option<MethodSite>>,
+        target: &Rc<p8_runtime::object::Class>,
+        func: &Function,
+        class: u16,
+    ) -> Option<crate::classes::MethodFrame> {
         let site = site.borrow();
         let s = site.as_ref()?;
         if s.class != Rc::as_ptr(target) as usize || s.scope != self.scope_addr() {
@@ -1100,21 +1424,38 @@ impl Context<'_> {
             MethodCode::User(c) => crate::classes::Code::User(c.upgrade()?),
             MethodCode::Native(n, name, _) => crate::classes::Code::Native(*n, name.clone()),
         };
-        let Receiver { this, called: kept } = static_receiver(self.frames.last(), target, &func.classes[class as usize], s.is_static)?;
-        Some(crate::classes::MethodFrame::method(code, this.cloned(), declaring, Rc::clone(kept.unwrap_or(target))))
+        let Receiver { this, called: kept } = static_receiver(
+            self.frames.last(),
+            target,
+            &func.classes[class as usize],
+            s.is_static,
+        )?;
+        Some(crate::classes::MethodFrame::method(
+            code,
+            this.cloned(),
+            declaring,
+            Rc::clone(kept.unwrap_or(target)),
+        ))
     }
 
     /// After `static_frame` resolved a static-syntax call: remember the
     /// method for this target class and scope (not a __call/__callStatic
     /// trampoline).
-    pub(crate) fn remember_static(&self, site: &RefCell<Option<MethodSite>>, target: &Rc<p8_runtime::object::Class>, m: &crate::classes::MethodFrame) {
+    pub(crate) fn remember_static(
+        &self,
+        site: &RefCell<Option<MethodSite>>,
+        target: &Rc<p8_runtime::object::Class>,
+        m: &crate::classes::MethodFrame,
+    ) {
         if m.trampoline.is_some() || m.closure.is_some() {
             return;
         }
         let Some(declaring) = &m.scope else { return };
         let code = match &m.func {
             crate::classes::Code::User(c) => MethodCode::User(Rc::downgrade(c)),
-            crate::classes::Code::Native(n, name) => MethodCode::Native(*n, name.clone(), Cell::new(None)),
+            crate::classes::Code::Native(n, name) => {
+                MethodCode::Native(*n, name.clone(), Cell::new(None))
+            }
         };
         *site.borrow_mut() = Some(MethodSite {
             class: Rc::as_ptr(target) as usize,
@@ -1127,9 +1468,16 @@ impl Context<'_> {
 
     /// After a full property read: remember where a declared, visible,
     /// hookless property of this class is, for the next read here.
-    pub(crate) fn remember_prop(&self, site: &Cell<PropSite>, o: &Rc<p8_runtime::object::Object>, name: &Value) {
+    pub(crate) fn remember_prop(
+        &self,
+        site: &Cell<PropSite>,
+        o: &Rc<p8_runtime::object::Object>,
+        name: &Value,
+    ) {
         let Some(name) = name.as_str() else { return };
-        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else { return };
+        let Ok(Some((slot, prop))) = self.prop_slot(o, name.as_bytes()) else {
+            return;
+        };
         if let Some(entry) = prop_entry(o, name.as_bytes(), slot, prop, self.scope_addr()) {
             site.set(entry);
         }
@@ -1164,17 +1512,35 @@ fn extends(class: &Rc<Class>, target: &Rc<Class>) -> bool {
 ///   `static_frame` raises).
 ///
 #[inline]
-fn static_receiver<'a>(top: Option<&'a Frame>, target: &Rc<Class>, kind: &p8_bytecode::ClassRef, is_static: bool) -> Option<Receiver<'a>> {
+fn static_receiver<'a>(
+    top: Option<&'a Frame>,
+    target: &Rc<Class>,
+    kind: &p8_bytecode::ClassRef,
+    is_static: bool,
+) -> Option<Receiver<'a>> {
     use p8_bytecode::ClassRef;
     if is_static {
-        if !matches!(kind, ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope) {
-            return Some(Receiver { this: None, called: None });
+        if !matches!(
+            kind,
+            ClassRef::Forward(..) | ClassRef::Static | ClassRef::Scope | ClassRef::ParentScope
+        ) {
+            return Some(Receiver {
+                this: None,
+                called: None,
+            });
         }
-        let called = top.and_then(|f| f.called_class()).filter(|c| extends(c, target) || c.is_a(&target.lower));
+        let called = top
+            .and_then(|f| f.called_class())
+            .filter(|c| extends(c, target) || c.is_a(&target.lower));
         return Some(Receiver { this: None, called });
     }
-    let this = top.and_then(|f| f.this.as_ref()).filter(|t| extends(&t.class, target) || t.class.is_a(&target.lower))?;
-    Some(Receiver { this: Some(this), called: Some(&this.class) })
+    let this = top
+        .and_then(|f| f.this.as_ref())
+        .filter(|t| extends(&t.class, target) || t.class.is_a(&target.lower))?;
+    Some(Receiver {
+        this: Some(this),
+        called: Some(&this.class),
+    })
 }
 
 /// What `static_receiver` answers, borrowed from the calling frame.
@@ -1255,13 +1621,20 @@ mod tests {
         table.push(Rc::clone(&stand_in));
         let first = Rc::clone(table.made_at(1, &stand_in, || Rc::new("made")));
         assert!(!Rc::ptr_eq(&first, &stand_in) && *first == "made");
-        let again = Rc::clone(table.made_at(1, &stand_in, || panic!("a made entry is not made again")));
-        assert!(Rc::ptr_eq(&first, &again), "the entry is the one made first");
+        let again =
+            Rc::clone(table.made_at(1, &stand_in, || panic!("a made entry is not made again")));
+        assert!(
+            Rc::ptr_eq(&first, &again),
+            "the entry is the one made first"
+        );
         // Naming something else as the stand-in replaces nothing either.
         let other = Rc::new("other");
         let still = Rc::clone(table.made_at(1, &other, || panic!("only the stand-in is replaced")));
         assert!(Rc::ptr_eq(&first, &still));
-        assert!(Rc::ptr_eq(&table[0], &stand_in) && table.len() == 2, "the other entry is as pushed");
+        assert!(
+            Rc::ptr_eq(&table[0], &stand_in) && table.len() == 2,
+            "the other entry is as pushed"
+        );
     }
 
     /// A declared function or method gets its closure when something first
@@ -1299,7 +1672,11 @@ mod tests {
         cx.declare_classes(&program.classes);
         assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
         let made = |name: &str| {
-            let i = cx.codes.iter().position(|c| c.name.as_bytes().eq_ignore_ascii_case(name.as_bytes())).unwrap_or_else(|| panic!("{name} declared"));
+            let i = cx
+                .codes
+                .iter()
+                .position(|c| c.name.as_bytes().eq_ignore_ascii_case(name.as_bytes()))
+                .unwrap_or_else(|| panic!("{name} declared"));
             !Rc::ptr_eq(&cx.closures[i], &cx.isolate.unbuilt)
         };
         for name in ["called", "by_name", "used", "as_callable"] {
@@ -1326,7 +1703,14 @@ mod tests {
             if (run(new A) !== 3) { exit(3); }";
         // One request: the record run()'s site made, its class A's number,
         // and the class (held weakly).
-        fn request(isolate: &mut Isolate, program: &p8_compiler::Program) -> (super::UserMethod, u64, std::rc::Weak<p8_runtime::object::Class>) {
+        fn request(
+            isolate: &mut Isolate,
+            program: &p8_compiler::Program,
+        ) -> (
+            super::UserMethod,
+            u64,
+            std::rc::Weak<p8_runtime::object::Class>,
+        ) {
             let mut host = Sink;
             let mut cx = isolate.new_context(&mut host);
             for f in &program.functions {
@@ -1334,23 +1718,56 @@ mod tests {
             }
             cx.declare_classes(&program.classes);
             assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
-            let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
-            let run = cx.closures.iter().find(|c| c.code.name.as_bytes() == b"run").expect("run declared");
-            let records: Vec<_> = run.methods.iter().map(|m| m.user.get()).filter(|r| r.class != 0).collect();
-            assert_eq!(records.len(), 1, "run()'s one method call site remembered its method");
-            assert!(records[0].is_for(&class, None), "the site's record is of this request's A");
-            assert_eq!((records[0].by_ref(0), records[0].by_ref(1)), (Some(true), Some(false)));
+            let class = Rc::clone(
+                cx.classes
+                    .values()
+                    .find(|c| c.lower == b"a")
+                    .expect("A linked"),
+            );
+            let run = cx
+                .closures
+                .iter()
+                .find(|c| c.code.name.as_bytes() == b"run")
+                .expect("run declared");
+            let records: Vec<_> = run
+                .methods
+                .iter()
+                .map(|m| m.user.get())
+                .filter(|r| r.class != 0)
+                .collect();
+            assert_eq!(
+                records.len(),
+                1,
+                "run()'s one method call site remembered its method"
+            );
+            assert!(
+                records[0].is_for(&class, None),
+                "the site's record is of this request's A"
+            );
+            assert_eq!(
+                (records[0].by_ref(0), records[0].by_ref(1)),
+                (Some(true), Some(false))
+            );
             (records[0], class.id.get(), Rc::downgrade(&class))
         }
         let program = compile(source, &registry);
         let mut isolate = Isolate::new(Arc::clone(&registry));
         let request = |isolate: &mut Isolate| request(isolate, &program);
         let (first, first_id, first_class) = request(&mut isolate);
-        assert!(first_class.upgrade().is_none(), "the first request's class A is freed with the request");
+        assert!(
+            first_class.upgrade().is_none(),
+            "the first request's class A is freed with the request"
+        );
         let (second, second_id, _) = request(&mut isolate);
-        assert_ne!(first_id, second_id, "the second request's A has a number of its own");
+        assert_ne!(
+            first_id, second_id,
+            "the second request's A has a number of its own"
+        );
         assert!(second_id > first_id, "numbers only go up");
-        assert_ne!(first.class, second.class, "each request's site kept its own class's number");
+        assert_ne!(
+            first.class, second.class,
+            "each request's site kept its own class's number"
+        );
         // Any class made from now on: never the first record's.
         for _ in 0..64 {
             let (later, later_id, _) = request(&mut isolate);
@@ -1377,7 +1794,14 @@ mod tests {
         // One request: the records of run()'s `A::m()` and `$o->o()` sites
         // and of m()'s `self::n()` site, class A's number, and the class
         // (held weakly).
-        fn request(isolate: &mut Isolate, program: &p8_compiler::Program) -> ([super::UserMethod; 3], u64, std::rc::Weak<p8_runtime::object::Class>) {
+        fn request(
+            isolate: &mut Isolate,
+            program: &p8_compiler::Program,
+        ) -> (
+            [super::UserMethod; 3],
+            u64,
+            std::rc::Weak<p8_runtime::object::Class>,
+        ) {
             let mut host = Sink;
             let mut cx = isolate.new_context(&mut host);
             for f in &program.functions {
@@ -1385,17 +1809,43 @@ mod tests {
             }
             cx.declare_classes(&program.classes);
             assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
-            let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
+            let class = Rc::clone(
+                cx.classes
+                    .values()
+                    .find(|c| c.lower == b"a")
+                    .expect("A linked"),
+            );
             let records = |name: &[u8]| -> Vec<super::UserMethod> {
-                let code = cx.closures.iter().find(|c| c.code.name.as_bytes().eq_ignore_ascii_case(name)).expect("made");
-                code.methods.iter().map(|m| m.user.get()).filter(|r| r.class != 0).collect()
+                let code = cx
+                    .closures
+                    .iter()
+                    .find(|c| c.code.name.as_bytes().eq_ignore_ascii_case(name))
+                    .expect("made");
+                code.methods
+                    .iter()
+                    .map(|m| m.user.get())
+                    .filter(|r| r.class != 0)
+                    .collect()
             };
             let (run, m) = (records(b"run"), records(b"m"));
-            assert_eq!((run.len(), m.len()), (2, 1), "each call site remembered its method");
+            assert_eq!(
+                (run.len(), m.len()),
+                (2, 1),
+                "each call site remembered its method"
+            );
             let (named, object, own) = (run[0], run[1], m[0]);
             // `A::m()` from no class, `self::n()` from A: static methods of A.
-            assert!(named.is_static_for(&class, None) && named.is_static && named.by_ref(0) == Some(true) && named.by_ref(1) == Some(false));
-            assert!(own.is_static_for(&class, Some(&class)) && own.is_static && !own.is_static_for(&class, None));
+            assert!(
+                named.is_static_for(&class, None)
+                    && named.is_static
+                    && named.by_ref(0) == Some(true)
+                    && named.by_ref(1) == Some(false)
+            );
+            assert!(
+                own.is_static_for(&class, Some(&class))
+                    && own.is_static
+                    && !own.is_static_for(&class, None)
+            );
             // A static-syntax call's record is no object's, an object's no
             // static-syntax call's.
             assert!(object.is_for(&class, None) && !object.is_static_for(&class, None));
@@ -1406,16 +1856,27 @@ mod tests {
         let mut isolate = Isolate::new(Arc::clone(&registry));
         let request = |isolate: &mut Isolate| request(isolate, &program);
         let (first, first_id, first_class) = request(&mut isolate);
-        assert!(first_class.upgrade().is_none(), "the first request's class A is freed with the request");
+        assert!(
+            first_class.upgrade().is_none(),
+            "the first request's class A is freed with the request"
+        );
         let (second, second_id, _) = request(&mut isolate);
-        assert!(second_id > first_id, "the second request's A has a later number of its own");
+        assert!(
+            second_id > first_id,
+            "the second request's A has a later number of its own"
+        );
         // Any class made from now on: never one the first request's
         // records are of.
         for _ in 0..64 {
             let (later, later_id, _) = request(&mut isolate);
             assert!(later_id > second_id);
             for (first, (second, later)) in first.iter().zip(second.iter().zip(&later)) {
-                assert!(first.class != second.class && first.class != later.class && second.class != later.class, "each request's site kept its own class's number");
+                assert!(
+                    first.class != second.class
+                        && first.class != later.class
+                        && second.class != later.class,
+                    "each request's site kept its own class's number"
+                );
             }
         }
     }
@@ -1429,7 +1890,20 @@ mod tests {
     #[test]
     fn a_method_record_answers_by_reference_as_the_code_does() {
         let registry = Arc::new(Registry::default());
-        let params = |n: usize, last: &str| (0..n).map(|i| if i % 3 == 1 { format!("&$p{i}") } else { format!("$p{i}") }).chain([last.to_string()]).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(", ");
+        let params = |n: usize, last: &str| {
+            (0..n)
+                .map(|i| {
+                    if i % 3 == 1 {
+                        format!("&$p{i}")
+                    } else {
+                        format!("$p{i}")
+                    }
+                })
+                .chain([last.to_string()])
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let bits = usize::from(p8_bytecode::callee::REF_BITS);
         let shapes = [
             params(0, ""),
@@ -1446,17 +1920,34 @@ mod tests {
         ];
         let mut isolate = Isolate::new(Arc::clone(&registry));
         for shape in &shapes {
-            let program = compile(&format!("<?php class A {{}} function f({shape}) {{}} new A;"), &registry);
-            let code = program.functions.iter().find(|f| f.name.as_bytes() == b"f").expect("f compiled");
+            let program = compile(
+                &format!("<?php class A {{}} function f({shape}) {{}} new A;"),
+                &registry,
+            );
+            let code = program
+                .functions
+                .iter()
+                .find(|f| f.name.as_bytes() == b"f")
+                .expect("f compiled");
             let mut host = Sink;
             let mut cx = isolate.new_context(&mut host);
             cx.declare_classes(&program.classes);
             assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
-            let class = Rc::clone(cx.classes.values().find(|c| c.lower == b"a").expect("A linked"));
-            let record = super::UserMethod::new(&class, None, 0, 0, code).unwrap_or_else(|| panic!("f({shape}) remembered"));
+            let class = Rc::clone(
+                cx.classes
+                    .values()
+                    .find(|c| c.lower == b"a")
+                    .expect("A linked"),
+            );
+            let record = super::UserMethod::new(&class, None, 0, 0, code)
+                .unwrap_or_else(|| panic!("f({shape}) remembered"));
             for n in 0..200 {
                 let asks = code.params.len() > bits && n >= bits;
-                assert_eq!(record.by_ref(n), (!asks).then(|| code.param_by_ref(n)), "argument {n} of f({shape})");
+                assert_eq!(
+                    record.by_ref(n),
+                    (!asks).then(|| code.param_by_ref(n)),
+                    "argument {n} of f({shape})"
+                );
             }
         }
     }

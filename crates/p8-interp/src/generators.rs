@@ -89,7 +89,14 @@ pub(crate) enum Op {
 impl Context<'_> {
     /// A call of a generator function: the Generator, its frame's
     /// registers set up from the arguments at `args`.
-    pub(crate) fn make_generator(&mut self, regs: &mut [Value], m: MethodFrame, func: Rc<Closure>, args: usize, argc: usize) -> Rc<Object> {
+    pub(crate) fn make_generator(
+        &mut self,
+        regs: &mut [Value],
+        m: MethodFrame,
+        func: Rc<Closure>,
+        args: usize,
+        argc: usize,
+    ) -> Rc<Object> {
         let code = &func.code;
         let mut window = vec![Value::UNDEF; code.nregs as usize];
         let nparams = code.params.len();
@@ -135,7 +142,13 @@ impl Context<'_> {
 
     /// Run the generator to its next yield (or its end): `sent` is what
     /// the yield it stopped at gives; `throw` is thrown there instead.
-    pub(crate) fn resume(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sent: Value, mut throw: Option<Rc<Object>>) -> Result<(), Throw> {
+    pub(crate) fn resume(
+        &mut self,
+        regs: &mut Vec<Value>,
+        object: &Rc<Object>,
+        sent: Value,
+        mut throw: Option<Rc<Object>>,
+    ) -> Result<(), Throw> {
         let state = gen_of(object).expect("a Generator");
         let (func, pc, argc, this, scope, called) = {
             let mut s = state.0.borrow_mut();
@@ -153,7 +166,14 @@ impl Context<'_> {
                 s.advanced = true;
             }
             s.started = true;
-            (Rc::clone(&s.func), s.pc, s.argc, s.this.clone(), s.scope.clone(), s.called.clone())
+            (
+                Rc::clone(&s.func),
+                s.pc,
+                s.argc,
+                s.this.clone(),
+                s.scope.clone(),
+                s.called.clone(),
+            )
         };
         let at = match self.frames.last() {
             Some(top) => top.base as usize + top.func.code.nregs as usize,
@@ -197,7 +217,9 @@ impl Context<'_> {
             // Thrown where it stopped, as if by its yield.
             self.pc = pc as usize;
             match self.unwind(regs, Throw::Object(e), (pc as usize).saturating_sub(1)) {
-                Ok(target) => self.frames.last_mut().expect("the generator's frame").pc = target as u32,
+                Ok(target) => {
+                    self.frames.last_mut().expect("the generator's frame").pc = target as u32
+                }
                 Err(t) => r = Err(t),
             }
         }
@@ -225,7 +247,14 @@ impl Context<'_> {
 
     /// `yield`: the generator's frame stops at `resume_pc`, keeping its
     /// registers; it gives `value` (under `key`, or the next int key).
-    pub(crate) fn suspend(&mut self, regs: &mut [Value], value: Value, key: Option<Value>, resume_pc: usize, dst: Option<Reg>) -> Next {
+    pub(crate) fn suspend(
+        &mut self,
+        regs: &mut [Value],
+        value: Value,
+        key: Option<Value>,
+        resume_pc: usize,
+        dst: Option<Reg>,
+    ) -> Next {
         let frame = self.frames.pop();
         let generator = frame.owner.take().expect("a generator's frame");
         let base = frame.base as usize;
@@ -235,7 +264,10 @@ impl Context<'_> {
         frame.called = None;
         let state = gen_of(&generator).expect("a Generator");
         let mut s = state.0.borrow_mut();
-        s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)).collect();
+        s.regs = regs[base..base + nregs]
+            .iter_mut()
+            .map(|r| std::mem::replace(r, Value::UNDEF))
+            .collect();
         s.pc = resume_pc as u32;
         s.resume_dst = dst;
         s.key = match key {
@@ -270,8 +302,18 @@ impl Context<'_> {
     /// `yield from src` at `at`: the next element of what it goes through
     /// (the frame stops, to run this again), or Ok(Some(result)) when
     /// that is done.
-    pub(crate) fn yield_from(&mut self, regs: &mut Vec<Value>, base: usize, src: Reg, at: usize) -> Result<Result<Next, Value>, Throw> {
-        let generator = self.frames.last().and_then(|f| f.owner.clone()).expect("yield in a generator");
+    pub(crate) fn yield_from(
+        &mut self,
+        regs: &mut Vec<Value>,
+        base: usize,
+        src: Reg,
+        at: usize,
+    ) -> Result<Result<Next, Value>, Throw> {
+        let generator = self
+            .frames
+            .last()
+            .and_then(|f| f.owner.clone())
+            .expect("yield in a generator");
         let state = gen_of(&generator).expect("a Generator");
         let first = state.0.borrow().delegate.is_none();
         if first {
@@ -280,12 +322,20 @@ impl Context<'_> {
                 Err(v) => match v.into_object() {
                     Ok(o) if gen_of(&o).is_some() => {
                         if Rc::ptr_eq(&o, &generator) {
-                            return Err(self.throw("Error", "Impossible to yield from the Generator being currently run"));
+                            return Err(self.throw(
+                                "Error",
+                                "Impossible to yield from the Generator being currently run",
+                            ));
                         }
                         Delegate::Generator(o)
                     }
                     Ok(o) if o.class.is_a(b"traversable") => self.iterator_delegate(regs, o)?,
-                    _ => return Err(self.throw("Error", "Can use \"yield from\" only with arrays and Traversables")),
+                    _ => {
+                        return Err(self.throw(
+                            "Error",
+                            "Can use \"yield from\" only with arrays and Traversables",
+                        ));
+                    }
                 },
             };
             state.0.borrow_mut().delegate = Some(delegate);
@@ -304,7 +354,9 @@ impl Context<'_> {
             None => (Value::NULL, None),
         };
         let iterator = match &mut state.0.borrow_mut().delegate {
-            Some(Delegate::Iterator(o, first)) => Some((Rc::clone(o), std::mem::replace(first, false))),
+            Some(Delegate::Iterator(o, first)) => {
+                Some((Rc::clone(o), std::mem::replace(first, false)))
+            }
             _ => None,
         };
         if let Some((it, first)) = iterator {
@@ -372,7 +424,11 @@ impl Context<'_> {
 
     /// What `yield from` goes through for a Traversable object: an
     /// IteratorAggregate's iterator (in turn), rewound; a generator as one.
-    fn iterator_delegate(&mut self, regs: &mut Vec<Value>, mut object: Rc<Object>) -> Result<Delegate, Throw> {
+    fn iterator_delegate(
+        &mut self,
+        regs: &mut Vec<Value>,
+        mut object: Rc<Object>,
+    ) -> Result<Delegate, Throw> {
         loop {
             if gen_of(&object).is_some() {
                 return Ok(Delegate::Generator(object));
@@ -381,7 +437,10 @@ impl Context<'_> {
                 self.call_known(regs, &object, known::REWIND, b"rewind")?;
                 return Ok(Delegate::Iterator(object, true));
             }
-            match self.call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?.into_object() {
+            match self
+                .call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?
+                .into_object()
+            {
                 Ok(o) if o.class.is_a(b"traversable") => object = o,
                 _ => {
                     return Err(self.throw(
@@ -406,7 +465,13 @@ impl Context<'_> {
     }
 
     /// A Generator method.
-    pub(crate) fn generator_op(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, op: Op, arg: Value) -> Result<Value, Throw> {
+    pub(crate) fn generator_op(
+        &mut self,
+        regs: &mut Vec<Value>,
+        object: &Rc<Object>,
+        op: Op,
+        arg: Value,
+    ) -> Result<Value, Throw> {
         fn state(o: &Rc<Object>) -> &Gen {
             gen_of(o).expect("a Generator")
         }
@@ -419,12 +484,20 @@ impl Context<'_> {
                 let mut leaf = Rc::clone(object);
                 loop {
                     let inner = match &state(&leaf).0.borrow().delegate {
-                        Some(Delegate::Generator(g)) if !state(g).0.borrow().finished => Rc::clone(g),
+                        Some(Delegate::Generator(g)) if !state(g).0.borrow().finished => {
+                            Rc::clone(g)
+                        }
                         _ => break,
                     };
                     leaf = inner;
                 }
-                let s = if op == Op::Valid { state(object) } else { state(&leaf) }.0.borrow();
+                let s = if op == Op::Valid {
+                    state(object)
+                } else {
+                    state(&leaf)
+                }
+                .0
+                .borrow();
                 Ok(match op {
                     Op::Current => s.current.clone(),
                     Op::Key => s.key.clone(),
@@ -450,7 +523,10 @@ impl Context<'_> {
             Op::Rewind => {
                 self.start(regs, object)?;
                 if state(object).0.borrow().advanced {
-                    return Err(self.throw("Exception", "Cannot rewind a generator that was already run"));
+                    return Err(self.throw(
+                        "Exception",
+                        "Cannot rewind a generator that was already run",
+                    ));
                 }
                 Ok(Value::NULL)
             }
@@ -460,12 +536,17 @@ impl Context<'_> {
                     (Some(v), true) => Ok(v.clone()),
                     _ => {
                         drop(s);
-                        Err(self.throw("Exception", "Cannot get return value of a generator that hasn't returned"))
+                        Err(self.throw(
+                            "Exception",
+                            "Cannot get return value of a generator that hasn't returned",
+                        ))
                     }
                 }
             }
             Op::Throw => {
-                let Ok(e) = arg.into_object() else { return Ok(Value::NULL) };
+                let Ok(e) = arg.into_object() else {
+                    return Ok(Value::NULL);
+                };
                 let started = state(object).0.borrow().started;
                 if !started {
                     // Not started: thrown as if at the start, and not caught there.
@@ -486,7 +567,13 @@ impl Context<'_> {
     /// not looked up (it is for the messages).
     ///
     /// [`known`]: p8_runtime::symbol::known
-    pub(crate) fn call_known(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<Value, Throw> {
+    pub(crate) fn call_known(
+        &mut self,
+        regs: &mut Vec<Value>,
+        object: &Rc<Object>,
+        sym: Sym,
+        name: &[u8],
+    ) -> Result<Value, Throw> {
         let m = self.iter_method(object, sym, name)?;
         if let Code::Native(native, _) = m.func {
             // Lent the registers: it may call PHP (SplHeap's compare()).
@@ -504,13 +591,24 @@ impl Context<'_> {
     /// one the entry was made for, and is remembered then as a call site
     /// remembers it (`remember_method`), unless the method is deprecated
     /// (its message is due at every call).
-    fn iter_method(&mut self, object: &Rc<Object>, sym: Sym, name: &[u8]) -> Result<MethodFrame, Throw> {
+    fn iter_method(
+        &mut self,
+        object: &Rc<Object>,
+        sym: Sym,
+        name: &[u8],
+    ) -> Result<MethodFrame, Throw> {
         let at = (Rc::as_ptr(&object.class) as usize, sym);
-        if let Some(m) = self.iter_sites.get(&at).and_then(|site| self.cached_method(site, object)) {
+        if let Some(m) = self
+            .iter_sites
+            .get(&at)
+            .and_then(|site| self.cached_method(site, object))
+        {
             return Ok(m);
         }
         let m = self.method_frame(&Value::object(Rc::clone(object)), Some(sym), name)?;
-        if crate::classes::method_of(&object.class, Some(sym)).is_some_and(|f| f.deprecation.is_none()) {
+        if crate::classes::method_of(&object.class, Some(sym))
+            .is_some_and(|f| f.deprecation.is_none())
+        {
             let site = RefCell::new(None);
             self.remember_method(&site, object, &m);
             if site.borrow().is_some() {
@@ -524,9 +622,17 @@ impl Context<'_> {
     /// when there is nothing to go through. Generators and Iterators
     /// are gone through as they are; an IteratorAggregate's iterator is;
     /// any other object's visible properties are.
-    pub(crate) fn iter_object(&mut self, regs: &mut Vec<Value>, object: Rc<Object>) -> Result<Option<Value>, Throw> {
+    pub(crate) fn iter_object(
+        &mut self,
+        regs: &mut Vec<Value>,
+        object: Rc<Object>,
+    ) -> Result<Option<Value>, Throw> {
         // A lazy object is initialized first; a proxy iterates its instance.
-        let mut object = if object.lazy.get() != 0 { self.lazy_init(regs, &object)? } else { object };
+        let mut object = if object.lazy.get() != 0 {
+            self.lazy_init(regs, &object)?
+        } else {
+            object
+        };
         loop {
             if gen_of(&object).is_some() {
                 self.generator_op(regs, &object, Op::Rewind, Value::NULL)?;
@@ -539,7 +645,10 @@ impl Context<'_> {
                 return Ok(valid.to_bool().then_some(Value::object(object)));
             }
             if object.class.is_a(b"iteratoraggregate") {
-                match self.call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?.into_object() {
+                match self
+                    .call_known(regs, &object, known::GET_ITERATOR, b"getIterator")?
+                    .into_object()
+                {
                     Ok(o) if o.class.is_a(b"traversable") => {
                         object = o;
                         continue;
@@ -571,12 +680,20 @@ impl Context<'_> {
 
     /// The next element of an object being gone through (after the first,
     /// it is moved on first): (value, key), or None at the end.
-    pub(crate) fn iter_object_next(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, first: bool) -> Result<Option<(Value, Value)>, Throw> {
+    pub(crate) fn iter_object_next(
+        &mut self,
+        regs: &mut Vec<Value>,
+        object: &Rc<Object>,
+        first: bool,
+    ) -> Result<Option<(Value, Value)>, Throw> {
         if gen_of(object).is_some() {
             if !first {
                 self.generator_op(regs, object, Op::Next, Value::NULL)?;
             }
-            if !self.generator_op(regs, object, Op::Valid, Value::NULL)?.to_bool() {
+            if !self
+                .generator_op(regs, object, Op::Valid, Value::NULL)?
+                .to_bool()
+            {
                 return Ok(None);
             }
             let value = self.generator_op(regs, object, Op::Current, Value::NULL)?;
@@ -586,7 +703,10 @@ impl Context<'_> {
         if !first {
             self.call_known(regs, object, known::NEXT, b"next")?;
         }
-        if !self.call_known(regs, object, known::VALID, b"valid")?.to_bool() {
+        if !self
+            .call_known(regs, object, known::VALID, b"valid")?
+            .to_bool()
+        {
             return Ok(None);
         }
         let value = self.call_known(regs, object, known::CURRENT, b"current")?;
@@ -595,7 +715,11 @@ impl Context<'_> {
     }
 
     /// Everything foreach would give for `v`.
-    pub(crate) fn iterate_all(&mut self, regs: &mut Vec<Value>, v: &Value) -> Result<Vec<(Value, Value)>, Throw> {
+    pub(crate) fn iterate_all(
+        &mut self,
+        regs: &mut Vec<Value>,
+        v: &Value,
+    ) -> Result<Vec<(Value, Value)>, Throw> {
         let v = v.deref();
         if let Some(a) = v.as_array() {
             return Ok(a.iter().map(|(k, v)| (k.into_value(), v.deref())).collect());
@@ -625,7 +749,11 @@ impl Context<'_> {
     /// foreach by reference over an object (`state`: the object and the names
     /// its visible properties had at the start): the property at position
     /// `pos` or after that still exists, made a reference.
-    pub(crate) fn next_prop_ref(&self, state: &PhpArray, pos: usize) -> Option<(usize, Key, crate::refs::Cell)> {
+    pub(crate) fn next_prop_ref(
+        &self,
+        state: &PhpArray,
+        pos: usize,
+    ) -> Option<(usize, Key, crate::refs::Cell)> {
         let o = state.get(&Key::Int(0)).and_then(Value::as_object)?;
         let names = state.get(&Key::Int(1)).and_then(Value::as_array)?;
         let scope = self.scope().0;
@@ -633,10 +761,15 @@ impl Context<'_> {
         for (p, name) in names.iter().enumerate().skip(pos) {
             let key = match name.as_int() {
                 Some(i) => Key::Int(i),
-                None => Key::from_string(name.to_php_string().unwrap_or_else(p8_runtime::string::PhpStr::empty)),
+                None => Key::from_string(
+                    name.to_php_string()
+                        .unwrap_or_else(p8_runtime::string::PhpStr::empty),
+                ),
             };
             let declared = match &key {
-                Key::Str(n) => o.class.slot(n.as_bytes(), scope.as_ref().map(|c| c.lower.as_slice())),
+                Key::Str(n) => o
+                    .class
+                    .slot(n.as_bytes(), scope.as_ref().map(|c| c.lower.as_slice())),
                 Key::Int(_) => None,
             };
             if let Some(i) = declared
@@ -662,7 +795,11 @@ impl Context<'_> {
             if slots[i].is_undef() || p.is_internal() {
                 continue;
             }
-            if o.class.slot(p.name.as_bytes(), scope.as_ref().map(|s| s.lower.as_slice())) != Some(i) {
+            if o.class.slot(
+                p.name.as_bytes(),
+                scope.as_ref().map(|s| s.lower.as_slice()),
+            ) != Some(i)
+            {
                 continue;
             }
             let declaring = self.class_named(&p.declaring).cloned();

@@ -30,7 +30,10 @@ impl Context<'_> {
         match self.load_class(name)? {
             Some(c) => Ok(c),
             // Named as written: a dynamic name keeps its leading `\`.
-            None => Err(self.throw("Error", format!("Class \"{}\" not found", String::from_utf8_lossy(name)))),
+            None => Err(self.throw(
+                "Error",
+                format!("Class \"{}\" not found", String::from_utf8_lossy(name)),
+            )),
         }
     }
 
@@ -53,7 +56,10 @@ impl Context<'_> {
         // the instruction that asked them.
         // Only a name that can be a class's is autoloaded (zend_is_valid_class_name):
         // never "" or "a-b".
-        let valid = !name.is_empty() && name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80);
+        let valid = !name.is_empty()
+            && name
+                .iter()
+                .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80);
         if valid && !self.autoloaders.is_empty() {
             let lower = name.to_ascii_lowercase();
             if self.autoload_retry.as_ref() == Some(&lower) {
@@ -96,11 +102,25 @@ impl Context<'_> {
             .isolate
             .registry
             .data_maker(spec.name)
-            .or_else(|| (spec.name == "Fiber").then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData))
+            .or_else(|| {
+                (spec.name == "Fiber")
+                    .then_some(crate::fiber::make_fiber as p8_runtime::object::MakeData)
+            })
             .or_else(|| crate::reflection::data_maker(spec.name));
-        let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| (spec.name == "Fiber").then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod));
+        let dtor = self.isolate.registry.native_dtor(spec.name).or_else(|| {
+            (spec.name == "Fiber")
+                .then_some(crate::fiber::destroy as p8_runtime::object::NativeMethod)
+        });
         let hooks = self.isolate.registry.class_hooks(spec.name);
-        crate::builtin_classes::declare_spec(&mut crate::builtin_classes::Classes { table: &mut self.classes, symbols: &self.isolate.names }, spec, make_data, dtor);
+        crate::builtin_classes::declare_spec(
+            &mut crate::builtin_classes::Classes {
+                table: &mut self.classes,
+                symbols: &self.isolate.names,
+            },
+            spec,
+            make_data,
+            dtor,
+        );
         if let Some(h) = hooks
             && let Some(c) = self.classes.get_mut(&key)
             && let Some(c) = Rc::get_mut(c)
@@ -129,12 +149,24 @@ impl Context<'_> {
     /// autoloaders where it is, and is not run again after them.
     #[cold]
     pub(crate) fn unlent_autoload(&mut self, name: PhpStr) -> Throw {
-        self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
-        Ctx::fatal(self, format!("a builtin not marked as reentering autoloaded \"{}\"", String::from_utf8_lossy(name.as_bytes())))
+        self.autoload_tried
+            .remove(&name.as_bytes().to_ascii_lowercase());
+        Ctx::fatal(
+            self,
+            format!(
+                "a builtin not marked as reentering autoloaded \"{}\"",
+                String::from_utf8_lossy(name.as_bytes())
+            ),
+        )
     }
 
     /// Run the autoloaders on `name`, in order, until one declares it.
-    fn run_loaders(&mut self, regs: &mut Vec<Value>, name: PhpStr, lower: &[u8]) -> Result<(), Throw> {
+    fn run_loaders(
+        &mut self,
+        regs: &mut Vec<Value>,
+        name: PhpStr,
+        lower: &[u8],
+    ) -> Result<(), Throw> {
         for loader in self.autoloaders.clone() {
             self.call_with_regs(regs, &loader, &mut [Value::str(name.clone())])?;
             if self.class_named(lower).is_some() {
@@ -146,7 +178,11 @@ impl Context<'_> {
 
     /// Run the autoloaders on `name` for the instruction that asked (it
     /// runs again after them).
-    pub(crate) fn run_autoload(&mut self, regs: &mut Vec<Value>, name: PhpStr) -> Result<(), Throw> {
+    pub(crate) fn run_autoload(
+        &mut self,
+        regs: &mut Vec<Value>,
+        name: PhpStr,
+    ) -> Result<(), Throw> {
         let lower = name.as_bytes().to_ascii_lowercase();
         let result = self.run_loaders(regs, name, &lower);
         self.autoload_tried.remove(&lower);
@@ -162,8 +198,14 @@ impl Context<'_> {
         let pending = std::mem::take(&mut self.pending_errors);
         // The builtin an E_USER_ERROR came from (call_builtin): the fatal
         // error's first frame if the handler declines it, else forgotten.
-        let raised_in = if pending.iter().any(|e| e.0 == 256) { self.failed_call.take() } else { None };
-        let Some((handler, _)) = self.error_handlers.last().cloned() else { return Ok(()) };
+        let raised_in = if pending.iter().any(|e| e.0 == 256) {
+            self.failed_call.take()
+        } else {
+            None
+        };
+        let Some((handler, _)) = self.error_handlers.last().cloned() else {
+            return Ok(());
+        };
         for (level, message, file, line) in pending {
             self.in_handler = true;
             let mut args = [
@@ -178,7 +220,11 @@ impl Context<'_> {
                 // An E_USER_ERROR the handler declines is fatal.
                 if level == 256 {
                     self.failed_call = raised_in;
-                    return Err(Throw::Fatal { message, file, line });
+                    return Err(Throw::Fatal {
+                        message,
+                        file,
+                        line,
+                    });
                 }
                 self.print_diag(level, &message, &file, line);
             }
@@ -193,7 +239,11 @@ impl Context<'_> {
 
     /// The destructors due, called from the instruction before `pc` of
     /// the top frame (where a trace shows the call).
-    pub(crate) fn run_destructors_at(&mut self, regs: &mut Vec<Value>, pc: Option<usize>) -> Result<(), Throw> {
+    pub(crate) fn run_destructors_at(
+        &mut self,
+        regs: &mut Vec<Value>,
+        pc: Option<usize>,
+    ) -> Result<(), Throw> {
         let saved = self.frames.last().map(|f| f.pc);
         if let (Some(pc), Some(top)) = (pc, self.frames.last_mut()) {
             top.pc = pc as u32;
@@ -268,7 +318,11 @@ impl Context<'_> {
     /// The destructors at the end: the globals (the main frame's first
     /// `ncv` registers) that alone hold an object, last first, until none
     /// is left; then every object still alive, oldest first.
-    pub(crate) fn end_destructors(&mut self, regs: &mut Vec<Value>, ncv: usize) -> Result<(), Throw> {
+    pub(crate) fn end_destructors(
+        &mut self,
+        regs: &mut Vec<Value>,
+        ncv: usize,
+    ) -> Result<(), Throw> {
         loop {
             let mut freed = false;
             for r in (0..ncv).rev() {
@@ -290,14 +344,22 @@ impl Context<'_> {
         // What the globals still hold lives on past the output buffers, as
         // PHP's symbol table does (a resource is freed then: a user-space
         // stream's stream_close runs after the buffers are flushed).
-        let kept = regs[..ncv.min(regs.len())].iter().filter(|v| !v.is_undef()).cloned();
+        let kept = regs[..ncv.min(regs.len())]
+            .iter()
+            .filter(|v| !v.is_undef())
+            .cloned();
         self.ended_globals.extend(kept);
         self.destruct_remaining(regs)
     }
 
     /// A native class's cleanup, with the registers lent so that it may call
     /// back into PHP (a ZipArchive closed on destruction runs its callbacks).
-    fn run_native_dtor(&mut self, regs: &mut Vec<Value>, dtor: p8_runtime::object::NativeMethod, object: &Rc<p8_runtime::object::Object>) -> Result<Value, Throw> {
+    fn run_native_dtor(
+        &mut self,
+        regs: &mut Vec<Value>,
+        dtor: p8_runtime::object::NativeMethod,
+        object: &Rc<p8_runtime::object::Object>,
+    ) -> Result<Value, Throw> {
         self.isolate.regs = std::mem::take(regs);
         let r = dtor(self, object, &mut []);
         *regs = std::mem::take(&mut self.isolate.regs);
@@ -337,7 +399,12 @@ impl Context<'_> {
     /// An exception nothing caught: the exception handler's, if one is set.
     pub(crate) fn handle_uncaught(&mut self, regs: &mut Vec<Value>, t: Throw) -> Throw {
         let Throw::Object(e) = t else { return t };
-        let Some(handler) = self.exception_handlers.last().cloned().filter(|h| !h.is_null()) else {
+        let Some(handler) = self
+            .exception_handlers
+            .last()
+            .cloned()
+            .filter(|h| !h.is_null())
+        else {
             return Throw::Object(e);
         };
         // The handler is called once; an exception it throws is uncaught.

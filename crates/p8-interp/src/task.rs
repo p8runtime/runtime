@@ -71,7 +71,11 @@ impl Context<'_> {
     /// when the running task is the request's first; else the first
     /// task's own, put aside while a fiber runs (taken out for the call,
     /// in constant time).
-    pub(crate) fn with_main<R>(&mut self, below: &mut [Value], f: impl FnOnce(&mut Self, &mut [Value]) -> R) -> R {
+    pub(crate) fn with_main<R>(
+        &mut self,
+        below: &mut [Value],
+        f: impl FnOnce(&mut Self, &mut [Value]) -> R,
+    ) -> R {
         if self.fibers.is_empty() {
             return f(self, below);
         }

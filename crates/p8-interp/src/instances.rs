@@ -40,12 +40,21 @@ pub(crate) struct Ctor {
 
 impl Ctor {
     /// The constructor's call on `object`.
-    pub(crate) fn frame(&self, object: Rc<p8_runtime::object::Object>, class: &Rc<Class>) -> MethodFrame {
+    pub(crate) fn frame(
+        &self,
+        object: Rc<p8_runtime::object::Object>,
+        class: &Rc<Class>,
+    ) -> MethodFrame {
         let func = match &self.func {
             Code::User(c) => Code::User(Rc::clone(c)),
             Code::Native(n, name) => Code::Native(*n, name.clone()),
         };
-        MethodFrame::method(func, Some(object), Rc::clone(&self.declaring), Rc::clone(class))
+        MethodFrame::method(
+            func,
+            Some(object),
+            Rc::clone(&self.declaring),
+            Rc::clone(class),
+        )
     }
 }
 
@@ -65,15 +74,30 @@ impl Context<'_> {
         if let Some(info) = self.new_infos.get(&key) {
             return (Rc::clone(info), true);
         }
-        let lazy = if class.flags & p8_runtime::object::CLASS_LAZY != 0 { Some(self.class_defaults.get(&key).cloned()) } else { None };
+        let lazy = if class.flags & p8_runtime::object::CLASS_LAZY != 0 {
+            Some(self.class_defaults.get(&key).cloned())
+        } else {
+            None
+        };
         let mut defaults: Vec<Value> = class.properties.iter().map(|p| p.default.clone()).collect();
         if let Some(Some(lazy)) = &lazy {
             for (i, v) in lazy.iter() {
                 defaults[*i] = v.clone();
             }
         }
-        let ctor = class.method_sym(p8_runtime::symbol::known::CONSTRUCT).map(|m| Ctor { func: self.code_of(m), declaring: self.declaring(class, &m.declaring), visibility: m.visibility });
-        let info = Rc::new(NewInfo { class: Rc::clone(class), defaults: defaults.into_boxed_slice(), throwable: class.is_a(b"throwable"), ctor });
+        let ctor = class
+            .method_sym(p8_runtime::symbol::known::CONSTRUCT)
+            .map(|m| Ctor {
+                func: self.code_of(m),
+                declaring: self.declaring(class, &m.declaring),
+                visibility: m.visibility,
+            });
+        let info = Rc::new(NewInfo {
+            class: Rc::clone(class),
+            defaults: defaults.into_boxed_slice(),
+            throwable: class.is_a(b"throwable"),
+            ctor,
+        });
         let keep = !matches!(lazy, Some(None));
         if keep {
             self.new_infos.insert(key, Rc::clone(&info));
@@ -138,17 +162,29 @@ mod tests {
         assert_eq!(cx.run_main(Arc::clone(&program.main)), 0);
         let a = Rc::clone(cx.class_named(b"a").expect("A"));
         let b = Rc::clone(cx.class_named(b"b").expect("B"));
-        let info = |c: &Rc<p8_runtime::object::Class>| Rc::clone(&cx.new_infos[&(Rc::as_ptr(c) as usize)]);
+        let info =
+            |c: &Rc<p8_runtime::object::Class>| Rc::clone(&cx.new_infos[&(Rc::as_ptr(c) as usize)]);
         let (ia, ib) = (info(&a), info(&b));
         assert_eq!(cx.new_infos.len(), 2, "one NewInfo per class");
         // B's constructor is A's, found through B once.
-        assert!(Rc::ptr_eq(&ib.ctor.as_ref().expect("inherited").declaring, &a));
+        assert!(Rc::ptr_eq(
+            &ib.ctor.as_ref().expect("inherited").declaring,
+            &a
+        ));
         assert_eq!(ib.defaults.len(), 3);
         // The defaults were copied, never changed by an object's writes.
         assert!(ia.defaults[0].as_array().is_some_and(|l| l.len() == 2));
         // make()'s two `new` sites hold their classes' NewInfo.
-        let make = cx.closures.iter().find(|c| c.code.name.as_bytes() == b"make").expect("make");
-        let held: Vec<_> = make.news.iter().filter_map(|s| s.borrow().upgrade()).collect();
+        let make = cx
+            .closures
+            .iter()
+            .find(|c| c.code.name.as_bytes() == b"make")
+            .expect("make");
+        let held: Vec<_> = make
+            .news
+            .iter()
+            .filter_map(|s| s.borrow().upgrade())
+            .collect();
         assert_eq!(held.len(), 2);
         assert!(held.iter().any(|i| Rc::ptr_eq(i, &ia)) && held.iter().any(|i| Rc::ptr_eq(i, &ib)));
     }
