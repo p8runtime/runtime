@@ -1,0 +1,41 @@
+cufa f: 300:45150
+cufa g: 300:45150
+cufa [o,m]: 300:45150
+cufa O::s: 300:45150
+cufa [O,s]: 300:45150
+cufa closure: 300:45150
+cufa __call: zz 300
+cufa __callStatic: static zz 300
+cufa max: 300
+cufa array_merge: 300
+cufa named: 301:46150
+cufa fixed: 1,2+298
+cuf f: 300:45150
+cuf [o,m]: 300:45150
+cuf closure: 300:45150
+spread f: 300:45150
+spread g: 300:45150
+spread m: 300:45150
+spread s: 300:45150
+spread __call: zz 300
+spread __callStatic: static zz 300
+spread closure: 300:45150
+spread dynamic: 300:45150
+spread fixed: 1,2+298
+spread named: 301:46150
+spread new: 300
+spread max: 300
+spread array_merge: 300
+spread sprintf: 792
+spread array_push: 300
+spread by ref: 300 600
+reflection invokeArgs: 300:45150
+reflection invoke: 300:45150
+reflection method: 300:45150
+Closure::call: 300:45150
+__invoke: 300:45150
+literal: 300:45150
+literal method: 300:45150
+literal builtin: 300
+fiber: 300
+array_map: 300

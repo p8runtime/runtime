@@ -1384,7 +1384,7 @@ impl Context<'_> {
             // ZEND_INIT_USER_CALL: the callback's frame, run by this loop.
             self.user_call_at(regs, base, i, (args, argc, dst), pc + 1)
         } else {
-            self.call_builtin(regs, base, i, args, argc, dst).map(|()| pc + 1)
+            self.call_builtin(regs, base, i, args, argc.into(), dst).map(|()| pc + 1)
         };
         let next = match ran {
             Ok(next) => next,
@@ -2419,7 +2419,7 @@ impl Context<'_> {
                     if regs.len() < at + list.len() + 1 {
                         regs.resize(at + list.len() + 1, Value::UNDEF);
                     }
-                    let argc = list.len() as u8;
+                    let argc = list.len();
                     for (i, v) in list.into_iter().enumerate() {
                         regs[at + i] = v;
                     }
@@ -2764,7 +2764,7 @@ impl Context<'_> {
         if let Some(o) = target.as_object()
             && let Some(m) = self.cached_method(&clo.methods[method as usize], o)
         {
-            return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+            return self.call_method(regs, m, base + args as usize, argc.into(), (base + dst as usize) as u32, pc);
         }
         let site = &clo.code.sites[method as usize];
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
@@ -2772,7 +2772,7 @@ impl Context<'_> {
             self.remember_method(&clo.methods[method as usize], o, &m);
             self.remember_user_method(&clo.methods[method as usize], o, &m);
         }
-        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+        self.call_method(regs, m, base + args as usize, argc.into(), (base + dst as usize) as u32, pc)
     }
 
     /// `$obj->m(literals)` in one instruction (the MethodCallNow at `at`),
@@ -2796,7 +2796,7 @@ impl Context<'_> {
         if let Some(o) = target.as_object()
             && let Some(m) = self.cached_method(slot, o)
         {
-            return self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc);
+            return self.call_method(regs, m, base + args as usize, argc.into(), (base + dst as usize) as u32, pc);
         }
         let site = &clo.code.sites[method as usize];
         let m = self.method_frame(&target, Some(site.sym), site.display.as_bytes())?;
@@ -2804,7 +2804,7 @@ impl Context<'_> {
             self.remember_method(slot, o, &m);
             self.remember_user_method(slot, o, &m);
         }
-        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+        self.call_method(regs, m, base + args as usize, argc.into(), (base + dst as usize) as u32, pc)
     }
 
     /// `$obj->m(` (the InitMethod at `at`), every case: the receiver read
@@ -2927,7 +2927,7 @@ impl Context<'_> {
                 None => native && cx.method_takes_ref(&target, Some(sym), n),
             });
         }
-        self.call_method(regs, m, base + args as usize, argc, (base + dst as usize) as u32, pc)
+        self.call_method(regs, m, base + args as usize, argc.into(), (base + dst as usize) as u32, pc)
     }
 
     /// `include` / `require` (`_once`) of the path in `src` (the Include at
@@ -4496,7 +4496,7 @@ impl Context<'_> {
         // read (INIT_DYNAMIC_CALL).
         if !self.pending_errors.is_empty() && target.is_null() {
             self.dispatch_errors(regs)?;
-            return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+            return self.call_value(regs, &target, base + args as usize, argc.into(), (base + dst as usize) as u32, pc);
         }
         if vars != p8_bytecode::NO_VARS {
             // By reference where the callable takes one: a
@@ -4515,7 +4515,7 @@ impl Context<'_> {
                         // argument is read (INIT_DYNAMIC_CALL fails first).
                         Err(_) => {
                             self.autoload_retry = retry;
-                            return self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc);
+                            return self.call_value(regs, &target, base + args as usize, argc.into(), (base + dst as usize) as u32, pc);
                         }
                     }
                 }
@@ -4526,7 +4526,7 @@ impl Context<'_> {
                 None => Self::closure_takes_ref(&target, n).unwrap_or(false),
             });
         }
-        self.call_value(regs, &target, base + args as usize, argc, (base + dst as usize) as u32, pc)
+        self.call_value(regs, &target, base + args as usize, argc.into(), (base + dst as usize) as u32, pc)
     }
 
     /// `f(...$args)` (the CallSpread at `at`: the callable in `callee`, the
@@ -4586,7 +4586,7 @@ impl Context<'_> {
         if regs.len() < at + list.len() + 1 {
             regs.resize(at + list.len() + 1, Value::UNDEF);
         }
-        let argc = list.len() as u8;
+        let argc = list.len();
         for (i, v) in list.into_iter().enumerate() {
             regs[at + i] = v;
         }
@@ -4630,7 +4630,7 @@ impl Context<'_> {
             }
             Some(ctor) => {
                 let m = ctor.frame(object, &info.class);
-                self.call_method(regs, m, base + args as usize, argc, NO_RET, pc)
+                self.call_method(regs, m, base + args as usize, argc.into(), NO_RET, pc)
             }
             None => {
                 let start = base + args as usize;
@@ -4799,7 +4799,7 @@ impl Context<'_> {
             }
             Callee::Builtin(i) if self.user_call_twins.contains(&i) => self.user_call(regs, base, i, (args, argc, dst), pc),
             Callee::Builtin(i) => {
-                self.call_builtin(regs, base, i, args, argc, dst)?;
+                self.call_builtin(regs, base, i, args, argc.into(), dst)?;
                 Ok(Next::Go(pc))
             }
             Callee::Constant(_) => unreachable!("a call site resolves to a function"),
@@ -4809,12 +4809,12 @@ impl Context<'_> {
     /// Push the frame of a method call: its arguments at `args`
     /// (absolute), its result to `ret` (NO_RET: discarded, as a
     /// constructor's is).
-    fn call_method(&mut self, regs: &mut Vec<Value>, mut m: classes::MethodFrame, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+    fn call_method(&mut self, regs: &mut Vec<Value>, mut m: classes::MethodFrame, args: usize, argc: usize, ret: u32, pc: usize) -> Result<Next, Throw> {
         // __call / __callStatic: the arguments become (name, [arguments]).
         let argc = match m.trampoline.take() {
             Some(name) => {
                 // (Moved out: no argument register keeps a value.)
-                let packed: Vec<Value> = regs[args..args + argc as usize].iter_mut().map(|r| std::mem::take(r).deref()).collect();
+                let packed: Vec<Value> = regs[args..args + argc].iter_mut().map(|r| std::mem::take(r).deref()).collect();
                 if regs.len() < args + 2 {
                     regs.resize(args + 2, Value::UNDEF);
                 }
@@ -4829,7 +4829,7 @@ impl Context<'_> {
             classes::Code::Native(native, name) => {
                 // (The arguments' buffer is the context's, kept for its capacity.)
                 let mut buf = std::mem::take(&mut self.arg_buf);
-                buf.extend(regs[args..args + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
+                buf.extend(regs[args..args + argc].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
                 let saved = std::mem::replace(&mut self.native_class, m.called.take());
                 // Lent, as to a builtin: Closure::call runs PHP code, and
                 // a class it looks up is autoloaded with it running.
@@ -4856,14 +4856,14 @@ impl Context<'_> {
                 return Ok(Next::Go(pc));
             }
         };
-        if (argc as usize) < func.code.required {
+        if argc < func.code.required {
             let class = m.scope.as_ref().map(|c| (c.name.clone(), m.this.is_some()));
             let class = class.as_ref().map(|(n, this)| (n, *this));
-            return Err(self.missing_args(&func.code, &regs[args..args + argc as usize], class));
+            return Err(self.missing_args(&func.code, &regs[args..args + argc], class));
         }
         if func.code.is_generator {
             let frame = classes::MethodFrame { func: classes::Code::User(Rc::clone(&func)), this: m.this, scope: m.scope, called: m.called, trampoline: None, closure: m.closure };
-            let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc as usize);
+            let g = self.make_generator(regs, frame, Rc::clone(&func), args, argc);
             if ret != NO_RET {
                 regs[ret as usize] = Value::object(g);
             }
@@ -4872,7 +4872,7 @@ impl Context<'_> {
         if let Some(caller) = self.frames.last_mut() {
             caller.pc = pc as u32;
         }
-        self.frames.push(&func, args, argc as usize, ret);
+        self.frames.push(&func, args, argc, ret);
         let frame = self.frames.last_mut().expect("the frame just pushed");
         frame.this = m.this;
         frame.scope = m.scope;
@@ -5227,21 +5227,21 @@ impl Context<'_> {
     /// runs, so it can call back into PHP (array_map, usort) and run the
     /// autoloaders where it looks a class up (class_exists, is_a).
     #[inline(never)]
-    fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: u8, dst: Reg) -> Result<(), Throw> {
+    fn call_builtin(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, args: Reg, argc: usize, dst: Reg) -> Result<(), Throw> {
         let start = base + args as usize;
         // call_user_func / call_user_func_array on the name of a function
         // of PHP code: run from the registers (callable.rs).
         if self.user_calls.contains(&i)
-            && let Some(r) = self.call_by_name(regs, base, i, start, argc as usize, dst)
+            && let Some(r) = self.call_by_name(regs, base, i, start, argc, dst)
         {
             return r;
         }
         // Arguments that leave the builtin nothing to do (a holding
         // assert()): its result, as the builtin would give it.
         if let Some(quick) = self.isolate.registry.call(i).quick
-            && let Some(v) = quick(&regs[start..start + argc as usize])
+            && let Some(v) = quick(&regs[start..start + argc])
         {
-            for r in &mut regs[start..start + argc as usize] {
+            for r in &mut regs[start..start + argc] {
                 clear(r);
             }
             regs[base + dst as usize] = v;
@@ -5252,11 +5252,11 @@ impl Context<'_> {
         // output before the headers, which may run
         // header_register_callback's callback: the path that can call back.
         let lent = self.isolate.registry.reenters(i)
-            || regs[start..start + argc as usize].iter().any(Value::is_object)
+            || regs[start..start + argc].iter().any(Value::is_object)
             || (!self.out.started && self.header_callback_set && self.ext_state.contains_key("header_callback"));
         if !lent {
             // The common case: the builtin works on the registers directly.
-            let args = &mut regs[start..start + argc as usize];
+            let args = &mut regs[start..start + argc];
             let r = self.run_builtin(i, args);
             for v in args {
                 clear(v);
@@ -5266,7 +5266,7 @@ impl Context<'_> {
         }
         p8_runtime::counts::bump(p8_runtime::counts::Count::BuiltinLent);
         let mut buf = std::mem::take(&mut self.arg_buf);
-        buf.extend(regs[start..start + argc as usize].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
+        buf.extend(regs[start..start + argc].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)));
         self.isolate.regs = std::mem::take(regs);
         // Running: frames it calls show it in their traces.
         // Its frames show this call's line.
