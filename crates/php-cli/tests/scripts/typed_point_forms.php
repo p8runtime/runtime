@@ -99,6 +99,13 @@ try {
 } catch (TypeError $e) {
     echo get_class($e), ": ", preg_replace('/, called in .*/', '', $e->getMessage()), "\n";
 }
+function f_arrvar(float $k, array ...$xs) { var_dump($k, $xs); }
+f_arrvar(1, [2]);
+try {
+    f_arrvar(1, 2);
+} catch (TypeError $e) {
+    echo get_class($e), ": ", preg_replace('/, called in .*/', '', $e->getMessage()), "\n";
+}
 try {
     f_mixed(new Holder, 2, 3);
 } catch (TypeError $e) {

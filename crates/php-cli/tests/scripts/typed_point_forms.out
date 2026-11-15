@@ -60,6 +60,15 @@ object(Holder)#6 (3) {
 float(23)
 TypeError: f_mixed(): Argument #2 ($k) must be of type float, string given
 TypeError: f_mixed(): Argument #3 ($j) must be of type float, array given
+float(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+TypeError: f_arrvar(): Argument #2 must be of type array, int given
 TypeError: f_mixed(): Argument #1 ($p) must be of type Point, Holder given
 float(6.5)
 array(1) {
