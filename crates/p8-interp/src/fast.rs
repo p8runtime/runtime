@@ -433,8 +433,10 @@ impl Context<'_> {
             // the operands `$args` it decoded (`out!`, not the slow path).
             macro_rules! gen_out {
                 ($m:ident $(::<$s:path>)?, $h:path, $args:expr) => {{
-                    let args = $args;
-                    match $h(hx!(), args) {
+                    // (The out-of-line paths decode the operands again from
+                    // the instruction: kept from here, they would be held,
+                    // on the stack, through the handler's own path.)
+                    match $h(hx!(), $args) {
                         Ctl::Next(released) => done!(released),
                         Ctl::Skip(released) => {
                             let at = pc;
@@ -446,12 +448,12 @@ impl Context<'_> {
                         Ctl::Jump(target) => {
                             if back!(target) {
                                 // (`out_of_line` raises the interrupt.)
-                                out!(args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args));
+                                out!($args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args));
                             }
                             pc = target as usize;
                         }
                         Ctl::Return(value) => ret!(value),
-                        Ctl::Cold => out!(args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args)),
+                        Ctl::Cold => out!($args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args)),
                     }
                 }};
             }
