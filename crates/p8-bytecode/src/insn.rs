@@ -109,6 +109,10 @@ pub const CONST_LEFT: u32 = 1 << 4;
 /// register b); the value is the constant in bits 14..28 (else register c).
 pub const KEY_CONST: u32 = 1 << 28;
 pub const VAL_CONST: u32 = 1 << 29;
+/// With KEY_CONST: the key is a string that names no int (`'a'`, not
+/// `'5'`), so the handler sets it as a string key with no numeric test,
+/// as PHP's compiler leaves a literal key for ZEND_INIT_ARRAY.
+pub const KEY_STR: u32 = 1 << 30;
 
 /// CallRegs' `imm` bit: the one argument is constant `a` (an index below
 /// 256), not the register.
@@ -658,12 +662,16 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
             Some(kk) => i(Op::ArrayPushC, arr, 0, 0, kk),
             None => i(Op::ArrayPush, arr, val, 0, take(t)),
         },
-        Instr::ArraySet { arr, key, val, take: t } => match (k(key), k(val)) {
-            (None, None) => i(Op::ArraySet, arr, key, val, take(t)),
-            (Some(kk), None) => i(Op::ArraySetC, arr, 0, val, take(t) | KEY_CONST | kk),
-            (None, Some(kv)) => i(Op::ArraySetC, arr, key, 0, VAL_CONST | kv << 14),
-            (Some(kk), Some(kv)) => i(Op::ArraySetC, arr, 0, 0, KEY_CONST | VAL_CONST | kk | kv << 14),
-        },
+        Instr::ArraySet { arr, key, val, take: t } => {
+            // (A string key naming no int: KEY_STR, `konst`'s KStr.)
+            let key_str = |kk: u32| if matches!(konst(consts, kk as usize), Some(Opnd::KStr(_))) { KEY_STR } else { 0 };
+            match (k(key), k(val)) {
+                (None, None) => i(Op::ArraySet, arr, key, val, take(t)),
+                (Some(kk), None) => i(Op::ArraySetC, arr, 0, val, take(t) | KEY_CONST | key_str(kk) | kk),
+                (None, Some(kv)) => i(Op::ArraySetC, arr, key, 0, VAL_CONST | kv << 14),
+                (Some(kk), Some(kv)) => i(Op::ArraySetC, arr, 0, 0, KEY_CONST | VAL_CONST | key_str(kk) | kk | kv << 14),
+            }
+        }
         Instr::FetchConst { site, dst } => i(Op::FetchConst, dst, 0, 0, u32::from(site)),
         Instr::IterInit { src, iter, end } => {
             r(iter + 1)?;
@@ -1047,6 +1055,8 @@ mod tests {
             Instr::Sub { dst: 5, a: 4, b: c(7) },
             Instr::Binary { op: BinOp::Concat, dst: 5, a: c(7), b: 4 },
             Instr::ArraySet { arr: 5, key: c(1), val: c(2), take: false },
+            Instr::ArraySet { arr: 5, key: c(7), val: 4, take: true },
+            Instr::ArraySet { arr: 5, key: c(8), val: c(2), take: false },
             Instr::LoadConst { dst: 10, k: 7 },
             Instr::Call { site: 4, base: 10, argc: 1, dst: 12 },
             Instr::Assign { var: 1, src: c(2) },
@@ -1065,11 +1075,14 @@ mod tests {
         assert_eq!(at(5), Insn { op: Op::SubC, a: 5, b: 4, c: 0, imm: 7 });
         assert_eq!(at(6), Insn { op: Op::BinaryC, a: 5, b: 4, c: 0, imm: binop_imm(BinOp::Concat) | CONST_LEFT | 7 << 8 });
         assert_eq!(at(7), Insn { op: Op::ArraySetC, a: 5, b: 0, c: 0, imm: KEY_CONST | VAL_CONST | 1 | 2 << 14 });
-        assert_eq!(at(8), Insn { op: Op::CallRegs, a: 7, b: 1, c: 12, imm: 4 | 10 << 16 | ARG_CONST });
-        assert_eq!(at(10), Insn { op: Op::P8_ASSIGN_K, a: 1, b: 0, c: 0, imm: 2 });
-        assert_eq!(at(11), Insn { op: Op::IncJumpLtC, a: 1, b: 2, c: 1, imm: 0 });
-        assert_eq!(at(12), Insn { op: Op::P8_RETURN_K, a: 0, b: 0, c: 0, imm: 2 });
-        assert!(lower_at(&code, 13, &consts, 0).is_none());
+        // A string key naming no int is KEY_STR; '5' (an int key) is not.
+        assert_eq!(at(8), Insn { op: Op::ArraySetC, a: 5, b: 0, c: 4, imm: TAKE | KEY_CONST | KEY_STR | 7 });
+        assert_eq!(at(9), Insn { op: Op::ArraySetC, a: 5, b: 0, c: 0, imm: KEY_CONST | VAL_CONST | 8 | 2 << 14 });
+        assert_eq!(at(10), Insn { op: Op::CallRegs, a: 7, b: 1, c: 12, imm: 4 | 10 << 16 | ARG_CONST });
+        assert_eq!(at(12), Insn { op: Op::P8_ASSIGN_K, a: 1, b: 0, c: 0, imm: 2 });
+        assert_eq!(at(13), Insn { op: Op::IncJumpLtC, a: 1, b: 2, c: 1, imm: 0 });
+        assert_eq!(at(14), Insn { op: Op::P8_RETURN_K, a: 0, b: 0, c: 0, imm: 2 });
+        assert!(lower_at(&code, 15, &consts, 0).is_none());
         // A constant past the table is no form either.
         assert!(lower_at(&code, 0, &consts[..3], 0).is_none());
     }

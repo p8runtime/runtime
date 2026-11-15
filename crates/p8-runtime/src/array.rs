@@ -4,7 +4,7 @@
 //! kept. Arrays are values: `Rc<PhpArray>` is shared until written
 //! (`Rc::make_mut`). Key rules follow zend_hash.c / zend_operators.c.
 
-use crate::string::{PhpStr, StrHead};
+use crate::string::{IStr, PhpStr, StrHead};
 use crate::value::{Kind, Value};
 use crate::number::dval_to_lval;
 use std::cell::RefCell;
@@ -779,6 +779,19 @@ impl Hashed {
         }
     }
 
+    /// [`set_str`](Self::set_str) of a program-memory string: looked up
+    /// by its head, with no handle made; the thread's handle of it (its
+    /// twin) is made only when the key is new.
+    #[inline(always)]
+    fn set_istr(&mut self, s: &'static IStr, value: Value) {
+        let h = s.hash();
+        let found = if self.small() { self.scan(h, Probe::Str(s)) } else { self.find(h, Probe::Str(s)) };
+        match found {
+            Some(i) => self.buckets[i].value = value,
+            None => self.insert_new(h, Some(s.to_php_str()), value),
+        }
+    }
+
     /// A new entry, last in order (`key` not present).
     #[inline(always)]
     fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
@@ -1203,6 +1216,19 @@ impl PhpArray {
                 }
             },
             Storage::Hashed(h) => h.set(key, value),
+        }
+    }
+
+    /// `insert` of a program-memory string key that names no int (a
+    /// keyed literal's constant key, ZEND_INIT_ARRAY's interned one):
+    /// into a hash, one call with no key enum and no numeric test, the
+    /// key's handle made only when it is new.
+    #[inline(never)]
+    pub fn insert_istr(&mut self, s: &'static IStr, value: Value) {
+        crate::counts::bump(crate::counts::Count::Insert);
+        match &mut self.storage {
+            Storage::Hashed(h) => h.set_istr(s, value),
+            Storage::Packed(_) => self.insert(Key::Str(s.to_php_str()), value),
         }
     }
 

@@ -935,9 +935,23 @@ impl Context<'_> {
                     // `['key' => 1]`: the key, the value or both literals.
                     Op::ArraySetC => {
                         ops!(a, b, c, imm);
-                        let key = if imm & insn::KEY_CONST != 0 { cst_src!(imm & 0x3fff) } else { reg_src!(b) };
-                        let val = if imm & insn::VAL_CONST != 0 { cst_src!(imm >> 14 & 0x3fff) } else { reg_src!(c) };
-                        array_set!(a, key, val, imm & insn::TAKE != 0);
+                        // A literal string key naming no int (KEY_STR), in
+                        // program memory: set by its head (`insert_istr`).
+                        if imm & insn::KEY_STR != 0
+                            && let Some(s) = cst!(imm & 0x3fff).as_istr()
+                        {
+                            let val = if imm & insn::VAL_CONST != 0 { cst_src!(imm >> 14 & 0x3fff) } else { reg_src!(c) };
+                            if !w[rx!(a)].is_array() {
+                                slow!();
+                            }
+                            let Some(v) = taken(&mut w[..], val, imm & insn::TAKE != 0) else { slow!() };
+                            w[rx!(a)].array_mut().expect("checked above").insert_istr(s, v);
+                            done!(true);
+                        } else {
+                            let key = if imm & insn::KEY_CONST != 0 { cst_src!(imm & 0x3fff) } else { reg_src!(b) };
+                            let val = if imm & insn::VAL_CONST != 0 { cst_src!(imm >> 14 & 0x3fff) } else { reg_src!(c) };
+                            array_set!(a, key, val, imm & insn::TAKE != 0);
+                        }
                     }
                     // A constant the site resolved (a deprecated one is never
                     // cached: it warns on every fetch).

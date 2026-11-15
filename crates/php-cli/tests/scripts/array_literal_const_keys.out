@@ -1,0 +1,255 @@
+array(6) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  string(1) "X"
+  ["c"]=>
+  int(20)
+  ["d"]=>
+  string(2) "Xy"
+  ["e"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+  ["f"]=>
+  NULL
+}
+array(2) {
+  ["a"]=>
+  string(1) "X"
+  ["b"]=>
+  int(2)
+}
+array(2) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  int(10)
+}
+array(9) {
+  [5]=>
+  int(1)
+  ["05"]=>
+  int(2)
+  ["-0"]=>
+  int(3)
+  ["1.5"]=>
+  int(4)
+  [""]=>
+  int(5)
+  [0]=>
+  int(6)
+  [-3]=>
+  int(7)
+  [" 2"]=>
+  int(8)
+  ["2 "]=>
+  int(9)
+}
+array(6) {
+  [5]=>
+  string(1) "X"
+  ["05"]=>
+  string(1) "X"
+  ["-0"]=>
+  string(1) "X"
+  [""]=>
+  string(1) "X"
+  [0]=>
+  string(1) "X"
+  [-3]=>
+  string(1) "X"
+}
+array(5) {
+  ["a"]=>
+  int(1)
+  [1]=>
+  int(4)
+  ["b"]=>
+  int(3)
+  ["c"]=>
+  int(5)
+  [2]=>
+  string(1) "X"
+}
+array(3) {
+  [0]=>
+  string(1) "X"
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  string(1) "X"
+}
+array(3) {
+  [0]=>
+  string(1) "X"
+  ["k"]=>
+  int(3)
+  [1]=>
+  string(1) "X"
+}
+array(4) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  ["k"]=>
+  int(3)
+  [2]=>
+  int(4)
+}
+array(11) {
+  ["k1"]=>
+  int(1)
+  ["k2"]=>
+  int(2)
+  ["k3"]=>
+  string(5) "again"
+  ["k4"]=>
+  int(4)
+  ["k5"]=>
+  int(5)
+  ["k6"]=>
+  int(6)
+  ["k7"]=>
+  int(7)
+  ["k8"]=>
+  int(8)
+  ["k9"]=>
+  int(9)
+  ["k10"]=>
+  string(1) "X"
+  ["k11"]=>
+  int(110)
+}
+int(11)
+string(5) "again"
+string(1) "X"
+bool(false)
+array(2) {
+  ["ab"]=>
+  int(2)
+  ["c"]=>
+  int(3)
+}
+array(1) {
+  ["long-key-long-key-long-key-long-key-long-key-"]=>
+  int(2)
+}
+array(3) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  int(2)
+  ["c"]=>
+  int(4)
+}
+array(3) {
+  ["a"]=>
+  int(2)
+  ["z"]=>
+  int(3)
+  ["b"]=>
+  int(4)
+}
+string(1) "n"
+string(1) "X"
+bool(true)
+bool(true)
+bool(false)
+string(4) "name"
+bool(false)
+string(1) "n"
+string(5) "value"
+bool(true)
+string(1) "X"
+string(5) "other"
+bool(false)
+int(3)
+array(3) {
+  [0]=>
+  string(4) "name"
+  [1]=>
+  string(5) "value"
+  [2]=>
+  string(5) "other"
+}
+array(3) {
+  ["n"]=>
+  string(4) "name"
+  ["X"]=>
+  string(5) "value"
+  [3]=>
+  string(5) "other"
+}
+string(4) "name"
+string(5) "other"
+array(3) {
+  ["name"]=>
+  string(1) "n"
+  ["other"]=>
+  int(3)
+  ["value"]=>
+  string(5) "again"
+}
+
+Warning: Undefined variable $undef in %s on line 59
+array(2) {
+  ["a"]=>
+  NULL
+  ["b"]=>
+  int(1)
+}
+
+Warning: Undefined variable $undef2 in %s on line 60
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+}
+array(3) {
+  [0]=>
+  array(2) {
+    ["id"]=>
+    int(0)
+    ["tag"]=>
+    string(2) "t0"
+  }
+  [1]=>
+  array(2) {
+    ["id"]=>
+    int(2)
+    ["tag"]=>
+    string(2) "t1"
+  }
+  [2]=>
+  array(2) {
+    ["id"]=>
+    int(4)
+    ["tag"]=>
+    string(2) "t2"
+  }
+}
+destruct 1
+built
+destruct 3
+destruct 2
+after
+array(4) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  int(2)
+  [5]=>
+  int(4)
+  ["x"]=>
+  string(1) "X"
+}
