@@ -1807,18 +1807,13 @@ impl Context<'_> {
         let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
             && matches!(v.deref().kind(), Kind::Str | Kind::Array | Kind::Object)
             && self.why_not_callable(v, true)?.is_none();
-        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called_class().map(|c| &**c)));
+        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
             b"parent" => scope.and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
             n => o.class.is_a(n),
         };
-        let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
-        // `static` of an object of the called class (a fluent `return
-        // $this`): accepted as `verify` would, without its dynamic calls.
-        if ty.mask & p8_runtime::types::T_STATIC != 0 && v.as_object().is_some_and(|o| static_ok(o)) {
-            return Ok(Ok(None));
-        }
+        let static_ok = |o: &Object| self.of_called_class(o);
         let verdict = ty.verify(v, strict, &is_a, &static_ok, callable);
         Ok(match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
@@ -1829,6 +1824,13 @@ impl Context<'_> {
             }
             p8_runtime::types::Verdict::Refused => Err(()),
         })
+    }
+
+    /// `static` of `o`: whether it is an instance of the running frame's
+    /// called class (that class itself first, by address).
+    #[inline]
+    pub(crate) fn of_called_class(&self, o: &Object) -> bool {
+        self.frames.last().and_then(|f| f.called_class()).is_some_and(|c| Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
     }
 
     /// How messages name the running function: `f`, `A::m`, `{closure}`.

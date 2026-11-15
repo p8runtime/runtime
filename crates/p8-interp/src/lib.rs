@@ -3376,6 +3376,11 @@ impl Context<'_> {
     pub(crate) fn verify_return_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (a, none): (Reg, bool)) -> Result<Next, Throw> {
         let func = &*clo.code;
         if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
+            // `static` of the called class's object (a fluent `return
+            // $this`): accepted in place, no copy or full check.
+            if ty.mask & p8_runtime::types::T_STATIC != 0 && Self::val(&regs[base..base + func.nregs as usize], clo, a).as_object().is_some_and(|o| self.of_called_class(o)) {
+                return Ok(Next::Go(at + 1));
+            }
             let v = self.operand(&regs[base..base + func.nregs as usize], clo, a);
             match self.check_type(ty, &v, func.strict)? {
                 Ok(Some(converted)) => regs[base + a as usize] = converted,
