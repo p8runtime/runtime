@@ -1510,7 +1510,7 @@ impl Context<'_> {
     #[inline(always)]
     fn detour(&mut self, regs: &mut Vec<Value>, pc: usize, run: Run<Self>) -> Result<Flow, Throw> {
         p8_runtime::counts::bump(p8_runtime::counts::Count::Slow);
-        self.out_of_line(regs, pc, (), |cx, regs, clo, base, argc, at, ()| run(cx, regs, clo, base, argc, at))
+        self.out_of_line_here(regs, pc, (), |cx, regs, clo, base, argc, at, ()| run(cx, regs, clo, base, argc, at))
     }
 
     /// The part of a loop arm's instruction at `pc` that runs out of line:
@@ -1519,9 +1519,17 @@ impl Context<'_> {
     /// raised first), then what it raised (`went`). The arms' own helpers
     /// (MethodCall's lookup and native methods, foreach over objects)
     /// run through this, as `slow` and `cold` do with the instruction
-    /// whole.
-    #[inline(always)]
+    /// whole. Never inlined: the loop has a hundred of these sites, and
+    /// none is a hot path (its work is the helper's); inlined, each was
+    /// a copy of this body and its `Rc` in the loop.
+    #[inline(never)]
     pub(crate) fn out_of_line<O>(&mut self, regs: &mut Vec<Value>, pc: usize, ops: O, run: impl FnOnce(&mut Self, &mut Vec<Value>, &Closure, usize, usize, usize, O) -> Result<Next, Throw>) -> Result<Flow, Throw> {
+        self.out_of_line_here(regs, pc, ops, run)
+    }
+
+    /// `out_of_line`'s body, for `detour` (itself out of line).
+    #[inline(always)]
+    fn out_of_line_here<O>(&mut self, regs: &mut Vec<Value>, pc: usize, ops: O, run: impl FnOnce(&mut Self, &mut Vec<Value>, &Closure, usize, usize, usize, O) -> Result<Next, Throw>) -> Result<Flow, Throw> {
         let frame = self.frames.last().expect("a frame");
         let func = Rc::clone(&frame.func);
         let (base, argc) = (frame.base as usize, frame.argc as usize);

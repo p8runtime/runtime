@@ -356,12 +356,7 @@ impl Context<'_> {
                 ($v:expr) => {{
                     let value: Value = $v;
                     if self.frames.len() == self.frames.floor + 1 {
-                        self.pc = pc + 1;
-                        leave(&mut self.frames, regs, value);
-                        if self.ids.has_pending() {
-                            self.run_destructors(regs)?;
-                        }
-                        return Ok(());
+                        return self.ret_floor(regs, pc, value);
                     }
                     leave(&mut self.frames, regs, value);
                     pc = self.frames.top().pc as usize;
@@ -2246,6 +2241,21 @@ impl Context<'_> {
             }
         }
     }
+
+    /// `ret!` from the bottom frame of this run of the loop (a callback a
+    /// builtin called): the frame left, the destructors the return made
+    /// due run, and out of the loop, as `slow` leaves it. Out of line, so
+    /// that the loop holds one copy of `leave` per return, not two.
+    #[cold]
+    #[inline(never)]
+    fn ret_floor(&mut self, regs: &mut Vec<Value>, pc: usize, value: Value) -> Result<(), Throw> {
+        self.pc = pc + 1;
+        leave(&mut self.frames, regs, value);
+        if self.ids.has_pending() {
+            self.run_destructors(regs)?;
+        }
+        Ok(())
+    }
 }
 
 /// The fixed window: every frame's first this many registers, which the
@@ -2973,10 +2983,7 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     // A frame with an Extra (arguments past its parameters, variables
     // named at run time, an included file's shared scope): one test.
     if frames.slots[n].extra.is_some() {
-        give_back_shared(frames, regs);
-        if let Some(extra) = frames.slots[n].extra.take() {
-            crate::frames::recycle_extra(&mut frames.spare, extra);
-        }
+        leave_extra(frames, regs);
     }
     frames.len = n;
     let frame = &mut frames.slots[n];
@@ -3005,6 +3012,17 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     if frame.ret != NO_RET {
         // (The Return arm tests pending after `leave`.)
         let _ = put(&mut regs[frame.ret as usize], value);
+    }
+}
+
+/// `leave`'s part for a frame with an Extra: the bindings it shares given
+/// back, the Extra recycled. Out of line: `leave` is in every return arm.
+#[cold]
+#[inline(never)]
+fn leave_extra(frames: &mut Frames, regs: &mut [Value]) {
+    give_back_shared(frames, regs);
+    if let Some(extra) = frames.slots[frames.len - 1].extra.take() {
+        crate::frames::recycle_extra(&mut frames.spare, extra);
     }
 }
 
