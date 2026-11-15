@@ -2910,9 +2910,12 @@ pub(crate) fn bind(frames: &mut Frames, regs: &mut Vec<Value>, shape: Shape, bas
     if argc == nparams {
         // The variables not passed are undefined (PHP initialises its
         // CVs). Constants are read in place (`const_index`): none is
-        // copied in.
+        // copied in. (Most are undefined already, as the frame that used
+        // these registers last left them: no store for those.)
         for r in &mut regs[base + argc..base + ncv] {
-            clear(r);
+            if !r.is_undef() {
+                clear(r);
+            }
         }
         return;
     }
