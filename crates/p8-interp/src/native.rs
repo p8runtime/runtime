@@ -137,29 +137,14 @@ impl NativeFrame<'_, '_> {
         if insn.op != Op::Call {
             return None;
         }
-        let (args, n, dst) = (
-            usize::from(insn.a),
-            usize::from(insn.b),
-            usize::from(insn.c),
-        );
-        let Some(&Callee::User(t)) = top.func.sites.get(insn.imm as usize).and_then(|s| s.get())
-        else {
-            return None;
-        };
+        let (args, n, dst) = (usize::from(insn.a), usize::from(insn.b), usize::from(insn.c));
+        let Some(&Callee::User(t)) = top.func.sites.get(insn.imm as usize).and_then(|s| s.get()) else { return None };
         let target = &cx.closures[t as usize];
         // (The loop's Call arm's conditions.)
-        if !fast::direct(target.shape, &target.code, insn.b)
-            || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
-        {
+        if !fast::direct(target.shape, &target.code, insn.b) || cx.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
             return None;
         }
-        cx.frames.call(
-            Some(target),
-            pc as usize + 1,
-            base + args,
-            n,
-            (base + dst) as u32,
-        );
+        cx.frames.call(Some(target), pc as usize + 1, base + args, n, (base + dst) as u32);
         fast::enter(&mut cx.frames, self.regs);
         let ran = self.nested();
         Some(self.after(ran, pc as usize))
@@ -189,11 +174,7 @@ impl NativeFrame<'_, '_> {
             Ok(()) if cx.fiber_suspended.is_some() => Ok(Flow::Done),
             Ok(()) => {
                 let next = cx.frames.last().expect("the caller").pc as usize;
-                if cx.ids.has_pending() || !cx.pending_errors.is_empty() {
-                    cx.after_errors(self.regs, next, at).map(Flow::Go)
-                } else {
-                    Ok(Flow::Go(next))
-                }
+                if cx.ids.has_pending() || !cx.pending_errors.is_empty() { cx.after_errors(self.regs, next, at).map(Flow::Go) } else { Ok(Flow::Go(next)) }
             }
             Err(t) => cx.unwind(self.regs, t, at).map(Flow::Go),
         }
@@ -204,11 +185,7 @@ impl NativeFrame<'_, '_> {
     /// (in a callee run nested, too: its frames stay where they are, as
     /// the fiber left them) ends this run of the loop, as `went` ends it.
     fn settle(&mut self, depth: usize, r: Result<Flow, Throw>) -> Help {
-        let r = if self.cx.fiber_suspended.is_some() && r.is_ok() {
-            Ok(Flow::Done)
-        } else {
-            r
-        };
+        let r = if self.cx.fiber_suspended.is_some() && r.is_ok() { Ok(Flow::Done) } else { r };
         match r {
             Ok(Flow::Go(next)) if self.cx.frames.len() == depth => Help::Next(next as u32),
             r => {
@@ -223,20 +200,11 @@ impl Context<'_> {
     /// Enter native function `id` on the top frame at pc 0: where the
     /// interpreter goes on.
     pub(crate) fn native_entry(&mut self, regs: &mut Vec<Value>, id: u32) -> Result<Flow, Throw> {
-        let Some(code) = self.isolate.native else {
-            return Ok(Flow::Go(0));
-        };
-        let mut frame = NativeFrame {
-            cx: self,
-            regs,
-            left: None,
-        };
+        let Some(code) = self.isolate.native else { return Ok(Flow::Go(0)) };
+        let mut frame = NativeFrame { cx: self, regs, left: None };
         match code.run(id, &mut frame) {
             Exit::At(pc) => Ok(Flow::Go(pc as usize)),
-            Exit::Left => frame
-                .left
-                .take()
-                .expect("the help that left kept what it gave"),
+            Exit::Left => frame.left.take().expect("the help that left kept what it gave"),
         }
     }
 }

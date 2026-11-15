@@ -71,9 +71,7 @@ impl Charge {
             let _ = trace.push(entry);
             return Ok(());
         }
-        let held: usize = entry
-            .as_array()
-            .map_or(0, |e| e.values().map(Value::alloc_bytes).sum());
+        let held: usize = entry.as_array().map_or(0, |e| e.values().map(Value::alloc_bytes).sum());
         self.take(entry.alloc_bytes() + held)?;
         let before = trace.table_bytes();
         let _ = trace.push(entry);
@@ -93,26 +91,14 @@ impl Context<'_> {
     /// (DEBUG_BACKTRACE_PROVIDE_OBJECT), and at most `limit` entries (0:
     /// all): the walk stops there, as zend_fetch_debug_backtrace's does,
     /// so the frames under them cost nothing.
-    pub(crate) fn trace_with(
-        &self,
-        regs: &dyn Fn(usize) -> Value,
-        objects: bool,
-        limit: usize,
-    ) -> PhpArray {
+    pub(crate) fn trace_with(&self, regs: &dyn Fn(usize) -> Value, objects: bool, limit: usize) -> PhpArray {
         // (Nothing charged: it cannot run out.)
-        self.trace_charged(regs, objects, limit, &mut Charge::none())
-            .unwrap_or_default()
+        self.trace_charged(regs, objects, limit, &mut Charge::none()).unwrap_or_default()
     }
 
     /// trace_with(), what it makes charged to `charge` entry by entry: the
     /// size of the allocation that did not fit when it runs out.
-    fn trace_charged(
-        &self,
-        regs: &dyn Fn(usize) -> Value,
-        objects: bool,
-        limit: usize,
-        charge: &mut Charge,
-    ) -> Result<PhpArray, usize> {
+    fn trace_charged(&self, regs: &dyn Fn(usize) -> Value, objects: bool, limit: usize, charge: &mut Charge) -> Result<PhpArray, usize> {
         let mut trace = PhpArray::new();
         let full = |trace: &PhpArray| limit != 0 && trace.len() >= limit;
         // The running task's frames over those of the tasks waiting under
@@ -125,24 +111,13 @@ impl Context<'_> {
         for task in self.waiting_tasks() {
             let below = frames.len();
             natives.extend(task.natives.iter().map(|n| (below + n.depth, n)));
-            frames.extend(
-                task.frames.slots[..task.frames.len()]
-                    .iter()
-                    .map(|f| (f, Some(task.regs.as_slice()))),
-            );
+            frames.extend(task.frames.slots[..task.frames.len()].iter().map(|f| (f, Some(task.regs.as_slice()))));
         }
         let below = frames.len();
         natives.extend(self.natives.iter().map(|n| (below + n.depth, n)));
-        frames.extend(
-            self.frames.slots[..self.frames.len()]
-                .iter()
-                .map(|f| (f, None)),
-        );
+        frames.extend(self.frames.slots[..self.frames.len()].iter().map(|f| (f, None)));
         // An internal method the error was raised in, called from the top frame.
-        if let Some(&(_, n)) = natives
-            .last()
-            .filter(|(depth, n)| n.top && *depth == frames.len())
-        {
+        if let Some(&(_, n)) = natives.last().filter(|(depth, n)| n.top && *depth == frames.len()) {
             let (file, line) = self.location();
             let mut entry = new_entry();
             entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*file)));
@@ -163,10 +138,7 @@ impl Context<'_> {
                     if objects && let Some(this) = this {
                         entry.insert_absent(key(OBJECT), Value::object(Rc::clone(this)));
                     }
-                    entry.insert_absent(
-                        key(TYPE),
-                        Value::str(if this.is_some() { "->" } else { "::" }),
-                    );
+                    entry.insert_absent(key(TYPE), Value::str(if this.is_some() { "->" } else { "::" }));
                 }
                 None => {
                     entry.insert_absent(key(FUNCTION), Value::str(n.name));
@@ -188,21 +160,12 @@ impl Context<'_> {
                 // or "[constant expression]" (zend_fetch_debug_backtrace's
                 // entry for the filename override).
                 if frame.func.code.own_location && frame.scope.is_some() {
-                    let line = caller
-                        .func
-                        .code
-                        .lines
-                        .get((caller.pc as usize).saturating_sub(1))
-                        .copied()
-                        .unwrap_or(0);
+                    let line = caller.func.code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
                     let entry = match natives.iter().find(|(depth, _)| *depth == k) {
                         Some(&(_, n)) => native_entry(n, caller, line),
                         None => {
                             let mut entry = new_entry();
-                            entry.insert_absent(
-                                key(FILE),
-                                Value::str(PhpStr::from(&*caller.func.code.file)),
-                            );
+                            entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*caller.func.code.file)));
                             entry.insert_absent(key(LINE), Value::int(i64::from(line)));
                             entry.insert_absent(key(FUNCTION), Value::str("[constant expression]"));
                             entry
@@ -214,25 +177,14 @@ impl Context<'_> {
             }
             let mut entry = new_entry();
             let code = &caller.func.code;
-            let line = code
-                .lines
-                .get((caller.pc as usize).saturating_sub(1))
-                .copied()
-                .unwrap_or(0);
+            let line = code.lines.get((caller.pc as usize).saturating_sub(1)).copied().unwrap_or(0);
             // A frame a builtin called (a callback): from no file.
-            let native = natives
-                .iter()
-                .find(|(depth, _)| *depth == k)
-                .map(|&(_, n)| n);
+            let native = natives.iter().find(|(depth, _)| *depth == k).map(|&(_, n)| n);
             if native.is_none() {
                 entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*code.file)));
                 entry.insert_absent(key(LINE), Value::int(i64::from(line)));
             }
-            let at = caller
-                .func
-                .code
-                .code
-                .get((caller.pc as usize).saturating_sub(1));
+            let at = caller.func.code.code.get((caller.pc as usize).saturating_sub(1));
             let code = &frame.func.code;
             // A file's or eval()'s code (its main function) shows as the
             // include or eval that ran it (zend_fetch_debug_backtrace's
@@ -253,47 +205,25 @@ impl Context<'_> {
                     _ => ("{main}", false),
                 };
                 if path {
-                    entry.insert_absent(
-                        key(ARGS),
-                        Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(
-                            &*code.file,
-                        ))])),
-                    );
+                    entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(vec![Value::str(PhpStr::from(&*code.file))])));
                 }
                 entry.insert_absent(key(FUNCTION), Value::str(function));
                 charge.push(&mut trace, entry)?;
                 continue;
             }
-            entry.insert_absent(
-                key(FUNCTION),
-                Value::str(PhpStr::from(code.name.as_bytes())),
-            );
+            entry.insert_absent(key(FUNCTION), Value::str(PhpStr::from(code.name.as_bytes())));
             // A closure made in a class shows that class, as a method does.
-            if code.class.is_some()
-                || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure"))
-            {
-                let class = frame
-                    .scope
-                    .as_ref()
-                    .map(|c| c.name.clone())
-                    .unwrap_or_else(PhpStr::empty);
+            if code.class.is_some() || (frame.scope.is_some() && code.name.as_bytes().starts_with(b"{closure")) {
+                let class = frame.scope.as_ref().map(|c| c.name.clone()).unwrap_or_else(PhpStr::empty);
                 entry.insert_absent(key(CLASS), Value::str(class));
                 if objects && let Some(this) = &frame.this {
                     entry.insert_absent(key(OBJECT), Value::object(Rc::clone(this)));
                 }
-                entry.insert_absent(
-                    key(TYPE),
-                    Value::str(if frame.this.is_some() { "->" } else { "::" }),
-                );
+                entry.insert_absent(key(TYPE), Value::str(if frame.this.is_some() { "->" } else { "::" }));
             }
             let mut args = PhpArray::new();
             let base = frame.base as usize;
-            let reg = |i: usize| {
-                frame_regs.map_or_else(
-                    || regs(base + i),
-                    |r| r.get(base + i).cloned().unwrap_or_default(),
-                )
-            };
+            let reg = |i: usize| frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default());
             // A variadic parameter's arguments show one by one, the named
             // ones by their names (debug_backtrace_get_args), as
             // func_get_args() reads them (`call_args`): from its list.
@@ -306,11 +236,7 @@ impl Context<'_> {
                 }
                 let _ = args.push(v.deref());
             }
-            let rest = if variadic {
-                reg(fixed).deref()
-            } else {
-                Value::UNDEF
-            };
+            let rest = if variadic { reg(fixed).deref() } else { Value::UNDEF };
             match rest.as_array() {
                 Some(list) => {
                     for (k, v) in list.iter() {
@@ -344,12 +270,7 @@ impl Context<'_> {
 
     /// The frame of a call that failed before it ran (a builtin, or a
     /// function given too few arguments): the trace shows it on top.
-    pub(crate) fn failed_call(
-        &mut self,
-        function: &[u8],
-        class: Option<(&PhpStr, bool)>,
-        args: &[Value],
-    ) {
+    pub(crate) fn failed_call(&mut self, function: &[u8], class: Option<(&PhpStr, bool)>, args: &[Value]) {
         let (file, line) = self.location();
         let mut entry = new_entry();
         entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*file)));
@@ -359,50 +280,27 @@ impl Context<'_> {
             entry.insert_absent(key(CLASS), Value::str(class.clone()));
             entry.insert_absent(key(TYPE), Value::str(if this { "->" } else { "::" }));
         }
-        let args: Vec<Value> = args
-            .iter()
-            .filter(|v| !v.is_undef())
-            .map(Value::deref)
-            .collect();
+        let args: Vec<Value> = args.iter().filter(|v| !v.is_undef()).map(Value::deref).collect();
         entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(args)));
         self.failed_call = Some(entry);
     }
 
     /// The object an engine error (`Throw::Error`) becomes.
     pub(crate) fn exception(&mut self, regs: &dyn Fn(usize) -> Value, t: Throw) -> Throw {
-        let Throw::Error {
-            class,
-            message,
-            file,
-            line,
-            props,
-        } = t
-        else {
+        let Throw::Error { class, message, file, line, props } = t else {
             // A fatal error, where it was raised: its trace, for showing with
             // it (fatal_error_backtraces; zend_error_impl fetches it then).
             if let Throw::Fatal { file, line, .. } = &t {
                 // The out-of-memory error's trace is made past memory_limit,
                 // up to the hard limit (zend_handle_delayed_oom).
-                let oom = self
-                    .frames
-                    .limit
-                    .as_ref()
-                    .is_some_and(|l| l.raised.replace(false));
+                let oom = self.frames.limit.as_ref().is_some_and(|l| l.raised.replace(false));
                 if self.fatal_trace.borrow().is_none() && self.fatal_error_backtraces() {
-                    let trace = if oom {
-                        self.oom_trace(regs)
-                    } else {
-                        Ok(p8_runtime::trace::trace_string(&Value::array(
-                            self.raised_trace(regs),
-                        )))
-                    };
+                    let trace = if oom { self.oom_trace(regs) } else { Ok(p8_runtime::trace::trace_string(&Value::array(self.raised_trace(regs)))) };
                     match trace {
                         Ok(trace) => *self.fatal_trace.borrow_mut() = Some(trace),
                         Err(tried) => {
                             let hard = self.frames.limit.as_ref().map_or(0, |l| l.hard());
-                            *self.hard_limit.borrow_mut() = Some(format!(
-                                "Hard memory limit of {hard} bytes exhausted (tried to allocate {tried} bytes) in {file} on line {line}"
-                            ));
+                            *self.hard_limit.borrow_mut() = Some(format!("Hard memory limit of {hard} bytes exhausted (tried to allocate {tried} bytes) in {file} on line {line}"));
                         }
                     }
                 }
@@ -425,12 +323,9 @@ impl Context<'_> {
     /// Past it, the size of the allocation that did not fit
     /// (zend_mm_hard_limit_error's "tried to allocate").
     fn oom_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> Result<String, usize> {
-        let stack =
-            self.frames.reg_bytes + self.frames.slots.capacity() * std::mem::size_of::<Frame>();
+        let stack = self.frames.reg_bytes + self.frames.slots.capacity() * std::mem::size_of::<Frame>();
         let hard = self.frames.limit.as_ref().map_or(usize::MAX, |l| l.hard());
-        let mut charge = Charge {
-            left: hard.saturating_sub(stack),
-        };
+        let mut charge = Charge { left: hard.saturating_sub(stack) };
         // (It is raised at an interrupt: no builtin's call is on top.)
         self.failed_call = None;
         let trace = self.trace_charged(regs, false, 0, &mut charge)?;
@@ -445,9 +340,7 @@ impl Context<'_> {
     /// here, under the builtin it was raised in (`failed_call`), if any.
     fn raised_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
         let trace = self.trace(regs);
-        let Some(top) = self.failed_call.take() else {
-            return trace;
-        };
+        let Some(top) = self.failed_call.take() else { return trace };
         let mut with = PhpArray::from_list(vec![Value::array(top)]);
         for (_, v) in trace.iter() {
             let _ = with.push(v.clone());
@@ -456,31 +349,14 @@ impl Context<'_> {
     }
 
     /// The object an engine error becomes, with the trace of where it was raised.
-    fn exception_object(
-        &mut self,
-        regs: &dyn Fn(usize) -> Value,
-        class: &'static str,
-        message: String,
-        file: Rc<str>,
-        line: u32,
-        props: Vec<(&'static str, Value)>,
-    ) -> Throw {
-        let found = self.sym_of(class.as_bytes()).and_then(|key| {
-            self.classes
-                .get(&key)
-                .cloned()
-                .or_else(|| self.builtin_on_demand(key))
-        });
+    fn exception_object(&mut self, regs: &dyn Fn(usize) -> Value, class: &'static str, message: String, file: Rc<str>, line: u32, props: Vec<(&'static str, Value)>) -> Throw {
+        let found = self.sym_of(class.as_bytes()).and_then(|key| self.classes.get(&key).cloned().or_else(|| self.builtin_on_demand(key)));
         let class = match found {
             Some(c) => c,
             None => Rc::clone(&self.classes[&self.isolate.known.error]),
         };
         let object = Object::new(Rc::clone(&class), &self.ids);
-        let root: &[u8] = if class.is_a(b"exception") {
-            b"exception"
-        } else {
-            b"error"
-        };
+        let root: &[u8] = if class.is_a(b"exception") { b"exception" } else { b"error" };
         class.write(&object, b"message", root, Value::str(PhpStr::from(message)));
         class.write(&object, b"file", root, Value::str(PhpStr::from(&*file)));
         class.write(&object, b"line", root, Value::int(i64::from(line)));
@@ -496,29 +372,16 @@ impl Context<'_> {
     /// that covers it there, or leave the frame and look in its caller.
     /// Returns where the top frame goes on; the exception if nothing
     /// catches it (or what is not an exception: exit, a fatal error).
-    pub(crate) fn unwind(
-        &mut self,
-        regs: &mut [Value],
-        t: Throw,
-        mut at: usize,
-    ) -> Result<usize, Throw> {
+    pub(crate) fn unwind(&mut self, regs: &mut [Value], t: Throw, mut at: usize) -> Result<usize, Throw> {
         let t = self.exception(&|i| regs.get(i).cloned().unwrap_or_default(), t);
-        let Throw::Object(object) = t else {
-            return Err(t);
-        };
+        let Throw::Object(object) = t else { return Err(t) };
         loop {
             let frame = self.frames.last().expect("a frame");
             let base = frame.base as usize;
             // Leaving `@` expressions: their level comes back, innermost
             // first, unless the code changed it (it holds more than the
             // fatal errors then).
-            let mut silences: Vec<_> = frame
-                .func
-                .code
-                .silences
-                .iter()
-                .filter(|s| s.0 as usize <= at && at < s.1 as usize)
-                .collect();
+            let mut silences: Vec<_> = frame.func.code.silences.iter().filter(|s| s.0 as usize <= at && at < s.1 as usize).collect();
             silences.sort_by_key(|s| std::cmp::Reverse(s.0));
             for s in silences {
                 if self.error_level & !4437 == 0
@@ -601,11 +464,7 @@ mod tests {
         Ok(Value::NULL)
     }
 
-    static PROBE: [Builtin; 1] = [Builtin {
-        name: "probe",
-        run: probe,
-        by_ref: &[],
-    }];
+    static PROBE: [Builtin; 1] = [Builtin { name: "probe", run: probe, by_ref: &[] }];
 
     /// A limited backtrace walks no further than its limit (as
     /// zend_fetch_debug_backtrace stops there): 300 frames deep, a limit
@@ -616,10 +475,7 @@ mod tests {
         let mut registry = Registry::default();
         registry.add_functions(&PROBE);
         let registry = Arc::new(registry);
-        let program = compile(
-            "<?php function deep($n, $s) { return $n === 0 ? probe() : deep($n - 1, \"$s.\"); } deep(300, '');",
-            &registry,
-        );
+        let program = compile("<?php function deep($n, $s) { return $n === 0 ? probe() : deep($n - 1, \"$s.\"); } deep(300, '');", &registry);
         let mut isolate = Isolate::new(Arc::clone(&registry));
         let mut host = Sink;
         let mut cx = isolate.new_context(&mut host);
@@ -630,20 +486,10 @@ mod tests {
         let seen = SEEN.with(|s| std::mem::take(&mut *s.borrow_mut()));
         assert_eq!(seen.len(), 1);
         let (whole, limited) = &seen[0];
-        assert!(
-            whole.len() > 300,
-            "the whole trace has every frame: {}",
-            whole.len()
-        );
-        assert!(
-            (2..=3).contains(&limited.len()),
-            "the limited walk stopped at 2 (+1 for a builtin's entry): {}",
-            limited.len()
-        );
+        assert!(whole.len() > 300, "the whole trace has every frame: {}", whole.len());
+        assert!((2..=3).contains(&limited.len()), "the limited walk stopped at 2 (+1 for a builtin's entry): {}", limited.len());
         for ((_, a), (_, b)) in limited.iter().zip(whole.iter()) {
-            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else {
-                panic!("trace entries are arrays")
-            };
+            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else { panic!("trace entries are arrays") };
             assert!(a.identical(b), "a limited entry is the whole trace's entry");
         }
     }

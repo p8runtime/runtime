@@ -9,10 +9,10 @@
 use crate::classes::{Code, MethodFrame};
 use crate::{Closure, Context, Next};
 use p8_bytecode::Function;
-use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::Throw;
 use p8_runtime::object::{Class, Native, Object};
 use p8_runtime::string::PhpStr;
+use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::value::{Kind, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -68,9 +68,7 @@ impl Clone for ClosureFunc {
 
 /// The closure data of a Closure object.
 pub(crate) fn closure_data(o: &Object) -> Option<&ClosureData> {
-    o.data
-        .as_ref()
-        .and_then(|d| d.0.downcast_ref::<ClosureData>())
+    o.data.as_ref().and_then(|d| d.0.downcast_ref::<ClosureData>())
 }
 
 /// What a callable value calls.
@@ -86,8 +84,7 @@ pub(crate) enum Target {
 #[inline(always)]
 fn enters_directly(func: &Closure, args: &[Value]) -> bool {
     let n = args.len();
-    crate::fast::direct(func.shape, &func.code, count_u8(n))
-        && !(0..n).any(|i| func.code.param_by_ref(i))
+    crate::fast::direct(func.shape, &func.code, count_u8(n)) && !(0..n).any(|i| func.code.param_by_ref(i))
 }
 
 /// An argument count as `fast::direct` takes it: 255 for 255 or more.
@@ -129,9 +126,7 @@ impl Context<'_> {
     /// where this request's run started.
     pub(crate) fn stack_exhausted(&self) -> bool {
         let here = 0u8;
-        let depth = self
-            .stack_base
-            .saturating_sub(std::ptr::addr_of!(here) as usize);
+        let depth = self.stack_base.saturating_sub(std::ptr::addr_of!(here) as usize);
         self.stack_base != 0 && depth > STACK_LIMIT
     }
 
@@ -148,23 +143,10 @@ impl Context<'_> {
             }
         };
         let (this, scope, called) = match self.frames.last() {
-            Some(f) => (
-                if is_static { None } else { f.this.clone() },
-                f.scope.clone(),
-                f.called_class().cloned(),
-            ),
+            Some(f) => (if is_static { None } else { f.this.clone() }, f.scope.clone(), f.called_class().cloned()),
             None => (None, None, None),
         };
-        let data = ClosureData {
-            func: ClosureFunc::User(closure),
-            is_static,
-            this,
-            scope,
-            called,
-            captured: RefCell::new(Vec::new()),
-            trampoline: None,
-            fake: false,
-        };
+        let data = ClosureData { func: ClosureFunc::User(closure), is_static, this, scope, called, captured: RefCell::new(Vec::new()), trampoline: None, fake: false };
         let class = Rc::clone(&self.classes[&self.isolate.known.closure]);
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
@@ -202,50 +184,24 @@ impl Context<'_> {
 
     /// Closure::bind / bindTo: a copy bound to `new_this` and the scope
     /// `scope` names ("static" or none: its own).
-    pub(crate) fn bind(
-        &mut self,
-        closure: &Rc<Object>,
-        new_this: Value,
-        scope: Option<Value>,
-    ) -> Result<Value, Throw> {
-        let Some(data) = closure_data(closure) else {
-            return Ok(Value::NULL);
-        };
+    pub(crate) fn bind(&mut self, closure: &Rc<Object>, new_this: Value, scope: Option<Value>) -> Result<Value, Throw> {
+        let Some(data) = closure_data(closure) else { return Ok(Value::NULL) };
         let this = new_this.into_object().ok();
         // zend_valid_closure_binding: a closure made from a method (or by
         // a partial application) keeps its method's $this and scope.
         let method_name = || match &data.func {
             ClosureFunc::User(c) => text(c.code.name.as_bytes()),
             ClosureFunc::Builtin(_, b) => b.name.to_string(),
-            ClosureFunc::Method(_, n) => text(
-                n.as_bytes()
-                    .rsplit(|&b| b == b':')
-                    .next()
-                    .unwrap_or_default(),
-            ),
+            ClosureFunc::Method(_, n) => text(n.as_bytes().rsplit(|&b| b == b':').next().unwrap_or_default()),
         };
         match &this {
             Some(_) if data.is_static => {
-                self.warn(
-                    "Cannot bind an instance to a static closure, this will be an error in PHP 9",
-                );
+                self.warn("Cannot bind an instance to a static closure, this will be an error in PHP 9");
                 return Ok(Value::NULL);
             }
-            Some(t)
-                if data.fake
-                    && data.scope.as_ref().is_some_and(|s| {
-                        !t.class.is_a(&s.name.as_bytes().to_ascii_lowercase())
-                    }) =>
-            {
-                let scope = data
-                    .scope
-                    .as_ref()
-                    .map_or_else(String::new, |s| text(s.name.as_bytes()));
-                let message = format!(
-                    "Cannot bind method {scope}::{}() to object of class {}, this will be an error in PHP 9",
-                    method_name(),
-                    text(t.class.name.as_bytes())
-                );
+            Some(t) if data.fake && data.scope.as_ref().is_some_and(|s| !t.class.is_a(&s.name.as_bytes().to_ascii_lowercase())) => {
+                let scope = data.scope.as_ref().map_or_else(String::new, |s| text(s.name.as_bytes()));
+                let message = format!("Cannot bind method {scope}::{}() to object of class {}, this will be an error in PHP 9", method_name(), text(t.class.name.as_bytes()));
                 self.warn(message);
                 return Ok(Value::NULL);
             }
@@ -278,27 +234,16 @@ impl Context<'_> {
             }
         };
         let same_scope = match (&scope, &data.scope) {
-            (Some(a), Some(b)) => {
-                Rc::ptr_eq(a, b) || a.name.as_bytes().eq_ignore_ascii_case(b.name.as_bytes())
-            }
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b) || a.name.as_bytes().eq_ignore_ascii_case(b.name.as_bytes()),
             (None, None) => true,
             _ => false,
         };
         if data.fake && !same_scope {
-            let what = if data.scope.is_none() {
-                "function"
-            } else {
-                "method"
-            };
-            self.warn(format!(
-                "Cannot rebind scope of closure created from {what}, this will be an error in PHP 9"
-            ));
+            let what = if data.scope.is_none() { "function" } else { "method" };
+            self.warn(format!("Cannot rebind scope of closure created from {what}, this will be an error in PHP 9"));
             return Ok(Value::NULL);
         }
-        let called = this
-            .as_ref()
-            .map(|t| Rc::clone(&t.class))
-            .or_else(|| scope.clone());
+        let called = this.as_ref().map(|t| Rc::clone(&t.class)).or_else(|| scope.clone());
         let copy = ClosureData {
             func: data.func.clone(),
             is_static: data.is_static,
@@ -329,18 +274,10 @@ impl Context<'_> {
     /// error; a trait's own: deprecated). `in_const`: one in a constant
     /// expression, as zend_ast_evaluate looks it up (no __callStatic, only
     /// a static method). Any other callable is closure_from_callable's.
-    pub(crate) fn static_callable(
-        &mut self,
-        callable: &Value,
-        in_const: bool,
-    ) -> Result<Value, Throw> {
-        let Ok(s) = callable.deref().into_str() else {
-            return self.closure_from_callable(callable);
-        };
+    pub(crate) fn static_callable(&mut self, callable: &Value, in_const: bool) -> Result<Value, Throw> {
+        let Ok(s) = callable.deref().into_str() else { return self.closure_from_callable(callable) };
         let name = s.as_bytes();
-        let Some(at) = name.windows(2).position(|w| w == b"::") else {
-            return self.closure_from_callable(callable);
-        };
+        let Some(at) = name.windows(2).position(|w| w == b"::") else { return self.closure_from_callable(callable) };
         let (class, method) = (&name[..at], &name[at + 2..]);
         let scope = self.scope().0;
         let target = match class.to_ascii_lowercase().as_slice() {
@@ -350,13 +287,9 @@ impl Context<'_> {
             _ => Some(self.find_class(class.strip_prefix(b"\\").unwrap_or(class))?),
         };
         // (`static`, or no class scope: resolve_callable says.)
-        let Some(target) = target else {
-            return self.closure_from_callable(callable);
-        };
+        let Some(target) = target else { return self.closure_from_callable(callable) };
         let key = self.method_key(method);
-        let call_static = target
-            .method_sym(p8_runtime::symbol::known::CALL_STATIC)
-            .is_some();
+        let call_static = target.method_sym(p8_runtime::symbol::known::CALL_STATIC).is_some();
         const MAGIC: &str = "Creating a callable for the magic __callStatic() method is not supported in constant expressions";
         let Some(m) = crate::classes::method_of(&target, key).cloned() else {
             if in_const && call_static {
@@ -375,35 +308,15 @@ impl Context<'_> {
                     let data = self.target_data(Target::Frame(frame));
                     return Ok(self.new_closure(data));
                 }
-                let message = format!(
-                    "Call to {} method {}::{}() from {}",
-                    m.visibility.word(),
-                    text(m.declaring_name.as_bytes()),
-                    text(method),
-                    self.scope_name()
-                );
+                let message = format!("Call to {} method {}::{}() from {}", m.visibility.word(), text(m.declaring_name.as_bytes()), text(method), self.scope_name());
                 return Err(self.throw("Error", message));
             }
         }
         if in_const && !m.is_static {
-            return Err(self.throw(
-                "Error",
-                format!(
-                    "Non-static method {}::{}() cannot be called statically",
-                    text(m.declaring_name.as_bytes()),
-                    text(m.name.as_bytes())
-                ),
-            ));
+            return Err(self.throw("Error", format!("Non-static method {}::{}() cannot be called statically", text(m.declaring_name.as_bytes()), text(m.name.as_bytes()))));
         }
         if m.is_abstract {
-            return Err(self.throw(
-                "Error",
-                format!(
-                    "Cannot call abstract method {}::{}()",
-                    text(m.declaring_name.as_bytes()),
-                    text(m.name.as_bytes())
-                ),
-            ));
+            return Err(self.throw("Error", format!("Cannot call abstract method {}::{}()", text(m.declaring_name.as_bytes()), text(m.name.as_bytes()))));
         }
         self.trait_static_deprecated(&target, &m);
         self.closure_from_callable(callable)
@@ -429,37 +342,18 @@ impl Context<'_> {
                 trampoline: None,
                 fake: true,
             },
-            Target::Frame(MethodFrame {
-                func: Code::User(func),
-                this,
-                scope,
-                called,
-                trampoline,
-                closure,
-            }) => ClosureData {
+            Target::Frame(MethodFrame { func: Code::User(func), this, scope, called, trampoline, closure }) => ClosureData {
                 func: ClosureFunc::User(func),
                 is_static: this.is_none(),
                 this,
                 scope,
                 called,
                 // A Closure's target: its `use` values too.
-                captured: RefCell::new(
-                    closure
-                        .as_deref()
-                        .and_then(closure_data)
-                        .map(|d| d.captured.borrow().clone())
-                        .unwrap_or_default(),
-                ),
+                captured: RefCell::new(closure.as_deref().and_then(closure_data).map(|d| d.captured.borrow().clone()).unwrap_or_default()),
                 trampoline,
                 fake: true,
             },
-            Target::Frame(MethodFrame {
-                func: Code::Native(native, name),
-                this,
-                scope,
-                called,
-                ..
-            }) => ClosureData {
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => ClosureData {
                 func: ClosureFunc::Method(native, name),
                 is_static: this.is_none(),
                 this,
@@ -476,25 +370,15 @@ impl Context<'_> {
     pub(crate) fn takes_ref(&self, target: &Target, n: usize) -> bool {
         match target {
             Target::Builtin(i) => self.isolate.registry.by_ref(*i, n),
-            Target::Frame(MethodFrame {
-                func: Code::User(f),
-                ..
-            }) => f.code.param_by_ref(n),
-            Target::Frame(MethodFrame {
-                func: Code::Native(..),
-                ..
-            }) => false,
+            Target::Frame(MethodFrame { func: Code::User(f), .. }) => f.code.param_by_ref(n),
+            Target::Frame(MethodFrame { func: Code::Native(..), .. }) => false,
         }
     }
 
     /// An argument as parameter `n` gets it: a reference (an argument
     /// compiled as one) only where the parameter takes one.
     fn arg_or_ref(&self, target: &Target, n: usize, v: &Value) -> Value {
-        if v.is_reference() && self.takes_ref(target, n) {
-            v.clone()
-        } else {
-            v.deref()
-        }
+        if v.is_reference() && self.takes_ref(target, n) { v.clone() } else { v.deref() }
     }
 
     /// Whether the parameter of `target` named `name` takes a reference.
@@ -512,8 +396,7 @@ impl Context<'_> {
     }
 
     pub(crate) fn named_takes_ref(&self, target: &Target, name: &[u8]) -> bool {
-        self.named_position(target, name)
-            .is_none_or(|i| self.takes_ref(target, i))
+        self.named_position(target, name).is_none_or(|i| self.takes_ref(target, i))
     }
 
     /// The position of the (non-variadic) parameter named `name` of
@@ -521,14 +404,7 @@ impl Context<'_> {
     /// of its parameters is made.
     fn named_position(&self, target: &Target, name: &[u8]) -> Option<usize> {
         match target {
-            Target::Frame(MethodFrame {
-                func: Code::User(clo),
-                ..
-            }) => clo
-                .code
-                .params
-                .iter()
-                .position(|p| p.name.as_bytes() == name && !p.variadic),
+            Target::Frame(MethodFrame { func: Code::User(clo), .. }) => clo.code.params.iter().position(|p| p.name.as_bytes() == name && !p.variadic),
             _ => {
                 let (_, params) = self.named_params(target);
                 let name = String::from_utf8_lossy(name);
@@ -547,46 +423,21 @@ impl Context<'_> {
                     return Ok(target);
                 }
                 if o.class.method(b"__invoke").is_some() {
-                    return self
-                        .method_frame(
-                            &Value::object(Rc::clone(o)),
-                            Some(p8_runtime::symbol::known::INVOKE),
-                            b"__invoke",
-                        )
-                        .map(Target::Frame);
+                    return self.method_frame(&Value::object(Rc::clone(o)), Some(p8_runtime::symbol::known::INVOKE), b"__invoke").map(Target::Frame);
                 }
-                Err(self.throw(
-                    "Error",
-                    "Object of type ".to_string()
-                        + &o.class.name.to_string_lossy()
-                        + " is not callable",
-                ))
+                Err(self.throw("Error", "Object of type ".to_string() + &o.class.name.to_string_lossy() + " is not callable"))
             }
             Kind::Str => self.resolve_name(callable.as_str().expect("a string").as_bytes()),
             Kind::Array => {
                 let a = callable.as_array().expect("an array");
                 if a.len() != 2 {
-                    return Err(
-                        self.throw("Error", "Array callback must have exactly two elements")
-                    );
+                    return Err(self.throw("Error", "Array callback must have exactly two elements"));
                 }
-                let (Some(target), Some(method)) = (
-                    a.get_int(0).map(Value::deref),
-                    a.get_int(1)
-                        .map(Value::deref)
-                        .and_then(|v| v.into_str().ok()),
-                ) else {
-                    return Err(
-                        self.throw("Error", "Array callback must have exactly two elements")
-                    );
+                let (Some(target), Some(method)) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref).and_then(|v| v.into_str().ok())) else {
+                    return Err(self.throw("Error", "Array callback must have exactly two elements"));
                 };
                 if target.is_object() {
-                    self.method_frame(
-                        &target,
-                        self.method_key(method.as_bytes()),
-                        method.as_bytes(),
-                    )
-                    .map(Target::Frame)
+                    self.method_frame(&target, self.method_key(method.as_bytes()), method.as_bytes()).map(Target::Frame)
                 } else if let Some(class) = target.as_str() {
                     self.static_by_name(class.as_bytes(), method.as_bytes())
                 } else {
@@ -594,10 +445,7 @@ impl Context<'_> {
                 }
             }
             // ZEND_INIT_DYNAMIC_CALL's message.
-            _ => Err(self.throw(
-                "Error",
-                format!("Value of type {} is not callable", callable.type_name()),
-            )),
+            _ => Err(self.throw("Error", format!("Value of type {} is not callable", callable.type_name()))),
         }
     }
 
@@ -611,20 +459,10 @@ impl Context<'_> {
         match self.function_named(name) {
             Some(crate::sites::Callee::User(f)) => {
                 let func = self.closure_at(f);
-                Ok(Target::Frame(MethodFrame {
-                    func: Code::User(func),
-                    this: None,
-                    scope: None,
-                    called: None,
-                    trampoline: None,
-                    closure: None,
-                }))
+                Ok(Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None }))
             }
             Some(crate::sites::Callee::Builtin(i)) => Ok(Target::Builtin(i)),
-            _ => Err(self.throw(
-                "Error",
-                format!("Call to undefined function {}()", text(name)),
-            )),
+            _ => Err(self.throw("Error", format!("Call to undefined function {}()", text(name)))),
         }
     }
 
@@ -643,21 +481,10 @@ impl Context<'_> {
         let is_keyword = keyword.is_some();
         let target = match keyword {
             Some(Some(c)) => c,
-            Some(None) => {
-                return Err(self.throw(
-                    "Error",
-                    format!(
-                        "Cannot use \"{}\" when no class scope is active",
-                        text(&class.to_ascii_lowercase())
-                    ),
-                ));
-            }
+            Some(None) => return Err(self.throw("Error", format!("Cannot use \"{}\" when no class scope is active", text(&class.to_ascii_lowercase())))),
             None => self.find_class(class)?,
         };
-        let forwarded = is_keyword
-            .then_some(called_here)
-            .flatten()
-            .filter(|c| c.is_a(&target.lower));
+        let forwarded = is_keyword.then_some(called_here).flatten().filter(|c| c.is_a(&target.lower));
         // Looked up once the class is there: declaring it (on demand, by
         // an autoloader) is what interns its members' names.
         let key = self.method_key(display);
@@ -665,20 +492,9 @@ impl Context<'_> {
             if let Some(m) = self.static_magic_call(&target, display) {
                 return Ok(Target::Frame(m));
             }
-            return Err(self.throw(
-                "Error",
-                format!(
-                    "Call to undefined method {}::{}()",
-                    target.name.to_string_lossy(),
-                    text(display)
-                ),
-            ));
+            return Err(self.throw("Error", format!("Call to undefined method {}::{}()", target.name.to_string_lossy(), text(display))));
         };
-        let this = self
-            .frames
-            .last()
-            .and_then(|f| f.this.clone())
-            .filter(|t| t.class.is_a(&target.lower));
+        let this = self.frames.last().and_then(|f| f.this.clone()).filter(|t| t.class.is_a(&target.lower));
         if !method.is_static && this.is_none() {
             return Err(self.throw(
                 "Error",
@@ -692,32 +508,15 @@ impl Context<'_> {
         // Among the class and its parents first, as zend_function's scope
         // points at it: no lookup by name.
         let scope = self.declaring(&target, &method.declaring);
-        let called = this
-            .as_ref()
-            .map(|t| Rc::clone(&t.class))
-            .or(forwarded)
-            .unwrap_or(target);
+        let called = this.as_ref().map(|t| Rc::clone(&t.class)).or(forwarded).unwrap_or(target);
         let this = if method.is_static { None } else { this };
         self.method_deprecated(&method);
-        Ok(Target::Frame(MethodFrame::method(
-            self.code_of(&method),
-            this,
-            scope,
-            called,
-        )))
+        Ok(Target::Frame(MethodFrame::method(self.code_of(&method), this, scope, called)))
     }
 
     /// CallValue: call `callee` with the `argc` arguments at `args`
     /// (absolute registers), its result to `ret`.
-    pub(crate) fn call_value(
-        &mut self,
-        regs: &mut Vec<Value>,
-        callee: &Value,
-        args: usize,
-        argc: u8,
-        ret: u32,
-        pc: usize,
-    ) -> Result<Next, Throw> {
+    pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
         // A Closure of PHP code: its frame made from the closure itself, and
         // its captured values put straight into the callee's variables, no
         // list of them made per call (ZEND_BIND_LEXICAL bound them once, at
@@ -733,14 +532,7 @@ impl Context<'_> {
             && data.trampoline.is_none()
         {
             // Its `use` values go in as its frame starts (call_method).
-            let m = MethodFrame {
-                func: Code::User(Rc::clone(clo)),
-                this: data.this.clone(),
-                scope: data.scope.clone(),
-                called: data.called.clone(),
-                trampoline: None,
-                closure: Some(Rc::clone(o)),
-            };
+            let m = MethodFrame { func: Code::User(Rc::clone(clo)), this: data.this.clone(), scope: data.scope.clone(), called: data.called.clone(), trampoline: None, closure: Some(Rc::clone(o)) };
             return self.call_target(regs, Target::Frame(m), args, argc, ret, pc);
         }
         let target = self.resolve_callable(callee)?;
@@ -748,15 +540,7 @@ impl Context<'_> {
     }
 
     /// `call_value` of a callable already resolved.
-    pub(crate) fn call_target(
-        &mut self,
-        regs: &mut Vec<Value>,
-        target: Target,
-        args: usize,
-        argc: u8,
-        ret: u32,
-        pc: usize,
-    ) -> Result<Next, Throw> {
+    pub(crate) fn call_target(&mut self, regs: &mut Vec<Value>, target: Target, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
         match target {
             Target::Frame(m) => {
                 // Arguments arrive by value: a reference is read through,
@@ -774,14 +558,7 @@ impl Context<'_> {
             }
             Target::Builtin(i) => {
                 let base = self.frames.last().expect("a frame").base as usize;
-                self.call_builtin(
-                    regs,
-                    base,
-                    i,
-                    (args - base) as p8_bytecode::Reg,
-                    argc,
-                    (ret as usize - base) as p8_bytecode::Reg,
-                )?;
+                self.call_builtin(regs, base, i, (args - base) as p8_bytecode::Reg, argc, (ret as usize - base) as p8_bytecode::Reg)?;
                 Ok(Next::Go(pc))
             }
         }
@@ -791,11 +568,7 @@ impl Context<'_> {
     /// `callable` on `args` to its return, above the running frames. (In
     /// line: Ctx::call is this, on every callback a builtin makes.)
     #[inline(always)]
-    pub(crate) fn call_from_builtin(
-        &mut self,
-        callable: &Value,
-        args: &mut [Value],
-    ) -> Result<Value, Throw> {
+    pub(crate) fn call_from_builtin(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.call_with_regs(&mut regs, callable, args);
         self.isolate.regs = regs;
@@ -819,9 +592,7 @@ impl Context<'_> {
         if name.windows(2).any(|w| w == b"::") {
             return None;
         }
-        let Some(crate::sites::Callee::User(f)) = self.function_named(name) else {
-            return None;
-        };
+        let Some(crate::sites::Callee::User(f)) = self.function_named(name) else { return None };
         // (Its closure made now: a name found here has one in `closures`.)
         self.closure_at(f);
         self.named_calls[slot] = (v.clone(), f);
@@ -833,14 +604,7 @@ impl Context<'_> {
     /// (Out of line: every other builtin's call keeps `builtin_call`'s
     /// frame as small as it was.)
     #[inline(never)]
-    pub(crate) fn user_call_at(
-        &mut self,
-        regs: &mut Vec<Value>,
-        base: usize,
-        i: usize,
-        call: (p8_bytecode::Reg, u8, p8_bytecode::Reg),
-        pc: usize,
-    ) -> Result<usize, Throw> {
+    pub(crate) fn user_call_at(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, call: (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<usize, Throw> {
         Ok(match self.user_call(regs, base, i, call, pc)? {
             Next::Go(next) => next,
             Next::Switch => self.frames.last().map_or(pc, |f| f.pc as usize),
@@ -860,14 +624,7 @@ impl Context<'_> {
     /// in its two callers, `user_call_at` and `call_site`, both out of
     /// line themselves.)
     #[inline(always)]
-    pub(crate) fn user_call(
-        &mut self,
-        regs: &mut Vec<Value>,
-        base: usize,
-        i: usize,
-        (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg),
-        pc: usize,
-    ) -> Result<Next, Throw> {
+    pub(crate) fn user_call(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
         // (As the loop's call of a function: an interrupt is raised here.)
         if self.stop.load(std::sync::atomic::Ordering::Relaxed) != crate::isolate::NO_INTERRUPT {
             return Err(self.interrupted());
@@ -880,12 +637,12 @@ impl Context<'_> {
         // of its parameters by reference, every required one passed): the
         // arguments read through a reference where one is, the callback's
         // register cleared, the frame pushed and bound.
-        if !array && let Some(f) = self.named_function(&regs[start]) {
+        if !array
+            && let Some(f) = self.named_function(&regs[start])
+        {
             let target = &self.closures[f as usize];
             let n = argc - 1;
-            if crate::fast::direct(target.shape, &target.code, n as u8)
-                && !target.code.params.iter().any(|p| p.by_ref)
-            {
+            if crate::fast::direct(target.shape, &target.code, n as u8) && !target.code.params.iter().any(|p| p.by_ref) {
                 for r in &mut regs[at..at + n] {
                     if r.is_reference() {
                         *r = r.deref();
@@ -894,8 +651,7 @@ impl Context<'_> {
                 // (A string: nothing it frees has a destructor.)
                 regs[start] = Value::UNDEF;
                 let target = &self.closures[f as usize];
-                self.frames
-                    .call(Some(target), pc, at, n, (base + dst as usize) as u32);
+                self.frames.call(Some(target), pc, at, n, (base + dst as usize) as u32);
                 crate::fast::bind(&mut self.frames, regs, target.shape, at, n);
                 return Ok(Next::Switch);
             }
@@ -914,13 +670,7 @@ impl Context<'_> {
     /// anything else, which is the rest of `user_call_frame`'s. (In line
     /// there: out of `user_call`, whose callers it would grow.)
     #[inline(always)]
-    fn user_call_list_direct(
-        &mut self,
-        regs: &mut Vec<Value>,
-        base: usize,
-        (args, dst): (p8_bytecode::Reg, p8_bytecode::Reg),
-        pc: usize,
-    ) -> Option<Result<Next, Throw>> {
+    fn user_call_list_direct(&mut self, regs: &mut Vec<Value>, base: usize, (args, dst): (p8_bytecode::Reg, p8_bytecode::Reg), pc: usize) -> Option<Result<Next, Throw>> {
         let start = base + args as usize;
         let at = start + 1;
         if let Some(f) = self.named_function(&regs[start])
@@ -929,20 +679,14 @@ impl Context<'_> {
         {
             let target = &self.closures[f as usize];
             let n = list.len();
-            if crate::fast::direct(target.shape, &target.code, count_u8(n))
-                && !target.code.params.iter().any(|p| p.by_ref)
-            {
+            if crate::fast::direct(target.shape, &target.code, count_u8(n)) && !target.code.params.iter().any(|p| p.by_ref) {
                 let held = std::mem::replace(&mut regs[at], Value::UNDEF);
                 let list = held.as_array().expect("an array (just matched)");
                 if regs.len() < at + n + 1 {
                     regs.resize(at + n + 1, Value::UNDEF);
                 }
                 for (r, v) in regs[at..at + n].iter_mut().zip(list.values()) {
-                    *r = if v.is_reference() {
-                        v.deref()
-                    } else {
-                        v.clone()
-                    };
+                    *r = if v.is_reference() { v.deref() } else { v.clone() };
                 }
                 // The list let go, as SEND_ARRAY lets go of it: a
                 // destructor that makes due runs before the call, in the
@@ -956,8 +700,7 @@ impl Context<'_> {
                     return Some(Err(t));
                 }
                 let target = &self.closures[f as usize];
-                self.frames
-                    .call(Some(target), pc, at, n, (base + dst as usize) as u32);
+                self.frames.call(Some(target), pc, at, n, (base + dst as usize) as u32);
                 crate::fast::bind(&mut self.frames, regs, target.shape, at, n);
                 return Some(Ok(Next::Switch));
             }
@@ -970,14 +713,7 @@ impl Context<'_> {
     /// arguments placed, its frame pushed (call_method), or a builtin
     /// called.
     #[inline(never)]
-    fn user_call_frame(
-        &mut self,
-        regs: &mut Vec<Value>,
-        base: usize,
-        i: usize,
-        (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg),
-        pc: usize,
-    ) -> Result<Next, Throw> {
+    fn user_call_frame(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
         let array = i == self.user_call_twins[1];
         if array && let Some(next) = self.user_call_list_direct(regs, base, (args, dst), pc) {
             return next;
@@ -988,14 +724,7 @@ impl Context<'_> {
         let mut target = match self.named_function(&regs[start]) {
             Some(f) => {
                 let func = self.closure_at(f);
-                Target::Frame(MethodFrame {
-                    func: Code::User(func),
-                    this: None,
-                    scope: None,
-                    called: None,
-                    trampoline: None,
-                    closure: None,
-                })
+                Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None })
             }
             None => self.user_call_target(regs, i, start)?,
         };
@@ -1005,10 +734,7 @@ impl Context<'_> {
         // one). A value where a parameter of PHP code takes a reference
         // is passed, after a warning (zend_call_function's).
         let takes_ref = |cx: &Self, n: usize| match &target {
-            Target::Frame(MethodFrame {
-                func: Code::User(f),
-                ..
-            }) => f.code.param_by_ref(n),
+            Target::Frame(MethodFrame { func: Code::User(f), .. }) => f.code.param_by_ref(n),
             Target::Frame(_) => false,
             Target::Builtin(b) => cx.isolate.registry.by_ref(*b, n),
         };
@@ -1021,14 +747,7 @@ impl Context<'_> {
             if names_arguments(list) {
                 let placed = self.user_call_named(&mut target, list)?;
                 if placed.len() > usize::from(u8::MAX) {
-                    return self.user_call_nested(
-                        regs,
-                        start,
-                        target,
-                        placed,
-                        base + dst as usize,
-                        pc,
-                    );
+                    return self.user_call_nested(regs, start, target, placed, base + dst as usize, pc);
                 }
                 if regs.len() < at + placed.len() + 1 {
                     regs.resize(at + placed.len() + 1, Value::UNDEF);
@@ -1040,14 +759,7 @@ impl Context<'_> {
                 n
             } else {
                 if list.len() > usize::from(u8::MAX) {
-                    return self.user_call_nested(
-                        regs,
-                        start,
-                        target,
-                        list.values().map(Value::deref).collect(),
-                        base + dst as usize,
-                        pc,
-                    );
+                    return self.user_call_nested(regs, start, target, list.values().map(Value::deref).collect(), base + dst as usize, pc);
                 }
                 if regs.len() < at + list.len() + 1 {
                     regs.resize(at + list.len() + 1, Value::UNDEF);
@@ -1057,11 +769,7 @@ impl Context<'_> {
                     if by_ref && !a.is_reference() {
                         self.user_call_by_value(&target, n);
                     }
-                    regs[at + n] = if a.is_reference() && by_ref {
-                        a.clone()
-                    } else {
-                        a.deref()
-                    };
+                    regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
                 }
                 list.len()
             }
@@ -1087,9 +795,7 @@ impl Context<'_> {
             self.run_destructors(regs)?;
         }
         match target {
-            Target::Frame(m) => {
-                self.call_method(regs, m, at, n as u8, (base + dst as usize) as u32, pc)
-            }
+            Target::Frame(m) => self.call_method(regs, m, at, n as u8, (base + dst as usize) as u32, pc),
             Target::Builtin(b) => {
                 self.call_builtin(regs, base, b, args + 1, n as u8, dst)?;
                 Ok(Next::Go(pc))
@@ -1105,12 +811,7 @@ impl Context<'_> {
     /// autoloader may run.
     #[cold]
     #[inline(never)]
-    fn user_call_target(
-        &mut self,
-        regs: &mut Vec<Value>,
-        i: usize,
-        start: usize,
-    ) -> Result<Target, Throw> {
+    fn user_call_target(&mut self, regs: &mut Vec<Value>, i: usize, start: usize) -> Result<Target, Throw> {
         let callable = regs[start].deref();
         let target = match callable.as_object().and_then(|o| self.closure_target(o)) {
             Some(target) => target,
@@ -1119,11 +820,7 @@ impl Context<'_> {
                 let target = match self.why_not_callable(&callable, true) {
                     Ok(None) => self.resolve_callable(&callable),
                     Ok(Some(why)) => {
-                        let sig = self
-                            .isolate
-                            .registry
-                            .sig(i)
-                            .expect("call_user_func's signature");
+                        let sig = self.isolate.registry.sig(i).expect("call_user_func's signature");
                         let (class, message) = p8_runtime::args::callback_error(sig, 0, &why);
                         Err(self.throw(class, message))
                     }
@@ -1155,11 +852,7 @@ impl Context<'_> {
     /// the callback takes a reference.
     #[cold]
     fn user_call_by_value(&mut self, target: &Target, n: usize) {
-        if let Target::Frame(MethodFrame {
-            func: Code::User(f),
-            ..
-        }) = target
-        {
+        if let Target::Frame(MethodFrame { func: Code::User(f), .. }) = target {
             self.by_value_warning(&f.code, n);
         }
     }
@@ -1169,15 +862,7 @@ impl Context<'_> {
     /// `args` (the list's values).
     #[cold]
     #[inline(never)]
-    fn user_call_nested(
-        &mut self,
-        regs: &mut Vec<Value>,
-        start: usize,
-        target: Target,
-        mut args: Vec<Value>,
-        ret: usize,
-        pc: usize,
-    ) -> Result<Next, Throw> {
+    fn user_call_nested(&mut self, regs: &mut Vec<Value>, start: usize, target: Target, mut args: Vec<Value>, ret: usize, pc: usize) -> Result<Next, Throw> {
         regs[start] = Value::UNDEF;
         let v = match target {
             Target::Frame(m) => self.run_nested(regs, m, &mut args)?,
@@ -1203,15 +888,7 @@ impl Context<'_> {
     /// anything else, which goes the builtin's way. (Out of line: the
     /// path every other builtin call takes keeps its own, smaller frame.)
     #[inline(never)]
-    pub(crate) fn call_by_name(
-        &mut self,
-        regs: &mut Vec<Value>,
-        base: usize,
-        i: usize,
-        start: usize,
-        argc: usize,
-        dst: p8_bytecode::Reg,
-    ) -> Option<Result<(), Throw>> {
+    pub(crate) fn call_by_name(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, start: usize, argc: usize, dst: p8_bytecode::Reg) -> Option<Result<(), Throw>> {
         let array = i == self.user_calls[1];
         if argc == 0 || (array && (argc != 2 || regs[start + 1].as_array().is_none())) {
             return None;
@@ -1223,16 +900,7 @@ impl Context<'_> {
         if let Some(top) = self.frames.last_mut() {
             top.pc = self.pc as u32;
         }
-        self.push_native(
-            if array {
-                "call_user_func_array"
-            } else {
-                "call_user_func"
-            },
-            None,
-            &regs[start..start + argc],
-            false,
-        );
+        self.push_native(if array { "call_user_func_array" } else { "call_user_func" }, None, &regs[start..start + argc], false);
         let entry = self.natives.len - 1;
         let outer = self.running_builtin.replace(i);
         let r = self.run_by_name(regs, func, array, start, argc);
@@ -1260,31 +928,15 @@ impl Context<'_> {
     /// value (call_user_func), or the list's values as they are
     /// (call_user_func_array: a reference stays one where the parameter
     /// takes one), as `run_nested_at` places them.
-    fn run_by_name(
-        &mut self,
-        regs: &mut Vec<Value>,
-        func: Rc<Closure>,
-        array: bool,
-        start: usize,
-        argc: usize,
-    ) -> Result<Value, Throw> {
+    fn run_by_name(&mut self, regs: &mut Vec<Value>, func: Rc<Closure>, array: bool, start: usize, argc: usize) -> Result<Value, Throw> {
         let at = self.nested_at();
         if array {
             let list = regs[start + 1].clone();
             let list = list.as_array().expect("an array");
             if names_arguments(list) {
-                let mut target = Target::Frame(MethodFrame {
-                    func: Code::User(func),
-                    this: None,
-                    scope: None,
-                    called: None,
-                    trampoline: None,
-                    closure: None,
-                });
+                let mut target = Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None });
                 let placed = self.user_call_named(&mut target, list)?;
-                let Target::Frame(m) = target else {
-                    unreachable!("a function's frame")
-                };
+                let Target::Frame(m) = target else { unreachable!("a function's frame") };
                 self.nested_room(regs, at, placed.len())?;
                 let n = placed.len();
                 for (k, v) in placed.into_iter().enumerate() {
@@ -1298,20 +950,9 @@ impl Context<'_> {
                 if by_ref && !a.is_reference() {
                     self.by_value_warning(&func.code, n);
                 }
-                regs[at + n] = if a.is_reference() && by_ref {
-                    a.clone()
-                } else {
-                    a.deref()
-                };
+                regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
             }
-            let m = MethodFrame {
-                func: Code::User(func),
-                this: None,
-                scope: None,
-                called: None,
-                trampoline: None,
-                closure: None,
-            };
+            let m = MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None };
             return self.run_placed(regs, m, list.len(), at);
         }
         self.nested_room(regs, at, argc - 1)?;
@@ -1322,25 +963,13 @@ impl Context<'_> {
             }
             regs[at + n] = if a.is_reference() { a.deref() } else { a };
         }
-        let m = MethodFrame {
-            func: Code::User(func),
-            this: None,
-            scope: None,
-            called: None,
-            trampoline: None,
-            closure: None,
-        };
+        let m = MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None };
         self.run_placed(regs, m, argc - 1, at)
     }
 
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
-    pub(crate) fn call_with_regs(
-        &mut self,
-        regs: &mut Vec<Value>,
-        callable: &Value,
-        args: &mut [Value],
-    ) -> Result<Value, Throw> {
+    pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         // The common case (array_map's, usort's, a filter's callback): a
         // Closure of PHP code (not a __call trampoline's) or the name of a
         // function of PHP code found before, entered here (`run_direct`).
@@ -1371,12 +1000,7 @@ impl Context<'_> {
     /// `call_with_regs` past its common case: `callable` resolved, then
     /// called. (Out of line: the common case keeps a small frame.)
     #[inline(never)]
-    fn call_resolved(
-        &mut self,
-        regs: &mut Vec<Value>,
-        callable: &Value,
-        args: &mut [Value],
-    ) -> Result<Value, Throw> {
+    fn call_resolved(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         let target = self.resolve_lent(regs, callable)?;
         self.call_target_with_regs(regs, target, args)
     }
@@ -1389,35 +1013,18 @@ impl Context<'_> {
     /// `use` values), and the loop run on it (`run_entered`). (In line:
     /// its one caller is that case.)
     #[inline(always)]
-    fn run_direct(
-        &mut self,
-        regs: &mut Vec<Value>,
-        func: &Rc<Closure>,
-        closure: Option<(&Rc<Object>, &ClosureData)>,
-        args: &[Value],
-    ) -> Result<Value, Throw> {
+    fn run_direct(&mut self, regs: &mut Vec<Value>, func: &Rc<Closure>, closure: Option<(&Rc<Object>, &ClosureData)>, args: &[Value]) -> Result<Value, Throw> {
         let n = args.len();
         let at = self.nested_at();
         self.nested_room(regs, at, n)?;
         for (r, a) in regs[at..at + n].iter_mut().zip(args) {
-            *r = if a.is_reference() {
-                a.deref()
-            } else {
-                a.clone()
-            };
+            *r = if a.is_reference() { a.deref() } else { a.clone() };
         }
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
         let caller_pc = self.frames.last().map_or(0, |f| f.pc);
         let frame = self.frames.push(func, at, n, at as u32);
         match closure {
-            Some((o, data)) => {
-                (frame.this, frame.scope, frame.called, frame.owner) = (
-                    data.this.clone(),
-                    data.scope.clone(),
-                    data.called.clone(),
-                    Some(Rc::clone(o)),
-                )
-            }
+            Some((o, data)) => (frame.this, frame.scope, frame.called, frame.owner) = (data.this.clone(), data.scope.clone(), data.called.clone(), Some(Rc::clone(o))),
             None => (frame.this, frame.scope, frame.called, frame.owner) = (None, None, None, None),
         }
         crate::fast::bind(&mut self.frames, regs, func.shape, at, n);
@@ -1434,11 +1041,7 @@ impl Context<'_> {
     /// call_user_func_array(`callable`, `list`) from a builtin (it holds
     /// the lent registers): the list's values the arguments, its string
     /// keys named ones (`user_call_named`).
-    pub(crate) fn call_list_from_builtin(
-        &mut self,
-        callable: &Value,
-        list: &PhpArray,
-    ) -> Result<Value, Throw> {
+    pub(crate) fn call_list_from_builtin(&mut self, callable: &Value, list: &PhpArray) -> Result<Value, Throw> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = if names_arguments(list) {
             self.call_named_with_regs(&mut regs, callable, list)
@@ -1455,12 +1058,7 @@ impl Context<'_> {
     /// `call_list_from_builtin` of a list that names arguments.
     #[cold]
     #[inline(never)]
-    fn call_named_with_regs(
-        &mut self,
-        regs: &mut Vec<Value>,
-        callable: &Value,
-        list: &PhpArray,
-    ) -> Result<Value, Throw> {
+    fn call_named_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, list: &PhpArray) -> Result<Value, Throw> {
         let mut target = self.resolve_lent(regs, callable)?;
         let mut args = self.user_call_named(&mut target, list)?;
         self.call_target_with_regs(regs, target, &mut args)
@@ -1480,12 +1078,7 @@ impl Context<'_> {
     /// `target` called on `args` above the running frames, whose
     /// registers `regs` is.
     #[inline(always)]
-    fn call_target_with_regs(
-        &mut self,
-        regs: &mut Vec<Value>,
-        target: Target,
-        args: &mut [Value],
-    ) -> Result<Value, Throw> {
+    fn call_target_with_regs(&mut self, regs: &mut Vec<Value>, target: Target, args: &mut [Value]) -> Result<Value, Throw> {
         let m = match target {
             Target::Builtin(i) => {
                 // A builtin that calls back finds the registers lent; it is
@@ -1503,24 +1096,12 @@ impl Context<'_> {
                 std::mem::swap(&mut self.isolate.regs, regs);
                 return r;
             }
-            Target::Frame(MethodFrame {
-                func: Code::Native(native, name),
-                this,
-                scope,
-                called,
-                ..
-            }) => {
+            Target::Frame(MethodFrame { func: Code::Native(native, name), this, scope, called, .. }) => {
                 let mut passed: Vec<Value> = args.iter().map(Value::deref).collect();
                 let saved = std::mem::replace(&mut self.native_class, called);
                 // Lent and running, as a method the code calls is.
                 std::mem::swap(&mut self.isolate.regs, regs);
-                let r = self.run_native_method(
-                    native,
-                    &name,
-                    scope.as_ref(),
-                    this.as_ref(),
-                    &mut passed,
-                );
+                let r = self.run_native_method(native, &name, scope.as_ref(), this.as_ref(), &mut passed);
                 std::mem::swap(&mut self.isolate.regs, regs);
                 self.native_class = saved;
                 return r;
@@ -1530,12 +1111,7 @@ impl Context<'_> {
         self.run_nested(regs, m, args)
     }
 
-    pub(crate) fn run_nested(
-        &mut self,
-        regs: &mut Vec<Value>,
-        m: MethodFrame,
-        args: &mut [Value],
-    ) -> Result<Value, Throw> {
+    pub(crate) fn run_nested(&mut self, regs: &mut Vec<Value>, m: MethodFrame, args: &mut [Value]) -> Result<Value, Throw> {
         let at = self.nested_at();
         self.run_nested_at(regs, m, args, at)
     }
@@ -1550,20 +1126,11 @@ impl Context<'_> {
         at.max(self.result_reg)
     }
 
-    fn run_nested_at(
-        &mut self,
-        regs: &mut Vec<Value>,
-        mut m: MethodFrame,
-        args: &mut [Value],
-        at: usize,
-    ) -> Result<Value, Throw> {
+    fn run_nested_at(&mut self, regs: &mut Vec<Value>, mut m: MethodFrame, args: &mut [Value], at: usize) -> Result<Value, Throw> {
         // __call / __callStatic: the arguments become (name, [arguments]).
         if let Some(name) = m.trampoline.take() {
             let packed: Vec<Value> = args.iter().map(Value::deref).collect();
-            let mut repacked = [
-                Value::str(name),
-                Value::array(p8_runtime::array::PhpArray::from_list(packed)),
-            ];
+            let mut repacked = [Value::str(name), Value::array(p8_runtime::array::PhpArray::from_list(packed))];
             return self.run_nested_at(regs, m, &mut repacked, at);
         }
         self.nested_room(regs, at, args.len())?;
@@ -1582,11 +1149,7 @@ impl Context<'_> {
             }
         }
         for (n, a) in args.iter().enumerate() {
-            regs[at + n] = if a.is_reference() && by_ref(n) {
-                a.clone()
-            } else {
-                a.deref()
-            };
+            regs[at + n] = if a.is_reference() && by_ref(n) { a.clone() } else { a.deref() };
         }
         self.run_placed(regs, m, args.len(), at)
     }
@@ -1615,29 +1178,15 @@ impl Context<'_> {
             Some(class) => format!("{}::{}", text(class.as_bytes()), text(code.name.as_bytes())),
             None => text(code.name.as_bytes()),
         };
-        let param = code
-            .params
-            .get(n)
-            .or(code.params.last())
-            .map(|p| text(p.name.as_bytes()))
-            .unwrap_or_default();
-        self.warn(format!(
-            "{name}(): Argument #{} (${param}) must be passed by reference, value given",
-            n + 1
-        ));
+        let param = code.params.get(n).or(code.params.last()).map(|p| text(p.name.as_bytes())).unwrap_or_default();
+        self.warn(format!("{name}(): Argument #{} (${param}) must be passed by reference, value given", n + 1));
     }
 
     /// The nested run of `m` on the `argc` arguments placed at `at` (see
     /// `run_nested_at`), to its return: its result. (In line: it is
     /// `run_nested_at`'s body, which every callback's run takes.)
     #[inline(always)]
-    fn run_placed(
-        &mut self,
-        regs: &mut Vec<Value>,
-        m: MethodFrame,
-        argc: usize,
-        at: usize,
-    ) -> Result<Value, Throw> {
+    fn run_placed(&mut self, regs: &mut Vec<Value>, m: MethodFrame, argc: usize, at: usize) -> Result<Value, Throw> {
         let argc = argc as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
         let caller_pc = self.frames.last().map_or(0, |f| f.pc);
@@ -1656,12 +1205,7 @@ impl Context<'_> {
     /// the loop's floor and `self.pc` (`saved`, as they were before the
     /// push) put back.
     #[inline(always)]
-    fn run_entered(
-        &mut self,
-        regs: &mut Vec<Value>,
-        at: usize,
-        (saved_pc, saved_floor, caller_pc): (usize, usize, u32),
-    ) -> Result<Value, Throw> {
+    fn run_entered(&mut self, regs: &mut Vec<Value>, at: usize, (saved_pc, saved_floor, caller_pc): (usize, usize, u32)) -> Result<Value, Throw> {
         self.frames.floor = self.frames.len() - 1;
         let saved_result_reg = std::mem::replace(&mut self.result_reg, at + 1);
         let r = self.execute(regs);
@@ -1689,11 +1233,7 @@ impl Context<'_> {
     /// trampoline taken): the method's name and the list, keys kept.
     #[cold]
     #[inline(never)]
-    fn user_call_named(
-        &mut self,
-        target: &mut Target,
-        list: &PhpArray,
-    ) -> Result<Vec<Value>, Throw> {
+    fn user_call_named(&mut self, target: &mut Target, list: &PhpArray) -> Result<Vec<Value>, Throw> {
         if let Target::Frame(m) = target
             && let Some(name) = m.trampoline.take()
         {
@@ -1704,11 +1244,7 @@ impl Context<'_> {
             return Ok(vec![Value::str(name), Value::array(packed)]);
         }
         let mut placed = self.place_args(target, list, false)?;
-        if let Target::Frame(MethodFrame {
-            func: Code::User(f),
-            ..
-        }) = &*target
-        {
+        if let Target::Frame(MethodFrame { func: Code::User(f), .. }) = &*target {
             let mut position = 0;
             for (k, v) in list.iter() {
                 let n = match k {
@@ -1737,12 +1273,7 @@ impl Context<'_> {
     /// parameter is Undef for a user function (its default runs) or its
     /// default for a builtin. `unpacking`: the list is a `...` spread (its
     /// errors say so).
-    pub(crate) fn place_args(
-        &mut self,
-        target: &Target,
-        list: &PhpArray,
-        unpacking: bool,
-    ) -> Result<Vec<Value>, Throw> {
+    pub(crate) fn place_args(&mut self, target: &Target, list: &PhpArray, unpacking: bool) -> Result<Vec<Value>, Throw> {
         if !list.iter().any(|(k, _)| matches!(k, Key::Str(_))) {
             return Ok(list.values().map(Value::deref).collect());
         }
@@ -1755,10 +1286,7 @@ impl Context<'_> {
                 // (ZEND_SEND_UNPACK, zend_call_function: a position means
                 // nothing after a name.)
                 Key::Int(_) if named => {
-                    let message = format!(
-                        "Cannot use positional argument after named argument{}",
-                        if unpacking { " during unpacking" } else { "" }
-                    );
+                    let message = format!("Cannot use positional argument after named argument{}", if unpacking { " during unpacking" } else { "" });
                     return Err(self.throw("Error", message));
                 }
                 Key::Int(_) => {
@@ -1779,30 +1307,16 @@ impl Context<'_> {
                                 // A variadic builtin takes none by a name of its
                                 // own (Z_PARAM_VARIADIC), but those that pass
                                 // them on (Z_PARAM_VARIADIC_WITH_NAMED).
-                                Target::Builtin(_)
-                                    if !matches!(
-                                        fname.as_str(),
-                                        "call_user_func" | "forward_static_call"
-                                    ) =>
-                                {
+                                Target::Builtin(_) if !matches!(fname.as_str(), "call_user_func" | "forward_static_call") => {
                                     return Err(self.throw("ArgumentCountError", format!("Internal function {fname}() does not accept named variadic arguments")));
                                 }
                                 Target::Builtin(_) => {}
                             }
                         }
-                        return Err(self.throw(
-                            "Error",
-                            format!("Unknown named parameter ${}", text(key.as_bytes())),
-                        ));
+                        return Err(self.throw("Error", format!("Unknown named parameter ${}", text(key.as_bytes()))));
                     };
                     if i < set.len() && set[i] {
-                        return Err(self.throw(
-                            "Error",
-                            format!(
-                                "Named parameter ${} overwrites previous argument",
-                                text(key.as_bytes())
-                            ),
-                        ));
+                        return Err(self.throw("Error", format!("Named parameter ${} overwrites previous argument", text(key.as_bytes()))));
                     }
                     if out.len() <= i {
                         out.resize(i + 1, Value::UNDEF);
@@ -1823,11 +1337,7 @@ impl Context<'_> {
         }
         // A user function's: a constant default put in place (it has no code
         // to run it), another left to its code; looked at in its parameters.
-        if let Target::Frame(MethodFrame {
-            func: Code::User(clo),
-            ..
-        }) = target
-        {
+        if let Target::Frame(MethodFrame { func: Code::User(clo), .. }) = target {
             for i in 0..out.len() {
                 if set[i] {
                     continue;
@@ -1855,23 +1365,12 @@ impl Context<'_> {
             }
             let p = &params[i];
             if !p.optional {
-                return Err(self.throw(
-                    "ArgumentCountError",
-                    format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name),
-                ));
+                return Err(self.throw("ArgumentCountError", format!("{fname}(): Argument #{} (${}) not passed", i + 1, p.name)));
             }
             if let Some(text) = p.default {
                 out[i] = match self.stub_default(text) {
                     Some(v) => v,
-                    None => {
-                        return Err(self.throw(
-                            "Error",
-                            format!(
-                                "p8 cannot pass named arguments to {fname}() past ${} yet",
-                                p.name
-                            ),
-                        ));
-                    }
+                    None => return Err(self.throw("Error", format!("p8 cannot pass named arguments to {fname}() past ${} yet", p.name))),
                 };
             }
         }
@@ -1897,17 +1396,7 @@ impl Context<'_> {
                     .isolate
                     .registry
                     .sig(*i)
-                    .map(|s| {
-                        s.params
-                            .iter()
-                            .map(|p| NamedParam {
-                                name: p.name.to_string(),
-                                optional: p.optional(),
-                                variadic: p.variadic,
-                                default: p.default,
-                            })
-                            .collect()
-                    })
+                    .map(|s| s.params.iter().map(|p| NamedParam { name: p.name.to_string(), optional: p.optional(), variadic: p.variadic, default: p.default }).collect())
                     .unwrap_or_default();
                 (name, params)
             }
@@ -1915,62 +1404,28 @@ impl Context<'_> {
                 Code::User(clo) => {
                     let code = &clo.code;
                     let name = match (&code.class, &m.scope) {
-                        (Some(_), Some(scope)) => format!(
-                            "{}::{}",
-                            text(scope.name.as_bytes()),
-                            text(code.name.as_bytes())
-                        ),
+                        (Some(_), Some(scope)) => format!("{}::{}", text(scope.name.as_bytes()), text(code.name.as_bytes())),
                         _ => text(code.name.as_bytes()),
                     };
                     let params = code
                         .params
                         .iter()
-                        .map(|p| NamedParam {
-                            name: text(p.name.as_bytes()),
-                            optional: p.has_default || p.variadic,
-                            variadic: p.variadic,
-                            default: None,
-                        })
+                        .map(|p| NamedParam { name: text(p.name.as_bytes()), optional: p.has_default || p.variadic, variadic: p.variadic, default: None })
                         .collect();
                     (name, params)
                 }
                 Code::Native(native, _) => {
                     // A builtin class's method: its stub signature, found by name.
-                    let Some(scope) = &m.scope else {
-                        return (String::new(), Vec::new());
-                    };
+                    let Some(scope) = &m.scope else { return (String::new(), Vec::new()) };
                     let same = |other: &Option<p8_runtime::object::Native>| match (other, native) {
-                        (
-                            Some(p8_runtime::object::Native::Method(a)),
-                            p8_runtime::object::Native::Method(b),
-                        ) => std::ptr::fn_addr_eq(*a, *b),
-                        (
-                            Some(p8_runtime::object::Native::Static(a)),
-                            p8_runtime::object::Native::Static(b),
-                        ) => std::ptr::fn_addr_eq(*a, *b),
+                        (Some(p8_runtime::object::Native::Method(a)), p8_runtime::object::Native::Method(b)) => std::ptr::fn_addr_eq(*a, *b),
+                        (Some(p8_runtime::object::Native::Static(a)), p8_runtime::object::Native::Static(b)) => std::ptr::fn_addr_eq(*a, *b),
                         _ => false,
                     };
-                    let Some(method) = scope.methods.values().find(|meth| same(&meth.native))
-                    else {
-                        return (String::new(), Vec::new());
-                    };
-                    let name = format!(
-                        "{}::{}",
-                        text(method.declaring_name.as_bytes()),
-                        text(method.name.as_bytes())
-                    );
+                    let Some(method) = scope.methods.values().find(|meth| same(&meth.native)) else { return (String::new(), Vec::new()) };
+                    let name = format!("{}::{}", text(method.declaring_name.as_bytes()), text(method.name.as_bytes()));
                     let params = p8_runtime::stubs::lookup(name.as_bytes())
-                        .map(|s| {
-                            s.params
-                                .iter()
-                                .map(|p| NamedParam {
-                                    name: p.name.to_string(),
-                                    optional: p.optional(),
-                                    variadic: p.variadic,
-                                    default: p.default,
-                                })
-                                .collect()
-                        })
+                        .map(|s| s.params.iter().map(|p| NamedParam { name: p.name.to_string(), optional: p.optional(), variadic: p.variadic, default: p.default }).collect())
                         .unwrap_or_default();
                     (name, params)
                 }
@@ -1994,22 +1449,14 @@ impl Context<'_> {
             "true" => Value::TRUE,
             "false" => Value::FALSE,
             "[]" => Value::array(PhpArray::new()),
-            _ if (t.starts_with('"') && t.ends_with('"')
-                || t.starts_with('\'') && t.ends_with('\''))
-                && t.len() >= 2 =>
-            {
-                Value::str(PhpStr::from(&unquote(t)[..]))
-            }
+            _ if (t.starts_with('"') && t.ends_with('"') || t.starts_with('\'') && t.ends_with('\'')) && t.len() >= 2 => Value::str(PhpStr::from(&unquote(t)[..])),
             _ => {
                 if let Ok(i) = t.parse::<i64>() {
                     Value::int(i)
                 } else if let Ok(x) = t.parse::<f64>() {
                     Value::float(x)
                 } else {
-                    let c = self
-                        .isolate
-                        .registry
-                        .constant(t.trim_start_matches('\\').as_bytes())?;
+                    let c = self.isolate.registry.constant(t.trim_start_matches('\\').as_bytes())?;
                     c.to_value()
                 }
             }
@@ -2025,8 +1472,7 @@ impl Context<'_> {
         // Not lent: the class stays unloaded, and a later lookup asks the
         // autoloaders again.
         if let Err(Throw::Autoload(name)) = &r {
-            self.autoload_tried
-                .remove(&name.as_bytes().to_ascii_lowercase());
+            self.autoload_tried.remove(&name.as_bytes().to_ascii_lowercase());
         }
         matches!(r, Ok(None))
     }
@@ -2042,11 +1488,7 @@ impl Context<'_> {
     /// `warn`: report the deprecations of `self`/`parent`/`static` and of
     /// `["C", "P::m"]` callables (as is_callable() and the checks of
     /// arguments do; a call itself does not).
-    pub(crate) fn why_not_callable(
-        &mut self,
-        v: &Value,
-        warn: bool,
-    ) -> Result<Option<String>, Throw> {
+    pub(crate) fn why_not_callable(&mut self, v: &Value, warn: bool) -> Result<Option<String>, Throw> {
         let v = v.deref();
         match v.kind() {
             Kind::Str => self.callable_func(v.as_str().expect("a string").as_bytes(), None, warn),
@@ -2055,10 +1497,7 @@ impl Context<'_> {
                 if a.len() != 2 {
                     return Ok(Some("array callback must have exactly two members".into()));
                 }
-                let (Some(holder), Some(method)) = (
-                    a.get_int(0).map(Value::deref),
-                    a.get_int(1).map(Value::deref),
-                ) else {
+                let (Some(holder), Some(method)) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) else {
                     return Ok(Some("array callback has to contain indices 0 and 1".into()));
                 };
                 let holder = if let Some(class) = holder.as_str() {
@@ -2069,11 +1508,7 @@ impl Context<'_> {
                 } else {
                     match holder.into_object() {
                         Ok(o) => (Rc::clone(&o.class), Some(o)),
-                        Err(_) => {
-                            return Ok(Some(
-                                "first array member is not a valid class name or object".into(),
-                            ));
-                        }
+                        Err(_) => return Ok(Some("first array member is not a valid class name or object".into())),
                     }
                 };
                 let Ok(method) = method.into_str() else {
@@ -2082,13 +1517,7 @@ impl Context<'_> {
                 self.callable_func(method.as_bytes(), Some(holder), warn)
             }
             // A Closure, or an object with __invoke (zend_std_get_closure).
-            Kind::Object
-                if v.as_object().is_some_and(|o| {
-                    closure_data(o).is_some() || o.class.method(b"__invoke").is_some()
-                }) =>
-            {
-                Ok(None)
-            }
+            Kind::Object if v.as_object().is_some_and(|o| closure_data(o).is_some() || o.class.method(b"__invoke").is_some()) => Ok(None),
             _ => Ok(Some("no array or string given".into())),
         }
     }
@@ -2098,12 +1527,7 @@ impl Context<'_> {
     /// the object the call would have (the running `$this`, when it is of
     /// that class from code of that class). Err: why not.
     #[allow(clippy::type_complexity)] // (class, object) or the reason; used here only
-    fn callable_class(
-        &mut self,
-        name: &[u8],
-        within: Option<&Rc<Class>>,
-        warn: bool,
-    ) -> Result<Result<(Rc<Class>, Option<Rc<Object>>), String>, Throw> {
+    fn callable_class(&mut self, name: &[u8], within: Option<&Rc<Class>>, warn: bool) -> Result<Result<(Rc<Class>, Option<Rc<Object>>), String>, Throw> {
         // `self` and `parent` are of the array's class in `["C", "parent::m"]`.
         let (scope, called) = match (within, self.scope()) {
             (Some(c), (_, called)) => (Some(Rc::clone(c)), called),
@@ -2121,9 +1545,7 @@ impl Context<'_> {
                 None => Err("cannot access \"parent\" when no class scope is active".into()),
                 Some(s) => match s.parent.clone() {
                     Some(p) => Ok((p, this)),
-                    None => Err(
-                        "cannot access \"parent\" when current class scope has no parent".into(),
-                    ),
+                    None => Err("cannot access \"parent\" when current class scope has no parent".into()),
                 },
             },
             b"static" => match called {
@@ -2144,10 +1566,7 @@ impl Context<'_> {
             },
         };
         if warn && keyword && found.is_ok() {
-            self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
-                "Use of \"{}\" in callables is deprecated",
-                text(&lower)
-            )));
+            self.diags.push(p8_runtime::ops::Diag::Deprecated(format!("Use of \"{}\" in callables is deprecated", text(&lower))));
             self.report_diags();
         }
         Ok(found)
@@ -2156,17 +1575,8 @@ impl Context<'_> {
     /// A callable's function or method (zend_is_callable_check_func):
     /// `name` alone (a function, or "Class::method"), or the method `name`
     /// of the class (and object) an array callable holds.
-    fn callable_func(
-        &mut self,
-        name: &[u8],
-        holder: Option<(Rc<Class>, Option<Rc<Object>>)>,
-        warn: bool,
-    ) -> Result<Option<String>, Throw> {
-        if holder.is_none()
-            && self
-                .function_named(name.strip_prefix(b"\\").unwrap_or(name))
-                .is_some()
-        {
+    fn callable_func(&mut self, name: &[u8], holder: Option<(Rc<Class>, Option<Rc<Object>>)>, warn: bool) -> Result<Option<String>, Throw> {
+        if holder.is_none() && self.function_named(name.strip_prefix(b"\\").unwrap_or(name)).is_some() {
             return Ok(None);
         }
         // "Class::method" (the last `::`), else the holder's method.
@@ -2176,28 +1586,16 @@ impl Context<'_> {
             (Some(at), holder) => {
                 // (Under an array's class, `self` and kin are not reported.)
                 let within = holder.as_ref().map(|(c, _)| Rc::clone(c));
-                let (class, object) = match self.callable_class(
-                    &name[..at],
-                    within.as_ref(),
-                    warn && holder.is_none(),
-                )? {
+                let (class, object) = match self.callable_class(&name[..at], within.as_ref(), warn && holder.is_none())? {
                     Ok(found) => found,
                     Err(why) => return Ok(Some(why)),
                 };
                 if let Some((org, _)) = &holder {
                     if !org.is_a(&class.lower) {
-                        return Ok(Some(format!(
-                            "class {} is not a subclass of {}",
-                            text(org.name.as_bytes()),
-                            text(class.name.as_bytes())
-                        )));
+                        return Ok(Some(format!("class {} is not a subclass of {}", text(org.name.as_bytes()), text(class.name.as_bytes()))));
                     }
                     if warn {
-                        self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
-                            "Callables of the form [\"{}\", \"{}\"] are deprecated",
-                            text(org.name.as_bytes()),
-                            text(name)
-                        )));
+                        self.diags.push(p8_runtime::ops::Diag::Deprecated(format!("Callables of the form [\"{}\", \"{}\"] are deprecated", text(org.name.as_bytes()), text(name))));
                         self.report_diags();
                     }
                 }
@@ -2205,12 +1603,7 @@ impl Context<'_> {
                 (class, object, &name[at + 2..], true)
             }
             (None, Some((class, object))) => (class, object, name, false),
-            (None, None) => {
-                return Ok(Some(format!(
-                    "function \"{}\" not found or invalid function name",
-                    text(name)
-                )));
-            }
+            (None, None) => return Ok(Some(format!("function \"{}\" not found or invalid function name", text(name)))),
         };
         let key = self.method_key(method);
         let found = if strict {
@@ -2218,47 +1611,16 @@ impl Context<'_> {
         } else {
             // Code of a class naming its own private method on one of its
             // instances means that one: the method a call would run.
-            crate::classes::called_method(
-                &class,
-                self.frames.last().and_then(|f| f.scope.as_deref()),
-                key,
-            )
-            .cloned()
+            crate::classes::called_method(&class, self.frames.last().and_then(|f| f.scope.as_deref()), key).cloned()
         };
         // __call / __callStatic answer what is not there, or not visible.
-        let magic = |c: &Class, object: bool| {
-            c.method(if object { b"__call" } else { b"__callstatic" })
-                .is_some()
-        };
+        let magic = |c: &Class, object: bool| c.method(if object { b"__call" } else { b"__callstatic" }).is_some();
         let Some(m) = found else {
-            let this_fits = || {
-                self.frames
-                    .last()
-                    .and_then(|f| f.this.as_ref())
-                    .is_some_and(|t| t.class.is_a(&class.lower))
-            };
-            let via = if object.is_some() {
-                magic(&class, true)
-            } else {
-                magic(&class, false) || (magic(&class, true) && this_fits())
-            };
-            return Ok(if via {
-                None
-            } else {
-                Some(format!(
-                    "class {} does not have a method \"{}\"",
-                    text(class.name.as_bytes()),
-                    text(method)
-                ))
-            });
+            let this_fits = || self.frames.last().and_then(|f| f.this.as_ref()).is_some_and(|t| t.class.is_a(&class.lower));
+            let via = if object.is_some() { magic(&class, true) } else { magic(&class, false) || (magic(&class, true) && this_fits()) };
+            return Ok(if via { None } else { Some(format!("class {} does not have a method \"{}\"", text(class.name.as_bytes()), text(method))) });
         };
-        let shown = || {
-            format!(
-                "{}::{}()",
-                text(class.name.as_bytes()),
-                text(m.name.as_bytes())
-            )
-        };
+        let shown = || format!("{}::{}()", text(class.name.as_bytes()), text(m.name.as_bytes()));
         // A public method needs no visibility check (the common case).
         let accessible = m.visibility == p8_runtime::object::Visibility::Public || {
             let declaring = self.declaring(&class, &m.declaring);
@@ -2273,17 +1635,10 @@ impl Context<'_> {
             return Ok(Some(format!("cannot call abstract method {}", shown())));
         }
         if object.is_none() && !m.is_static {
-            return Ok(Some(format!(
-                "non-static method {} cannot be called statically",
-                shown()
-            )));
+            return Ok(Some(format!("non-static method {} cannot be called statically", shown())));
         }
         if !accessible {
-            return Ok(Some(format!(
-                "cannot access {} method {}",
-                m.visibility.word(),
-                shown()
-            )));
+            return Ok(Some(format!("cannot access {} method {}", m.visibility.word(), shown())));
         }
         Ok(None)
     }
@@ -2305,9 +1660,7 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     use p8_runtime::array::{Key, PhpArray};
     let key = |k: &str| Key::from_string(PhpStr::from(k));
     let mut out = PhpArray::new();
-    let Some(data) = closure_data(o) else {
-        return out;
-    };
+    let Some(data) = closure_data(o) else { return out };
     if let ClosureFunc::Builtin(_, b) = &data.func {
         // A closure of a builtin function: its name as declared, and its
         // parameters as its stub has them.
@@ -2317,30 +1670,17 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
             let mut params = PhpArray::new();
             for p in sig.params {
                 let name = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
-                params.insert(
-                    Key::from_string(PhpStr::from(name)),
-                    Value::str(if p.optional() {
-                        "<optional>"
-                    } else {
-                        "<required>"
-                    }),
-                );
+                params.insert(Key::from_string(PhpStr::from(name)), Value::str(if p.optional() { "<optional>" } else { "<required>" }));
             }
             out.insert(key("parameter"), Value::array(params));
         }
         return out;
     }
-    let Some(func) = data.func.user().map(|f| &f.code) else {
-        return out;
-    };
+    let Some(func) = data.func.user().map(|f| &f.code) else { return out };
     if data.fake && data.trampoline.is_none() && !func.name.as_bytes().starts_with(b"{closure") {
         // A closure of a named function or method (ZEND_ACC_FAKE_CLOSURE).
         let name = match &data.scope {
-            Some(scope) => format!(
-                "{}::{}",
-                scope.name.to_string_lossy(),
-                String::from_utf8_lossy(func.name.as_bytes())
-            ),
+            Some(scope) => format!("{}::{}", scope.name.to_string_lossy(), String::from_utf8_lossy(func.name.as_bytes())),
             None => String::from_utf8_lossy(func.name.as_bytes()).into_owned(),
         };
         out.insert(key("function"), Value::str(PhpStr::from(name)));
@@ -2367,16 +1707,8 @@ pub(crate) fn debug_info(o: &Object) -> p8_runtime::array::PhpArray {
     if !func.params.is_empty() {
         let mut params = PhpArray::new();
         for p in &func.params {
-            let name = format!(
-                "{}${}",
-                if p.by_ref { "&" } else { "" },
-                String::from_utf8_lossy(p.name.as_bytes())
-            );
-            let kind = if p.has_default || p.variadic {
-                "<optional>"
-            } else {
-                "<required>"
-            };
+            let name = format!("{}${}", if p.by_ref { "&" } else { "" }, String::from_utf8_lossy(p.name.as_bytes()));
+            let kind = if p.has_default || p.variadic { "<optional>" } else { "<required>" };
             params.insert(Key::from_string(PhpStr::from(name)), Value::str(kind));
         }
         out.insert(key("parameter"), Value::array(params));

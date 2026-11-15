@@ -18,13 +18,8 @@
 //! constant's index (`Hx::v` reads either by its kind), `$this` a 0.
 
 use super::*;
-use crate::fast::{
-    Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest,
-    owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref,
-};
-use crate::sites::{
-    Plain, PropSite, cached_prop, dynamic_prop, plain_prop, plain_slot, refill_prop,
-};
+use crate::fast::{Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
+use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -73,21 +68,13 @@ impl Hx<'_> {
     /// A value operand of kind `K`: a literal read in place, or a register.
     #[inline(always)]
     fn v<K: Kind>(&self, x: u32) -> &Value {
-        if is_k(K::ID) {
-            &self.clo.consts[x as usize]
-        } else {
-            &self.w[r(x)]
-        }
+        if is_k(K::ID) { &self.clo.consts[x as usize] } else { &self.w[r(x)] }
     }
 
     /// The same as a `Src`, for the out-of-line helpers.
     #[inline(always)]
     fn src<K: Kind>(&self, x: u32) -> Src<'_> {
-        if is_k(K::ID) {
-            Src::Const(&self.clo.consts[x as usize])
-        } else {
-            Src::Reg(x as Reg)
-        }
+        if is_k(K::ID) { Src::Const(&self.clo.consts[x as usize]) } else { Src::Reg(x as Reg) }
     }
 
     /// Class reference `class` of kind `C` (NAMED, STATIC, SCOPE) as a
@@ -99,21 +86,14 @@ impl Hx<'_> {
         if C::ID == NAMED {
             return Some(class as usize + 1);
         }
-        let c = if C::ID == STATIC {
-            self.top.called_class()
-        } else {
-            self.top.scope.as_ref()
-        };
+        let c = if C::ID == STATIC { self.top.called_class() } else { self.top.scope.as_ref() };
         Some(Rc::as_ptr(c?) as usize)
     }
 
     /// The class the frame's code is in, as a cache entry keys it.
     #[inline(always)]
     fn scope(&self) -> usize {
-        self.top
-            .scope
-            .as_ref()
-            .map_or(0, |c| Rc::as_ptr(c) as usize)
+        self.top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize)
     }
 }
 
@@ -126,9 +106,7 @@ pub(crate) fn mov<S: spec::Mov>(hx: Hx, args::Mov { dst, src }: args::Mov) -> Ct
         let v = hx.v::<S::Src>(src).clone();
         return Ctl::Next(put(&mut hx.w[r(dst)], v));
     }
-    let Some(v) = copied(&hx.w[r(src)]) else {
-        return Ctl::Cold;
-    };
+    let Some(v) = copied(&hx.w[r(src)]) else { return Ctl::Cold };
     let _ = put(&mut hx.w[r(dst)], v);
     Ctl::Next(true)
 }
@@ -181,9 +159,7 @@ pub(crate) fn free(hx: Hx, args::Free { reg }: args::Free) -> Ctl {
 /// `$this`, in a method that has one (else cold: the error).
 #[inline(always)]
 pub(crate) fn this(hx: Hx, args::This { dst }: args::This) -> Ctl {
-    let Some(this) = &hx.top.this else {
-        return Ctl::Cold;
-    };
+    let Some(this) = &hx.top.this else { return Ctl::Cold };
     let this = Value::object(Rc::clone(this));
     Ctl::Next(put(&mut hx.w[r(dst)], this))
 }
@@ -192,10 +168,7 @@ pub(crate) fn this(hx: Hx, args::This { dst }: args::This) -> Ctl {
 /// anything else through `truth` (what may warn, NAN and an undefined
 /// variable, is cold).
 #[inline(always)]
-pub(crate) fn jump_cond<S: spec::JumpCond>(
-    hx: Hx,
-    args::JumpCond { cond, target }: args::JumpCond,
-) -> Ctl {
+pub(crate) fn jump_cond<S: spec::JumpCond>(hx: Hx, args::JumpCond { cond, target }: args::JumpCond) -> Ctl {
     let v = &hx.w[r(cond)];
     let c = match v.truth_by_tag() {
         Some(c) => c,
@@ -204,11 +177,7 @@ pub(crate) fn jump_cond<S: spec::JumpCond>(
             None => return Ctl::Cold,
         },
     };
-    if c == (S::When::ID == T) {
-        Ctl::Jump(target)
-    } else {
-        Ctl::Next(false)
-    }
+    if c == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
 /// A compare-and-branch. Inline: two ints, and for `===` whatever the
@@ -218,10 +187,7 @@ pub(crate) fn jump_cond<S: spec::JumpCond>(
 /// references, arrays, objects) goes through `test`; an undefined
 /// variable (its warning) is cold.
 #[inline(always)]
-pub(crate) fn jump_cmp<S: spec::JumpCmp>(
-    hx: Hx,
-    args::JumpCmp { a, b, target }: args::JumpCmp,
-) -> Ctl {
+pub(crate) fn jump_cmp<S: spec::JumpCmp>(hx: Hx, args::JumpCmp { a, b, target }: args::JumpCmp) -> Ctl {
     let cmp = match S::Cmp::ID {
         LT => Cmp::Lt,
         LE => Cmp::Le,
@@ -241,11 +207,7 @@ pub(crate) fn jump_cmp<S: spec::JumpCmp>(
         test(cmp, x, y)
     };
     let Some(t) = t else { return Ctl::Cold };
-    if t == (S::When::ID == T) {
-        Ctl::Jump(target)
-    } else {
-        Ctl::Next(false)
-    }
+    if t == (S::When::ID == T) { Ctl::Jump(target) } else { Ctl::Next(false) }
 }
 
 /// `$a[k]` on an array holding a plain value at that key: an int key, a
@@ -254,10 +216,7 @@ pub(crate) fn jump_cmp<S: spec::JumpCmp>(
 /// (empty()'s last dimension): a missing key of an array is null. Anything
 /// else (a missing key's warning, an object, a string's offset) is cold.
 #[inline(always)]
-pub(crate) fn fetch_dim<S: spec::FetchDim>(
-    hx: Hx,
-    args::FetchDim { dst, arr, key }: args::FetchDim,
-) -> Ctl {
+pub(crate) fn fetch_dim<S: spec::FetchDim>(hx: Hx, args::FetchDim { dst, arr, key }: args::FetchDim) -> Ctl {
     let kv = hx.v::<S::Key>(key);
     let v = if let Some(a) = hx.w[r(arr)].as_array() {
         let e = if S::Key::ID == KSTR {
@@ -288,13 +247,7 @@ pub(crate) fn fetch_dim<S: spec::FetchDim>(
         }
     } else {
         // (Out of line: the array case is the arm's straight path.)
-        match dim_of(
-            &hx.w[..],
-            arr as Reg,
-            hx.src::<S::Key>(key),
-            S::Key::ID == KSTR,
-            S::Mode::ID != R,
-        ) {
+        match dim_of(&hx.w[..], arr as Reg, hx.src::<S::Key>(key), S::Key::ID == KSTR, S::Mode::ID != R) {
             Some(v) => v,
             None => return Ctl::Cold,
         }
@@ -323,9 +276,7 @@ fn ref_elem(v: &Value) -> Option<Value> {
 #[inline(never)]
 fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Value> {
     let c = &w[usize::from(arr)];
-    let Some(cell) = c.as_reference() else {
-        return dim_in(c, w, key, kstr, quiet);
-    };
+    let Some(cell) = c.as_reference() else { return dim_in(c, w, key, kstr, quiet) };
     let held = cell.borrow();
     if let Some(a) = held.as_array() {
         let k = crate::fast::src(w, key);
@@ -353,16 +304,8 @@ fn dim_of(w: &[Value], arr: Reg, key: Src, kstr: bool, quiet: bool) -> Option<Va
 /// `dim_of` of a value that is not a reference.
 fn dim_in(c: &Value, w: &[Value], key: Src, kstr: bool, quiet: bool) -> Option<Value> {
     if let Some(s) = c.as_str() {
-        let i = if kstr {
-            None
-        } else {
-            crate::fast::src(w, key).as_int()
-        }?;
-        let at = if i < 0 {
-            i.wrapping_add(s.len() as i64)
-        } else {
-            i
-        };
+        let i = if kstr { None } else { crate::fast::src(w, key).as_int() }?;
+        let at = if i < 0 { i.wrapping_add(s.len() as i64) } else { i };
         return match usize::try_from(at).ok().and_then(|at| s.as_bytes().get(at)) {
             Some(&b) => Some(Value::str(PhpStr::byte(b))),
             None if quiet => Some(Value::NULL),
@@ -379,10 +322,7 @@ fn dim_in(c: &Value, w: &[Value], key: Src, kstr: bool, quiet: bool) -> Option<V
 /// string; the rest (an object, a string's offset, a key of another type)
 /// is cold.
 #[inline(always)]
-pub(crate) fn isset_dim<S: spec::IssetDim>(
-    hx: Hx,
-    args::IssetDim { dst, var, key }: args::IssetDim,
-) -> Ctl {
+pub(crate) fn isset_dim<S: spec::IssetDim>(hx: Hx, args::IssetDim { dst, var, key }: args::IssetDim) -> Ctl {
     let kv = hx.v::<S::Key>(key);
     let set = if let Some(a) = hx.w[r(var)].as_array() {
         if S::Key::ID == KSTR {
@@ -438,32 +378,17 @@ fn isset_scalar(c: &Value, key: &Value) -> Option<bool> {
 /// any write. USED: the value to `dst` too; UNUSED: nothing there, and the
 /// Free after is skipped.
 #[inline(always)]
-pub(crate) fn assign_dim<S: spec::AssignDim>(
-    hx: Hx,
-    args::AssignDim { var, key, val, dst }: args::AssignDim,
-) -> Ctl {
+pub(crate) fn assign_dim<S: spec::AssignDim>(hx: Hx, args::AssignDim { var, key, val, dst }: args::AssignDim) -> Ctl {
     let kv = hx.v::<S::Key>(key);
     let v = if S::Key::ID == KSTR || (S::Key::ID == REG && kv.is_str()) {
-        let Some(v) = copied(hx.v::<S::Val>(val)) else {
-            return Ctl::Cold;
-        };
+        let Some(v) = copied(hx.v::<S::Val>(val)) else { return Ctl::Cold };
         // The key out of the frame, so the array can be written while it
         // is borrowed: a literal copied (no count), a register's string
         // moved out of it (no count either) and put back below, whatever
         // the write did.
         let key_at = r(key);
-        let key = if S::Key::ID == REG {
-            std::mem::replace(&mut hx.w[key_at], Value::UNDEF)
-        } else {
-            kv.clone()
-        };
-        let done = assign_str_elem(
-            &mut hx.w[r(var)],
-            &key,
-            v,
-            S::Key::ID == KSTR,
-            S::Res::ID == USED,
-        );
+        let key = if S::Key::ID == REG { std::mem::replace(&mut hx.w[key_at], Value::UNDEF) } else { kv.clone() };
+        let done = assign_str_elem(&mut hx.w[r(var)], &key, v, S::Key::ID == KSTR, S::Res::ID == USED);
         if S::Key::ID == REG {
             std::mem::forget(std::mem::replace(&mut hx.w[key_at], key));
         }
@@ -474,9 +399,7 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(
     } else {
         // (Any defined value, copied: a string, an array shares its
         // storage until either is written.)
-        let (Some(k), Some(v)) = (kv.as_int(), copied(hx.v::<S::Val>(val))) else {
-            return Ctl::Cold;
-        };
+        let (Some(k), Some(v)) = (kv.as_int(), copied(hx.v::<S::Val>(val))) else { return Ctl::Cold };
         let slot = &mut hx.w[r(var)];
         let done = if slot.is_array() {
             set_int_elem(slot, k, &v, None)
@@ -519,24 +442,14 @@ pub(crate) fn assign_dim<S: spec::AssignDim>(
 /// in `slot`: the value `v` (back too when `used`). None (nothing written)
 /// when the variable holds no array (the cold path's).
 #[inline(always)]
-fn assign_str_elem(
-    slot: &mut Value,
-    key: &Value,
-    v: Value,
-    kstr: bool,
-    used: bool,
-) -> Option<Option<Value>> {
+fn assign_str_elem(slot: &mut Value, key: &Value, v: Value, kstr: bool, used: bool) -> Option<Option<Value>> {
     let s = key.as_str()?;
     // One lookup, as zend_hash_lookup: the slot is written in place, or
     // the key added with no second search. (A shared array is separated
     // first: the cold write would separate it too.) A variable bound by
     // reference: the array its cell holds.
     let cell = slot.as_reference().map(Rc::clone);
-    let (stored, result) = if used {
-        (v.clone(), Some(v))
-    } else {
-        (v, None)
-    };
+    let (stored, result) = if used { (v.clone(), Some(v)) } else { (v, None) };
     // The value back when the element found is bound to the cell the
     // array is borrowed from (`$a['k'] = &$a`, `is_owner`): written
     // below, once that borrow is over.
@@ -551,11 +464,7 @@ fn assign_str_elem(
         };
         let a = root.array_mut()?;
         // (A KSTR literal is never a canonical integer: lowering's promise.)
-        let found = if kstr {
-            a.get_str_key_mut(s)
-        } else {
-            a.get_str_mut(s)
-        };
+        let found = if kstr { a.get_str_key_mut(s) } else { a.get_str_mut(s) };
         match found {
             Some(e) if is_owner(e, cell.as_deref()) => Some(stored),
             // An element bound by reference: the value goes into its cell.
@@ -570,14 +479,7 @@ fn assign_str_elem(
             }
             None => {
                 let s = key.cloned_str().expect("a string");
-                a.insert_absent(
-                    if kstr {
-                        Key::Str(s)
-                    } else {
-                        Key::from_string(s)
-                    },
-                    stored,
-                );
+                a.insert_absent(if kstr { Key::Str(s) } else { Key::from_string(s) }, stored);
                 None
             }
         }
@@ -592,10 +494,7 @@ fn assign_str_elem(
 /// out of line: `push_ref`): appended at its next key; an occupied next
 /// key (the error), anything but an array, an undefined value is cold.
 #[inline(always)]
-pub(crate) fn append_dim<S: spec::AppendDim>(
-    hx: Hx,
-    args::AppendDim { var, val, dst }: args::AppendDim,
-) -> Ctl {
+pub(crate) fn append_dim<S: spec::AppendDim>(hx: Hx, args::AppendDim { var, val, dst }: args::AppendDim) -> Ctl {
     let v = if is_k(S::Val::ID) {
         hx.v::<S::Val>(val).clone()
     } else {
@@ -604,11 +503,7 @@ pub(crate) fn append_dim<S: spec::AppendDim>(
             None => return Ctl::Cold,
         }
     };
-    let kept = if S::Res::ID == USED {
-        Some(v.clone())
-    } else {
-        None
-    };
+    let kept = if S::Res::ID == USED { Some(v.clone()) } else { None };
     match hx.w[r(var)].array_mut() {
         Some(a) => {
             if a.next_key().is_none() {
@@ -638,13 +533,9 @@ pub(crate) fn append_dim<S: spec::AppendDim>(
 #[cold]
 #[inline(never)]
 fn push_ref(var: &Value, v: Value) -> bool {
-    let Some(cell) = var.as_reference() else {
-        return false;
-    };
+    let Some(cell) = var.as_reference() else { return false };
     let mut held = cell.borrow_mut();
-    let Some(a) = held.array_mut() else {
-        return false;
-    };
+    let Some(a) = held.array_mut() else { return false };
     if a.next_key().is_none() {
         return false;
     }
@@ -659,12 +550,7 @@ fn push_ref(var: &Value, v: Value) -> bool {
 /// already. (Pending destructors are tested after, whatever this
 /// released.)
 #[inline(always)]
-pub(crate) fn write_slot(
-    o: &p8_runtime::object::Object,
-    slot: usize,
-    plain: Plain,
-    v: &Value,
-) -> bool {
+pub(crate) fn write_slot(o: &p8_runtime::object::Object, slot: usize, plain: Plain, v: &Value) -> bool {
     match o.slots().get(slot) {
         Some(s) if slot_writable(o, s, plain) => {
             let mut cur = s.replace(Value::UNDEF);
@@ -681,19 +567,11 @@ pub(crate) fn write_slot(
 /// one (an unset one may be theirs); a readonly property's first write,
 /// an unset slot of a class without them.
 #[inline(always)]
-pub(crate) fn slot_writable(
-    o: &p8_runtime::object::Object,
-    s: &std::cell::Cell<Value>,
-    plain: Plain,
-) -> bool {
+pub(crate) fn slot_writable(o: &p8_runtime::object::Object, s: &std::cell::Cell<Value>, plain: Plain) -> bool {
     let magic = o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0;
     (!magic && plain == Plain::Any) || {
         let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
-        if plain == Plain::Unset {
-            unset && !magic
-        } else {
-            !unset
-        }
+        if plain == Plain::Unset { unset && !magic } else { !unset }
     }
 }
 
@@ -702,17 +580,10 @@ pub(crate) fn slot_writable(
 /// the entry does not answer as it stands is `fetch_prop_miss`'s, one
 /// call out of line.
 #[inline(always)]
-pub(crate) fn fetch_prop<S: spec::FetchProp>(
-    hx: Hx,
-    args::FetchProp { dst, obj, site }: args::FetchProp,
-) -> Ctl {
+pub(crate) fn fetch_prop<S: spec::FetchProp>(hx: Hx, args::FetchProp { dst, obj, site }: args::FetchProp) -> Ctl {
     let this = S::Obj::ID == THIS;
     let found = match hx.clo.props.get(site as usize) {
-        Some(entry) => match if this {
-            hx.top.this.as_ref()
-        } else {
-            hx.w[r(obj)].as_object()
-        } {
+        Some(entry) => match if this { hx.top.this.as_ref() } else { hx.w[r(obj)].as_object() } {
             Some(o) => cached_prop(entry.get(), o, || hx.top.scope.as_ref()),
             None => None,
         },
@@ -722,14 +593,7 @@ pub(crate) fn fetch_prop<S: spec::FetchProp>(
     // `Ctl` in memory and built it there after every read.)
     let released = match found {
         Some(v) => put(&mut hx.w[r(dst)], v),
-        None => match fetch_prop_miss(
-            hx.w,
-            hx.clo,
-            hx.top,
-            dst,
-            if this { p8_bytecode::THIS } else { obj as Reg },
-            site,
-        ) {
+        None => match fetch_prop_miss(hx.w, hx.clo, hx.top, dst, if this { p8_bytecode::THIS } else { obj as Reg }, site) {
             Some(released) => released,
             None => return Ctl::Cold,
         },
@@ -750,14 +614,7 @@ pub(crate) fn fetch_prop<S: spec::FetchProp>(
 /// through memory, and the arm then stored one for its own read too).
 #[cold]
 #[inline(never)]
-fn fetch_prop_miss(
-    w: &mut [Value; WINDOW],
-    clo: &Closure,
-    top: &Frame,
-    dst: u32,
-    obj: Reg,
-    site: u32,
-) -> Option<bool> {
+fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32, obj: Reg, site: u32) -> Option<bool> {
     let entry = clo.props.get(site as usize)?;
     let held;
     let o = if obj == p8_bytecode::THIS {
@@ -775,9 +632,7 @@ fn fetch_prop_miss(
     let scope = top.scope.as_ref();
     let v = match cached_prop(entry.get(), o, || scope) {
         Some(v) => v,
-        None if refill_prop(entry, o, &clo.consts[site as usize], scope) => {
-            cached_prop(entry.get(), o, || scope)?
-        }
+        None if refill_prop(entry, o, &clo.consts[site as usize], scope) => cached_prop(entry.get(), o, || scope)?,
         None => dynamic_prop(o, &clo.consts[site as usize])?,
     };
     Some(put(&mut w[r(dst)], v))
@@ -796,56 +651,28 @@ fn fetch_prop_miss(
 /// tests. What neither takes is cold. TAKE: the value's temporary is
 /// released after.
 #[inline(always)]
-pub(crate) fn assign_prop<S: spec::AssignProp>(
-    hx: Hx,
-    args::AssignProp {
-        obj,
-        val,
-        dst,
-        site,
-    }: args::AssignProp,
-) -> Ctl {
-    let Some(entry) = hx.clo.props.get(site as usize) else {
-        return Ctl::Cold;
-    };
+pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, val, dst, site }: args::AssignProp) -> Ctl {
+    let Some(entry) = hx.clo.props.get(site as usize) else { return Ctl::Cold };
     let o = if S::Obj::ID == THIS {
-        let Some(o) = &hx.top.this else {
-            return Ctl::Cold;
-        };
+        let Some(o) = &hx.top.this else { return Ctl::Cold };
         o
     } else {
-        let Some(o) = hx.w[r(obj)].as_object() else {
-            return Ctl::Cold;
-        };
+        let Some(o) = hx.w[r(obj)].as_object() else { return Ctl::Cold };
         o
     };
     let v = hx.v::<S::Val>(val);
     let e = entry.get();
     let class = Rc::as_ptr(&o.class) as usize;
-    let cell = if e.class == class
-        && (e.scope == 0 || e.scope == hx.scope())
-        && o.lazy.get() == 0
-        && !v.is_undef()
-        && !v.is_reference()
-    {
+    let cell = if e.class == class && (e.scope == 0 || e.scope == hx.scope()) && o.lazy.get() == 0 && !v.is_undef() && !v.is_reference() {
         o.slot_at(e.slot as usize)
     } else {
         None
     };
     let mut released = if let Some(cell) = cell
-        && (e.plain_write == class
-            || plain_prop(o, e.slot as usize, hx.top.scope.as_deref(), v, hx.reinit)
-                .is_some_and(|plain| slot_writable(o, cell, plain)))
+        && (e.plain_write == class || plain_prop(o, e.slot as usize, hx.top.scope.as_deref(), v, hx.reinit).is_some_and(|plain| slot_writable(o, cell, plain)))
     {
         store_slot(cell, v.clone())
-    } else if assign_prop_guarded(
-        entry,
-        o,
-        v,
-        &hx.clo.consts[site as usize],
-        hx.top.scope.as_ref(),
-        hx.reinit,
-    ) {
+    } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {
         // (What it released is not told: the test after is made.)
         true
     } else {
@@ -909,18 +736,8 @@ fn store_through(cell: &std::cell::Cell<Value>, reference: Value) -> bool {
 /// of line: the entry's own class and scope, the common case, never come
 /// here (a typed property's write among them: `plain_prop` in the arm).
 #[inline(never)]
-fn assign_prop_guarded(
-    entry: &std::cell::Cell<PropSite>,
-    o: &p8_runtime::object::Object,
-    v: &Value,
-    name: &Value,
-    scope: Option<&Rc<Class>>,
-    reinit: bool,
-) -> bool {
-    let at = (
-        scope.map_or(0, |c| Rc::as_ptr(c) as usize),
-        scope.map(|c| &**c),
-    );
+fn assign_prop_guarded(entry: &std::cell::Cell<PropSite>, o: &p8_runtime::object::Object, v: &Value, name: &Value, scope: Option<&Rc<Class>>, reinit: bool) -> bool {
+    let at = (scope.map_or(0, |c| Rc::as_ptr(c) as usize), scope.map(|c| &**c));
     let found = match plain_slot(entry.get(), o, at, v, reinit) {
         Some(found) => Some(found),
         None if refill_prop(entry, o, name, scope) => plain_slot(entry.get(), o, at, v, reinit),
@@ -972,10 +789,7 @@ pub(crate) fn ret<S: spec::Ret>(hx: Hx, args::Ret { src }: args::Ret) -> Ctl {
 /// it, never autoloading), no called class or scope, an undefined
 /// variable (the warning) are cold.
 #[inline(always)]
-pub(crate) fn instance_of<S: spec::InstanceOf>(
-    hx: Hx,
-    args::InstanceOf { dst, src, class }: args::InstanceOf,
-) -> Ctl {
+pub(crate) fn instance_of<S: spec::InstanceOf>(hx: Hx, args::InstanceOf { dst, src, class }: args::InstanceOf) -> Ctl {
     // A class in a register (its errors, a string's class), `parent` in a
     // trait: out of line, whatever `src` is.
     if S::Cls::ID == OTHER {
@@ -983,28 +797,16 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(
     }
     let is = |o: &Object| -> Option<bool> {
         if S::Cls::ID == NAMED {
-            let (p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name)) =
-                &hx.clo.code.classes[class as usize]
-            else {
-                return None;
-            };
+            let (p8_bytecode::ClassRef::Named(name) | p8_bytecode::ClassRef::Forward(name)) = &hx.clo.code.classes[class as usize] else { return None };
             let target = hx.clo.class_refs[class as usize].borrow();
             if std::ptr::eq(Rc::as_ptr(&o.class), target.as_ptr()) {
                 return Some(true);
             }
             let target = target.upgrade()?;
             // (Through an alias, the class it names, and the name itself.)
-            Some(
-                o.class.is_a(&target.lower)
-                    || (target.lower != name.lower.as_bytes()
-                        && o.class.is_a(name.lower.as_bytes())),
-            )
+            Some(o.class.is_a(&target.lower) || (target.lower != name.lower.as_bytes() &&o.class.is_a(name.lower.as_bytes())))
         } else {
-            let c = if S::Cls::ID == STATIC {
-                hx.top.called_class()?
-            } else {
-                hx.top.scope.as_ref()?
-            };
+            let c = if S::Cls::ID == STATIC { hx.top.called_class()? } else { hx.top.scope.as_ref()? };
             Some(Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
         }
     };
@@ -1032,16 +834,9 @@ pub(crate) fn instance_of<S: spec::InstanceOf>(
 /// was read from. A miss (the first read, another class or scope, a
 /// constant that is not cached), no called class or scope, are cold.
 #[inline(always)]
-pub(crate) fn class_const<S: spec::ClassConst>(
-    hx: Hx,
-    args::ClassConst { dst, class, site }: args::ClassConst,
-) -> Ctl {
-    let Some(key) = hx.class_key::<S::Cls>(class) else {
-        return Ctl::Cold;
-    };
-    let Some(entry) = hx.clo.class_consts.get(site as usize) else {
-        return Ctl::Cold;
-    };
+pub(crate) fn class_const<S: spec::ClassConst>(hx: Hx, args::ClassConst { dst, class, site }: args::ClassConst) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.class_consts.get(site as usize) else { return Ctl::Cold };
     let v = {
         let e = entry.borrow();
         if e.key != key || (e.scope != 0 && e.scope != hx.scope()) {
@@ -1058,21 +853,12 @@ pub(crate) fn class_const<S: spec::ClassConst>(
 /// scope, a class whose initializers have not run), no called class or
 /// scope, an unset value (a typed property not initialized) are cold.
 #[inline(always)]
-pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(
-    hx: Hx,
-    args::FetchStaticProp { dst, class, site }: args::FetchStaticProp,
-) -> Ctl {
-    let Some(key) = hx.class_key::<S::Cls>(class) else {
-        return Ctl::Cold;
-    };
-    let Some(entry) = hx.clo.statics.get(site as usize) else {
-        return Ctl::Cold;
-    };
+pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(hx: Hx, args::FetchStaticProp { dst, class, site }: args::FetchStaticProp) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.statics.get(site as usize) else { return Ctl::Cold };
     let v = {
         let e = entry.borrow();
-        let Some(cell) = &e.cell else {
-            return Ctl::Cold;
-        };
+        let Some(cell) = &e.cell else { return Ctl::Cold };
         if e.key != key || e.scope != hx.scope() {
             return Ctl::Cold;
         }
@@ -1090,21 +876,9 @@ pub(crate) fn fetch_static_prop<S: spec::FetchStaticProp>(
 /// `store` writes it), and `dst` the value too. A miss, no called class or
 /// scope, an undefined value (the warning) are cold.
 #[inline(always)]
-pub(crate) fn assign_static_prop<S: spec::AssignStaticProp>(
-    hx: Hx,
-    args::AssignStaticProp {
-        val,
-        dst,
-        class,
-        site,
-    }: args::AssignStaticProp,
-) -> Ctl {
-    let Some(key) = hx.class_key::<S::Cls>(class) else {
-        return Ctl::Cold;
-    };
-    let Some(entry) = hx.clo.statics.get(site as usize) else {
-        return Ctl::Cold;
-    };
+pub(crate) fn assign_static_prop<S: spec::AssignStaticProp>(hx: Hx, args::AssignStaticProp { val, dst, class, site }: args::AssignStaticProp) -> Ctl {
+    let Some(key) = hx.class_key::<S::Cls>(class) else { return Ctl::Cold };
+    let Some(entry) = hx.clo.statics.get(site as usize) else { return Ctl::Cold };
     let v = if is_k(S::Val::ID) {
         hx.v::<S::Val>(val).clone()
     } else {
@@ -1115,9 +889,7 @@ pub(crate) fn assign_static_prop<S: spec::AssignStaticProp>(
     };
     let released = {
         let e = entry.borrow();
-        let Some(cell) = &e.cell else {
-            return Ctl::Cold;
-        };
+        let Some(cell) = &e.cell else { return Ctl::Cold };
         if e.key != key || e.scope != hx.scope() {
             return Ctl::Cold;
         }

@@ -67,13 +67,7 @@ pub(crate) enum Origin {
 #[inline(always)]
 pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
     let n = frames.len;
-    let Some(origins) = frames.slots[n - 1]
-        .extra
-        .as_mut()
-        .and_then(|e| e.shared.take())
-    else {
-        return;
-    };
+    let Some(origins) = frames.slots[n - 1].extra.as_mut().and_then(|e| e.shared.take()) else { return };
     let base = frames.slots[n - 1].base as usize;
     for (i, origin) in origins.iter().enumerate() {
         let v = std::mem::take(&mut regs[base + i]);
@@ -95,20 +89,10 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
     }
     // Its variables only named at run time (a file it included made them)
     // are the including scope's too.
-    let made = frames.slots[n - 1]
-        .extra
-        .as_mut()
-        .map(|e| std::mem::take(&mut e.vars.0))
-        .unwrap_or_default();
+    let made = frames.slots[n - 1].extra.as_mut().map(|e| std::mem::take(&mut e.vars.0)).unwrap_or_default();
     for (name, cell) in made {
         let below = &mut frames.slots[n - 2];
-        match below
-            .func
-            .code
-            .cv_names
-            .iter()
-            .position(|c| c.as_bytes() == name.as_slice())
-        {
+        match below.func.code.cv_names.iter().position(|c| c.as_bytes() == name.as_slice()) {
             Some(r) => regs[below.base as usize + r] = Value::reference(cell),
             None => {
                 let vars = &mut below.vars_mut().0;
@@ -127,19 +111,13 @@ impl Frame {
     /// from `$this` (`Z_OBJCE(This)`): it is `$this`'s class.
     #[inline(always)]
     pub(crate) fn called_class(&self) -> Option<&Rc<Class>> {
-        self.called
-            .as_ref()
-            .or_else(|| self.this.as_ref().map(|t| &t.class))
+        self.called.as_ref().or_else(|| self.this.as_ref().map(|t| &t.class))
     }
 
     /// The Generator this frame runs, taken (its code returns): none in a
     /// frame that is not a generator's (its owner is a Closure, if any).
     pub(crate) fn take_generator(&mut self) -> Option<Rc<Object>> {
-        if self.owner.is_some() && self.func.code.is_generator {
-            self.owner.take()
-        } else {
-            None
-        }
+        if self.owner.is_some() && self.func.code.is_generator { self.owner.take() } else { None }
     }
 
     /// The arguments past the declared parameters.
@@ -249,13 +227,7 @@ pub(crate) struct StackLimit {
 impl StackLimit {
     pub(crate) fn new(stop: Arc<AtomicU64>, text: Option<&[u8]>, percent: Option<&[u8]>) -> Self {
         let percent = percent.map_or(-1, p8_runtime::ini::quantity);
-        StackLimit {
-            bytes: Cell::new(text.map_or(usize::MAX, limit_bytes)),
-            tried: Cell::new(0),
-            stop,
-            percent: Cell::new(percent),
-            raised: Cell::new(false),
-        }
+        StackLimit { bytes: Cell::new(text.map_or(usize::MAX, limit_bytes)), tried: Cell::new(0), stop, percent: Cell::new(percent), raised: Cell::new(false) }
     }
 
     /// The hard limit: what the request may take while it reports going
@@ -333,13 +305,7 @@ impl Frames {
 
     /// Push a frame running `func`, its window at `base`.
     #[inline(always)]
-    pub(crate) fn push(
-        &mut self,
-        func: &Rc<Closure>,
-        base: usize,
-        argc: usize,
-        ret: u32,
-    ) -> &mut Frame {
+    pub(crate) fn push(&mut self, func: &Rc<Closure>, base: usize, argc: usize, ret: u32) -> &mut Frame {
         self.push_code(Some(func), base, argc, ret)
     }
 
@@ -347,14 +313,7 @@ impl Frames {
     /// when it returns: `func` (None: the slot the push reuses runs it
     /// already). The frame pushed.
     #[inline(always)]
-    pub(crate) fn call(
-        &mut self,
-        func: Option<&Rc<Closure>>,
-        resume: usize,
-        base: usize,
-        argc: usize,
-        ret: u32,
-    ) -> &mut Frame {
+    pub(crate) fn call(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
         self.top_mut().pc = resume as u32;
         self.push_code(func, base, argc, ret)
     }
@@ -363,13 +322,7 @@ impl Frames {
     /// of the code only when it does not run it already: the same
     /// function called again from the same depth takes none.
     #[inline(always)]
-    fn push_code(
-        &mut self,
-        func: Option<&Rc<Closure>>,
-        base: usize,
-        argc: usize,
-        ret: u32,
-    ) -> &mut Frame {
+    fn push_code(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
         let n = self.len;
         self.len = n + 1;
         if n >= self.slots.len() {
@@ -382,8 +335,7 @@ impl Frames {
             p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
             slot.func = Rc::clone(func);
         }
-        (slot.pc, slot.base, slot.ret, slot.argc, slot.global) =
-            (0, base as u32, ret, argc as u32, false);
+        (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
         slot
     }
 
@@ -431,10 +383,7 @@ impl Frames {
             // (Vec's own growth, made explicit: see `grow`.)
             let cap = need.max(regs.capacity() * 2);
             let bytes = cap * std::mem::size_of::<Value>();
-            self.charge(
-                bytes + self.slots.capacity() * std::mem::size_of::<Frame>(),
-                bytes,
-            );
+            self.charge(bytes + self.slots.capacity() * std::mem::size_of::<Frame>(), bytes);
             regs.reserve_exact(cap - regs.len());
             self.reg_bytes = bytes;
         }
@@ -447,17 +396,7 @@ impl Frames {
     /// (a timeout) stays the one raised.
     fn charge(&self, total: usize, tried: usize) {
         let Some(limit) = &self.limit else { return };
-        if total > limit.bytes.get()
-            && limit
-                .stop
-                .compare_exchange(
-                    NO_INTERRUPT,
-                    OUT_OF_MEMORY,
-                    AtomicOrdering::Relaxed,
-                    AtomicOrdering::Relaxed,
-                )
-                .is_ok()
-        {
+        if total > limit.bytes.get() && limit.stop.compare_exchange(NO_INTERRUPT, OUT_OF_MEMORY, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed).is_ok() {
             limit.tried.set(tried);
         }
     }

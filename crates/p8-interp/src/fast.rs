@@ -109,8 +109,7 @@ impl Context<'_> {
             // `step` then raises it.
             macro_rules! back {
                 ($target:expr) => {
-                    $target as usize <= pc!()
-                        && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                    $target as usize <= pc!() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
                 };
             }
             // The instruction at the pc (or at `$at`) is `slow`'s
@@ -178,9 +177,7 @@ impl Context<'_> {
             // (`enter`), so the frame's fixed window always exists.
             // (One test: the slice's own check is the same compare.)
             let w: &mut [Value; WINDOW] = if regs.len() >= base + WINDOW {
-                (&mut regs[base..base + WINDOW])
-                    .try_into()
-                    .expect("a window's worth of registers")
+                (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
             } else {
                 grow_window(regs, base)
             };
@@ -213,8 +210,7 @@ impl Context<'_> {
             macro_rules! arith {
                 ($op:expr, $dst:expr, $a:expr, $b:expr, $int:expr, $miss:expr) => {{
                     let b: Src = $b;
-                    let released = if let (Some(x), Some(y)) =
-                        (w[rx!($a)].as_int(), src(&w[..], b).as_int())
+                    let released = if let (Some(x), Some(y)) = (w[rx!($a)].as_int(), src(&w[..], b).as_int())
                         && let Some(n) = $int(x, y)
                     {
                         put_var(&mut w[rx!($dst)], Value::int(n))
@@ -230,10 +226,7 @@ impl Context<'_> {
             // register): out of line on the arm's operands (`binary_ops`).
             macro_rules! arith_miss {
                 ($op:expr, $dst:expr, $a:expr, $b:expr) => {
-                    out!(
-                        ($op, Reg::from($dst), Reg::from($a), Reg::from($b)),
-                        |cx, regs, clo, base, _, at, ops| cx.binary_ops(regs, clo, base, at, ops)
-                    )
+                    out!(($op, Reg::from($dst), Reg::from($a), Reg::from($b)), |cx, regs, clo, base, _, at, ops| cx.binary_ops(regs, clo, base, at, ops))
                 };
             }
             // `var op= src`: two ints inline, the rest (floats, references,
@@ -243,19 +236,14 @@ impl Context<'_> {
             macro_rules! assign_op {
                 ($op:expr, $var:expr, $b:expr, $y:expr) => {{
                     let b: Src = $b;
-                    let released = if let (Some(x), Some(y)) =
-                        (w[rx!($var)].as_int(), src(&w[..], b).as_int())
+                    let released = if let (Some(x), Some(y)) = (w[rx!($var)].as_int(), src(&w[..], b).as_int())
                         && let Some(n) = int_op($op, x, y)
                     {
                         put(&mut w[rx!($var)], Value::int(n))
                     } else if assign_op(&mut w[..], $op, Reg::from($var), b) {
                         true
                     } else {
-                        out!(
-                            ($op, Reg::from($var), $y),
-                            |cx, regs, clo, base, _, at, ops| cx
-                                .assign_op_ops(regs, clo, base, at, ops)
-                        )
+                        out!(($op, Reg::from($var), $y), |cx, regs, clo, base, _, at, ops| cx.assign_op_ops(regs, clo, base, at, ops))
                     };
                     done!(released);
                 }};
@@ -279,11 +267,7 @@ impl Context<'_> {
                         test(cmp, x, y)
                     };
                     let Some(t) = t else {
-                        out!(
-                            (cmp, Reg::from($dst), Reg::from($a), $b),
-                            |cx, regs, clo, base, _, at, ops| cx
-                                .compare_ops(regs, clo, base, at, ops)
-                        )
+                        out!((cmp, Reg::from($dst), Reg::from($a), $b), |cx, regs, clo, base, _, at, ops| cx.compare_ops(regs, clo, base, at, ops))
                     };
                     done!(put_var(&mut w[rx!($dst)], Value::bool(t)));
                 }};
@@ -295,15 +279,11 @@ impl Context<'_> {
             macro_rules! array_push {
                 ($arr:expr, $val:expr, $take:expr) => {{
                     let val: Src = $val;
-                    let Some(arr) = w[rx!($arr)].as_array() else {
-                        slow!()
-                    };
+                    let Some(arr) = w[rx!($arr)].as_array() else { slow!() };
                     if arr.next_key().is_none() {
                         slow!();
                     }
-                    let Some(v) = taken(&mut w[..], val, $take) else {
-                        slow!()
-                    };
+                    let Some(v) = taken(&mut w[..], val, $take) else { slow!() };
                     let _ = w[rx!($arr)].array_mut().expect("checked above").push(v);
                     // (A taken temporary that held a reference let go of it.)
                     done!(true);
@@ -323,14 +303,9 @@ impl Context<'_> {
                     } else {
                         slow!()
                     };
-                    let Some(v) = taken(&mut w[..], val, $take) else {
-                        slow!()
-                    };
+                    let Some(v) = taken(&mut w[..], val, $take) else { slow!() };
                     // (A key written twice in one literal replaces the first value.)
-                    w[rx!($arr)]
-                        .array_mut()
-                        .expect("checked above")
-                        .insert(k, v);
+                    w[rx!($arr)].array_mut().expect("checked above").insert(k, v);
                     done!(true);
                 }};
             }
@@ -405,13 +380,7 @@ impl Context<'_> {
                             goto!(at + 1);
                         }
                         r => {
-                            resume = threw!(self.frameless_tail(
-                                regs,
-                                at,
-                                $i,
-                                r,
-                                (base + $start, $n, base + rx!($dst), $temps)
-                            ));
+                            resume = threw!(self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps)));
                             continue 'frame;
                         }
                     }
@@ -422,13 +391,7 @@ impl Context<'_> {
             // the handler is inlined) ...
             macro_rules! hx {
                 () => {
-                    Hx {
-                        w: &mut *w,
-                        clo,
-                        top,
-                        frames: &self.frames,
-                        reinit: !self.reinit.is_empty(),
-                    }
+                    Hx { w: &mut *w, clo, top, frames: &self.frames, reinit: !self.reinit.is_empty() }
                 };
             }
             // A return of `$v` from the top frame (not the script's main
@@ -555,8 +518,7 @@ impl Context<'_> {
                 macro_rules! static_call {
                     ($vars:expr) => {{
                         ops!(a, b, c, imm);
-                        let (dst, args, n, method, class) =
-                            (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
+                        let (dst, args, n, method, class) = (a, b, rx!(c), (imm & 0xffff) as usize, (imm >> 16) as u16);
                         let vars: Option<u16> = $vars;
                         // Anything else (the first call, a native method,
                         // __callStatic, a hook's `parent::$p::get()`, a
@@ -565,63 +527,31 @@ impl Context<'_> {
                         // (`static_call_ops`).
                         macro_rules! uncached {
                             () => {{
-                                let ops = StaticCallOps {
-                                    dst: Reg::from(dst),
-                                    class,
-                                    method: method as u16,
-                                    args: Reg::from(args),
-                                    argc: n as u8,
-                                    vars: vars.unwrap_or(p8_bytecode::NO_VARS),
-                                };
-                                out!(ops, |cx, regs, clo, base, _, at, ops| cx
-                                    .static_call_ops(regs, clo, base, at, ops))
+                                let ops = StaticCallOps { dst: Reg::from(dst), class, method: method as u16, args: Reg::from(args), argc: n as u8, vars: vars.unwrap_or(p8_bytecode::NO_VARS) };
+                                out!(ops, |cx, regs, clo, base, _, at, ops| cx.static_call_ops(regs, clo, base, at, ops))
                             }};
                         }
                         // (The frame takes the parts, no copy; the code is
                         // the one at its index, as the cached MethodCall
                         // takes it: `push_code` counts it only when the
                         // frame slot the call reuses does not run it.)
-                        let Some(sites::StaticHit {
-                            code,
-                            this,
-                            scope,
-                            called,
-                        }) = self.static_site(clo, class, method)
-                        else {
-                            uncached!()
-                        };
-                        let Some(target) = self.closures.get(code as usize) else {
-                            uncached!()
-                        };
+                        let Some(sites::StaticHit { code, this, scope, called }) = self.static_site(clo, class, method) else { uncached!() };
+                        let Some(target) = self.closures.get(code as usize) else { uncached!() };
                         let callee = &target.code;
-                        if n < callee.required
-                            || callee.is_generator
-                            || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
-                        {
+                        if n < callee.required || callee.is_generator || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                             uncached!();
                         }
                         if let Some(vars) = vars {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
-                            match send_vars(
-                                &mut w[..],
-                                &clo.code.arg_vars[usize::from(vars)],
-                                rx!(args),
-                                callee,
-                            ) {
+                            match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), callee) {
                                 Some(released) if !(released && ids.has_pending()) => {}
                                 _ => slow!(),
                             }
                         }
                         // (No Closure object: the slot's `owner` is empty,
                         // as `leave` left it.)
-                        let frame = self.frames.call(
-                            Some(target),
-                            pc!() + 1,
-                            base + args as usize,
-                            n,
-                            (base + dst as usize) as u32,
-                        );
+                        let frame = self.frames.call(Some(target), pc!() + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
                         frame.scope = Some(scope);
                         frame.called = Some(called);
@@ -660,29 +590,12 @@ impl Context<'_> {
                             } else {
                                 if !w[rx!(a)].is_array() {
                                     if w[rx!(a)].is_object() {
-                                        let ops = IterNextOps {
-                                            iter: Reg::from(a),
-                                            val: Reg::from(b),
-                                            key: Reg::from(c),
-                                            has_key: $key,
-                                            end: imm,
-                                        };
-                                        out!(ops, |cx, regs, clo, base, _, at, ops| cx
-                                            .iter_next_object_ops(regs, clo, base, at, ops));
+                                        let ops = IterNextOps { iter: Reg::from(a), val: Reg::from(b), key: Reg::from(c), has_key: $key, end: imm };
+                                        out!(ops, |cx, regs, clo, base, _, at, ops| cx.iter_next_object_ops(regs, clo, base, at, ops));
                                     }
                                     slow!();
                                 }
-                                if iter_next(
-                                    &mut w[..],
-                                    Reg::from(a),
-                                    Reg::from(b),
-                                    Reg::from(c),
-                                    $key,
-                                ) {
-                                    at + 1
-                                } else {
-                                    imm as usize
-                                }
+                                if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { at + 1 } else { imm as usize }
                             };
                             if ids.has_pending() {
                                 pending_at!(next, at);
@@ -2401,10 +2314,7 @@ impl Context<'_> {
 /// The register file is kept this far ahead of every frame's base.
 pub(crate) const WINDOW: usize = 256;
 
-const _: () = assert!(
-    WINDOW == u8::MAX as usize + 1,
-    "a u8 operand indexes the window"
-);
+const _: () = assert!(WINDOW == u8::MAX as usize + 1, "a u8 operand indexes the window");
 
 /// What `slow` leaves the loop to do: go on at a pc, or the run is over
 /// (the bottom frame returned, or a fiber suspended).
@@ -2421,17 +2331,12 @@ pub(crate) enum Flow {
 /// made it), as ZEND_RECV_VARIADIC checks them.
 #[inline]
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
-    clo.code
-        .params
-        .iter()
-        .zip(w)
-        .enumerate()
-        .all(|(i, (p, v))| match &p.ty {
-            None => true,
-            Some(ty) if p.variadic => variadic_plain(ty, v),
-            Some(_) if i >= argc || v.is_undef() => true,
-            Some(ty) => plain_arg(clo.type_memo.get(i), ty, v),
-        })
+    clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
+        None => true,
+        Some(ty) if p.variadic => variadic_plain(ty, v),
+        Some(_) if i >= argc || v.is_undef() => true,
+        Some(ty) => plain_arg(clo.type_memo.get(i), ty, v),
+    })
 }
 
 /// The variables a call sends itself (`vars`, its `Function::arg_vars`
@@ -2445,11 +2350,7 @@ pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
 fn send_vars(w: &mut [Value], vars: &[(u8, Reg)], args: usize, target: &Function) -> Option<bool> {
     let mut released = false;
     for &(n, var) in vars {
-        let v = if target.param_by_ref(usize::from(n)) {
-            Value::reference(make_ref(w, var))
-        } else {
-            copied(&w[usize::from(var)])?
-        };
+        let v = if target.param_by_ref(usize::from(n)) { Value::reference(make_ref(w, var)) } else { copied(&w[usize::from(var)])? };
         released |= put(&mut w[(args + usize::from(n)) & (WINDOW - 1)], v);
     }
     Some(released)
@@ -2479,11 +2380,7 @@ fn unpack_array(to: &mut Value, from: &PhpArray) -> bool {
         return false;
     }
     let to = to.array_mut().expect("an array");
-    if to
-        .next_key()
-        .and_then(|k| k.checked_add(from.len() as i64))
-        .is_none()
-    {
+    if to.next_key().and_then(|k| k.checked_add(from.len() as i64)).is_none() {
         return false;
     }
     to.reserve(from.len());
@@ -2537,13 +2434,7 @@ pub(crate) struct Path {
 /// only find the levels before it separated. Else whether a write
 /// released memory.
 #[inline(never)]
-fn assign_path(
-    w: &mut [Value],
-    var: usize,
-    p: Path,
-    val: Src<'_>,
-    dst: Option<usize>,
-) -> Option<bool> {
+fn assign_path(w: &mut [Value], var: usize, p: Path, val: Src<'_>, dst: Option<usize>) -> Option<bool> {
     let path = p.keys..p.keys + p.n;
     // (A variable bound by reference: the array its cell holds.)
     let cell = w[var].as_reference().map(Rc::clone);
@@ -2551,8 +2442,7 @@ fn assign_path(
         Some(cell) => cell.borrow().is_array(),
         None => w[var].is_array(),
     };
-    if path.contains(&var) || !is_array || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str())
-    {
+    if path.contains(&var) || !is_array || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
     }
     let mut v = copied(src(w, val))?;
@@ -2563,11 +2453,7 @@ fn assign_path(
         None => {
             let mut root = std::mem::take(&mut w[var]);
             // (No result to give: the one copy goes into the array.)
-            let stored = if dst.is_some() {
-                v.clone()
-            } else {
-                std::mem::take(&mut v)
-            };
+            let stored = if dst.is_some() { v.clone() } else { std::mem::take(&mut v) };
             let written = write_path(&mut root, &w[path], p.append, stored, None);
             w[var] = root;
             written.map(|x| matches!(x, Wrote::Done(true)))
@@ -2589,21 +2475,10 @@ fn assign_path(
 /// `assign_path` walks a variable (`update_slot_dim`'s write). None, with
 /// nothing written but levels separated, for anything else (`step`'s).
 #[inline(never)]
-fn assign_prop_path(
-    w: &mut [Value],
-    o: &Rc<Object>,
-    site: PropSite,
-    scope: usize,
-    path: Path,
-    val: usize,
-    dst: Option<usize>,
-) -> Option<bool> {
+fn assign_prop_path(w: &mut [Value], o: &Rc<Object>, site: PropSite, scope: usize, path: Path, val: usize, dst: Option<usize>) -> Option<bool> {
     let slot = cached_slot(site, o, scope)?;
     let p = &o.class.properties[slot];
-    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0
-        || p.readonly
-        || p.set_visibility.is_some()
-    {
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
         return None;
     }
     let keys = &w[path.keys..path.keys + path.n];
@@ -2620,13 +2495,8 @@ fn assign_prop_path(
         write_cell_path(rc, keys, path.append, &v, untyped)
     } else if root.is_array() || (root.is_null() && untyped) {
         // (No result to give: the one copy goes into the array.)
-        let stored = if dst.is_some() {
-            v.clone()
-        } else {
-            std::mem::take(&mut v)
-        };
-        write_path(&mut root, keys, path.append, stored, None)
-            .map(|x| matches!(x, Wrote::Done(true)))
+        let stored = if dst.is_some() { v.clone() } else { std::mem::take(&mut v) };
+        write_path(&mut root, keys, path.append, stored, None).map(|x| matches!(x, Wrote::Done(true)))
     } else {
         None
     };
@@ -2644,18 +2514,8 @@ fn assign_prop_path(
 /// element bound to that cell (`$a['p'][0] = &$a`) is not written here:
 /// `Some(Owner)`, and the caller puts the value in the cell in place of
 /// the root, as PHP's assignment through that reference replaces `$a`.
-fn write_path(
-    root: &mut Value,
-    keys: &[Value],
-    append: bool,
-    v: Value,
-    owner: Option<&RefCell<Value>>,
-) -> Option<Wrote> {
-    let (last, levels) = if append {
-        (None, keys)
-    } else {
-        keys.split_last().map(|(l, rest)| (Some(l), rest))?
-    };
+fn write_path(root: &mut Value, keys: &[Value], append: bool, v: Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
+    let (last, levels) = if append { (None, keys) } else { keys.split_last().map(|(l, rest)| (Some(l), rest))? };
     let mut cur = root;
     for k in levels {
         if cur.is_null() {
@@ -2666,9 +2526,7 @@ fn write_path(
         let arr = cur.array_mut()?;
         cur = match k.as_int() {
             Some(i) => arr.slot_mut(&Key::Int(i)),
-            None => arr.slot_str_mut(k.as_str().expect("a string key"), || {
-                k.cloned_str().expect("a string key")
-            }),
+            None => arr.slot_str_mut(k.as_str().expect("a string key"), || k.cloned_str().expect("a string key")),
         };
     }
     if cur.is_null() {
@@ -2703,19 +2561,9 @@ fn write_path(
 /// that reference replaces it (`untyped` only: a typed property's
 /// reference checks the value first, `step`'s). None, nothing written,
 /// for anything else in the cell.
-fn write_cell_path(
-    cell: &RefCell<Value>,
-    keys: &[Value],
-    append: bool,
-    v: &Value,
-    untyped: bool,
-) -> Option<bool> {
+fn write_cell_path(cell: &RefCell<Value>, keys: &[Value], append: bool, v: &Value, untyped: bool) -> Option<bool> {
     let mut root = std::mem::take(&mut *cell.borrow_mut());
-    let written = if root.is_array() || (untyped && root.is_null()) {
-        write_path(&mut root, keys, append, v.clone(), Some(cell))
-    } else {
-        None
-    };
+    let written = if root.is_array() || (untyped && root.is_null()) { write_path(&mut root, keys, append, v.clone(), Some(cell)) } else { None };
     match written {
         Some(Wrote::Owner) if untyped => {
             *cell.borrow_mut() = v.clone();
@@ -2755,13 +2603,7 @@ fn path_key(k: &Value) -> Key {
 /// (not `var` itself). None when the root is not an array or a key is of
 /// another type.
 #[inline(always)]
-fn on_path<R>(
-    w: &mut [Value],
-    var: usize,
-    keys: usize,
-    n: usize,
-    f: impl FnOnce(&mut Value, &[Value]) -> Option<R>,
-) -> Option<R> {
+fn on_path<R>(w: &mut [Value], var: usize, keys: usize, n: usize, f: impl FnOnce(&mut Value, &[Value]) -> Option<R>) -> Option<R> {
     let path = keys..keys + n;
     if path.contains(&var) || !w[path.clone()].iter().all(|k| k.is_int() || k.is_str()) {
         return None;
@@ -2770,11 +2612,7 @@ fn on_path<R>(
         // (The keys are no references: the cell is not theirs.)
         let cell = Rc::clone(cell);
         let mut root = cell.borrow_mut();
-        return if root.is_array() {
-            f(&mut root, &w[path])
-        } else {
-            None
-        };
+        return if root.is_array() { f(&mut root, &w[path]) } else { None };
     }
     if !w[var].is_array() {
         return None;
@@ -2806,9 +2644,7 @@ fn unset_dim(w: &mut [Value], var: usize, keys: usize, n: usize) -> Option<bool>
             if cur.is_shared_array() && !cur.as_array()?.contains_key(&k) {
                 return Some(false);
             }
-            let Some(next) = cur.array_mut()?.get_mut(&k) else {
-                return Some(false);
-            };
+            let Some(next) = cur.array_mut()?.get_mut(&k) else { return Some(false) };
             cur = next;
             if !cur.is_array() {
                 return None;
@@ -2839,17 +2675,9 @@ fn dim_inc_dec(w: &mut [Value], var: usize, keys: usize, imm: u32) -> Option<Val
         }
         let slot = cur.as_int_mut()?;
         let old = *slot;
-        let new = if imm & insn::DIM_INC != 0 {
-            old.checked_add(1)
-        } else {
-            old.checked_sub(1)
-        }?;
+        let new = if imm & insn::DIM_INC != 0 { old.checked_add(1) } else { old.checked_sub(1) }?;
         *slot = new;
-        Some(Value::int(if imm & insn::DIM_POST != 0 {
-            old
-        } else {
-            new
-        }))
+        Some(Value::int(if imm & insn::DIM_POST != 0 { old } else { new }))
     })
 }
 
@@ -2874,13 +2702,7 @@ fn cast(v: &Value, kind: u32) -> Option<Value> {
             _ => None,
         };
     }
-    if !(v.is_null()
-        || v.as_bool().is_some()
-        || v.is_int()
-        || v.is_float()
-        || v.is_str()
-        || v.is_array())
-    {
+    if !(v.is_null() || v.as_bool().is_some() || v.is_int() || v.is_float() || v.is_str() || v.is_array()) {
         return None;
     }
     match kind {
@@ -2926,29 +2748,18 @@ fn cast(v: &Value, kind: u32) -> Option<Value> {
 fn prop_inc_dec(o: &Rc<Object>, site: PropSite, scope: usize, imm: u32) -> Option<Value> {
     let slot = cached_slot(site, o, scope)?;
     let p = &o.class.properties[slot];
-    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0
-        || p.readonly
-        || p.set_visibility.is_some()
-    {
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
         return None;
     }
     let cell = &o.slots()[slot];
     let old = cell.peek(Value::as_int)?;
-    let new = if imm & insn::PROP_INC != 0 {
-        old.checked_add(1)
-    } else {
-        old.checked_sub(1)
-    }?;
+    let new = if imm & insn::PROP_INC != 0 { old.checked_add(1) } else { old.checked_sub(1) }?;
     let new = Value::int(new);
     if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
         return None;
     }
     cell.assign(new.clone());
-    Some(if imm & insn::PROP_POST != 0 {
-        Value::int(old)
-    } else {
-        new
-    })
+    Some(if imm & insn::PROP_POST != 0 { Value::int(old) } else { new })
 }
 
 /// `isset($a[k0]..[kn-1])` through arrays (`Op::IssetDimPath`): each key
@@ -2993,21 +2804,8 @@ fn isset_path(w: &[Value], var: usize, keys: usize, n: usize) -> Option<bool> {
 /// name, `consts[site]`), not in the arm: the arm tests nothing of the
 /// entry.
 #[inline(never)]
-fn prop_op(
-    o: &Rc<Object>,
-    entry: &Cell<PropSite>,
-    consts: &[Value],
-    site: usize,
-    scope: Option<&Rc<Class>>,
-    op: BinOp,
-    y: &Value,
-) -> Option<Value> {
-    let scalar = |v: &Value| {
-        matches!(
-            v.kind(),
-            Kind::Null | Kind::Bool | Kind::Int | Kind::Float | Kind::Str
-        )
-    };
+fn prop_op(o: &Rc<Object>, entry: &Cell<PropSite>, consts: &[Value], site: usize, scope: Option<&Rc<Class>>, op: BinOp, y: &Value) -> Option<Value> {
+    let scalar = |v: &Value| matches!(v.kind(), Kind::Null | Kind::Bool | Kind::Int | Kind::Float | Kind::Str);
     let at = scope.map_or(0, |c| Rc::as_ptr(c) as usize);
     let slot = match cached_slot(entry.get(), o, at) {
         Some(slot) => slot,
@@ -3015,11 +2813,7 @@ fn prop_op(
         None => return None,
     };
     let p = &o.class.properties[slot];
-    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0
-        || p.readonly
-        || p.set_visibility.is_some()
-        || !scalar(y)
-    {
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() || !scalar(y) {
         return None;
     }
     let cell = &o.slots()[slot];
@@ -3061,9 +2855,7 @@ fn prop_op(
     }
     let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
     let mut diags = Vec::new();
-    let new = p8_runtime::ops::binary(op, &x, y, &mut diags)
-        .ok()
-        .filter(|_| diags.is_empty())?;
+    let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;
     if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
         return None;
     }
@@ -3098,10 +2890,7 @@ fn ref_class_name(v: &Value) -> Option<Value> {
 fn prop_ref_cached(o: &Rc<Object>, site: PropSite, scope: usize) -> Option<Rc<RefCell<Value>>> {
     let slot = cached_slot(site, o, scope)?;
     let p = &o.class.properties[slot];
-    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0
-        || p.readonly
-        || p.set_visibility.is_some()
-    {
+    if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() {
         return None;
     }
     let cell = &o.slots()[slot];
@@ -3116,8 +2905,7 @@ fn prop_ref_cached(o: &Rc<Object>, site: PropSite, scope: usize) -> Option<Rc<Re
 #[cold]
 #[inline(never)]
 fn variadic_plain(ty: &p8_runtime::types::TypeDecl, v: &Value) -> bool {
-    v.as_array()
-        .is_none_or(|list| list.values().all(|v| plain_arg(None, ty, v)))
+    v.as_array().is_none_or(|list| list.values().all(|v| plain_arg(None, ty, v)))
 }
 
 /// One argument plainly of its type (`ClassMemo::quick`), a reference's
@@ -3132,11 +2920,7 @@ fn plain_arg(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Val
 
 #[cold]
 #[inline(never)]
-fn quick_ref(
-    memo: Option<&ClassMemo>,
-    ty: &p8_runtime::types::TypeDecl,
-    cell: &RefCell<Value>,
-) -> bool {
+fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &RefCell<Value>) -> bool {
     ClassMemo::quick(memo, ty, &cell.borrow())
 }
 
@@ -3146,9 +2930,7 @@ fn quick_ref(
 #[inline(never)]
 fn grow_window(regs: &mut Vec<Value>, base: usize) -> &mut [Value; WINDOW] {
     regs.resize(base + WINDOW, Value::UNDEF);
-    (&mut regs[base..base + WINDOW])
-        .try_into()
-        .expect("a window's worth of registers")
+    (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
 }
 
 /// Set up the registers of the frame just pushed: its window starts at
@@ -3177,13 +2959,7 @@ pub(crate) fn direct(shape: Shape, code: &Function, n: u8) -> bool {
 /// what is left is the variables after the parameters made undefined. The
 /// other calls do what they did, from the same numbers.
 #[inline(always)]
-pub(crate) fn bind(
-    frames: &mut Frames,
-    regs: &mut Vec<Value>,
-    shape: Shape,
-    base: usize,
-    argc: usize,
-) {
+pub(crate) fn bind(frames: &mut Frames, regs: &mut Vec<Value>, shape: Shape, base: usize, argc: usize) {
     // A window's worth at least: the loop's fixed window (WINDOW) must exist.
     let need = base + shape.need as usize;
     if regs.len() < need {
@@ -3271,10 +3047,7 @@ pub(crate) fn fill_defaults(defaults: &[Option<Value>], params: &mut [Value], fr
 /// Whether an ini value turns a flag on ("1", "on", "yes", "true").
 pub(crate) fn ini_on(v: &Value) -> bool {
     match v.as_str() {
-        Some(s) => matches!(
-            s.as_bytes().to_ascii_lowercase().as_slice(),
-            b"1" | b"on" | b"true" | b"yes"
-        ),
+        Some(s) => matches!(s.as_bytes().to_ascii_lowercase().as_slice(), b"1" | b"on" | b"true" | b"yes"),
         None => v.to_bool(),
     }
 }
@@ -3305,12 +3078,7 @@ fn leave_frame(frames: &mut Frames, regs: &mut [Value], n: usize, value: Value) 
     let code = &frame.func.code;
     // The variables, and the temporaries unless the code frees each
     // where it dies (`frees_temps`), as PHP's are: then they are empty.
-    let end = base
-        + if code.frees_temps {
-            code.ncv as usize
-        } else {
-            usize::from(code.nregs)
-        };
+    let end = base + if code.frees_temps { code.ncv as usize } else { usize::from(code.nregs) };
     for r in &mut regs[base..end] {
         clear(r);
     }
@@ -3661,11 +3429,7 @@ fn assign_op(w: &mut [Value], op: BinOp, var: Reg, b: Src) -> bool {
 #[inline(never)]
 pub(crate) fn truth(v: &Value) -> Option<bool> {
     fn of(v: &Value) -> Option<bool> {
-        if v.is_undef() || v.as_float().is_some_and(f64::is_nan) {
-            None
-        } else {
-            Some(v.to_bool())
-        }
+        if v.is_undef() || v.as_float().is_some_and(f64::is_nan) { None } else { Some(v.to_bool()) }
     }
     match v.as_reference() {
         Some(cell) => of(&cell.borrow()),
@@ -3735,12 +3499,7 @@ pub(crate) fn isset_elem(w: &[Value], var: Reg, keys: Src) -> Option<bool> {
 /// is over (`owner_write`). (`Done`'s release is not told: the caller
 /// tests for one, as for any write.)
 #[inline(always)]
-pub(crate) fn set_int_elem(
-    slot: &mut Value,
-    k: i64,
-    v: &Value,
-    owner: Option<&RefCell<Value>>,
-) -> Option<Wrote> {
+pub(crate) fn set_int_elem(slot: &mut Value, k: i64, v: &Value, owner: Option<&RefCell<Value>>) -> Option<Wrote> {
     let a = slot.array_mut()?;
     match a.get_int_mut(k) {
         Some(e) if is_owner(e, owner) => return Some(Wrote::Owner),
@@ -3788,17 +3547,11 @@ pub(crate) fn owner_write(cell: &RefCell<Value>, v: Value) {
 #[cold]
 #[inline(never)]
 pub(crate) fn owner_path_write(cell: &Rc<RefCell<Value>>, keys: &[Value], v: &Value) -> bool {
-    let Some((last, before)) = keys.split_last() else {
-        return false;
-    };
+    let Some((last, before)) = keys.split_last() else { return false };
     let hit = {
         let held = cell.borrow();
         let find = |a: &PhpArray, k: &Value| -> Option<Value> {
-            let e = if let Some(i) = k.as_int() {
-                a.get_int(i)
-            } else {
-                a.get_str(k.as_str()?)
-            };
+            let e = if let Some(i) = k.as_int() { a.get_int(i) } else { a.get_str(k.as_str()?) };
             e.map(Value::deref)
         };
         let mut cur = held.clone();
@@ -3847,10 +3600,7 @@ pub(crate) fn intrinsic(kind: u32, x: &Value) -> Option<Value> {
         5 => Value::bool(x.is_float()),
         6 => Value::bool(x.is_str()),
         7 => Value::bool(x.is_array()),
-        8 => Value::bool(
-            x.as_object()
-                .is_some_and(|o| o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0),
-        ),
+        8 => Value::bool(x.as_object().is_some_and(|o| o.class.flags & p8_runtime::object::CLASS_RESOURCE == 0)),
         _ => return None,
     })
 }

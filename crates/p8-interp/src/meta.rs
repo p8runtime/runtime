@@ -50,9 +50,7 @@ impl Context<'_> {
         match callee {
             Callee::Method(class, name) => {
                 let m = class.method(&name.as_bytes().to_ascii_lowercase())?;
-                self.class_named(&m.declaring)
-                    .cloned()
-                    .or_else(|| Some(Rc::clone(class)))
+                self.class_named(&m.declaring).cloned().or_else(|| Some(Rc::clone(class)))
             }
             Callee::Closure(o) => closure_data(o)?.scope.clone(),
             Callee::Function(_) => None,
@@ -60,11 +58,7 @@ impl Context<'_> {
     }
 
     /// `pick` applied to the class declaration, then to the traits it uses.
-    fn in_def<'a, T>(
-        &'a self,
-        def: &'a ClassDef,
-        pick: &dyn Fn(&'a ClassDef) -> Option<T>,
-    ) -> Option<T> {
+    fn in_def<'a, T>(&'a self, def: &'a ClassDef, pick: &dyn Fn(&'a ClassDef) -> Option<T>) -> Option<T> {
         pick(def).or_else(|| {
             def.traits.iter().find_map(|t| {
                 let used = self.def_named(t.as_bytes())?;
@@ -73,39 +67,20 @@ impl Context<'_> {
         })
     }
 
-    fn find_meta<'a>(
-        &'a self,
-        subject: &Subject,
-        code: Option<&'a Arc<Function>>,
-    ) -> Option<Found<'a>> {
+    fn find_meta<'a>(&'a self, subject: &Subject, code: Option<&'a Arc<Function>>) -> Option<Found<'a>> {
         match subject {
             Subject::Class(class) => {
                 let def = self.def_named(&class.lower)?;
-                Some(Found {
-                    meta: &def.meta,
-                    attrs: &def.meta.attrs,
-                    scope: Some(Rc::clone(class)),
-                    def: Some(def),
-                })
+                Some(Found { meta: &def.meta, attrs: &def.meta.attrs, scope: Some(Rc::clone(class)), def: Some(def) })
             }
             Subject::Function(callee) => {
                 let code = code?;
-                Some(Found {
-                    meta: &code.meta,
-                    attrs: &code.meta.attrs,
-                    scope: self.scope_of(callee),
-                    def: None,
-                })
+                Some(Found { meta: &code.meta, attrs: &code.meta.attrs, scope: self.scope_of(callee), def: None })
             }
             Subject::Param(callee, pos) => {
                 let code = code?;
                 let param = code.params.get(*pos)?;
-                Some(Found {
-                    meta: &code.meta,
-                    attrs: &param.attrs,
-                    scope: self.scope_of(callee),
-                    def: None,
-                })
+                Some(Found { meta: &code.meta, attrs: &param.attrs, scope: self.scope_of(callee), def: None })
             }
             Subject::Property(class, name) => {
                 let n = name.as_bytes();
@@ -114,18 +89,8 @@ impl Context<'_> {
                     None => class.statics.get(n)?.2.clone(),
                 };
                 let def = self.def_named(&declaring)?;
-                let meta = self.in_def(def, &|d| {
-                    d.properties
-                        .iter()
-                        .find(|p| p.name.as_bytes() == n)
-                        .map(|p| &p.meta)
-                })?;
-                Some(Found {
-                    meta,
-                    attrs: &meta.attrs,
-                    scope: self.class_named(&declaring).cloned(),
-                    def: None,
-                })
+                let meta = self.in_def(def, &|d| d.properties.iter().find(|p| p.name.as_bytes() == n).map(|p| &p.meta))?;
+                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(&declaring).cloned(), def: None })
             }
             Subject::Constant(class, name) => {
                 let n = name.as_bytes();
@@ -136,19 +101,9 @@ impl Context<'_> {
                         .iter()
                         .find(|c| c.name.as_bytes() == n)
                         .map(|c| &c.meta)
-                        .or_else(|| {
-                            d.cases
-                                .iter()
-                                .position(|(c, _)| c.as_bytes() == n)
-                                .and_then(|i| d.case_meta.get(i))
-                        })
+                        .or_else(|| d.cases.iter().position(|(c, _)| c.as_bytes() == n).and_then(|i| d.case_meta.get(i)))
                 })?;
-                Some(Found {
-                    meta,
-                    attrs: &meta.attrs,
-                    scope: self.class_named(declaring).cloned(),
-                    def: None,
-                })
+                Some(Found { meta, attrs: &meta.attrs, scope: self.class_named(declaring).cloned(), def: None })
             }
         }
     }
@@ -162,9 +117,7 @@ impl Context<'_> {
 
     /// A builtin attribute class is itself marked `#[Attribute(flags)]`.
     fn builtin_attribute_flags(subject: &Subject) -> Option<i64> {
-        let Subject::Class(class) = subject else {
-            return None;
-        };
+        let Subject::Class(class) = subject else { return None };
         Some(match class.lower.as_slice() {
             b"attribute" | b"allowdynamicproperties" => 1,
             b"returntypewillchange" | b"override" => 4,
@@ -177,83 +130,40 @@ impl Context<'_> {
     pub(crate) fn meta_facts(&self, subject: &Subject) -> Facts {
         let code = self.subject_code(subject);
         if Self::builtin_attribute_flags(subject).is_some() {
-            return Facts {
-                attrs: vec![PhpStr::from("Attribute")],
-                ..Facts::default()
-            };
+            return Facts { attrs: vec![PhpStr::from("Attribute")], ..Facts::default() };
         }
-        let Some(found) = self.find_meta(subject, code.as_ref()) else {
-            return Facts::default();
-        };
+        let Some(found) = self.find_meta(subject, code.as_ref()) else { return Facts::default() };
         let mut facts = Facts {
             doc: found.meta.doc.as_ref().map(|d| PhpStr::from(d.as_bytes())),
-            attrs: found
-                .attrs
-                .iter()
-                .map(|a| PhpStr::from(a.name.as_bytes()))
-                .collect(),
+            attrs: found.attrs.iter().map(|a| PhpStr::from(a.name.as_bytes())).collect(),
             file: None,
             line: 0,
             end_line: found.meta.end_line,
-            traits: found
-                .def
-                .map(|d| {
-                    d.traits
-                        .iter()
-                        .map(|t| PhpStr::from(t.as_bytes()))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            traits: found.def.map(|d| d.traits.iter().map(|t| PhpStr::from(t.as_bytes())).collect()).unwrap_or_default(),
         };
         if let (Some(def), Subject::Class(class)) = (found.def, subject) {
             facts.line = def.line;
-            facts.file = self
-                .sym_of(&class.lower)
-                .and_then(|key| self.class_origins.get(&key))
-                .map(|(file, _)| PhpStr::from(file.as_bytes()));
+            facts.file = self.sym_of(&class.lower).and_then(|key| self.class_origins.get(&key)).map(|(file, _)| PhpStr::from(file.as_bytes()));
         }
         facts
     }
 
     /// Run a constant expression's code, in `scope`.
-    fn eval_code(
-        &mut self,
-        code: &Arc<Function>,
-        scope: Option<Rc<Class>>,
-    ) -> Result<Value, Throw> {
-        let frame = MethodFrame {
-            func: Code::User(Closure::new(Arc::clone(code), self.isolate)),
-            this: None,
-            scope: scope.clone(),
-            called: scope,
-            trampoline: None,
-            closure: None,
-        };
+    fn eval_code(&mut self, code: &Arc<Function>, scope: Option<Rc<Class>>) -> Result<Value, Throw> {
+        let frame = MethodFrame { func: Code::User(Closure::new(Arc::clone(code), self.isolate)), this: None, scope: scope.clone(), called: scope, trampoline: None, closure: None };
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.run_nested(&mut regs, frame, &mut []);
         self.isolate.regs = regs;
         r
     }
 
-    pub(crate) fn attr_arguments(
-        &mut self,
-        subject: &Subject,
-        index: usize,
-    ) -> Result<PhpArray, Throw> {
+    pub(crate) fn attr_arguments(&mut self, subject: &Subject, index: usize) -> Result<PhpArray, Throw> {
         if let Some(flags) = Self::builtin_attribute_flags(subject) {
-            return Ok(PhpArray::from_list(if index == 0 {
-                vec![Value::int(flags)]
-            } else {
-                Vec::new()
-            }));
+            return Ok(PhpArray::from_list(if index == 0 { vec![Value::int(flags)] } else { Vec::new() }));
         }
         let code = self.subject_code(subject);
-        let Some(found) = self.find_meta(subject, code.as_ref()) else {
-            return Ok(PhpArray::new());
-        };
-        let Some(attr) = found.attrs.get(index) else {
-            return Ok(PhpArray::new());
-        };
+        let Some(found) = self.find_meta(subject, code.as_ref()) else { return Ok(PhpArray::new()) };
+        let Some(attr) = found.attrs.get(index) else { return Ok(PhpArray::new()) };
         // Cloned: running code needs the context mutably.
         let (args, scope) = (attr.args.clone(), found.scope);
         let mut out = PhpArray::new();
@@ -273,31 +183,15 @@ impl Context<'_> {
     }
 
     /// `new C(...)` with named arguments placed as a call places them.
-    pub(crate) fn new_instance_placed(
-        &mut self,
-        class: &Rc<Class>,
-        args: &PhpArray,
-    ) -> Result<Rc<Object>, Throw> {
+    pub(crate) fn new_instance_placed(&mut self, class: &Rc<Class>, args: &PhpArray) -> Result<Rc<Object>, Throw> {
         let object = self.new_instance_of(class, &mut [], false)?;
         if let Some(ctor) = self.constructor(&object) {
             object.destructed.set(false);
             let target = Target::Frame(ctor);
             let mut list = self.place_args(&target, args, false)?;
-            self.invoke_callee(
-                &Callee::Method(Rc::clone(class), PhpStr::from("__construct")),
-                Some(Rc::clone(&object)),
-                &mut list,
-            )?;
-        } else if let Some((Key::Str(name), _)) =
-            args.iter().find(|(k, _)| matches!(k, Key::Str(_)))
-        {
-            return Err(self.throw(
-                "Error",
-                format!(
-                    "Unknown named parameter ${}",
-                    String::from_utf8_lossy(name.as_bytes())
-                ),
-            ));
+            self.invoke_callee(&Callee::Method(Rc::clone(class), PhpStr::from("__construct")), Some(Rc::clone(&object)), &mut list)?;
+        } else if let Some((Key::Str(name), _)) = args.iter().find(|(k, _)| matches!(k, Key::Str(_))) {
+            return Err(self.throw("Error", format!("Unknown named parameter ${}", String::from_utf8_lossy(name.as_bytes()))));
         }
         Ok(object)
     }

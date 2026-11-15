@@ -7,12 +7,10 @@
 
 use p8_runtime::array::PhpArray;
 use p8_runtime::ext::{Ctx, Throw};
-use p8_runtime::fast::HashMap;
-use p8_runtime::object::{
-    CLASS_INTERFACE, Class, Method, Native, NativeMethod, Object, Property, Visibility,
-};
+use p8_runtime::object::{CLASS_INTERFACE, Class, Method, Native, NativeMethod, Object, Property, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::Value;
+use p8_runtime::fast::HashMap;
 use std::rc::Rc;
 
 use p8_runtime::symbol::{Sym, SymbolCache};
@@ -60,27 +58,15 @@ fn declare(
 ) {
     let lower = name.to_ascii_lowercase().into_bytes();
     let parent = parent.map(|p| Rc::clone(&classes[p.to_ascii_lowercase().as_bytes()]));
-    let (inherited_props, inherited_bool, inherited_string, inherited_clone) =
-        parent.as_ref().map_or((None, None, None, None), |p| {
-            (p.get_properties, p.cast_bool, p.cast_string, p.clone_data)
-        });
+    let (inherited_props, inherited_bool, inherited_string, inherited_clone) = parent.as_ref().map_or((None, None, None, None), |p| (p.get_properties, p.cast_bool, p.cast_string, p.clone_data));
     let inherited_forward = parent.as_ref().and_then(|p| p.forward_calls);
     let inherited_int = parent.as_ref().and_then(|p| p.cast_int);
     let declaring: Rc<[u8]> = Rc::from(lower.as_slice());
-    let mut all_interfaces: Vec<Rc<[u8]>> = parent
-        .as_ref()
-        .map(|p| p.interfaces.clone())
-        .unwrap_or_default();
-    let mut table: p8_runtime::object::Methods = parent.as_ref().map_or_else(
-        || p8_runtime::object::Methods::new(classes.symbols),
-        |p| p.methods.clone(),
-    );
+    let mut all_interfaces: Vec<Rc<[u8]>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+    let mut table: p8_runtime::object::Methods = parent.as_ref().map_or_else(|| p8_runtime::object::Methods::new(classes.symbols), |p| p.methods.clone());
     // Constants are inherited from the parent and the interfaces, as for
     // a user class (RecursiveRegexIterator::GET_MATCH is RegexIterator's).
-    let mut constants: p8_runtime::object::Constants = parent
-        .as_ref()
-        .map(|p| p.constants.clone())
-        .unwrap_or_default();
+    let mut constants: p8_runtime::object::Constants = parent.as_ref().map(|p| p.constants.clone()).unwrap_or_default();
     for i in interfaces {
         let iface = &classes[i.to_ascii_lowercase().as_bytes()];
         for (k, c) in &iface.constants {
@@ -100,15 +86,9 @@ fn declare(
     }
     let own: Vec<PhpStr> = properties.iter().map(|p| p.name.clone()).collect();
     let property_order = crate::classes::property_order(own, parent.as_deref(), Vec::new());
-    let mut props: Vec<Property> = parent
-        .as_ref()
-        .map(|p| p.properties.clone())
-        .unwrap_or_default();
+    let mut props: Vec<Property> = parent.as_ref().map(|p| p.properties.clone()).unwrap_or_default();
     for p in properties {
-        match props
-            .iter()
-            .position(|q| q.name == p.name && q.visibility != Visibility::Private)
-        {
+        match props.iter().position(|q| q.name == p.name && q.visibility != Visibility::Private) {
             Some(at) => props[at] = p,
             None => props.push(p),
         }
@@ -164,26 +144,11 @@ fn declare(
 }
 
 fn interface(classes: &mut Classes, name: &str, extends: &[&str], methods: &[&str]) {
-    let methods: Vec<(&str, Option<NativeMethod>, bool)> =
-        methods.iter().map(|m| (*m, None, false)).collect();
-    declare(
-        classes,
-        name,
-        CLASS_INTERFACE,
-        None,
-        extends,
-        Vec::new(),
-        &methods,
-    );
+    let methods: Vec<(&str, Option<NativeMethod>, bool)> = methods.iter().map(|m| (*m, None, false)).collect();
+    declare(classes, name, CLASS_INTERFACE, None, extends, Vec::new(), &methods);
 }
 
-fn prop(
-    name: &str,
-    default: Value,
-    visibility: Visibility,
-    declaring: &str,
-    ty: Option<&str>,
-) -> Property {
+fn prop(name: &str, default: Value, visibility: Visibility, declaring: &str, ty: Option<&str>) -> Property {
     Property {
         name: PhpStr::from(name),
         default,
@@ -210,13 +175,7 @@ fn throwable_props(root: &str) -> Vec<Property> {
         prop("code", Value::int(0), Protected, root, None),
         prop("file", empty(), Protected, root, Some("string")),
         prop("line", Value::int(0), Protected, root, Some("int")),
-        prop(
-            "trace",
-            Value::array(PhpArray::new()),
-            Private,
-            root,
-            Some("array"),
-        ),
+        prop("trace", Value::array(PhpArray::new()), Private, root, Some("array")),
         prop("previous", Value::NULL, Private, root, Some("?Throwable")),
     ]
 }
@@ -236,45 +195,13 @@ const THROWABLE_METHODS: &[(&str, Option<NativeMethod>, bool)] = &[
 
 pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     let mut table = Table::default();
-    let mut c = Classes {
-        table: &mut table,
-        symbols: names,
-    };
+    let mut c = Classes { table: &mut table, symbols: names };
     // #[AllowDynamicProperties], which its subclasses inherit.
-    declare(
-        &mut c,
-        "stdClass",
-        p8_runtime::object::CLASS_ALLOW_DYNAMIC,
-        None,
-        &[],
-        Vec::new(),
-        &[],
-    );
-    declare(
-        &mut c,
-        "__PHP_Incomplete_Class",
-        p8_runtime::object::CLASS_FINAL,
-        None,
-        &[],
-        Vec::new(),
-        &[],
-    );
+    declare(&mut c, "stdClass", p8_runtime::object::CLASS_ALLOW_DYNAMIC, None, &[], Vec::new(), &[]);
+    declare(&mut c, "__PHP_Incomplete_Class", p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
     // The builtin attribute classes without state (Attribute and Deprecated: reflection.rs).
-    for name in [
-        "ReturnTypeWillChange",
-        "AllowDynamicProperties",
-        "SensitiveParameter",
-        "Override",
-    ] {
-        declare(
-            &mut c,
-            name,
-            p8_runtime::object::CLASS_FINAL,
-            None,
-            &[],
-            Vec::new(),
-            &[],
-        );
+    for name in ["ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override"] {
+        declare(&mut c, name, p8_runtime::object::CLASS_FINAL, None, &[], Vec::new(), &[]);
     }
     declare(
         &mut c,
@@ -283,20 +210,11 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
         None,
         &[],
         Vec::new(),
-        &[
-            ("bindTo", Some(closure_bind_to), false),
-            ("call", Some(closure_call), false),
-            ("__invoke", Some(closure_invoke), false),
-        ],
+        &[("bindTo", Some(closure_bind_to), false), ("call", Some(closure_call), false), ("__invoke", Some(closure_invoke), false)],
     );
-    let closure =
-        Rc::get_mut(c.get_mut(b"closure".as_slice()).expect("Closure")).expect("not shared yet");
+    let closure = Rc::get_mut(c.get_mut(b"closure".as_slice()).expect("Closure")).expect("not shared yet");
     closure.debug_info = Some(crate::callable::debug_info);
-    for (name, f) in [
-        ("bind", closure_bind as p8_runtime::object::NativeStatic),
-        ("fromCallable", closure_from_callable),
-        ("getCurrent", closure_get_current),
-    ] {
+    for (name, f) in [("bind", closure_bind as p8_runtime::object::NativeStatic), ("fromCallable", closure_from_callable), ("getCurrent", closure_get_current)] {
         let lower = name.to_ascii_lowercase().into_bytes();
         let mut m = Method::clone(&closure.methods[b"bindto".as_slice()]);
         m.name = PhpStr::from(name);
@@ -306,24 +224,9 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
     }
     interface(&mut c, "Stringable", &[], &["__toString"]);
     interface(&mut c, "Traversable", &[], &[]);
-    interface(
-        &mut c,
-        "Iterator",
-        &["Traversable"],
-        &["current", "next", "key", "valid", "rewind"],
-    );
-    interface(
-        &mut c,
-        "IteratorAggregate",
-        &["Traversable"],
-        &["getIterator"],
-    );
-    interface(
-        &mut c,
-        "ArrayAccess",
-        &[],
-        &["offsetExists", "offsetGet", "offsetSet", "offsetUnset"],
-    );
+    interface(&mut c, "Iterator", &["Traversable"], &["current", "next", "key", "valid", "rewind"]);
+    interface(&mut c, "IteratorAggregate", &["Traversable"], &["getIterator"]);
+    interface(&mut c, "ArrayAccess", &[], &["offsetExists", "offsetGet", "offsetSet", "offsetUnset"]);
     interface(&mut c, "Countable", &[], &["count"]);
     interface(&mut c, "JsonSerializable", &[], &["jsonSerialize"]);
     interface(&mut c, "UnitEnum", &[], &["cases"]);
@@ -332,15 +235,7 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
         &mut c,
         "Throwable",
         &["Stringable"],
-        &[
-            "getMessage",
-            "getCode",
-            "getFile",
-            "getLine",
-            "getTrace",
-            "getPrevious",
-            "getTraceAsString",
-        ],
+        &["getMessage", "getCode", "getFile", "getLine", "getTrace", "getPrevious", "getTraceAsString"],
     );
     declare(
         &mut c,
@@ -361,41 +256,16 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
             ("throw", Some(gen_throw), false),
         ],
     );
-    declare(
-        &mut c,
-        "Exception",
-        0,
-        None,
-        &["Throwable"],
-        throwable_props("Exception"),
-        THROWABLE_METHODS,
-    );
-    declare(
-        &mut c,
-        "Error",
-        0,
-        None,
-        &["Throwable"],
-        throwable_props("Error"),
-        THROWABLE_METHODS,
-    );
+    declare(&mut c, "Exception", 0, None, &["Throwable"], throwable_props("Exception"), THROWABLE_METHODS);
+    declare(&mut c, "Error", 0, None, &["Throwable"], throwable_props("Error"), THROWABLE_METHODS);
     declare(
         &mut c,
         "ErrorException",
         0,
         Some("Exception"),
         &[],
-        vec![prop(
-            "severity",
-            Value::int(1),
-            Visibility::Protected,
-            "ErrorException",
-            Some("int"),
-        )],
-        &[
-            ("__construct", Some(error_exception_construct), false),
-            ("getSeverity", Some(get_severity), true),
-        ],
+        vec![prop("severity", Value::int(1), Visibility::Protected, "ErrorException", Some("int"))],
+        &[("__construct", Some(error_exception_construct), false), ("getSeverity", Some(get_severity), true)],
     );
     for (name, parent) in [
         ("CompileError", "Error"),
@@ -431,18 +301,10 @@ pub(crate) fn build(names: &Rc<SymbolCache>) -> Table {
 
 /// The classes declared when first wanted (Reflection, the extensions'),
 /// by name: the first of a name counts.
-pub(crate) fn on_demand(
-    registry: &p8_runtime::ext::Registry,
-) -> HashMap<Sym, &'static p8_runtime::ext::ClassSpec> {
+pub(crate) fn on_demand(registry: &p8_runtime::ext::Registry) -> HashMap<Sym, &'static p8_runtime::ext::ClassSpec> {
     let mut specs = HashMap::default();
-    for spec in crate::reflection::CLASSES
-        .iter()
-        .chain(crate::fiber::CLASSES.iter())
-        .chain(registry.classes().iter().copied())
-    {
-        specs
-            .entry(registry.symbols().intern_lower(spec.name.as_bytes()))
-            .or_insert(spec);
+    for spec in crate::reflection::CLASSES.iter().chain(crate::fiber::CLASSES.iter()).chain(registry.classes().iter().copied()) {
+        specs.entry(registry.symbols().intern_lower(spec.name.as_bytes())).or_insert(spec);
     }
     specs
 }
@@ -452,35 +314,18 @@ pub(crate) fn on_demand(
 /// cases, in order, each Null for a pure enum or its backing value (all
 /// Int or all Str) for a backed one. The members are a user enum's
 /// (`EnumMembers`, shared with linking).
-fn declare_enum_members(
-    class: &mut Class,
-    spec: &p8_runtime::ext::ClassSpec,
-    declaring: &Rc<[u8]>,
-) {
+fn declare_enum_members(class: &mut Class, spec: &p8_runtime::ext::ClassSpec, declaring: &Rc<[u8]>) {
     use p8_runtime::ext::Constant;
     let backing = spec.constants.first().and_then(|(_, v)| match v {
         Constant::Int(_) => Some("int"),
         Constant::Str(_) => Some("string"),
         _ => None,
     });
-    let cases = spec
-        .constants
-        .iter()
-        .map(|(n, v)| (n.as_bytes(), v.to_value()))
-        .collect();
-    let flags = crate::classes::EnumMembers {
-        interfaces: &mut class.interfaces,
-        properties: &mut class.properties,
-        constants: &mut class.constants,
-        methods: &mut class.methods,
-    }
-    .add(declaring, &class.name, backing, cases);
+    let cases = spec.constants.iter().map(|(n, v)| (n.as_bytes(), v.to_value())).collect();
+    let flags = crate::classes::EnumMembers { interfaces: &mut class.interfaces, properties: &mut class.properties, constants: &mut class.constants, methods: &mut class.methods }
+        .add(declaring, &class.name, backing, cases);
     class.flags |= flags;
-    class.enum_cases = spec
-        .constants
-        .iter()
-        .map(|(n, _)| PhpStr::from(*n))
-        .collect();
+    class.enum_cases = spec.constants.iter().map(|(n, _)| PhpStr::from(*n)).collect();
     class.enum_backing = backing.map(PhpStr::from);
     let mut slots = p8_runtime::object::Slots::default();
     for (i, p) in class.properties.iter().enumerate() {
@@ -496,11 +341,7 @@ pub(crate) fn declare_spec(
     make_data: Option<p8_runtime::object::MakeData>,
     dtor: Option<p8_runtime::object::NativeMethod>,
 ) {
-    let props = spec
-        .properties
-        .iter()
-        .map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None))
-        .collect();
+    let props = spec.properties.iter().map(|(n, d, v)| prop(n, d.to_value(), *v, spec.name, None)).collect();
     let methods: Vec<(&str, Option<NativeMethod>, bool)> = spec
         .methods
         .iter()
@@ -510,37 +351,18 @@ pub(crate) fn declare_spec(
             Some(Native::Static(_)) => None,
         })
         .collect();
-    declare(
-        c,
-        spec.name,
-        spec.flags,
-        spec.parent,
-        spec.interfaces,
-        props,
-        &methods,
-    );
-    let class = Rc::get_mut(
-        c.get_mut(spec.name.to_ascii_lowercase().as_bytes())
-            .expect("just declared"),
-    )
-    .expect("not shared yet");
+    declare(c, spec.name, spec.flags, spec.parent, spec.interfaces, props, &methods);
+    let class = Rc::get_mut(c.get_mut(spec.name.to_ascii_lowercase().as_bytes()).expect("just declared")).expect("not shared yet");
     class.debug_info = spec.debug_info;
     // A property with a `$name::get` / `$name::set` native method is a
     // virtual hooked property: reads and writes run that native code, as
     // PHP's internal classes (DOM) back their properties.
     use p8_runtime::object::{CLASS_HOOKS, HOOK_GET, HOOK_SET, HOOK_VIRTUAL};
     for (n, _, _) in spec.properties {
-        let has = |kind: &str| {
-            spec.methods
-                .iter()
-                .any(|(m, _)| m.eq_ignore_ascii_case(&format!("${n}::{kind}")))
-        };
+        let has = |kind: &str| spec.methods.iter().any(|(m, _)| m.eq_ignore_ascii_case(&format!("${n}::{kind}")));
         let hooks = if has("get") { HOOK_GET } else { 0 } | if has("set") { HOOK_SET } else { 0 };
         if hooks != 0
-            && let Some(p) = class
-                .properties
-                .iter_mut()
-                .find(|p| p.name.as_bytes() == n.as_bytes())
+            && let Some(p) = class.properties.iter_mut().find(|p| p.name.as_bytes() == n.as_bytes())
         {
             p.hooks = hooks | HOOK_VIRTUAL;
         }
@@ -548,19 +370,7 @@ pub(crate) fn declare_spec(
     if class.properties.iter().any(|p| p.hooks != 0) {
         class.flags |= CLASS_HOOKS;
     }
-    if [
-        &b"__get"[..],
-        b"__set",
-        b"__isset",
-        b"__unset",
-        b"$*::get",
-        b"$*::set",
-        b"$*::isset",
-        b"$*::unset",
-    ]
-    .iter()
-    .any(|m| class.methods.contains_key(m))
-    {
+    if [&b"__get"[..], b"__set", b"__isset", b"__unset", b"$*::get", b"$*::set", b"$*::isset", b"$*::unset"].iter().any(|m| class.methods.contains_key(m)) {
         class.flags |= p8_runtime::object::CLASS_MAGIC_PROPS;
     }
     class.make_data = make_data.or_else(|| class.parent.as_ref().and_then(|p| p.make_data));
@@ -575,13 +385,7 @@ pub(crate) fn declare_spec(
         for (n, value) in spec.constants {
             class.constants.insert(
                 n.as_bytes().to_vec(),
-                Rc::new(p8_runtime::object::Constant {
-                    value: value.to_value(),
-                    visibility: Visibility::Public,
-                    declaring_name: PhpStr::from(spec.name),
-                    is_case: false,
-                    init: None,
-                }),
+                Rc::new(p8_runtime::object::Constant { value: value.to_value(), visibility: Visibility::Public, declaring_name: PhpStr::from(spec.name), is_case: false, init: None }),
             );
         }
     }
@@ -609,9 +413,7 @@ pub(crate) fn declare_spec(
 /// What calling builtin method `class::method` raises if PHP declares it
 /// #[\Deprecated] (its stub; p8_stubs::deprecation).
 fn method_deprecation(class: &str, method: &str) -> Option<Rc<str>> {
-    p8_stubs::lookup(format!("{class}::{method}").as_bytes())
-        .and_then(p8_stubs::deprecation)
-        .map(Rc::from)
+    p8_stubs::lookup(format!("{class}::{method}").as_bytes()).and_then(p8_stubs::deprecation).map(Rc::from)
 }
 
 fn gen_current(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -646,52 +448,24 @@ fn gen_get_return(ctx: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Resu
 fn gen_throw(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     match args.first().map(Value::deref) {
         Some(e) if e.is_object() => ctx.generator(this, "throw", e),
-        _ => Err(ctx.throw(
-            "TypeError",
-            "Generator::throw(): Argument #1 ($exception) must be of type Throwable".into(),
-        )),
+        _ => Err(ctx.throw("TypeError", "Generator::throw(): Argument #1 ($exception) must be of type Throwable".into())),
     }
 }
 
 /// An enum's cases(), in order.
 pub(crate) fn enum_cases(ctx: &mut dyn Ctx, _: &mut [Value]) -> Result<Value, Throw> {
-    let Some(class) = ctx.native_class() else {
-        return Ok(Value::NULL);
-    };
-    let cases: Vec<Value> = class
-        .enum_cases
-        .iter()
-        .map(|n| ctx.enum_case(&class, n.as_bytes()))
-        .collect();
+    let Some(class) = ctx.native_class() else { return Ok(Value::NULL) };
+    let cases: Vec<Value> = class.enum_cases.iter().map(|n| ctx.enum_case(&class, n.as_bytes())).collect();
     Ok(Value::array(PhpArray::from_list(cases)))
 }
 
 /// The case backed by `v` (converted to the backing type), if any.
-fn backed_case(
-    ctx: &mut dyn Ctx,
-    args: &[Value],
-) -> Result<(Rc<Class>, Value, Option<Value>), Throw> {
+fn backed_case(ctx: &mut dyn Ctx, args: &[Value]) -> Result<(Rc<Class>, Value, Option<Value>), Throw> {
     let class = ctx.native_class().expect("an enum's method");
     let v = args.first().map(Value::deref).unwrap_or(Value::NULL);
-    let int = class
-        .enum_backing
-        .as_ref()
-        .is_some_and(|t| t.as_bytes() == b"int");
-    let v = if int {
-        Value::int(v.to_int())
-    } else {
-        Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty))
-    };
-    let found = class
-        .enum_cases
-        .iter()
-        .find(|n| {
-            class
-                .constants
-                .get(n.as_bytes())
-                .is_some_and(|c| c.value.identical(&v))
-        })
-        .cloned();
+    let int = class.enum_backing.as_ref().is_some_and(|t| t.as_bytes() == b"int");
+    let v = if int { Value::int(v.to_int()) } else { Value::str(v.to_php_string().unwrap_or_else(PhpStr::empty)) };
+    let found = class.enum_cases.iter().find(|n| class.constants.get(n.as_bytes()).is_some_and(|c| c.value.identical(&v))).cloned();
     let case = found.map(|n| ctx.enum_case(&class, n.as_bytes()));
     Ok((class, v, case))
 }
@@ -704,18 +478,9 @@ pub(crate) fn enum_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
         None => {
             let shown = match v.as_str() {
                 Some(s) => format!("\"{}\"", String::from_utf8_lossy(s.as_bytes())),
-                None => String::from_utf8_lossy(
-                    v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes(),
-                )
-                .into_owned(),
+                None => String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned(),
             };
-            Err(ctx.throw(
-                "ValueError",
-                format!(
-                    "{shown} is not a valid backing value for enum {}",
-                    String::from_utf8_lossy(class.name.as_bytes())
-                ),
-            ))
+            Err(ctx.throw("ValueError", format!("{shown} is not a valid backing value for enum {}", String::from_utf8_lossy(class.name.as_bytes()))))
         }
     }
 }
@@ -726,11 +491,7 @@ pub(crate) fn enum_try_from(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Val
 }
 
 /// Closure::bindTo(?object $newThis, object|string|null $newScope = "static")
-fn closure_bind_to(
-    ctx: &mut dyn Ctx,
-    this: &Rc<Object>,
-    args: &mut [Value],
-) -> Result<Value, Throw> {
+fn closure_bind_to(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let new_this = args.first().map(Value::deref).unwrap_or(Value::NULL);
     let scope = args.get(1).map(Value::deref);
     ctx.bind_closure(this, new_this, scope)
@@ -738,15 +499,8 @@ fn closure_bind_to(
 
 /// Closure::bind(Closure $closure, ?object $newThis, object|string|null $newScope = "static")
 fn closure_bind(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
-    let Some(closure) = args
-        .first()
-        .map(Value::deref)
-        .and_then(|v| v.into_object().ok())
-    else {
-        return Err(ctx.throw(
-            "TypeError",
-            "Closure::bind(): Argument #1 ($closure) must be of type Closure".into(),
-        ));
+    let Some(closure) = args.first().map(Value::deref).and_then(|v| v.into_object().ok()) else {
+        return Err(ctx.throw("TypeError", "Closure::bind(): Argument #1 ($closure) must be of type Closure".into()));
     };
     let new_this = args.get(1).map(Value::deref).unwrap_or(Value::NULL);
     let scope = args.get(2).map(Value::deref);
@@ -762,19 +516,11 @@ fn closure_call(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Res
         None => Value::NULL,
     };
     let bound = ctx.bind_closure(this, new_this, Some(scope))?;
-    let rest = if args.is_empty() {
-        &mut [][..]
-    } else {
-        &mut args[1..]
-    };
+    let rest = if args.is_empty() { &mut [][..] } else { &mut args[1..] };
     ctx.call(&bound, rest)
 }
 
-fn closure_invoke(
-    ctx: &mut dyn Ctx,
-    this: &Rc<Object>,
-    args: &mut [Value],
-) -> Result<Value, Throw> {
+fn closure_invoke(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     ctx.call(&Value::object(Rc::clone(this)), args)
 }
 
@@ -787,24 +533,14 @@ fn closure_from_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value,
 /// Closure::getCurrent(): the closure running (PHP 8.5).
 fn closure_get_current(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if !args.is_empty() {
-        return Err(ctx.throw(
-            "ArgumentCountError",
-            format!(
-                "Closure::getCurrent() expects exactly 0 arguments, {} given",
-                args.len()
-            ),
-        ));
+        return Err(ctx.throw("ArgumentCountError", format!("Closure::getCurrent() expects exactly 0 arguments, {} given", args.len())));
     }
     ctx.current_closure()
 }
 
 /// The class Throwable's private properties belong to: Exception or Error.
 fn root(o: &Object) -> &'static [u8] {
-    if o.class.is_a(b"exception") {
-        b"exception"
-    } else {
-        b"error"
-    }
+    if o.class.is_a(b"exception") { b"exception" } else { b"error" }
 }
 
 fn read(o: &Object, name: &[u8]) -> Value {
@@ -836,13 +572,7 @@ pub(crate) fn set_previous(e: &Rc<Object>, previous: Rc<Object>) {
 fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let class = String::from_utf8_lossy(this.class.name.as_bytes()).into_owned();
     if args.len() > 3 {
-        return Err(ctx.throw(
-            "ArgumentCountError",
-            format!(
-                "{class}::__construct() expects at most 3 arguments, {} given",
-                args.len()
-            ),
-        ));
+        return Err(ctx.throw("ArgumentCountError", format!("{class}::__construct() expects at most 3 arguments, {} given", args.len())));
     }
     if let Some(m) = args.first().map(Value::deref) {
         if m.is_array() || m.is_object() {
@@ -866,10 +596,7 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
         } else {
             return Err(ctx.throw(
                 "TypeError",
-                format!(
-                    "{class}::__construct(): Argument #2 ($code) must be of type int, {} given",
-                    c.type_name()
-                ),
+                format!("{class}::__construct(): Argument #2 ($code) must be of type int, {} given", c.type_name()),
             ));
         };
         write(this, b"code", Value::int(code));
@@ -890,11 +617,7 @@ fn construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result
 
 /// ErrorException::__construct($message = "", $code = 0, $severity = E_ERROR,
 /// $filename = null, $line = null, $previous = null)
-fn error_exception_construct(
-    ctx: &mut dyn Ctx,
-    this: &Rc<Object>,
-    args: &mut [Value],
-) -> Result<Value, Throw> {
+fn error_exception_construct(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Result<Value, Throw> {
     let mut base: Vec<Value> = args.iter().take(2).cloned().collect();
     if let Some(p) = args.get(5) {
         base.resize(2, Value::int(0));
@@ -902,15 +625,10 @@ fn error_exception_construct(
     }
     construct(ctx, this, &mut base)?;
     if let Some(s) = args.get(2) {
-        this.class
-            .write(this, b"severity", b"errorexception", Value::int(s.to_int()));
+        this.class.write(this, b"severity", b"errorexception", Value::int(s.to_int()));
     }
     if let Some(f) = args.get(3).map(Value::deref).filter(|v| !v.is_null()) {
-        write(
-            this,
-            b"file",
-            Value::str(f.to_php_string().unwrap_or_else(PhpStr::empty)),
-        );
+        write(this, b"file", Value::str(f.to_php_string().unwrap_or_else(PhpStr::empty)));
     }
     if let Some(l) = args.get(4).map(Value::deref).filter(|v| !v.is_null()) {
         write(this, b"line", Value::int(l.to_int()));
@@ -950,14 +668,8 @@ fn get_previous(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<V
     Ok(read(this, b"previous"))
 }
 
-fn get_trace_as_string(
-    _: &mut dyn Ctx,
-    this: &Rc<Object>,
-    _: &mut [Value],
-) -> Result<Value, Throw> {
-    Ok(Value::str(PhpStr::from(p8_runtime::trace::trace_string(
-        &read(this, b"trace"),
-    ))))
+fn get_trace_as_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
+    Ok(Value::str(PhpStr::from(p8_runtime::trace::trace_string(&read(this, b"trace")))))
 }
 
 fn to_string(_: &mut dyn Ctx, this: &Rc<Object>, _: &mut [Value]) -> Result<Value, Throw> {
@@ -974,21 +686,13 @@ pub(crate) fn describe(this: &Rc<Object>) -> String {
         let mut message = text(&read(&e, b"message"));
         // An argument error raised for a call names where the function is
         // defined next (the " in file:line" that follows).
-        if matches!(
-            e.class.lower.as_slice(),
-            b"typeerror" | b"argumentcounterror"
-        ) && message.contains(", called in ")
-        {
+        if matches!(e.class.lower.as_slice(), b"typeerror" | b"argumentcounterror") && message.contains(", called in ") {
             message.push_str(" and defined");
         }
         let file = text(&read(&e, b"file"));
         let line = read(&e, b"line").to_int();
         let trace = p8_runtime::trace::trace_string(&read(&e, b"trace"));
-        let next = if out.is_empty() {
-            String::new()
-        } else {
-            format!("\n\nNext {out}")
-        };
+        let next = if out.is_empty() { String::new() } else { format!("\n\nNext {out}") };
         out = if message.is_empty() {
             format!("{class} in {file}:{line}\nStack trace:\n{trace}{next}")
         } else {
@@ -1002,3 +706,4 @@ pub(crate) fn describe(this: &Rc<Object>) -> String {
 fn text(v: &Value) -> String {
     String::from_utf8_lossy(v.to_php_string().unwrap_or_else(PhpStr::empty).as_bytes()).into_owned()
 }
+
