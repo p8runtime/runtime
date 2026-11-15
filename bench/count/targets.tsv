@@ -1,6 +1,6 @@
 # Targets for the cases in bench/count/cases, one row per case, ranked by score (largest first).
 # Counts are instructions per loop iteration from bench/count/count.sh (callgrind; the 22000-iteration run minus the 2000-iteration run, divided by 20000).
-# php = PHP 8.6.0RC5. p8, by row: main 163ee87c, measured 14 Nov 2026 on addis; the rows PR #542 changed (nested_write and those its run moved by more than 1) are that PR's branch on 163ee87c; property_read is PR #544's branch on main 61c7f930; compare_loose_str is PR #533's branch on main e5f3f343 (before = main e5f3f343); builtin_call is PR #549's branch on main a1c75626 (before = main a1c75626); callback_by_name is PR #545's after.
+# php = PHP 8.6.0RC5. p8, by row: main 163ee87c, measured 14 Nov 2026 on addis; the rows PR #542 changed (nested_write and those its run moved by more than 1) are that PR's branch on 163ee87c; property_read is PR #544's branch on main 61c7f930; compare_loose_str is PR #533's branch on main e5f3f343 (before = main e5f3f343); builtin_call is PR #549's branch on main a1c75626 (before = main a1c75626); callback_by_name is PR #556's branch on main b4cca45e (before = main b4cca45e).
 # ops = p8 operations executed per iteration of the case's loop, the callee's included (read from `p8 --dump`; a method body is counted from the same body written as a function, because --dump does not print methods).
 # target = php + 10 * ops. gap = p8 - target.
 # wp_count = how many times one WordPress request (the scoreboard's) does what one iteration of the case does. wp_cost = what the named routine costs in that request, in instructions.
@@ -24,7 +24,6 @@ nested_write	183	658	3.60	253	7	405	60395	39406434	24459975	merged: PR #542	720	
 new_object	669	1220	1.82	779	11	441	53997	21537795	23812677	claimed: PR #548	1185	1145	-2,656,738	new: New + Construct arms + classes::new_object 54,172 calls 10,484,935 inclusive
 array_key_built	500	973	1.95	560	6	413	45425	5290039	18760525	claimed: PR #550	975	653	-4,864,212	array write under a key held in a variable: the P8_ASSIGN_DIM_REG arms
 property_read_this	222	606	2.73	282	6	324	51154	8845777	16573896	open	-	-	-	getter: a method call without arguments that reads $this (MethodCallNow; the read itself is counted under property_read)
-callback_by_name	247	1596	6.46	327	8	1269	11345	11689336	14396805	merged: PR #545	3075	1596	-6,295,664	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
 method_empty	145	457	3.15	185	4	272	51154	8845777	13913888	waits for the rebuild	-	-	-	method call without arguments: MethodCallNow
 foreach_array	1237	1946	1.57	1587	35	359	36097	30535224	12958823	claimed: PR #553	1858	1557	-4,813,500	foreach: 135,708 loops, 360,965 steps (count = steps / 10; cost = the three Iter arms + iter_step 12,983,352 + iter_step_key 6,104,266)
 property_write	81	171	2.11	111	3	60	200020	21972538	12001200	open	-	-	-	property write: the eight P8_ASSIGN_PROP arms (195,995 of the runs are on $this; the case runs a REG form)
@@ -33,6 +32,7 @@ array_isset	133	216	1.62	173	4	43	268420	10912082	11542060	open	-	-	-	isset() on
 call_typed	229	693	3.03	319	9	374	30740	4138313	11496760	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
 static_method	183	706	3.86	223	4	483	17367	3512328	8388261	open	-	-	-	static method call: StaticCall 6,576 + StaticCallVars 10,791 runs (cost includes SendVarStatic)
 serialize_small	1498	5559	3.71	1548	5	4011	1427	7031287	5723697	claimed: PR #551	5566	1558	-5,483,336	serialize(): 126 calls writing 5,708 values, serial::Writer::value inclusive (count = values / 4, the case writes 4)
+callback_by_name	247	808	3.27	327	8	481	11345	11689336	5456945	claimed: PR #556	1589	808	-3.6M	call_user_func and hooks: 11,345 nested runs of the loop (run_nested_at 2,741,350 own, call_with_regs 1,149,314 own, resolve_callable 12,112 calls 7,798,672 inclusive)
 str_replace_short	662	1383	2.09	732	7	651	8192	13585030	5332992	claimed: PR #555	1371	828	-2,626,565	str_replace(): string::replace 8,192 calls, inclusive
 array_read_str	174	232	1.33	214	4	18	284926	15689828	5128668	open	-	-	-	array element read: the three P8_FETCH_DIM_R arms
 string_concat	792	1163	1.47	862	7	301	13264	7682042	3992464	open	-	-	-	concatenation: p8_interp::concat 26,527 calls, inclusive (count = calls / 2, the case concatenates twice)
