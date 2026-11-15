@@ -77,6 +77,17 @@ pub(crate) enum Target {
     Frame(MethodFrame),
 }
 
+/// Whether `call_with_regs` enters `func` itself on `args`
+/// (`run_direct`): every required argument there and none extra the
+/// frame cannot count (`fast::direct`: not a generator's code either),
+/// and no reference parameter among those `args` fill (their warning
+/// and passing are `run_nested_at`'s).
+#[inline(always)]
+fn enters_directly(func: &Closure, args: &[Value]) -> bool {
+    let n = args.len();
+    n <= usize::from(u8::MAX) && crate::fast::direct(func.shape, &func.code, n as u8) && !(0..n).any(|i| func.code.param_by_ref(i))
+}
+
 /// A parameter as named arguments see it: its name, whether it may be
 /// left out, whether it is variadic, and a builtin's default (as the stub
 /// writes it).
@@ -547,7 +558,9 @@ impl Context<'_> {
     }
 
     /// Call PHP code from a builtin (it holds the lent registers): run
-    /// `callable` on `args` to its return, above the running frames.
+    /// `callable` on `args` to its return, above the running frames. (In
+    /// line: Ctx::call is this, on every callback a builtin makes.)
+    #[inline(always)]
     pub(crate) fn call_from_builtin(&mut self, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         let mut regs = std::mem::take(&mut self.isolate.regs);
         let r = self.call_with_regs(&mut regs, callable, args);
@@ -639,6 +652,56 @@ impl Context<'_> {
         self.user_call_frame(regs, base, i, (args, argc as u8, dst), pc)
     }
 
+    /// `user_call` of call_user_func_array (its two arguments at `args`
+    /// above `base`, its result to `dst`), its common case (a hook's
+    /// callback: WP_Hook runs its filters so): a function's name found
+    /// before and a list with no string key, as many values as the
+    /// function takes (or more, or enough for its required parameters),
+    /// none of its parameters by reference. The list's values are placed
+    /// by value after the callback's register, as SEND_ARRAY places them,
+    /// and the frame pushed and bound as the loop's Call arm does. None:
+    /// anything else, which is the rest of `user_call_frame`'s. (In line
+    /// there: out of `user_call`, whose callers it would grow.)
+    #[inline(always)]
+    fn user_call_list_direct(&mut self, regs: &mut Vec<Value>, base: usize, (args, dst): (p8_bytecode::Reg, p8_bytecode::Reg), pc: usize) -> Option<Result<Next, Throw>> {
+        let start = base + args as usize;
+        let at = start + 1;
+        if let Some(f) = self.named_function(&regs[start])
+            && let Some(list) = regs[at].as_array()
+            && list.len() <= usize::from(u8::MAX)
+            && !names_arguments(list)
+        {
+            let target = &self.closures[f as usize];
+            let n = list.len();
+            if crate::fast::direct(target.shape, &target.code, n as u8) && !target.code.params.iter().any(|p| p.by_ref) {
+                let held = std::mem::replace(&mut regs[at], Value::UNDEF);
+                let list = held.as_array().expect("an array (just matched)");
+                if regs.len() < at + n + 1 {
+                    regs.resize(at + n + 1, Value::UNDEF);
+                }
+                for (r, v) in regs[at..at + n].iter_mut().zip(list.values()) {
+                    *r = if v.is_reference() { v.deref() } else { v.clone() };
+                }
+                // The list let go, as SEND_ARRAY lets go of it: a
+                // destructor that makes due runs before the call, in the
+                // caller (as `user_call_frame` runs it). (The callback is
+                // a string: nothing it frees has a destructor.)
+                drop(held);
+                regs[start] = Value::UNDEF;
+                if self.ids.has_pending()
+                    && let Err(t) = self.run_destructors(regs)
+                {
+                    return Some(Err(t));
+                }
+                let target = &self.closures[f as usize];
+                self.frames.call(Some(target), pc, at, n, (base + dst as usize) as u32);
+                crate::fast::bind(&mut self.frames, regs, target.shape, at, n);
+                return Some(Ok(Next::Switch));
+            }
+        }
+        None
+    }
+
     /// `user_call` past its common case (out of line: that case keeps a
     /// small frame of its own): the callback found and checked, its
     /// arguments placed, its frame pushed (call_method), or a builtin
@@ -646,6 +709,9 @@ impl Context<'_> {
     #[inline(never)]
     fn user_call_frame(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
         let array = i == self.user_call_twins[1];
+        if array && let Some(next) = self.user_call_list_direct(regs, base, (args, dst), pc) {
+            return next;
+        }
         let (start, argc) = (base + args as usize, argc as usize);
         let at = start + 1;
         // The callback, as INIT_USER_CALL finds it (zend_is_callable_ex).
@@ -898,8 +964,64 @@ impl Context<'_> {
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
     pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
+        // The common case (array_map's, usort's, a filter's callback): a
+        // Closure of PHP code (not a __call trampoline's) or the name of a
+        // function of PHP code found before, entered here (`run_direct`).
+        // Anything else goes the general way (`resolve_callable`,
+        // `run_nested_at`).
+        match callable.as_object() {
+            Some(o) => {
+                if let Some(data) = closure_data(o)
+                    && let ClosureFunc::User(func) = &data.func
+                    && data.trampoline.is_none()
+                    && enters_directly(func, args)
+                {
+                    return self.run_direct(regs, func, Some((o, data)), args);
+                }
+            }
+            None => {
+                if let Some(f) = self.named_function(callable) {
+                    let func = Rc::clone(&self.closures[f as usize]);
+                    if enters_directly(&func, args) {
+                        return self.run_direct(regs, &func, None, args);
+                    }
+                }
+            }
+        }
         let target = self.resolve_lent(regs, callable)?;
         self.call_target_with_regs(regs, target, args)
+    }
+
+    /// `func` run nested on `args` to its return, as `call_with_regs`'
+    /// common case (`enters_directly`): the arguments placed by value
+    /// above the running frame, the frame pushed and entered as
+    /// call_method pushes a function's (from `closure`, the Closure
+    /// called and what it holds: its `$this`, scope, called class and
+    /// `use` values), and the loop run on it (`run_entered`).
+    #[inline(never)]
+    fn run_direct(&mut self, regs: &mut Vec<Value>, func: &Rc<Closure>, closure: Option<(&Rc<Object>, &ClosureData)>, args: &[Value]) -> Result<Value, Throw> {
+        let n = args.len();
+        let at = self.nested_at();
+        self.nested_room(regs, at, n)?;
+        for (r, a) in regs[at..at + n].iter_mut().zip(args) {
+            *r = if a.is_reference() { a.deref() } else { a.clone() };
+        }
+        let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
+        let caller_pc = self.frames.last().map_or(0, |f| f.pc);
+        let frame = self.frames.push(func, at, n, at as u32);
+        match closure {
+            Some((o, data)) => (frame.this, frame.scope, frame.called, frame.owner) = (data.this.clone(), data.scope.clone(), data.called.clone(), Some(Rc::clone(o))),
+            None => (frame.this, frame.scope, frame.called, frame.owner) = (None, None, None, None),
+        }
+        crate::fast::bind(&mut self.frames, regs, func.shape, at, n);
+        if let Some((_, data)) = closure
+            && !func.code.bound.is_empty()
+        {
+            for (r, v) in func.code.bound.iter().zip(data.captured.borrow().iter()) {
+                regs[at + *r as usize] = v.clone();
+            }
+        }
+        self.run_entered(regs, at, (saved_pc, saved_floor, caller_pc))
     }
 
     /// call_user_func_array(`callable`, `list`) from a builtin (it holds
@@ -1061,6 +1183,15 @@ impl Context<'_> {
             // Nothing to run (a generator function made its Generator).
             return Ok(std::mem::replace(&mut regs[at], Value::UNDEF));
         }
+        self.run_entered(regs, at, (saved_pc, saved_floor, caller_pc))
+    }
+
+    /// The loop run on the frame just pushed for a nested run at `at`, to
+    /// its return (its result in register `at`), then the caller's pc,
+    /// the loop's floor and `self.pc` (`saved`, as they were before the
+    /// push) put back.
+    #[inline(always)]
+    fn run_entered(&mut self, regs: &mut Vec<Value>, at: usize, (saved_pc, saved_floor, caller_pc): (usize, usize, u32)) -> Result<Value, Throw> {
         self.frames.floor = self.frames.len() - 1;
         let saved_result_reg = std::mem::replace(&mut self.result_reg, at + 1);
         let r = self.execute(regs);

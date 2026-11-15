@@ -123,6 +123,15 @@ fn array_map(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         if callback.is_null() {
             return Ok(Value::array(Rc::clone(a)));
         }
+        // A list without holes keeps its keys 0..n-1: the results are
+        // the new list's values, in order (no key written per element).
+        if a.is_dense_list() {
+            let mut out = Vec::with_capacity(a.len());
+            for v in a.values() {
+                out.push(ctx.call(&callback, &mut [v.deref()])?);
+            }
+            return Ok(Value::array(PhpArray::from_list(out)));
+        }
         let mut out = PhpArray::new();
         for (k, v) in a.iter() {
             let r = ctx.call(&callback, &mut [v.deref()])?;
