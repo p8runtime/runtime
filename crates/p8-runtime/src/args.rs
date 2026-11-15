@@ -154,18 +154,31 @@ pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Val
 /// refuses the referenced value, of another kind (an undefined variable
 /// passed is null), as Z_PARAM_ARRAY_EX / Z_PARAM_ARRAY_OR_OBJECT_EX check
 /// it; nothing is converted. Other by-reference parameters (out
-/// parameters, untyped or scalar) are the builtin's to read.
+/// parameters, untyped or scalar) are the builtin's to read. (As `accepts`
+/// answers for such a type, the referenced array, the common case, first.)
+#[inline]
 fn by_ref_refuses(param: &Param, value: &Value) -> bool {
     let mask = param.mask;
-    mask & T_ARRAY != 0
-        && mask & !(T_ARRAY | T_OBJECT | T_NULL) == 0
-        && param.classes.is_empty()
-        && matches!(accepts(param, value), Accept::No)
+    if mask & T_ARRAY == 0 || mask & !(T_ARRAY | T_OBJECT | T_NULL) != 0 || !param.classes.is_empty() {
+        return false;
+    }
+    let refused = |v: &Value| match v.kind() {
+        Kind::Array => false,
+        Kind::Null | Kind::Undef => mask & T_NULL == 0,
+        Kind::Object => mask & T_OBJECT == 0,
+        _ => true,
+    };
+    match value.as_reference() {
+        Some(cell) => refused(&cell.borrow()),
+        None => refused(value),
+    }
 }
 
 /// The TypeError for argument `i` (0-based) of `sig`, `arg`, which its
 /// parameter does not take. `array|object` is named "array": ZPP's
 /// Z_PARAM_ARRAY_OR_OBJECT reports Z_EXPECTED_ARRAY.
+#[cold]
+#[inline(never)]
 fn type_refused(sig: &Sig, i: usize, param: &Param, arg: &Value) -> Refused {
     let shown = if param.mask == T_ARRAY | T_OBJECT && param.classes.is_empty() {
         "array".to_string()
