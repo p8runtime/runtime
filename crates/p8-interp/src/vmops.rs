@@ -636,9 +636,9 @@ fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32
 /// result is USED. The entry says whether the property is one with
 /// nothing to check (`PropSite::plain_write`: the class's address when it
 /// is), so the common write asks nothing of the property, the class's
-/// flags or the slot's state: that address and the entry's scope, the object not lazy, a
-/// defined value that is no reference, then the store (`store_slot`).
-/// The rest, out of line (`assign_prop_guarded`): an entry for another
+/// flags or the slot's state: that address and the entry's scope, the
+/// object not lazy, a defined value that is no reference, then the store
+/// (`store_slot`). The rest (`assign_prop_guarded`): an entry for another
 /// class or scope, filled again; a typed, readonly or set-visibility
 /// property, or a class with __set and its kin, through `plain_slot`'s
 /// tests. What neither takes is cold. TAKE: the value's temporary is
@@ -663,7 +663,8 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
         && let Some(cell) = o.slot_at(e.slot as usize)
     {
         store_slot(cell, v.clone())
-    } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {        // (What it released is not told: the test after is made.)
+    } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {
+        // (What it released is not told: the test after is made.)
         true
     } else {
         return Ctl::Cold;
@@ -725,7 +726,9 @@ fn store_through(cell: &std::cell::Cell<Value>, reference: Value) -> bool {
 /// (a typed property's value plainly of its type, a readonly property's
 /// first write from its class, a set visibility its class passes, a set
 /// slot of a class with __set). False: nothing written (the cold path's).
-#[inline(never)]
+/// Inline: a typed property's write is common (Laravel's), and a call
+/// for it cost more than the tests (+0.9% Laravel execution out of line).
+#[inline(always)]
 fn assign_prop_guarded(entry: &std::cell::Cell<PropSite>, o: &p8_runtime::object::Object, v: &Value, name: &Value, scope: Option<&Rc<Class>>, reinit: bool) -> bool {
     let at = (scope.map_or(0, |c| Rc::as_ptr(c) as usize), scope.map(|c| &**c));
     let found = match plain_slot(entry.get(), o, at, v, reinit) {
