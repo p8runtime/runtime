@@ -111,6 +111,23 @@ echo "private: ", implode(',', $b->hidden()), "\n";
 echo "static: ", implode(',', SubBox::made()), "\n";
 echo "scope: ", implode(',', $b->scope()), "\n";
 
+// Closures made from callables: a method's (its $this), a static
+// method's, a builtin's, a __call trampoline's, a native method's.
+class Magic
+{
+    function __call($name, $args) { return "$name(" . implode(',', $args) . ")"; }
+    static function __callStatic($name, $args) { return "static $name(" . implode(',', $args) . ")"; }
+}
+echo "method closure: ", implode(',', array_map($b->scaled(...), [0])[0]), "\n";
+echo "static closure: ", implode(',', array_map(SubBox::made(...), [0])[0]), "\n";
+echo "builtin closure: ", implode(',', array_map(strlen(...), ['ab', 'cde'])), "\n";
+echo "trampoline closure: ", implode(' ', array_map((new Magic)->missing(...), [1, 2])), "\n";
+echo "trampoline array: ", implode(' ', array_map([new Magic, 'missing'], [3])), "\n";
+echo "static trampoline: ", implode(' ', array_map(Magic::gone(...), [4])), "\n";
+echo "fromCallable trampoline: ", implode(' ', array_map(Closure::fromCallable([new Magic, 'other']), [5, 6])), "\n";
+$date = new DateTimeImmutable('2020-01-02');
+echo "native method closure: ", implode(',', array_map($date->format(...), ['Y', 'm'])), "\n";
+
 // A closure that rebinds itself.
 $counter = function () { static $n = 0; return ++$n; };
 echo "statics: ", implode(',', array_map($counter, [1, 1, 1])), "\n";
@@ -137,6 +154,7 @@ try {
 } catch (ArgumentCountError $e) {
     echo "cufa count error: ", $e->getMessage(), "\n";
 }
+echo "cufa many: ", call_user_func_array('all_args', array_fill(0, 300, 1)) === implode(',', array_fill(0, 300, 1)) ? "same" : "differs", "\n";
 echo "cufa where: ", call_user_func_array('where', []), "\n";
 echo "cufa typed: ", call_user_func_array('typed', ['41']), "\n";
 foreach (call_user_func_array('gen', [1]) as $v) {

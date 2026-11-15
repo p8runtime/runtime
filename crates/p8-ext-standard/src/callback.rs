@@ -117,11 +117,10 @@ fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// array_map(?callable $callback, array $array, array ...$arrays)
 fn array_map(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callback = arg(args, 0);
-    let arrays: Vec<Rc<PhpArray>> = (1..args.len()).map(|i| array(args, i)).collect();
-    if arrays.len() == 1 {
-        let a = &arrays[0];
+    if args.len() == 2 {
+        let a = array(args, 1);
         if callback.is_null() {
-            return Ok(Value::array(Rc::clone(a)));
+            return Ok(Value::array(a));
         }
         // A list without holes keeps its keys 0..n-1: the results are
         // the new list's values, in order (no key written per element).
@@ -140,6 +139,7 @@ fn array_map(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
         return Ok(Value::array(out));
     }
     // Several arrays: by position, the shorter ones padded with null.
+    let arrays: Vec<Rc<PhpArray>> = (1..args.len()).map(|i| array(args, i)).collect();
     let longest = arrays.iter().map(|a| a.len()).max().unwrap_or(0);
     let columns: Vec<Vec<Value>> = arrays.iter().map(|a| a.values().map(Value::deref).collect()).collect();
     let mut out = Vec::with_capacity(longest);

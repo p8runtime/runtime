@@ -78,14 +78,21 @@ pub(crate) enum Target {
 }
 
 /// Whether `call_with_regs` enters `func` itself on `args`
-/// (`run_direct`): every required argument there and none extra the
-/// frame cannot count (`fast::direct`: not a generator's code either),
-/// and no reference parameter among those `args` fill (their warning
-/// and passing are `run_nested_at`'s).
+/// (`run_direct`): every required argument there (`fast::direct`, not
+/// a generator's code either), and no reference parameter among those
+/// `args` fill (their warning and passing are `run_nested_at`'s).
 #[inline(always)]
 fn enters_directly(func: &Closure, args: &[Value]) -> bool {
     let n = args.len();
-    n <= usize::from(u8::MAX) && crate::fast::direct(func.shape, &func.code, n as u8) && !(0..n).any(|i| func.code.param_by_ref(i))
+    crate::fast::direct(func.shape, &func.code, count_u8(n)) && !(0..n).any(|i| func.code.param_by_ref(i))
+}
+
+/// An argument count as `fast::direct` takes it: 255 for 255 or more.
+/// (It answers yes for 255 only when the code takes at least that many,
+/// or as many as required: true of any larger count too.)
+#[inline(always)]
+fn count_u8(n: usize) -> u8 {
+    u8::try_from(n).unwrap_or(u8::MAX)
 }
 
 /// A parameter as named arguments see it: its name, whether it may be
@@ -668,12 +675,11 @@ impl Context<'_> {
         let at = start + 1;
         if let Some(f) = self.named_function(&regs[start])
             && let Some(list) = regs[at].as_array()
-            && list.len() <= usize::from(u8::MAX)
             && !names_arguments(list)
         {
             let target = &self.closures[f as usize];
             let n = list.len();
-            if crate::fast::direct(target.shape, &target.code, n as u8) && !target.code.params.iter().any(|p| p.by_ref) {
+            if crate::fast::direct(target.shape, &target.code, count_u8(n)) && !target.code.params.iter().any(|p| p.by_ref) {
                 let held = std::mem::replace(&mut regs[at], Value::UNDEF);
                 let list = held.as_array().expect("an array (just matched)");
                 if regs.len() < at + n + 1 {
@@ -988,6 +994,13 @@ impl Context<'_> {
                 }
             }
         }
+        self.call_resolved(regs, callable, args)
+    }
+
+    /// `call_with_regs` past its common case: `callable` resolved, then
+    /// called. (Out of line: the common case keeps a small frame.)
+    #[inline(never)]
+    fn call_resolved(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
         let target = self.resolve_lent(regs, callable)?;
         self.call_target_with_regs(regs, target, args)
     }
@@ -997,8 +1010,9 @@ impl Context<'_> {
     /// above the running frame, the frame pushed and entered as
     /// call_method pushes a function's (from `closure`, the Closure
     /// called and what it holds: its `$this`, scope, called class and
-    /// `use` values), and the loop run on it (`run_entered`).
-    #[inline(never)]
+    /// `use` values), and the loop run on it (`run_entered`). (In line:
+    /// its one caller is that case.)
+    #[inline(always)]
     fn run_direct(&mut self, regs: &mut Vec<Value>, func: &Rc<Closure>, closure: Option<(&Rc<Object>, &ClosureData)>, args: &[Value]) -> Result<Value, Throw> {
         let n = args.len();
         let at = self.nested_at();

@@ -66,6 +66,14 @@ this: 3,6
 private: s1,s2
 static: SubBox,SubBox
 scope: SubBox/Box/SubBox
+method closure: 3,6
+static closure: SubBox,SubBox
+builtin closure: 2,3
+trampoline closure: missing(1) missing(2)
+trampoline array: missing(3)
+static trampoline: static gone(4)
+fromCallable trampoline: other(5) other(6)
+native method closure: 2020,01
 statics: 1,2,3
 cufa: 15
 cufa args kept: 7,8
@@ -76,10 +84,11 @@ cufa named: M-N
 cufa hash list: 11
 cufa ref list: r! r!
 cufa by-ref param: 
-Warning: by_ref(): Argument #1 ($x) must be passed by reference, value given in %s on line 131
+Warning: by_ref(): Argument #1 ($x) must be passed by reference, value given in %s on line 148
 p! p
 cufa reference value: 3
-cufa count error: Too few arguments to function needs_two(), 1 passed in %s on line 136 and exactly 2 expected
+cufa count error: Too few arguments to function needs_two(), 1 passed in %s on line 153 and exactly 2 expected
+cufa many: same
 cufa where: where
 cufa typed: 42
 cufa gen: 1
