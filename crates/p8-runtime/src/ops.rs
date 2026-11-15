@@ -293,9 +293,10 @@ fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
 }
 
 /// `x op y` in floats for the operators whose result needs no test
-/// (+, -, *); None for / and **.
+/// (+, -, *); None for / and **. (`binary`'s first test, and the loop's
+/// float property `op=`.)
 #[inline(always)]
-fn float_plain(op: BinOp, x: f64, y: f64) -> Option<f64> {
+pub fn float_plain(op: BinOp, x: f64, y: f64) -> Option<f64> {
     match op {
         BinOp::Add => Some(x + y),
         BinOp::Sub => Some(x - y),
