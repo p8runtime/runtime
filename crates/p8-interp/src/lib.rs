@@ -5427,8 +5427,19 @@ impl Context<'_> {
     #[cold]
     fn missing_args(&mut self, func: &Function, args: &[Value], class: Option<(&PhpStr, bool)>) -> Throw {
         let passed = args.len();
+        // Where it was called from, when PHP code called it; a builtin's
+        // call (a callback, Reflection's invoke) names none
+        // (zend_missing_arg_error: the caller's frame is user code). The
+        // innermost builtin running was entered above the running frame.
+        let natives = &self.natives;
+        let by_builtin = natives.len > 0 && natives.slots[natives.len - 1].depth == self.frames.len();
         self.failed_call(func.name.as_bytes(), class, args);
-        let (file, line) = self.location();
+        let from = if by_builtin {
+            String::new()
+        } else {
+            let (file, line) = self.location();
+            format!(" in {file} on line {line}")
+        };
         let declared = func.params.iter().filter(|p| !p.variadic).count();
         let exactly = if func.required == declared { "exactly" } else { "at least" };
         let name = match &func.class {
@@ -5437,10 +5448,7 @@ impl Context<'_> {
         };
         Throw::Error {
             class: "ArgumentCountError",
-            message: format!(
-                "Too few arguments to function {name}(), {passed} passed in {file} on line {line} and {exactly} {} expected",
-                func.required
-            ),
+            message: format!("Too few arguments to function {name}(), {passed} passed{from} and {exactly} {} expected", func.required),
             file: Rc::from(&*func.file),
             line: func.line,
             props: Vec::new(),
