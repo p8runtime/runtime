@@ -223,15 +223,41 @@ impl Context<'_> {
             }
             let mut args = PhpArray::new();
             let base = frame.base as usize;
-            for i in 0..(frame.argc as usize).min(code.params.len()) {
-                let v = frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default());
+            let reg = |i: usize| frame_regs.map_or_else(|| regs(base + i), |r| r.get(base + i).cloned().unwrap_or_default());
+            // A variadic parameter's arguments show one by one, the named
+            // ones by their names (debug_backtrace_get_args), as
+            // func_get_args() reads them (`call_args`): from its list.
+            let variadic = code.params.last().is_some_and(|p| p.variadic);
+            let fixed = code.params.len() - usize::from(variadic);
+            for i in 0..(frame.argc as usize).min(fixed) {
+                let v = reg(i);
                 if v.is_undef() {
                     continue;
                 }
                 let _ = args.push(v.deref());
             }
-            for v in frame.args().iter() {
-                let _ = args.push(v.deref());
+            let rest = if variadic { reg(fixed).deref() } else { Value::UNDEF };
+            match rest.as_array() {
+                Some(list) => {
+                    for (k, v) in list.iter() {
+                        match k {
+                            Key::Int(_) => {
+                                let _ = args.push(v.deref());
+                            }
+                            Key::Str(_) => args.insert(k, v.deref()),
+                        }
+                    }
+                }
+                // Not collected yet (or no longer a list): the argument
+                // in its register, then the ones past it.
+                None => {
+                    if variadic && (frame.argc as usize) > fixed && !rest.is_undef() {
+                        let _ = args.push(rest.clone());
+                    }
+                    for v in frame.args().iter() {
+                        let _ = args.push(v.deref());
+                    }
+                }
             }
             entry.insert_absent(key(ARGS), Value::array(args));
             charge.push(&mut trace, entry)?;
