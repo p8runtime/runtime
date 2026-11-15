@@ -28,7 +28,7 @@ property_read_this	222	606	2.73	282	6	324	51154	8845777	16573896	open	-	-	-	gett
 method_empty	145	457	3.15	185	4	272	51154	8845777	13913888	waits for the rebuild	-	-	-	method call without arguments: MethodCallNow
 regex_route	2279	5806	2.55	2419	14	3387	3925	29846154	13293975	claimed: claude/regex	5806	4935	-3,041,761	preg_match(): p8_ext_pcre::preg_match 3,925 calls, inclusive (wp numbers from main 94b2e29f; wp_change is the whole branch's, shared with regex_replace)
 foreach_array	1237	1946	1.57	1587	35	359	36097	30535224	12958823	claimed: PR #553	1858	1557	-4,813,500	foreach: 135,708 loops, 360,965 steps (count = steps / 10; cost = the three Iter arms + iter_step 12,983,352 + iter_step_key 6,104,266)
-property_write	81	171	2.11	111	3	60	200020	21972538	12001200	open	-	-	-	property write: the eight P8_ASSIGN_PROP arms (195,995 of the runs are on $this; the case runs a REG form)
+property_write	81	171	2.11	111	3	60	200020	21972538	12001200	claimed: PR #568	171	126	-6,982,131	property write: the eight P8_ASSIGN_PROP arms (195,995 of the runs are on $this; the case runs a REG form)
 array_literal	542	1396	2.58	622	8	774	15155	2180990	11729970	claimed: PR #561	1390	1068	-2,393,158	array literal: NewArray runs, with ArraySet 3,231 + ArraySetC 14,804 element writes
 array_isset	133	216	1.62	173	4	43	268420	10912082	11542060	open	-	-	-	isset() on an array element: the three P8_ISSET_DIM arms
 call_typed	229	693	3.03	319	9	374	30740	4138313	11496760	waits for the rebuild	-	-	-	call with checked types: VerifyArgs 30,740 + VerifyReturn 74,077 runs
