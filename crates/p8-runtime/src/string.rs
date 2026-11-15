@@ -266,6 +266,18 @@ impl IStr {
         // (While the thread is torn down: a copy.)
         twin.unwrap_or_else(|_| PhpStr::copy_of(self.as_bytes()))
     }
+
+    /// [`to_php_str`](Self::to_php_str) inline when the twin is made: its
+    /// count, with no call (an array literal's new key); the first one,
+    /// and the rest, through the call.
+    #[inline(always)]
+    pub fn twin(&'static self) -> PhpStr {
+        let kept = TWINS.try_with(|twins| twins.try_borrow().ok().and_then(|t| t.get(self.id as usize).cloned().flatten()));
+        match kept {
+            Ok(Some(s)) => s,
+            _ => self.to_php_str(),
+        }
+    }
 }
 
 /// A value's string, to read: the string itself when the value is one

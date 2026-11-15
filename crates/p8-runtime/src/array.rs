@@ -788,7 +788,7 @@ impl Hashed {
         let found = if self.small() { self.scan(h, Probe::Str(s)) } else { self.find(h, Probe::Str(s)) };
         match found {
             Some(i) => self.buckets[i].value = value,
-            None => self.insert_new(h, Some(s.to_php_str()), value),
+            None => self.insert_new(h, Some(s.twin()), value),
         }
     }
 
