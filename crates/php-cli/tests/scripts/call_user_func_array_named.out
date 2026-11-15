@@ -1,0 +1,127 @@
+1 2
+-- global
+1 2
+1 2
+1 B x
+1 B x
+Error: Cannot use positional argument after named argument
+Error: Unknown named parameter $z
+Error: Named parameter $a overwrites previous argument
+ArgumentCountError: g(): Argument #1 ($a) not passed
+1 array(3) {
+  [0]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  ["y"]=>
+  int(4)
+}
+1 array(1) {
+  ["x"]=>
+  int(3)
+}
+n+y
+
+Warning: r(): Argument #1 ($x) must be passed by reference, value given in %s on line 54
+m P Q
+s P q
+__call missing array(2) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  string(1) "K"
+}
+__callStatic missingStatic array(1) {
+  ["k"]=>
+  string(1) "K"
+}
+closure 1 2
+---a
+aBc
+Error: Unknown named parameter $nope
+ArgumentCountError: Internal function array_merge() does not accept named variadic arguments
+[1,2]
+-- by name
+1 2
+1 2
+1 B x
+1 B x
+Error: Cannot use positional argument after named argument
+Error: Unknown named parameter $z
+Error: Named parameter $a overwrites previous argument
+ArgumentCountError: g(): Argument #1 ($a) not passed
+1 array(3) {
+  [0]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  ["y"]=>
+  int(4)
+}
+1 array(1) {
+  ["x"]=>
+  int(3)
+}
+n+y
+
+Warning: r(): Argument #1 ($x) must be passed by reference, value given in %s on line 56
+m P Q
+s P q
+__call missing array(2) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  string(1) "K"
+}
+__callStatic missingStatic array(1) {
+  ["k"]=>
+  string(1) "K"
+}
+closure 1 2
+---a
+aBc
+Error: Unknown named parameter $nope
+ArgumentCountError: Internal function array_merge() does not accept named variadic arguments
+[1,2]
+-- namespaced
+1 2
+1 2
+1 B x
+1 B x
+Error: Cannot use positional argument after named argument
+Error: Unknown named parameter $z
+Error: Named parameter $a overwrites previous argument
+ArgumentCountError: g(): Argument #1 ($a) not passed
+1 array(3) {
+  [0]=>
+  int(2)
+  ["x"]=>
+  int(3)
+  ["y"]=>
+  int(4)
+}
+1 array(1) {
+  ["x"]=>
+  int(3)
+}
+n+y
+
+Warning: r(): Argument #1 ($x) must be passed by reference, value given in %s on line 61
+m P Q
+s P q
+__call missing array(2) {
+  [0]=>
+  int(1)
+  ["k"]=>
+  string(1) "K"
+}
+__callStatic missingStatic array(1) {
+  ["k"]=>
+  string(1) "K"
+}
+closure 1 2
+---a
+aBc
+Error: Unknown named parameter $nope
+ArgumentCountError: Internal function array_merge() does not accept named variadic arguments
+[1,2]

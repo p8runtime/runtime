@@ -95,6 +95,13 @@ fn text(s: &[u8]) -> String {
     String::from_utf8_lossy(s).into_owned()
 }
 
+/// Whether call_user_func_array's `list` names arguments: a string key,
+/// a named argument (a packed list has none).
+#[inline(always)]
+fn names_arguments(list: &PhpArray) -> bool {
+    !list.is_packed() && list.iter().any(|(k, _)| matches!(k, Key::Str(_)))
+}
+
 impl Context<'_> {
     /// Whether a nested run (a callback a builtin makes, a call native code
     /// makes, #444) would take the native stack past `STACK_LIMIT` from
@@ -642,7 +649,7 @@ impl Context<'_> {
         let (start, argc) = (base + args as usize, argc as usize);
         let at = start + 1;
         // The callback, as INIT_USER_CALL finds it (zend_is_callable_ex).
-        let target = match self.named_function(&regs[start]) {
+        let mut target = match self.named_function(&regs[start]) {
             Some(f) => {
                 let func = self.closure_at(f);
                 Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None })
@@ -665,20 +672,35 @@ impl Context<'_> {
             }
             let held = std::mem::replace(&mut regs[at], Value::UNDEF);
             let list = held.as_array().expect("an array (user_call_list checked)");
-            if list.len() > usize::from(u8::MAX) {
-                return self.user_call_nested(regs, start, target, list, base + dst as usize, pc);
-            }
-            if regs.len() < at + list.len() + 1 {
-                regs.resize(at + list.len() + 1, Value::UNDEF);
-            }
-            for (n, a) in list.values().enumerate() {
-                let by_ref = takes_ref(self, n);
-                if by_ref && !a.is_reference() {
-                    self.user_call_by_value(&target, n);
+            if names_arguments(list) {
+                let placed = self.user_call_named(&mut target, list)?;
+                if placed.len() > usize::from(u8::MAX) {
+                    return self.user_call_nested(regs, start, target, placed, base + dst as usize, pc);
                 }
-                regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
+                if regs.len() < at + placed.len() + 1 {
+                    regs.resize(at + placed.len() + 1, Value::UNDEF);
+                }
+                let n = placed.len();
+                for (k, v) in placed.into_iter().enumerate() {
+                    regs[at + k] = v;
+                }
+                n
+            } else {
+                if list.len() > usize::from(u8::MAX) {
+                    return self.user_call_nested(regs, start, target, list.values().map(Value::deref).collect(), base + dst as usize, pc);
+                }
+                if regs.len() < at + list.len() + 1 {
+                    regs.resize(at + list.len() + 1, Value::UNDEF);
+                }
+                for (n, a) in list.values().enumerate() {
+                    let by_ref = takes_ref(self, n);
+                    if by_ref && !a.is_reference() {
+                        self.user_call_by_value(&target, n);
+                    }
+                    regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
+                }
+                list.len()
             }
-            list.len()
         } else {
             for n in 0..argc - 1 {
                 if takes_ref(self, n) {
@@ -764,12 +786,11 @@ impl Context<'_> {
     }
 
     /// `user_call` of a list too long for a frame's argument count: the
-    /// callback run nested, to its return (into register `ret`), on the
-    /// list's values.
+    /// callback run nested, to its return (into register `ret`), on
+    /// `args` (the list's values).
     #[cold]
     #[inline(never)]
-    fn user_call_nested(&mut self, regs: &mut Vec<Value>, start: usize, target: Target, list: &PhpArray, ret: usize, pc: usize) -> Result<Next, Throw> {
-        let mut args: Vec<Value> = list.values().map(Value::deref).collect();
+    fn user_call_nested(&mut self, regs: &mut Vec<Value>, start: usize, target: Target, mut args: Vec<Value>, ret: usize, pc: usize) -> Result<Next, Throw> {
         regs[start] = Value::UNDEF;
         let v = match target {
             Target::Frame(m) => self.run_nested(regs, m, &mut args)?,
@@ -840,6 +861,17 @@ impl Context<'_> {
         if array {
             let list = regs[start + 1].clone();
             let list = list.as_array().expect("an array");
+            if names_arguments(list) {
+                let mut target = Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None });
+                let placed = self.user_call_named(&mut target, list)?;
+                let Target::Frame(m) = target else { unreachable!("a function's frame") };
+                self.nested_room(regs, at, placed.len())?;
+                let n = placed.len();
+                for (k, v) in placed.into_iter().enumerate() {
+                    regs[at + k] = v;
+                }
+                return self.run_placed(regs, m, n, at);
+            }
             self.nested_room(regs, at, list.len())?;
             for (n, a) in list.values().enumerate() {
                 let by_ref = func.code.param_by_ref(n);
@@ -866,12 +898,51 @@ impl Context<'_> {
     /// Call `callable` on `args` above the running frames, whose
     /// registers `regs` is.
     pub(crate) fn call_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value]) -> Result<Value, Throw> {
-        // Lent while the callable is resolved: a class it names is
-        // autoloaded there (zend_is_callable_ex), not by running it again.
+        let target = self.resolve_lent(regs, callable)?;
+        self.call_target_with_regs(regs, target, args)
+    }
+
+    /// call_user_func_array(`callable`, `list`) from a builtin (it holds
+    /// the lent registers): the list's values the arguments, its string
+    /// keys named ones (`user_call_named`).
+    pub(crate) fn call_list_from_builtin(&mut self, callable: &Value, list: &PhpArray) -> Result<Value, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = if names_arguments(list) {
+            self.call_named_with_regs(&mut regs, callable, list)
+        } else {
+            // References in the list stay ones: the callee takes them where
+            // its parameters do.
+            let mut args: Vec<Value> = list.values().cloned().collect();
+            self.call_with_regs(&mut regs, callable, &mut args)
+        };
+        self.isolate.regs = regs;
+        r
+    }
+
+    /// `call_list_from_builtin` of a list that names arguments.
+    #[cold]
+    #[inline(never)]
+    fn call_named_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, list: &PhpArray) -> Result<Value, Throw> {
+        let mut target = self.resolve_lent(regs, callable)?;
+        let mut args = self.user_call_named(&mut target, list)?;
+        self.call_target_with_regs(regs, target, &mut args)
+    }
+
+    /// What `callable` calls, the registers lent meanwhile: a class it
+    /// names is autoloaded there (zend_is_callable_ex), not by running it
+    /// again.
+    #[inline(always)]
+    fn resolve_lent(&mut self, regs: &mut Vec<Value>, callable: &Value) -> Result<Target, Throw> {
         std::mem::swap(&mut self.isolate.regs, regs);
         let target = self.resolve_callable(callable);
         std::mem::swap(&mut self.isolate.regs, regs);
-        let target = target?;
+        target
+    }
+
+    /// `target` called on `args` above the running frames, whose
+    /// registers `regs` is.
+    #[inline(always)]
+    fn call_target_with_regs(&mut self, regs: &mut Vec<Value>, target: Target, args: &mut [Value]) -> Result<Value, Throw> {
         let m = match target {
             Target::Builtin(i) => {
                 // A builtin that calls back finds the registers lent; it is
@@ -932,10 +1003,11 @@ impl Context<'_> {
             Code::Native(..) => false,
         };
         // A value where the parameter takes a reference: PHP warns
-        // (zend_call_function) and passes the value.
+        // (zend_call_function) and passes the value. (Undef: a parameter
+        // named arguments skipped, its default to run.)
         if let Code::User(f) = &m.func {
             for (n, a) in args.iter().enumerate() {
-                if by_ref(n) && !a.is_reference() {
+                if by_ref(n) && !a.is_reference() && !a.is_undef() {
                     self.by_value_warning(&f.code, n);
                 }
             }
@@ -1007,6 +1079,50 @@ impl Context<'_> {
         Ok(v)
     }
 
+    /// call_user_func_array's list when it names arguments
+    /// ([`names_arguments`]): the arguments in `target`'s parameter order,
+    /// as zend_call_function places fci->named_params (`place_args`, its
+    /// errors a call's, not a spread's), a value given where a parameter
+    /// of PHP code takes a reference warned about and passed in a
+    /// reference of its own. For __call / __callStatic (the target's
+    /// trampoline taken): the method's name and the list, keys kept.
+    #[cold]
+    #[inline(never)]
+    fn user_call_named(&mut self, target: &mut Target, list: &PhpArray) -> Result<Vec<Value>, Throw> {
+        if let Target::Frame(m) = target
+            && let Some(name) = m.trampoline.take()
+        {
+            let mut packed = PhpArray::new();
+            for (k, v) in list.iter() {
+                packed.insert(k, v.deref());
+            }
+            return Ok(vec![Value::str(name), Value::array(packed)]);
+        }
+        let mut placed = self.place_args(target, list, false)?;
+        if let Target::Frame(MethodFrame { func: Code::User(f), .. }) = &*target {
+            let mut position = 0;
+            for (k, v) in list.iter() {
+                let n = match k {
+                    Key::Int(_) => {
+                        position += 1;
+                        position - 1
+                    }
+                    Key::Str(name) => match self.named_position(target, name.as_bytes()) {
+                        Some(n) => n,
+                        None => continue,
+                    },
+                };
+                if f.code.param_by_ref(n) && !v.is_reference() {
+                    self.by_value_warning(&f.code, n);
+                    if let Some(p) = placed.get_mut(n) {
+                        *p = Value::new_reference(std::mem::replace(p, Value::UNDEF));
+                    }
+                }
+            }
+        }
+        Ok(placed)
+    }
+
     /// A call's argument array (`...`, named arguments) in parameter
     /// order: string keys are named arguments. A skipped optional
     /// parameter is Undef for a user function (its default runs) or its
@@ -1035,10 +1151,22 @@ impl Context<'_> {
                 Key::Str(key) => {
                     named = true;
                     let Some(i) = self.named_position(target, key.as_bytes()) else {
-                        // A variadic user function collects it by name.
-                        if matches!(target, Target::Frame(_)) && self.named_params(target).1.last().is_some_and(|p| p.variadic) {
-                            extra.insert(Key::Str(key.clone()), v.deref());
-                            continue;
+                        let (fname, params) = self.named_params(target);
+                        if params.last().is_some_and(|p| p.variadic) {
+                            match target {
+                                // A variadic user function collects it by name.
+                                Target::Frame(_) => {
+                                    extra.insert(Key::Str(key.clone()), v.deref());
+                                    continue;
+                                }
+                                // A variadic builtin takes none by a name of its
+                                // own (Z_PARAM_VARIADIC), but those that pass
+                                // them on (Z_PARAM_VARIADIC_WITH_NAMED).
+                                Target::Builtin(_) if !matches!(fname.as_str(), "call_user_func" | "forward_static_call") => {
+                                    return Err(self.throw("ArgumentCountError", format!("Internal function {fname}() does not accept named variadic arguments")));
+                                }
+                                Target::Builtin(_) => {}
+                            }
                         }
                         return Err(self.throw("Error", format!("Unknown named parameter ${}", text(key.as_bytes()))));
                     };
