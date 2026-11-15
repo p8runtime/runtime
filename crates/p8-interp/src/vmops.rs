@@ -634,9 +634,9 @@ fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32
 /// `$o->name = v` the name's cache entry answers, on a property with
 /// nothing to check: nothing cloned but the value, and that only when the
 /// result is USED. The entry says whether the property is one with
-/// nothing to check (`PropSite::plain_write`, the class's), so the
-/// common write asks nothing of the property, the class's flags or the
-/// slot's state: the entry's class and scope, the object not lazy, a
+/// nothing to check (`PropSite::plain_write`: the class's address when it
+/// is), so the common write asks nothing of the property, the class's
+/// flags or the slot's state: that address and the entry's scope, the object not lazy, a
 /// defined value that is no reference, then the store (`store_slot`).
 /// The rest, out of line (`assign_prop_guarded`): an entry for another
 /// class or scope, filled again; a typed, readonly or set-visibility
@@ -655,8 +655,7 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
     };
     let v = hx.v::<S::Val>(val);
     let e = entry.get();
-    let mut released = if e.class == Rc::as_ptr(&o.class) as usize
-        && e.plain_write
+    let mut released = if e.plain_write == Rc::as_ptr(&o.class) as usize
         && (e.scope == 0 || e.scope == hx.scope())
         && o.lazy.get() == 0
         && !v.is_undef()

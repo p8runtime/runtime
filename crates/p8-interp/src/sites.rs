@@ -340,12 +340,13 @@ pub(crate) struct PropSite {
     pub(crate) class: usize,
     pub(crate) scope: usize,
     pub(crate) slot: u32,
-    /// A write the entry answers is a plain store, whatever the slot
-    /// holds (`prop_entry`): the property is untyped, not readonly, with
-    /// no set visibility, in a class without __set and its kin. All of
-    /// that is the class's, as the slot is, so the loop's write tests
-    /// this and nothing of the property (`assign_prop`).
-    pub(crate) plain_write: bool,
+    /// `class` when a write the entry answers is a plain store, whatever
+    /// the slot holds (`prop_entry`): the property is untyped, not
+    /// readonly, with no set visibility, in a class without __set and its
+    /// kin; else 0, no class's address. All of that is the class's, as
+    /// the slot is, so the loop's write compares this with the object's
+    /// class and asks nothing of the property (`assign_prop`).
+    pub(crate) plain_write: usize,
 }
 
 /// A method call's cache entry: on an object of `class` (its address),
@@ -607,8 +608,9 @@ pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usiz
     }
     let shared = o.class.slots.get(name).is_some_and(|slots| slots.len() == 1);
     let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { scope };
-    let plain_write = !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
-    Some(PropSite { class: Rc::as_ptr(&o.class) as usize, scope, slot: slot as u32, plain_write })
+    let class = Rc::as_ptr(&o.class) as usize;
+    let plain = !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
+    Some(PropSite { class, scope, slot: slot as u32, plain_write: if plain { class } else { 0 } })
 }
 
 /// The declared slot of property `name` of `o` that code in `scope` sees
