@@ -64,7 +64,11 @@ impl Frozen {
             Frozen::Int(i) => Value::int(*i),
             Frozen::Float(f) => Value::float(*f),
             Frozen::Str(s) => Value::str(PhpStr::from(s.as_bytes())),
-            Frozen::Array(entries) => Value::array(array_of(entries)),
+            Frozen::Array(entries) => {
+                let mut array = array_of(entries);
+                array.mark_constant();
+                Value::array(array)
+            }
         }
     }
 

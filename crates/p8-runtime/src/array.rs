@@ -25,6 +25,11 @@ const POOL_MAX: usize = 256;
 thread_local! {
     static VALUES: RefCell<Pool<Value>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
     static BUCKETS: RefCell<Pool<Bucket>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
+    /// Freed small tables (SMALL buckets) kept as tables: every bucket
+    /// empty room again (see [`keep_ready`]), so the next small table
+    /// takes one as it is (no room to fill), and its free empties only
+    /// the entries it held.
+    static READY: RefCell<Vec<Vec<Bucket>>> = const { RefCell::new(Vec::new()) };
     /// Arrays copied on this thread (zend_array_dup's count): every copy
     /// allocates, so counting one is noise beside it.
     static COPIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -81,6 +86,43 @@ fn give<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, mut v: Vec<T>
     });
 }
 
+/// A hash's table done with, its first `used` buckets the entries it held:
+/// kept ([`give`]), a small one (SMALL buckets) as a table. Its entries
+/// are emptied, in order (their values go now, as with `give`), and the
+/// table kept whole for [`take_ready`]; the room after them is empty
+/// already (a small table has no chains, so no bucket of it holds a
+/// chain head).
+#[inline(always)]
+fn give_table(mut table: Vec<Bucket>, used: usize) {
+    if table.len() != SMALL || table.capacity() != SMALL {
+        give(&BUCKETS, table);
+        return;
+    }
+    for b in &mut table[..used] {
+        b.h = 0;
+        b.key = None;
+        b.value = Value::NULL;
+        b.next = NONE;
+    }
+    debug_assert!(table.iter().all(Bucket::is_room));
+    // (Dropping the values may free other arrays, which keep theirs: the
+    // pool is not borrowed meanwhile.)
+    let _ = READY.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut()
+            && p.len() < POOL_MAX
+        {
+            p.push(table);
+        }
+    });
+}
+
+/// A kept small table, every bucket empty room ([`keep_ready`]); None when
+/// there is none.
+#[inline]
+fn take_ready() -> Option<Vec<Bucket>> {
+    READY.try_with(|p| p.try_borrow_mut().ok().and_then(|mut p| p.pop())).ok().flatten()
+}
+
 /// A values buffer with room for `n` (an object's properties, a frame's
 /// extra arguments): from the pool when `n` is a pooled size.
 pub fn values_buffer(n: usize) -> Vec<Value> {
@@ -100,7 +142,7 @@ impl Drop for Packed {
 
 impl Drop for Hashed {
     fn drop(&mut self) {
-        give(&BUCKETS, std::mem::take(&mut self.buckets));
+        give_table(std::mem::take(&mut self.buckets), self.used);
     }
 }
 
@@ -121,7 +163,10 @@ pub(crate) fn free(a: std::rc::Rc<PhpArray>) {
     let Some(mut array) = std::rc::Rc::into_inner(a) else { return };
     match &mut array.storage {
         Storage::Packed(p) => give(&VALUES, std::mem::take(&mut p.slots)),
-        Storage::Hashed(h) => give(&BUCKETS, std::mem::take(&mut h.buckets)),
+        Storage::Hashed(h) => {
+            let used = h.used;
+            give_table(std::mem::take(&mut h.buckets), used);
+        }
     }
     // What is left holds nothing (an empty Vec): its `Drop` would only
     // give back an empty buffer.
@@ -424,6 +469,11 @@ impl Bucket {
     fn empty() -> Bucket {
         Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: NONE }
     }
+
+    /// Whether it is what [`Bucket::empty`] makes.
+    fn is_room(&self) -> bool {
+        self.h == 0 && self.key.is_none() && self.value.is_null() && self.next == NONE && self.head == NONE
+    }
 }
 
 impl Bucket {
@@ -520,9 +570,20 @@ impl Clone for Packed {
 /// the whole table), as PHP copies nNumUsed buckets and the hash part.
 impl Clone for Hashed {
     fn clone(&self) -> Self {
+        let (taken, room) = self.buckets.split_at(self.used);
+        // A small table into a kept one: its entries written over the
+        // room there (a small table's room is all empty, as the kept
+        // one's).
+        if self.buckets.len() == SMALL
+            && let Some(mut buckets) = take_ready()
+        {
+            for (to, b) in buckets.iter_mut().zip(taken) {
+                *to = Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: NONE };
+            }
+            return Hashed { buckets, used: self.used, live: self.live };
+        }
         // (In a kept buffer when its size is a pooled one.)
         let mut buckets = take(&BUCKETS, self.buckets.len());
-        let (taken, room) = self.buckets.split_at(self.used);
         buckets.extend(taken.iter().map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head }));
         buckets.extend(room.iter().map(|b| Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: b.head }));
         Hashed { buckets, used: self.used, live: self.live }
@@ -533,6 +594,11 @@ impl Hashed {
     /// Empty, with room for `n` entries before it grows.
     fn with_capacity(n: usize) -> Hashed {
         let size = n.max(MIN_SIZE).next_power_of_two();
+        if size == SMALL
+            && let Some(buckets) = take_ready()
+        {
+            return Hashed { buckets, used: 0, live: 0 };
+        }
         assert!(size < UNSET as usize, "array too large");
         let mut buckets = take(&BUCKETS, size);
         buckets.resize_with(size, Bucket::empty);
@@ -796,8 +862,13 @@ pub struct PhpArray {
     /// The key `$a[] = v` uses next; None until an int key is used
     /// (PHP 8.3+: after only negative keys it is the largest plus one).
     next_free: Option<i64>,
-    /// The internal pointer (current(), next(), reset()): a position.
-    cursor: usize,
+    /// The internal pointer (current(), next(), reset()): a position (a
+    /// table's positions fit in 32 bits; one past them is past the end).
+    cursor: u32,
+    /// A compiled constant's array (`Frozen::to_value`; or one that was,
+    /// written in place where nothing else held it): its copies are not
+    /// counted in [`copies`].
+    constant: bool,
 }
 
 /// A copy (zend_array_dup): an internal pointer past the end starts over
@@ -805,12 +876,16 @@ pub struct PhpArray {
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
         // (An empty array's copy, the first write to a shared `[]`, copies
-        // no values: not counted, as PHP makes a new array there.)
-        if !self.is_empty() {
+        // no values: not counted, as PHP makes a new array there. Nor a
+        // constant's: a write to a literal copies it wherever it runs, as
+        // PHP's immutable arrays are copied; it is how a literal with
+        // values only known when it runs is built (the compiler's
+        // `literal_template`), not a copy a program could do without.)
+        if !self.is_empty() && !self.constant {
             COPIES.with(|c| c.set(c.get() + 1));
         }
-        let cursor = if self.cursor < self.end_pos() { self.cursor } else { 0 };
-        PhpArray { storage: self.storage.clone(), next_free: self.next_free, cursor }
+        let cursor = if (self.cursor as usize) < self.end_pos() { self.cursor } else { 0 };
+        PhpArray { storage: self.storage.clone(), next_free: self.next_free, cursor, constant: false }
     }
 }
 
@@ -822,19 +897,19 @@ impl Default for PhpArray {
 
 impl PhpArray {
     pub fn new() -> Self {
-        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
+        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0, constant: false }
     }
 
     /// An empty list with room for `capacity` elements pushed onto it.
     pub fn list_with_capacity(capacity: usize) -> Self {
         let slots = if capacity == 0 { Vec::new() } else { take(&VALUES, capacity) };
-        PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0 }
+        PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0, constant: false }
     }
 
     /// An empty array sized for `capacity` keyed entries (array_init_size,
     /// as builtins returning a record make theirs): no growth while it fills.
     pub fn hashed(capacity: usize) -> Self {
-        PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0 }
+        PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0, constant: false }
     }
 
     /// Whether it is stored packed (int keys by position: HT_IS_PACKED).
@@ -851,7 +926,7 @@ impl PhpArray {
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
-        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0 }
+        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0, constant: false }
     }
 
     /// Room for `additional` more elements, made now (a builtin that
@@ -1025,7 +1100,7 @@ impl PhpArray {
         for (k, v) in keys.iter().zip(values) {
             h.insert_new(k.hash(), Some(k.clone()), v);
         }
-        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0 }
+        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0, constant: false }
     }
 
     /// `get` for an int key.
@@ -1286,11 +1361,17 @@ impl PhpArray {
 
     /// The internal pointer's position.
     pub fn cursor(&self) -> usize {
-        self.cursor
+        self.cursor as usize
     }
 
+    /// (A position past 32 bits is past the end of any table.)
     pub fn set_cursor(&mut self, pos: usize) {
-        self.cursor = pos;
+        self.cursor = u32::try_from(pos).unwrap_or(u32::MAX);
+    }
+
+    /// Mark it a compiled constant's array (see `constant`).
+    pub(crate) fn mark_constant(&mut self) {
+        self.constant = true;
     }
 
     /// Entries in order.
@@ -1574,6 +1655,12 @@ mod tests {
         let mut b = a.clone();
         std::rc::Rc::make_mut(&mut b).push(int(2)).unwrap();
         assert_eq!((a.len(), b.len()), (1, 2));
+    }
+
+    #[test]
+    fn an_array_stays_64_bytes() {
+        // (The internal pointer and the constant mark share one word.)
+        assert_eq!(std::mem::size_of::<PhpArray>(), 64);
     }
 
     #[test]

@@ -3326,6 +3326,48 @@ impl<'src> Compiler<'src> {
         }
     }
 
+    /// An array literal whose keys are all int or string literals, no key
+    /// twice (after "5" is 5), and some of whose values are not known at
+    /// compile time (`['a' => $i, 'b' => 2]`): its shape, one constant
+    /// (those keys in order, the known values in place, null where the
+    /// others go), and the items whose values are written into a copy of
+    /// it, in order. The copy is the shape's table copied in one piece,
+    /// not a list turned into a hash at the first string key and grown,
+    /// each constant key made a handle and tested for a number on the way.
+    /// None for anything else (a key computed, written twice, a
+    /// float, null or bool key; an element without a key, spread or by
+    /// reference): built element by element.
+    fn literal_template(&self, items: &[p8_syntax::ast::ArrayItem]) -> Option<(Frozen, Vec<usize>)> {
+        let mut seen = HashSet::default();
+        let mut entries = Vec::with_capacity(items.len());
+        let mut writes = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            if item.unpack || item.by_ref {
+                return None;
+            }
+            let key = item.key.filter(|k| is_literal(k)).and_then(|k| self.literal(k))?;
+            // (A duplicate key: which value is kept depends on the order
+            // the writes and the shape's values meet, so not here.)
+            let first = match &key {
+                Frozen::Int(n) => seen.insert(Ok(*n)),
+                Frozen::Str(s) => seen.insert(int_key(s.as_bytes()).ok_or_else(|| s.clone())),
+                _ => return None,
+            };
+            if !first {
+                return None;
+            }
+            let value = match self.foldable(item.value).then(|| self.const_value(item.value).ok()).flatten() {
+                Some(v) => v,
+                None => {
+                    writes.push(i);
+                    Frozen::Null
+                }
+            };
+            entries.push((Some(key), value));
+        }
+        (!writes.is_empty()).then(|| (Frozen::Array(entries.into()), writes))
+    }
+
     /// Whether `e` is known at compile time throughout: literals, the
     /// file's magic constants, and arrays, concatenations and signs of
     /// those (what const_value folds). An array of such is one constant
@@ -5172,6 +5214,32 @@ impl<'src> Compiler<'src> {
             Expr::Array { .. } if self.foldable(e) && self.const_value(e).is_ok() => {
                 let value = self.const_value(e)?;
                 f.constant(value)
+            }
+            // Literal keys, some values not known (`['a' => $i, 'b' => 2]`):
+            // a copy of the literal's shape (`literal_template`), and the
+            // values not known written into it in order. A variable's
+            // value goes in as `$t['a'] = $i` does (the key found in the
+            // copy, no handle made); a temporary's is moved in.
+            Expr::Array { items, .. } if let Some((template, writes)) = self.literal_template(items) => {
+                let dst = f.temp();
+                let shape = f.constant(template);
+                f.emit(Instr::Move { dst, src: shape });
+                let keep = f.temps;
+                for i in writes {
+                    f.reset_temps(keep);
+                    let item = &items[i];
+                    let key = self.expr(f, item.key.expect("a keyed item"))?;
+                    let val = self.expr(f, item.value)?;
+                    if val >> KIND_SHIFT == CV {
+                        let res = f.temp();
+                        f.emit(Instr::AssignDim { var: dst, keys: key, n: 1, append: false, val, dst: res });
+                        f.emit(Instr::Free { reg: res });
+                    } else {
+                        f.emit(Instr::ArraySet { arr: dst, key, val, take: is_temp(val) });
+                    }
+                }
+                f.reset_temps(keep);
+                dst
             }
             Expr::Array { items, .. } => {
                 let dst = f.temp();
