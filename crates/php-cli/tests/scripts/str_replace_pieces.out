@@ -1,0 +1,77 @@
+string(18) "a kwuick brown fox"
+string(17) "a quick br0wn f0x"
+int(2)
+string(0) ""
+int(4)
+string(8) "yzyzyzyz"
+int(4)
+string(10) "yzyzyzyzyz"
+int(5)
+string(16) "a-b-c-d-e-f-g-h-"
+int(8)
+string(40) "ABABABABABABABABABABABABABABABABABABABAB"
+int(20)
+string(66) "blong replacement textnlong replacement textnlong replacement text"
+int(3)
+string(17) "a quick brown fox"
+int(0)
+string(17) "a quick brown fox"
+int(0)
+string(0) ""
+int(0)
+string(0) ""
+string(1) "c"
+string(17) "a quick brown fox"
+string(18) "a kwuick brown fox"
+int(1)
+string(15) "F[o][o] b[o][o]"
+int(4)
+string(25) "A slow slow slow slow fox"
+int(4)
+bool(true)
+string(32) "e9dbfb8ba8c364dab55a9fa620401c2a"
+int(1510900)
+int(39764)
+string(4) "2223"
+int(2)
+string(3) "x1y"
+int(1)
+
+Deprecated: str_replace(): Passing null to parameter #1 ($search) of type array|string is deprecated in %s on line 48
+string(3) "abc"
+int(0)
+
+Deprecated: str_replace(): Passing null to parameter #2 ($replace) of type array|string is deprecated in %s on line 49
+string(3) "bnn"
+int(3)
+string(4) "3.25"
+string(2) "cc"
+int(3)
+array(3) {
+  [0]=>
+  string(2) "xx"
+  ["k"]=>
+  string(2) "xx"
+  [3]=>
+  string(2) "zz"
+}
+int(4)
+string(4) "b111"
+int(5)
+array(3) {
+  [0]=>
+  string(6) "bonono"
+  [1]=>
+  string(2) "12"
+  [2]=>
+  string(0) ""
+}
+int(3)
+TypeError: str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string
+int(4)
+array(1) {
+  ["k"]=>
+  int(2)
+}
+string(12) "stringable Q"
+int(1)
