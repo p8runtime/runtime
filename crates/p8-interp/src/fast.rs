@@ -48,7 +48,7 @@ impl Context<'_> {
             if pc == 0
                 && self.isolate.native.is_some()
                 && handed_back != self.frames.len()
-                && let Some(id) = self.frames.last().expect("a frame").func.code.native
+                && let Some(id) = self.frames.top().func.code.native
             {
                 let depth = self.frames.len();
                 match self.native_entry(regs, id)? {
@@ -59,7 +59,7 @@ impl Context<'_> {
                 continue 'frame;
             }
             handed_back = 0;
-            let mut top = self.frames.last().expect("a frame");
+            let mut top = self.frames.top();
             let mut clo = &*top.func;
             let base = top.base as usize;
             let mut code = &clo.code.insns[..];
@@ -127,10 +127,12 @@ impl Context<'_> {
             }
             // The register file is kept a window ahead of every frame
             // (`enter`), so the frame's fixed window always exists.
-            if regs.len() < base + WINDOW {
-                regs.resize(base + WINDOW, Value::UNDEF);
-            }
-            let w: &mut [Value; WINDOW] = (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers");
+            // (One test: the slice's own check is the same compare.)
+            let w: &mut [Value; WINDOW] = if regs.len() >= base + WINDOW {
+                (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
+            } else {
+                grow_window(regs, base)
+            };
             // A constant operand (an `Op::*C` form): the closure's constant
             // (`Function::consts`, thawed once), read in place as PHP reads a
             // CONST operand from the op_array. `lower` keeps the index in
@@ -326,7 +328,7 @@ impl Context<'_> {
                             if self.ids.has_pending() {
                                 pending_at!(pc, at);
                             }
-                            top = self.frames.last().expect("a frame");
+                            top = self.frames.top();
                             clo = &*top.func;
                             code = &clo.code.insns[..];
                         }
@@ -362,7 +364,7 @@ impl Context<'_> {
                         return Ok(());
                     }
                     leave(&mut self.frames, regs, value);
-                    pc = self.frames.last().expect("the caller's frame").pc as usize;
+                    pc = self.frames.top().pc as usize;
                     if self.ids.has_pending() {
                         pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
                     }
@@ -1116,7 +1118,7 @@ impl Context<'_> {
                                             if self.ids.has_pending() {
                                                 pending_at!(pc, pc - 1);
                                             }
-                                            top = self.frames.last().expect("a frame");
+                                            top = self.frames.top();
                                             clo = &*top.func;
                                             code = &clo.code.insns[..];
                                         }
@@ -1422,7 +1424,7 @@ impl Context<'_> {
                         let object = self.make_closure(&lambda, imm >> 16 != 0);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after a frameless call.)
-                        top = self.frames.last().expect("a frame");
+                        top = self.frames.top();
                         clo = &*top.func;
                         code = &clo.code.insns[..];
                         done!(put(&mut w[rx!(a)], Value::object(object)));
@@ -1812,7 +1814,7 @@ impl Context<'_> {
                         drop(func);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after MakeClosure.)
-                        top = self.frames.last().expect("a frame");
+                        top = self.frames.top();
                         clo = &*top.func;
                         code = &clo.code.insns[..];
                         let released = put(&mut w[rx!(a)], Value::reference(cell));
@@ -2836,6 +2838,15 @@ fn plain_arg(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, v: &Val
 #[inline(never)]
 fn quick_ref(memo: Option<&ClassMemo>, ty: &p8_runtime::types::TypeDecl, cell: &RefCell<Value>) -> bool {
     ClassMemo::quick(memo, ty, &cell.borrow())
+}
+
+/// The loop's window at `base` when the register file does not reach it
+/// yet: the file grown to it first (undefined registers).
+#[cold]
+#[inline(never)]
+fn grow_window(regs: &mut Vec<Value>, base: usize) -> &mut [Value; WINDOW] {
+    regs.resize(base + WINDOW, Value::UNDEF);
+    (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
 }
 
 /// Set up the registers of the frame just pushed: its window starts at

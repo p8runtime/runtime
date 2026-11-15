@@ -287,6 +287,14 @@ impl Frames {
         self.slots[..self.len].first()
     }
 
+    /// The running frame, where there must be one (the interpreter loop's
+    /// frame): one bounds check, where `last()` slices, tests for none and
+    /// tests the reference it made.
+    #[inline(always)]
+    pub(crate) fn top(&self) -> &Frame {
+        &self.slots[self.len - 1]
+    }
+
     /// The running frame, where there must be one (a call's caller): one
     /// bounds check, where `last_mut()` slices and tests for none.
     #[inline(always)]
