@@ -2796,6 +2796,19 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
         cell.assign(new.clone());
         return Some(new);
     }
+    // Two floats added, subtracted or multiplied (a float property's
+    // `+=`): `ops::binary`'s first case (`float_plain`), with no copy of
+    // the old value, no diagnostics list and no call.
+    if let Some(b) = y.as_float()
+        && let Some(new) = cell.peek(|v| p8_runtime::ops::float_plain(op, v.as_float()?, b))
+    {
+        let new = Value::float(new);
+        if p.ty_decl.as_ref().is_some_and(|t| !t.quick(&new)) {
+            return None;
+        }
+        cell.assign(new.clone());
+        return Some(new);
+    }
     let x = cell.peek(|v| scalar(v).then(|| v.clone()))?;
     let mut diags = Vec::new();
     let new = p8_runtime::ops::binary(op, &x, y, &mut diags).ok().filter(|_| diags.is_empty())?;

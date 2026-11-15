@@ -1,0 +1,515 @@
+-- floats into types that take a float
+U
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+F
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+NF
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+IF_
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+MX
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+float(1.75)
+float(-2.75)
+float(5.5)
+float(5.5)
+float(5.6)
+float(5.8)
+float(5.8)
+float(INF)
+float(INF)
+float(NAN)
+float(NAN)
+float(-0)
+float(-0)
+float(0)
+float(0)
+float(NAN)
+float(NAN)
+-- operands and values that are not two floats
+U
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+F
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+float(1.5)
+IF_
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+float + int: float(2.5)
+float + "2.5": float(5)
+float + true: float(6)
+float + null: float(6)
+float + "x": TypeError: Unsupported operand types: float + string
+int + float: float(3.5)
+"1.5" * float: float(3)
+float(1.5)
+-- types that do not take the float
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 17
+int + 1.5
+int(2)
+int + 2.0
+int(4)
+string + 1.0
+string(3) "2.5"
+bool * 0.0
+bool(false)
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 17
+int + 1.5
+int(2)
+int + 2.0
+int(4)
+string + 1.0
+string(3) "2.5"
+bool * 0.0
+bool(false)
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 17
+int + 1.5
+int(2)
+int + 2.0
+int(4)
+string + 1.0
+string(3) "2.5"
+bool * 0.0
+bool(false)
+-- the other operators on two floats
+U / 2.0: float(0.25)
+U / 0.0: DivisionByZeroError: Division by zero
+U ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+U % 2.0
+int(1)
+U . 2.5
+string(4) "12.5"
+U / 2.0: float(0.25)
+U / 0.0: DivisionByZeroError: Division by zero
+U ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+U % 2.0
+int(1)
+U . 2.5
+string(4) "12.5"
+U / 2.0: float(0.25)
+U / 0.0: DivisionByZeroError: Division by zero
+U ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+U % 2.0
+int(1)
+U . 2.5
+string(4) "12.5"
+F / 2.0: float(0.25)
+F / 0.0: DivisionByZeroError: Division by zero
+F ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+F % 2.0
+float(1)
+F . 2.5
+float(12.5)
+F / 2.0: float(0.25)
+F / 0.0: DivisionByZeroError: Division by zero
+F ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+F % 2.0
+float(1)
+F . 2.5
+float(12.5)
+F / 2.0: float(0.25)
+F / 0.0: DivisionByZeroError: Division by zero
+F ** 2.0: float(0.25)
+
+Deprecated: Implicit conversion from float 7.5 to int loses precision in %s on line 22
+F % 2.0
+float(1)
+F . 2.5
+float(12.5)
+-- readonly, set visibility, a reference, hooks, magic, unset
+readonly inside: Error: Cannot modify readonly property RO::$p
+readonly outside: Error: Cannot modify readonly property RO::$p
+set visibility inside: float(2.5)
+set visibility outside: Error: Cannot modify private(set) property PS::$p from global scope
+reference: float(2)
+float(2)
+typed reference: float(1.5)
+float(1.5)
+get
+set 1.5
+hooks: float(1.5)
+magic: float(1.5)
+__get p
+__set p
+magic unset: float(3)
+typed unset: Error: Typed property F::$p must not be accessed before initialization
+readonly inside: Error: Cannot modify readonly property RO::$p
+readonly outside: Error: Cannot modify readonly property RO::$p
+set visibility inside: float(2.5)
+set visibility outside: Error: Cannot modify private(set) property PS::$p from global scope
+reference: float(2)
+float(2)
+typed reference: float(1.5)
+float(1.5)
+get
+set 1.5
+hooks: float(1.5)
+magic: float(1.5)
+__get p
+__set p
+magic unset: float(3)
+typed unset: Error: Typed property F::$p must not be accessed before initialization
+readonly inside: Error: Cannot modify readonly property RO::$p
+readonly outside: Error: Cannot modify readonly property RO::$p
+set visibility inside: float(2.5)
+set visibility outside: Error: Cannot modify private(set) property PS::$p from global scope
+reference: float(2)
+float(2)
+typed reference: float(1.5)
+float(1.5)
+get
+set 1.5
+hooks: float(1.5)
+magic: float(1.5)
+__get p
+__set p
+magic unset: float(3)
+typed unset: Error: Typed property F::$p must not be accessed before initialization
+-- $this, a constant operand, and the released value
+array(2) {
+  [0]=>
+  float(4.25)
+  [1]=>
+  float(4.25)
+}
+array(2) {
+  [0]=>
+  float(17)
+  [1]=>
+  float(21.25)
+}
+before
+destruct
+after
+float(1.5)
+array(2) {
+  [0]=>
+  float(4.25)
+  [1]=>
+  float(4.25)
+}
+array(2) {
+  [0]=>
+  float(17)
+  [1]=>
+  float(21.25)
+}
+before
+destruct
+after
+float(1.5)
+array(2) {
+  [0]=>
+  float(4.25)
+  [1]=>
+  float(4.25)
+}
+array(2) {
+  [0]=>
+  float(17)
+  [1]=>
+  float(21.25)
+}
+before
+destruct
+after
+float(1.5)
