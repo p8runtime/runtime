@@ -220,19 +220,34 @@ pub(crate) fn exec_into_dfa(p: &Prog, s: &[u8], start: usize, opts: &MatchOption
         nest: 0,
     };
     let found = search(&mut vm, from, anchored);
-    let Vm { slots, mut stack, mark, .. } = vm;
+    let Vm { slots, mut stack, mark, regs, frames, targets, .. } = vm;
     caps.slots = slots;
     stack.clear();
     // (Not a big one: a cached pattern would hold it for the request.)
     if stack.capacity() <= 1024 {
-        p.stack.set(stack);
+        release(p.stack.replace(stack));
     }
+    release(regs);
+    release(frames);
+    release(targets);
     let end = found?;
     if let Some(end) = end {
         caps.slots[1] = Some(end);
         caps.mark = mark.map(|m| p.marks[m as usize].clone());
     }
     Ok(end.is_some())
+}
+
+/// Drops a Vec, with no call when it never had room (a search that used
+/// no recursion, lookbehind or loop registers): such a Vec holds nothing
+/// and owns no memory, so forgetting it is dropping it.
+#[inline(always)]
+fn release<T>(v: Vec<T>) {
+    if v.capacity() == 0 {
+        std::mem::forget(v);
+    } else {
+        drop(v);
+    }
 }
 
 /// Where a match can start at or after `at`: the next byte a match can
