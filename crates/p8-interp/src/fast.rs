@@ -39,7 +39,17 @@ impl Context<'_> {
         // the next round of the frame loop runs that frame here, even at
         // pc 0 (another frame, a callee it left pushed, is entered).
         let mut handed_back = 0;
-        'frame: loop {
+        // (An exception the loop's out-of-line paths raise leaves the loop
+        // with it, `threw!`, and out of `execute` from one place.)
+        let threw: Throw = 'frame: loop {
+            macro_rules! threw {
+                ($e:expr) => {
+                    match $e {
+                        Ok(v) => v,
+                        Err(t) => break 'frame t,
+                    }
+                };
+            }
             // A frame starting at its first instruction whose code the
             // executable has machine code for (native.rs) runs that, until
             // it hands the frame back: every call path comes here. (An
@@ -51,7 +61,7 @@ impl Context<'_> {
                 && let Some(id) = self.frames.top().func.code.native
             {
                 let depth = self.frames.len();
-                match self.native_entry(regs, id)? {
+                match threw!(self.native_entry(regs, id)) {
                     Flow::Go(next) => pc = next,
                     Flow::Done => return Ok(()),
                 }
@@ -74,7 +84,7 @@ impl Context<'_> {
             // then start over with the frame as it left it.
             macro_rules! slow {
                 () => {{
-                    match self.slow(regs, pc)? {
+                    match threw!(self.slow(regs, pc)) {
                         Flow::Go(next) => pc = next,
                         Flow::Done => return Ok(()),
                     }
@@ -85,7 +95,7 @@ impl Context<'_> {
             // the next instruction.
             macro_rules! pending {
                 () => {{
-                    pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                    pc = threw!(self.after_errors(regs, pc, pc.saturating_sub(1)));
                     continue 'frame;
                 }};
             }
@@ -93,7 +103,7 @@ impl Context<'_> {
             // goes on, `$at` the instruction itself.
             macro_rules! pending_at {
                 ($next:expr, $at:expr) => {{
-                    pc = self.after_errors(regs, $next, $at)?;
+                    pc = threw!(self.after_errors(regs, $next, $at));
                     continue 'frame;
                 }};
             }
@@ -333,7 +343,7 @@ impl Context<'_> {
                             code = &clo.code.insns[..];
                         }
                         r => {
-                            pc = self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps))?;
+                            pc = threw!(self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps)));
                             continue 'frame;
                         }
                     }
@@ -361,7 +371,7 @@ impl Context<'_> {
                     leave(&mut self.frames, regs, value);
                     pc = self.frames.top().pc as usize;
                     if self.ids.has_pending() {
-                        pc = self.after_errors(regs, pc, pc.saturating_sub(1))?;
+                        pc = threw!(self.after_errors(regs, pc, pc.saturating_sub(1)));
                     }
                     continue 'frame;
                 }};
@@ -371,7 +381,7 @@ impl Context<'_> {
             // frame as it left it ...
             macro_rules! cold {
                 ($m:ident) => {{
-                    match self.cold(regs, pc, Self::$m)? {
+                    match threw!(self.cold(regs, pc, Self::$m)) {
                         Flow::Go(next) => pc = next,
                         Flow::Done => return Ok(()),
                     }
@@ -384,7 +394,7 @@ impl Context<'_> {
             // it.
             macro_rules! out {
                 ($ops:expr, $run:expr) => {{
-                    match self.out_of_line(regs, pc, $ops, $run)? {
+                    match threw!(self.out_of_line(regs, pc, $ops, $run)) {
                         Flow::Go(next) => pc = next,
                         Flow::Done => return Ok(()),
                     }
@@ -650,7 +660,7 @@ impl Context<'_> {
                         // line as the Call arm's (`builtin_call`).
                         macro_rules! call {
                             () => {{
-                                pc = self.builtin_call(regs, pc, base, i, (Reg::from(b), c, Reg::from(a)))?;
+                                pc = threw!(self.builtin_call(regs, pc, base, i, (Reg::from(b), c, Reg::from(a))));
                                 continue 'frame;
                             }};
                         }
@@ -1038,7 +1048,7 @@ impl Context<'_> {
                                 {
                                     frameless!(i, run, start, n, dst, true, pc);
                                 } else {
-                                    pc = self.builtin_call(regs, pc, base, i, (Reg::from(args), n as u8, Reg::from(dst)))?;
+                                    pc = threw!(self.builtin_call(regs, pc, base, i, (Reg::from(args), n as u8, Reg::from(dst))));
                                     continue 'frame;
                                 }
                             }
@@ -1122,7 +1132,7 @@ impl Context<'_> {
                                             // checked path would have it.
                                             let at = rk!((imm >> 16) as usize);
                                             let _ = put(&mut w[at], arg[0].clone());
-                                            pc = self.frameless_tail(regs, pc + 1, i, r, (base + at, 1, base + rx!(c), true))?;
+                                            pc = threw!(self.frameless_tail(regs, pc + 1, i, r, (base + at, 1, base + rx!(c), true)));
                                             continue 'frame;
                                         }
                                     }
@@ -2239,7 +2249,8 @@ impl Context<'_> {
                     }
                 })
             }
-        }
+        };
+        Err(threw)
     }
 
     /// `ret!` from the bottom frame of this run of the loop (a callback a
