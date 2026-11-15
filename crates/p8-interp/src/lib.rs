@@ -2437,7 +2437,14 @@ impl Context<'_> {
                         let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
                         let r = ops::binary(op, &x, &y, &mut self.diags);
                         self.report_diags();
-                        let v = r.map_err(|e| self.op_error(e))?;
+                        let v = match r {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let thrown = self.op_error(e);
+                                self.failed_prop_op(&target, &pname);
+                                return Err(thrown);
+                            }
+                        };
                         self.write_cached(&o, slot, &pname, v.clone())?;
                         reg!(dst) = v;
                         return Ok(Next::Go(pc));
@@ -2469,7 +2476,14 @@ impl Context<'_> {
                     let x = self.read_for_update(&target, &name)?;
                     let r = ops::binary(op, &x, &y, &mut self.diags);
                     self.report_diags();
-                    let v = r.map_err(|e| self.op_error(e))?;
+                    let v = match r {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let thrown = self.op_error(e);
+                            self.failed_prop_op(&target, &name);
+                            return Err(thrown);
+                        }
+                    };
                     self.write_prop(&target, &name, v.clone())?;
                     if let (Some(site), Some(o)) = (site, target.as_object())
                         && site.get().class != Rc::as_ptr(&o.class) as usize

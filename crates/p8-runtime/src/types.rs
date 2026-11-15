@@ -95,6 +95,26 @@ impl TypeDecl {
             }
     }
 
+    /// What a property of this type holds once its compound assignment's
+    /// operation threw (`$o->f /= 0`, `$o->i <<= -1`): the operation leaves
+    /// its result undefined, and zend_binary_assign_op_typed_prop stores it
+    /// if the type takes it. In weak mode zend_verify_weak_scalar_type_hint
+    /// takes it as 0 where int is taken (mixed too), else as 0.0 where
+    /// float is; string and bool see the pending exception and refuse it.
+    /// None (the property keeps its value) for any other type, and under
+    /// strict_types.
+    pub fn after_failed_op(&self, strict: bool) -> Option<Value> {
+        if strict {
+            None
+        } else if self.mask & (T_INT | T_MIXED) != 0 {
+            Some(Value::int(0))
+        } else if self.mask & T_FLOAT != 0 {
+            Some(Value::float(0.0))
+        } else {
+            None
+        }
+    }
+
     /// An int where this type takes a float and no int: the float, in
     /// either mode (the one conversion strict_types makes; in weak mode
     /// float is the first scalar such a type takes an int as). None for
