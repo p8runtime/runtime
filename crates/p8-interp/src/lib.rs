@@ -1354,6 +1354,12 @@ impl Context<'_> {
             let name = String::from_utf8_lossy(s.display.as_bytes()).into_owned();
             return Err(self.throw("Error", format!("Call to undefined function {name}()")));
         };
+        // ZEND_INIT_USER_CALL: the builtin's twin, which `user_call` runs.
+        let twin = match callee {
+            Callee::Builtin(i) if s.user_call => self.user_calls.iter().position(|&u| u == i).map(|k| self.user_call_twins[k]).filter(|&t| t != usize::MAX),
+            _ => None,
+        };
+        let callee = twin.map_or(callee, Callee::Builtin);
         // A user function's closure is made with the first site that calls
         // it: `fast` then finds it at the index this site caches.
         if let Callee::User(f) = callee {
@@ -1374,8 +1380,14 @@ impl Context<'_> {
     fn builtin_call(&mut self, regs: &mut Vec<Value>, pc: usize, base: usize, i: usize, call: (Reg, u8, Reg)) -> Result<usize, Throw> {
         let (args, argc, dst) = call;
         self.pc = pc + 1;
-        let next = match self.call_builtin(regs, base, i, args, argc, dst) {
-            Ok(()) => pc + 1,
+        let ran = if self.user_call_twins.contains(&i) {
+            // ZEND_INIT_USER_CALL: the callback's frame, run by this loop.
+            self.user_call_at(regs, base, i, (args, argc, dst), pc + 1)
+        } else {
+            self.call_builtin(regs, base, i, args, argc, dst).map(|()| pc + 1)
+        };
+        let next = match ran {
+            Ok(next) => next,
             Err(t) => self.unwind(regs, t, pc)?,
         };
         if !self.pending_errors.is_empty() || self.ids.has_pending() {
@@ -4754,6 +4766,7 @@ impl Context<'_> {
                 enter(&mut self.frames, regs);
                 Ok(Next::Switch)
             }
+            Callee::Builtin(i) if self.user_call_twins.contains(&i) => self.user_call(regs, base, i, (args, argc, dst), pc),
             Callee::Builtin(i) => {
                 self.call_builtin(regs, base, i, args, argc, dst)?;
                 Ok(Next::Go(pc))

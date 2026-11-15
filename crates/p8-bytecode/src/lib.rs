@@ -857,6 +857,13 @@ pub struct Site {
     pub fallback: Option<(Text, Sym)>,
     /// The name as written, for messages.
     pub display: Text,
+    /// A call PHP compiles to ZEND_INIT_USER_CALL
+    /// (zend_compile_func_cuf, zend_compile_func_cufa): call_user_func
+    /// with a callback, or call_user_func_array with two arguments, named
+    /// at compile time (no namespace fallback), its arguments positional.
+    /// The callback runs as called from here: no call_user_func frame.
+    /// (Its own site: an unpacked call of the name keeps the frame.)
+    pub user_call: bool,
 }
 
 #[derive(Debug, Clone)]

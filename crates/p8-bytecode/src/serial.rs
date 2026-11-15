@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// The layout's version: change it when the layout changes in a way the
 /// key (see the file cache) would not notice.
-pub const FORMAT: u32 = 31;
+pub const FORMAT: u32 = 32;
 
 /// How deeply nested arrays and closures may be read (each level is a
 /// native stack frame).
@@ -587,7 +587,7 @@ record!(TraitRule { trait_name, method, insteadof, alias, visibility });
 record!(ConstDef { name, value, code, visibility, is_final, meta });
 record!(PropDef { name, default, code, hooks, visibility, set_visibility, is_static, readonly, is_final, ty, ty_decl, meta });
 record!(MethodDef { func, visibility, is_static, is_abstract, is_final });
-record!(Site { name, sym, fallback, display });
+record!(Site { name, sym, fallback, display, user_call });
 record!(Param { name, by_ref, has_default, variadic, ty, default, default_const, default_src, default_ns, promoted, attrs });
 record!(Handler { start, end, target, slot, depth });
 record!(TypeDecl { mask, classes, lower, written, intersection });

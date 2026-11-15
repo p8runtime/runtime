@@ -126,7 +126,9 @@ impl Context<'_> {
         Object::with_data(class, &self.ids, Some(Rc::new(data)))
     }
 
-    /// What calling a Closure object calls.
+    /// What calling a Closure object calls. (In line: resolve_callable's
+    /// first case, on every callback's call.)
+    #[inline(always)]
     fn closure_target(&self, o: &Rc<Object>) -> Option<Target> {
         let data = closure_data(o)?;
         Some(match &data.func {
@@ -546,6 +548,242 @@ impl Context<'_> {
         r
     }
 
+    /// The function of PHP code the string `v` names (no `::`), if it
+    /// names one. A name found before, by the string's address: the entry
+    /// (`named_calls`) holds its string (an interned one lives for good),
+    /// so no other string has that address. A function, once declared,
+    /// stays: what a name found is found again.
+    #[inline(always)]
+    fn named_function(&mut self, v: &Value) -> Option<u32> {
+        let head = v.as_str()?;
+        let slot = (std::ptr::from_ref(head) as usize >> 4) % crate::isolate::NAMED_CALLS;
+        let (held, found) = &self.named_calls[slot];
+        if held.as_str().is_some_and(|s| std::ptr::eq(s, head)) {
+            return Some(*found);
+        }
+        let name = head.as_bytes();
+        if name.windows(2).any(|w| w == b"::") {
+            return None;
+        }
+        let Some(crate::sites::Callee::User(f)) = self.function_named(name) else { return None };
+        // (Its closure made now: a name found here has one in `closures`.)
+        self.closure_at(f);
+        self.named_calls[slot] = (v.clone(), f);
+        Some(f)
+    }
+
+    /// `user_call` from the loop's call of a builtin (`builtin_call`):
+    /// the pc to go on at, the callee's first when its frame was pushed.
+    /// (Out of line: every other builtin's call keeps `builtin_call`'s
+    /// frame as small as it was.)
+    #[inline(never)]
+    pub(crate) fn user_call_at(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, call: (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<usize, Throw> {
+        Ok(match self.user_call(regs, base, i, call, pc)? {
+            Next::Go(next) => next,
+            Next::Switch => self.frames.last().map_or(pc, |f| f.pc as usize),
+        })
+    }
+
+    /// A call site PHP compiles to ZEND_INIT_USER_CALL
+    /// (`Site::user_call`): call_user_func(callback, ...) or
+    /// call_user_func_array(callback, args), `i` the builtin's twin, its
+    /// `argc` arguments at `args` above `base`, its result to `dst`, the
+    /// caller going on at `pc`. The callback is the caller's own call
+    /// (INIT_USER_CALL, SEND_USER or SEND_ARRAY, DO_FCALL): no
+    /// call_user_func frame, in a trace or anywhere. A function of PHP
+    /// code gets its frame on the arguments where they are, after the
+    /// callback's register, and the caller's loop runs it (Next::Switch),
+    /// as it runs a plain call; a builtin is called from here. (In line
+    /// in its two callers, `user_call_at` and `call_site`, both out of
+    /// line themselves.)
+    #[inline(always)]
+    pub(crate) fn user_call(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
+        // (As the loop's call of a function: an interrupt is raised here.)
+        if self.stop.load(std::sync::atomic::Ordering::Relaxed) != crate::isolate::NO_INTERRUPT {
+            return Err(self.interrupted());
+        }
+        let array = i == self.user_call_twins[1];
+        let (start, argc) = (base + args as usize, argc as usize);
+        let at = start + 1;
+        // The common case, call_user_func of a function's name found
+        // before, entered as the loop's Call arm enters a function (none
+        // of its parameters by reference, every required one passed): the
+        // arguments read through a reference where one is, the callback's
+        // register cleared, the frame pushed and bound.
+        if !array
+            && let Some(f) = self.named_function(&regs[start])
+        {
+            let target = &self.closures[f as usize];
+            let n = argc - 1;
+            if crate::fast::direct(target.shape, &target.code, n as u8) && !target.code.params.iter().any(|p| p.by_ref) {
+                for r in &mut regs[at..at + n] {
+                    if r.is_reference() {
+                        *r = r.deref();
+                    }
+                }
+                // (A string: nothing it frees has a destructor.)
+                regs[start] = Value::UNDEF;
+                let target = &self.closures[f as usize];
+                self.frames.call(Some(target), pc, at, n, (base + dst as usize) as u32);
+                crate::fast::bind(&mut self.frames, regs, target.shape, at, n);
+                return Ok(Next::Switch);
+            }
+        }
+        self.user_call_frame(regs, base, i, (args, argc as u8, dst), pc)
+    }
+
+    /// `user_call` past its common case (out of line: that case keeps a
+    /// small frame of its own): the callback found and checked, its
+    /// arguments placed, its frame pushed (call_method), or a builtin
+    /// called.
+    #[inline(never)]
+    fn user_call_frame(&mut self, regs: &mut Vec<Value>, base: usize, i: usize, (args, argc, dst): (p8_bytecode::Reg, u8, p8_bytecode::Reg), pc: usize) -> Result<Next, Throw> {
+        let array = i == self.user_call_twins[1];
+        let (start, argc) = (base + args as usize, argc as usize);
+        let at = start + 1;
+        // The callback, as INIT_USER_CALL finds it (zend_is_callable_ex).
+        let target = match self.named_function(&regs[start]) {
+            Some(f) => {
+                let func = self.closure_at(f);
+                Target::Frame(MethodFrame { func: Code::User(func), this: None, scope: None, called: None, trampoline: None, closure: None })
+            }
+            None => self.user_call_target(regs, i, start)?,
+        };
+        // Its arguments, by value after the callback's register: what
+        // SEND_USER sends (a reference read through), or the list's values
+        // (SEND_ARRAY: a reference stays one where the parameter takes
+        // one). A value where a parameter of PHP code takes a reference
+        // is passed, after a warning (zend_call_function's).
+        let takes_ref = |cx: &Self, n: usize| match &target {
+            Target::Frame(MethodFrame { func: Code::User(f), .. }) => f.code.param_by_ref(n),
+            Target::Frame(_) => false,
+            Target::Builtin(b) => cx.isolate.registry.by_ref(*b, n),
+        };
+        let n = if array {
+            if regs[at].as_array().is_none() {
+                self.user_call_list(regs, at)?;
+            }
+            let held = std::mem::replace(&mut regs[at], Value::UNDEF);
+            let list = held.as_array().expect("an array (user_call_list checked)");
+            if list.len() > usize::from(u8::MAX) {
+                return self.user_call_nested(regs, start, target, list, base + dst as usize, pc);
+            }
+            if regs.len() < at + list.len() + 1 {
+                regs.resize(at + list.len() + 1, Value::UNDEF);
+            }
+            for (n, a) in list.values().enumerate() {
+                let by_ref = takes_ref(self, n);
+                if by_ref && !a.is_reference() {
+                    self.user_call_by_value(&target, n);
+                }
+                regs[at + n] = if a.is_reference() && by_ref { a.clone() } else { a.deref() };
+            }
+            list.len()
+        } else {
+            for n in 0..argc - 1 {
+                if takes_ref(self, n) {
+                    self.user_call_by_value(&target, n);
+                }
+                let r = &mut regs[at + n];
+                if r.is_reference() {
+                    *r = r.deref();
+                }
+            }
+            argc - 1
+        };
+        regs[start] = Value::UNDEF;
+        // What sending raised reaches the error handler before the call,
+        // in the caller (and a destructor due runs there).
+        if !self.pending_errors.is_empty() {
+            self.dispatch_errors(regs)?;
+        }
+        if self.ids.has_pending() {
+            self.run_destructors(regs)?;
+        }
+        match target {
+            Target::Frame(m) => self.call_method(regs, m, at, n as u8, (base + dst as usize) as u32, pc),
+            Target::Builtin(b) => {
+                self.call_builtin(regs, base, b, args + 1, n as u8, dst)?;
+                Ok(Next::Go(pc))
+            }
+        }
+    }
+
+    /// `user_call`'s callback when it is not a function's name found
+    /// before: a Closure's function, else the callback checked as
+    /// INIT_USER_CALL checks it (its TypeError, the builtin's message) and
+    /// resolved; then, for call_user_func_array, its list checked
+    /// (SEND_ARRAY's TypeError). The registers lent meanwhile: an
+    /// autoloader may run.
+    #[cold]
+    #[inline(never)]
+    fn user_call_target(&mut self, regs: &mut Vec<Value>, i: usize, start: usize) -> Result<Target, Throw> {
+        let callable = regs[start].deref();
+        let target = match callable.as_object().and_then(|o| self.closure_target(o)) {
+            Some(target) => target,
+            None => {
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let target = match self.why_not_callable(&callable, true) {
+                    Ok(None) => self.resolve_callable(&callable),
+                    Ok(Some(why)) => {
+                        let sig = self.isolate.registry.sig(i).expect("call_user_func's signature");
+                        let (class, message) = p8_runtime::args::callback_error(sig, 0, &why);
+                        Err(self.throw(class, message))
+                    }
+                    Err(t) => Err(t),
+                };
+                std::mem::swap(&mut self.isolate.regs, regs);
+                target?
+            }
+        };
+        Ok(target)
+    }
+
+    /// call_user_func_array's list, in register `at`, as SEND_ARRAY
+    /// checks it once the callback is found: an array (read through a
+    /// reference), else its TypeError.
+    #[cold]
+    #[inline(never)]
+    fn user_call_list(&mut self, regs: &mut [Value], at: usize) -> Result<(), Throw> {
+        let list = regs[at].deref();
+        if list.as_array().is_none() {
+            let given = p8_runtime::args::value_name(&list);
+            return Err(self.throw("TypeError", format!("call_user_func_array(): Argument #2 ($args) must be of type array, {given} given")));
+        }
+        regs[at] = list;
+        Ok(())
+    }
+
+    /// The warning for a value `user_call` sends where parameter `n` of
+    /// the callback takes a reference.
+    #[cold]
+    fn user_call_by_value(&mut self, target: &Target, n: usize) {
+        if let Target::Frame(MethodFrame { func: Code::User(f), .. }) = target {
+            self.by_value_warning(&f.code, n);
+        }
+    }
+
+    /// `user_call` of a list too long for a frame's argument count: the
+    /// callback run nested, to its return (into register `ret`), on the
+    /// list's values.
+    #[cold]
+    #[inline(never)]
+    fn user_call_nested(&mut self, regs: &mut Vec<Value>, start: usize, target: Target, list: &PhpArray, ret: usize, pc: usize) -> Result<Next, Throw> {
+        let mut args: Vec<Value> = list.values().map(Value::deref).collect();
+        regs[start] = Value::UNDEF;
+        let v = match target {
+            Target::Frame(m) => self.run_nested(regs, m, &mut args)?,
+            Target::Builtin(b) => {
+                std::mem::swap(&mut self.isolate.regs, regs);
+                let r = self.run_builtin(b, &mut args);
+                std::mem::swap(&mut self.isolate.regs, regs);
+                r?
+            }
+        };
+        regs[ret] = v;
+        Ok(Next::Go(pc))
+    }
+
     /// A call site's call_user_func("f", ...) or call_user_func_array("f",
     /// [...]) (builtin `i`, its `argc` arguments at absolute register
     /// `start`, its result to `dst` above `base`) when "f" names a function
@@ -562,24 +800,7 @@ impl Context<'_> {
         if argc == 0 || (array && (argc != 2 || regs[start + 1].as_array().is_none())) {
             return None;
         }
-        let head = regs[start].as_str()?;
-        let name = head.as_bytes();
-        // A name found before, by the string's address: the entry holds
-        // its string (an interned one lives for good), so no other string
-        // has that address. A function, once declared, stays: what a name
-        // found is found again.
-        let slot = (std::ptr::from_ref(head) as usize >> 4) % crate::isolate::NAMED_CALLS;
-        let (held, found) = &self.named_calls[slot];
-        let f = if held.as_str().is_some_and(|s| std::ptr::eq(s, head)) {
-            *found
-        } else {
-            if name.windows(2).any(|w| w == b"::") {
-                return None;
-            }
-            let Some(crate::sites::Callee::User(f)) = self.function_named(name) else { return None };
-            self.named_calls[slot] = (regs[start].clone(), f);
-            f
-        };
+        let f = self.named_function(&regs[start])?;
         p8_runtime::counts::bump(p8_runtime::counts::Count::BuiltinLent);
         let func = self.closure_at(f);
         // Its frames show this call's line.
