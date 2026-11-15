@@ -95,6 +95,16 @@ impl TypeDecl {
             }
     }
 
+    /// An int where this type takes a float and no int: the float, in
+    /// either mode (the one conversion strict_types makes; in weak mode
+    /// float is the first scalar such a type takes an int as). None for
+    /// anything else (a reference included).
+    #[inline]
+    pub fn widened(&self, v: &Value) -> Option<Value> {
+        let i = v.as_int()?;
+        (self.mask & (T_FLOAT | T_INT) == T_FLOAT).then(|| Value::float(i as f64))
+    }
+
     /// Check `v`. `is_a(o, class)`: whether object `o` is an instance of
     /// a class this type names (the caller resolves self/parent/static).
     /// `callable`: whether `v` can be called from the checking code (the
@@ -130,12 +140,12 @@ impl TypeDecl {
         if self.mask & T_CALLABLE != 0 && callable && matches!(v.kind(), Kind::Str | Kind::Array | Kind::Object) {
             return Verdict::Accepted(None);
         }
+        if let Some(f) = self.widened(&v) {
+            return Verdict::Accepted(Some(f));
+        }
         let scalars = T_BOOL | T_TRUE | T_FALSE | T_INT | T_FLOAT | T_STRING;
         if strict {
-            return match v.as_int() {
-                Some(i) if self.mask & T_FLOAT != 0 => Verdict::Accepted(Some(Value::float(i as f64))),
-                _ => Verdict::Refused,
-            };
+            return Verdict::Refused;
         }
         // Weak mode: scalars (not null) convert to a scalar type.
         if !matches!(v.kind(), Kind::Bool | Kind::Int | Kind::Float | Kind::Str) || self.mask & scalars == 0 {

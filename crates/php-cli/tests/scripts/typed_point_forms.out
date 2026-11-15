@@ -1,0 +1,77 @@
+float(2997)
+float(4995)
+float(7992)
+float(3)
+float(-4)
+float(0)
+float(2)
+float(9.223372036854776E+18)
+float(-9007199254740992)
+float(11)
+float(1.75)
+float(-3)
+float(3)
+float(12)
+float(-1.5)
+float(36)
+DivisionByZeroError: Division by zero
+float(36)
+float(INF)
+float(NAN)
+float(-0)
+string(6) "Point3"
+string(6) "Point3"
+string(5) "Point"
+TypeError: Point::parent(): Return value must be of type Point3, Point returned
+TypeError: Point::wrongInt(): Return value must be of type int, Point3 returned
+string(6) "Point3"
+string(5) "Point"
+float(5)
+string(1) "5"
+float(7)
+bool(false)
+float(8)
+NULL
+int(9)
+string(1) "5"
+float(3)
+float(3.5)
+array(3) {
+  [0]=>
+  float(1)
+  [1]=>
+  float(2.5)
+  [2]=>
+  float(3)
+}
+array(0) {
+}
+float(7)
+float(4)
+NULL
+object(Holder)#6 (3) {
+  ["f"]=>
+  float(11)
+  ["g"]=>
+  float(12)
+  ["h"]=>
+  int(13)
+}
+float(23)
+TypeError: f_mixed(): Argument #2 ($k) must be of type float, string given
+TypeError: f_mixed(): Argument #3 ($j) must be of type float, array given
+float(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+TypeError: f_arrvar(): Argument #2 must be of type array, int given
+TypeError: f_mixed(): Argument #1 ($p) must be of type Point, Holder given
+float(6.5)
+array(1) {
+  ["k"]=>
+  float(-1)
+}

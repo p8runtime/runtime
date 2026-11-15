@@ -122,6 +122,30 @@ fn stub_param_by_ref(m: &Method, n: usize) -> bool {
     p8_runtime::stubs::lookup(stub.as_bytes()).is_some_and(|s| s.params.get(n).is_some_and(|p| p.by_ref))
 }
 
+/// Function entry's common conversion, before `verify_args`: `w` the
+/// callee's window, `argc` passed. Every typed argument plainly of its
+/// type, or an int for a float (made the float in place: what
+/// `verify_args` would write, in either mode): true. Anything else
+/// (a variadic, a reference, another conversion, a TypeError): false,
+/// and `verify_args` checks them all (the floats made here are plain
+/// to it).
+pub(crate) fn args_widened(w: &mut [Value], clo: &Closure, argc: usize) -> bool {
+    for (i, (p, v)) in clo.code.params.iter().zip(w.iter_mut()).enumerate() {
+        let Some(ty) = &p.ty else { continue };
+        if p.variadic {
+            return false;
+        }
+        if i >= argc || v.is_undef() || crate::sites::ClassMemo::quick(clo.type_memo.get(i), ty, v) {
+            continue;
+        }
+        match ty.widened(v) {
+            Some(f) => *v = f,
+            None => return false,
+        }
+    }
+    true
+}
+
 impl Context<'_> {
     /// What method `m` runs.
     /// Whether method `lower` of `class` takes argument `n` by reference
@@ -1775,17 +1799,21 @@ impl Context<'_> {
         if ty.quick(v) {
             return Ok(Ok(None));
         }
+        // An int for a float (either mode): no scope or class needed.
+        if let Some(f) = ty.widened(v) {
+            return Ok(Ok(Some(f)));
+        }
         // `callable`: whether the code checking can call it (zend_is_callable).
         let callable = ty.mask & p8_runtime::types::T_CALLABLE != 0
             && matches!(v.deref().kind(), Kind::Str | Kind::Array | Kind::Object)
             && self.why_not_callable(v, true)?.is_none();
-        let (scope, called) = self.frames.last().map_or((None, None), |f| (f.scope.as_deref(), f.called_class().map(|c| &**c)));
+        let scope = self.frames.last().and_then(|f| f.scope.as_deref());
         let is_a = |o: &Object, name: &[u8]| match name {
             b"self" => scope.is_some_and(|s| o.class.is_a(&s.lower)),
             b"parent" => scope.and_then(|s| s.parent.as_ref()).is_some_and(|p| o.class.is_a(&p.lower)),
             n => o.class.is_a(n),
         };
-        let static_ok = |o: &Object| called.is_some_and(|c| o.class.is_a(&c.lower));
+        let static_ok = |o: &Object| self.of_called_class(o);
         let verdict = ty.verify(v, strict, &is_a, &static_ok, callable);
         Ok(match verdict {
             p8_runtime::types::Verdict::Accepted(c) => Ok(c),
@@ -1796,6 +1824,13 @@ impl Context<'_> {
             }
             p8_runtime::types::Verdict::Refused => Err(()),
         })
+    }
+
+    /// `static` of `o`: whether it is an instance of the running frame's
+    /// called class (that class itself first, by address).
+    #[inline]
+    pub(crate) fn of_called_class(&self, o: &Object) -> bool {
+        self.frames.last().and_then(|f| f.called_class()).is_some_and(|c| Rc::ptr_eq(&o.class, c) || o.class.is_a(&c.lower))
     }
 
     /// How messages name the running function: `f`, `A::m`, `{closure}`.

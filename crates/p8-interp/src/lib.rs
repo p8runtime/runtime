@@ -1536,6 +1536,22 @@ impl Context<'_> {
     /// and destructors it made due.
     #[inline(never)]
     fn went(&mut self, regs: &mut Vec<Value>, at: usize, ran: Result<Next, Throw>) -> Result<Flow, Throw> {
+        // The common answer, the next pc with nothing raised or due:
+        // here, with no frame of its own (`went_rest` the others).
+        if let Ok(Next::Go(next)) = ran
+            && self.fiber_suspended.is_none()
+            && self.pending_errors.is_empty()
+            && !self.ids.has_pending()
+        {
+            return Ok(Flow::Go(next));
+        }
+        self.went_rest(regs, at, ran)
+    }
+
+    /// `went` for the rest: a frame switch, a fiber suspended, an
+    /// exception, an autoload, errors or destructors due.
+    #[inline(never)]
+    fn went_rest(&mut self, regs: &mut Vec<Value>, at: usize, ran: Result<Next, Throw>) -> Result<Flow, Throw> {
         let mut pc = at;
         match ran {
             Ok(Next::Go(next)) => {
@@ -3376,6 +3392,11 @@ impl Context<'_> {
     pub(crate) fn verify_return_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, at: usize, (a, none): (Reg, bool)) -> Result<Next, Throw> {
         let func = &*clo.code;
         if let Some(ty) = func.ret_type.as_ref().filter(|_| !func.is_generator) {
+            // `static` of the called class's object (a fluent `return
+            // $this`): accepted in place, no copy or full check.
+            if ty.mask & p8_runtime::types::T_STATIC != 0 && Self::val(&regs[base..base + func.nregs as usize], clo, a).as_object().is_some_and(|o| self.of_called_class(o)) {
+                return Ok(Next::Go(at + 1));
+            }
             let v = self.operand(&regs[base..base + func.nregs as usize], clo, a);
             match self.check_type(ty, &v, func.strict)? {
                 Ok(Some(converted)) => regs[base + a as usize] = converted,
@@ -4155,8 +4176,10 @@ impl Context<'_> {
     /// class's test, a variadic's, the TypeErrors. `step` runs it, and the
     /// loop's VerifyArgs arm when an argument is not plainly of its type.
     #[inline(never)]
-    pub(crate) fn verify_args_ops(&mut self, regs: &mut Vec<Value>, _clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
-        self.verify_args(regs, base, argc)?;
+    pub(crate) fn verify_args_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
+        if !classes::args_widened(&mut regs[base..], clo, argc) {
+            self.verify_args(regs, base, argc)?;
+        }
         Ok(Next::Go(at + 1))
     }
 

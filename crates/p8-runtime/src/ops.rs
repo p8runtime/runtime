@@ -117,6 +117,13 @@ impl BinOp {
 
 /// `a op b`.
 pub fn binary(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Value, OpError> {
+    // Two floats added, subtracted or multiplied (a float property's
+    // `+=`): `arithmetic`'s float case, with nothing to convert or report.
+    if let (Some(x), Some(y)) = (a.as_float(), b.as_float())
+        && let Some(r) = float_plain(op, x, y)
+    {
+        return Ok(Value::float(r));
+    }
     if let Some(cell) = a.as_reference() {
         return binary(op, &cell.borrow(), b, diags);
     }
@@ -271,11 +278,9 @@ fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
         },
         (x, y) => {
             let (x, y) = (as_f64(x), as_f64(y));
-            Value::float(match op {
-                BinOp::Add => x + y,
-                BinOp::Sub => x - y,
-                BinOp::Mul => x * y,
-                BinOp::Div => {
+            Value::float(match (float_plain(op, x, y), op) {
+                (Some(r), _) => r,
+                (None, BinOp::Div) => {
                     if y == 0.0 {
                         return Err(OpError::DivisionByZero("Division by zero"));
                     }
@@ -285,6 +290,18 @@ fn arithmetic(op: BinOp, a: &Value, b: &Value, diags: &mut Diags) -> Result<Valu
             })
         }
     })
+}
+
+/// `x op y` in floats for the operators whose result needs no test
+/// (+, -, *); None for / and **.
+#[inline(always)]
+fn float_plain(op: BinOp, x: f64, y: f64) -> Option<f64> {
+    match op {
+        BinOp::Add => Some(x + y),
+        BinOp::Sub => Some(x - y),
+        BinOp::Mul => Some(x * y),
+        _ => None,
+    }
 }
 
 fn as_f64(n: Number) -> f64 {

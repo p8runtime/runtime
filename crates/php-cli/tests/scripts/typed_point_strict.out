@@ -1,0 +1,16 @@
+float(295)
+float(1)
+float(2)
+float(3)
+array(2) {
+  [0]=>
+  float(4)
+  [1]=>
+  float(5.5)
+}
+float(6)
+float(3)
+TypeError: f_float(): Argument #1 ($x) must be of type float, string given
+TypeError: f_bool(): Argument #1 ($x) must be of type float|bool, string given
+TypeError: f_two(): Argument #2 ($b) must be of type float, string given
+TypeError: f_var(): Argument #2 must be of type float, true given
