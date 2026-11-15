@@ -1,0 +1,113 @@
+a:2:{i:0;i:1;i:1;R:2;}
+9
+a:3:{s:1:"p";i:5;s:1:"q";a:2:{i:0;R:2;s:1:"r";i:5;}s:1:"s";a:1:{i:0;a:1:{i:0;R:2;}}}
+changed changed 5
+a:2:{i:0;a:2:{i:0;i:1;i:1;i:2;}i:1;a:2:{i:0;R:3;i:1;i:2;}}
+a:6:{i:0;s:1:"m";i:1;s:1:"x";i:2;s:1:"n";i:3;a:3:{i:0;b:1;i:1;N;i:2;d:1.5;}i:4;R:2;i:5;R:4;}
+a:4:{i:0;i:1;i:1;R:2;i:2;O:8:"stdClass":0:{}i:3;r:3;}
+a:3:{i:0;O:8:"stdClass":1:{s:1:"v";i:1;}i:1;R:2;i:2;r:2;}
+a:2:{i:0;O:8:"stdClass":1:{s:1:"v";i:1;}i:1;R:2;}
+bool(true)
+string(8) "replaced"
+a:4:{i:0;O:8:"stdClass":0:{}i:1;r:2;i:2;O:8:"stdClass":1:{s:4:"name";s:1:"q";}i:3;r:4;}
+bool(true)
+bool(true)
+bool(true)
+string(1) "q"
+O:4:"Pair":2:{s:1:"a";i:1;s:1:"b";R:2;}
+2
+a:1:{i:0;a:1:{i:0;R:2;}}
+bool(true)
+a:2:{i:0;i:1;i:1;i:2;}
+a:2:{i:0;a:2:{i:0;i:1;i:1;i:2;}i:1;a:2:{i:0;i:1;i:1;i:2;}}
+a:2:{i:0;O:4:"Data":3:{s:1:"x";s:1:"v";s:1:"y";R:3;s:1:"z";i:1;}i:1;s:5:"after";}
+set
+O:6:"Sleepy":3:{s:1:"a";s:1:"a";s:1:"b";R:2;s:1:"c";s:1:"c";}
+A
+array(3) {
+  [0]=>
+  &string(1) "x"
+  [1]=>
+  &string(1) "x"
+  [2]=>
+  &string(1) "x"
+}
+8
+string(9) "no object"
+
+Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 125
+bool(false)
+array(2) {
+  [0]=>
+  object(stdClass)#7 (0) {
+  }
+  [1]=>
+  object(stdClass)#7 (0) {
+  }
+}
+
+Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 127
+bool(false)
+
+Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 128
+bool(false)
+
+Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 129
+bool(false)
+object(stdClass)#7 (1) {
+  ["p"]=>
+  &int(2)
+}
+array(3) {
+  [0]=>
+  object(stdClass)#6 (0) {
+  }
+  [1]=>
+  &object(stdClass)#6 (0) {
+  }
+  [2]=>
+  &object(stdClass)#6 (0) {
+  }
+}
+array(2) {
+  [5]=>
+  &array(0) {
+  }
+  [1]=>
+  &array(0) {
+  }
+}
+int(2)
+string(1) "a"
+string(1) "a"
+bool(true)
+int(1)
+int(1)
+bool(true)
+
+Warning: unserialize(): Error at offset 4 of 4 bytes in %s on line 141
+bool(false)
+
+Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 142
+bool(false)
+
+Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 143
+bool(false)
+
+Warning: unserialize(): Error at offset 17 of 23 bytes in %s on line 144
+bool(false)
+
+Warning: unserialize(): Error at offset 17 of 21 bytes in %s on line 145
+bool(false)
+
+Warning: unserialize(): Error at offset 21 of 26 bytes in %s on line 146
+bool(false)
+
+Warning: unserialize(): Error at offset 25 of 26 bytes in %s on line 147
+bool(false)
+array(2) {
+  [0]=>
+  string(4) "R:1;"
+  [1]=>
+  string(2) "R:"
+}
