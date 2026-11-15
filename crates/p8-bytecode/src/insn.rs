@@ -653,7 +653,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         Instr::ToBool { dst, src } => i(Op::ToBool, dst, src, 0, 0),
         Instr::IssetVar { dst, var } => i(Op::IssetVar, dst, var, 0, 0),
         Instr::JumpIfSet { src, dst, target } => i(Op::JumpIfSet, src, dst, 0, target),
-        Instr::NewArray { dst, n } => i(Op::NewArray, dst, 0, 0, u32::from(n)),
+        Instr::NewArray { dst, n } => i(Op::NewArray, dst, 0, 0, u32::try_from(crate::new_array_room(n)).ok()?),
         Instr::ArrayPush { arr, val, take: t } => match k(val) {
             Some(kk) => i(Op::ArrayPushC, arr, 0, 0, kk),
             None => i(Op::ArrayPush, arr, val, 0, take(t)),

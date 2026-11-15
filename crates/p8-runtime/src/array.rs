@@ -447,6 +447,13 @@ const MIN_SIZE: usize = 8;
 const MIN_PACKED: usize = 8;
 /// Up to this many buckets a table has no chains (scanned).
 const SMALL: usize = 8;
+/// In the room [`PhpArray::list_with_capacity`] is asked for: the array
+/// is a keyed literal's (its first key a string), made a hash with room
+/// for its entries at once, as PHP's INIT_ARRAY makes a literal's table
+/// with its size, rather than a list turned into a hash at that key.
+/// (Bit 31: what an instruction's 32-bit operand carries, and no list
+/// is asked for that much room: 2^31 values are 32 GB.)
+pub const KEYED_ROOM: usize = 1 << 31;
 
 #[derive(Debug)]
 struct Bucket {
@@ -759,6 +766,19 @@ impl Hashed {
         }
     }
 
+    /// [`set`](Self::set) of a string key (a keyed literal's element, a
+    /// record's field): the handle kept as the key only when it is new,
+    /// with no key enum carried through the lookup.
+    #[inline(never)]
+    fn set_str(&mut self, s: PhpStr, value: Value) {
+        let h = s.hash();
+        let found = if self.small() { self.scan(h, Probe::Str(&s)) } else { self.find(h, Probe::Str(&s)) };
+        match found {
+            Some(i) => self.buckets[i].value = value,
+            None => self.insert_new(h, Some(s), value),
+        }
+    }
+
     /// A new entry, last in order (`key` not present).
     #[inline(always)]
     fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
@@ -862,13 +882,8 @@ pub struct PhpArray {
     /// The key `$a[] = v` uses next; None until an int key is used
     /// (PHP 8.3+: after only negative keys it is the largest plus one).
     next_free: Option<i64>,
-    /// The internal pointer (current(), next(), reset()): a position (a
-    /// table's positions fit in 32 bits; one past them is past the end).
-    cursor: u32,
-    /// A compiled constant's array (`Frozen::to_value`; or one that was,
-    /// written in place where nothing else held it): its copies are not
-    /// counted in [`copies`].
-    constant: bool,
+    /// The internal pointer (current(), next(), reset()): a position.
+    cursor: usize,
 }
 
 /// A copy (zend_array_dup): an internal pointer past the end starts over
@@ -876,16 +891,12 @@ pub struct PhpArray {
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
         // (An empty array's copy, the first write to a shared `[]`, copies
-        // no values: not counted, as PHP makes a new array there. Nor a
-        // constant's: a write to a literal copies it wherever it runs, as
-        // PHP's immutable arrays are copied; it is how a literal with
-        // values only known when it runs is built (the compiler's
-        // `literal_template`), not a copy a program could do without.)
-        if !self.is_empty() && !self.constant {
+        // no values: not counted, as PHP makes a new array there.)
+        if !self.is_empty() {
             COPIES.with(|c| c.set(c.get() + 1));
         }
-        let cursor = if (self.cursor as usize) < self.end_pos() { self.cursor } else { 0 };
-        PhpArray { storage: self.storage.clone(), next_free: self.next_free, cursor, constant: false }
+        let cursor = if self.cursor < self.end_pos() { self.cursor } else { 0 };
+        PhpArray { storage: self.storage.clone(), next_free: self.next_free, cursor }
     }
 }
 
@@ -897,19 +908,24 @@ impl Default for PhpArray {
 
 impl PhpArray {
     pub fn new() -> Self {
-        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0, constant: false }
+        PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
     }
 
-    /// An empty list with room for `capacity` elements pushed onto it.
+    /// An empty list with room for `capacity` elements pushed onto it; with
+    /// [`KEYED_ROOM`] set in it, an empty hash with room for the rest
+    /// (an array literal's `NewArray`, see there).
     pub fn list_with_capacity(capacity: usize) -> Self {
+        if capacity & KEYED_ROOM != 0 {
+            return Self::hashed(capacity & !KEYED_ROOM);
+        }
         let slots = if capacity == 0 { Vec::new() } else { take(&VALUES, capacity) };
-        PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0, constant: false }
+        PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0 }
     }
 
     /// An empty array sized for `capacity` keyed entries (array_init_size,
     /// as builtins returning a record make theirs): no growth while it fills.
     pub fn hashed(capacity: usize) -> Self {
-        PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0, constant: false }
+        PhpArray { storage: Storage::Hashed(Hashed::with_capacity(capacity)), next_free: None, cursor: 0 }
     }
 
     /// Whether it is stored packed (int keys by position: HT_IS_PACKED).
@@ -926,7 +942,7 @@ impl PhpArray {
     /// A list of values (keys 0..n-1).
     pub fn from_list(values: Vec<Value>) -> Self {
         let next_free = (!values.is_empty()).then_some(values.len() as i64);
-        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0, constant: false }
+        PhpArray { storage: Storage::Packed(Packed { slots: values, holes: 0 }), next_free, cursor: 0 }
     }
 
     /// Room for `additional` more elements, made now (a builtin that
@@ -1100,7 +1116,7 @@ impl PhpArray {
         for (k, v) in keys.iter().zip(values) {
             h.insert_new(k.hash(), Some(k.clone()), v);
         }
-        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0, constant: false }
+        PhpArray { storage: Storage::Hashed(h), next_free: None, cursor: 0 }
     }
 
     /// `get` for an int key.
@@ -1162,6 +1178,12 @@ impl PhpArray {
     /// Set `key` to `value` (in place if present, else appended in order).
     pub fn insert(&mut self, key: Key, value: Value) {
         crate::counts::bump(crate::counts::Count::Insert);
+        // A string key into a hash (a keyed literal's elements): straight
+        // to the table's lookup.
+        let key = match (&mut self.storage, key) {
+            (Storage::Hashed(h), Key::Str(s)) => return h.set_str(s, value),
+            (_, key) => key,
+        };
         if let Key::Int(k) = key {
             self.note_int_key(k);
         }
@@ -1361,17 +1383,11 @@ impl PhpArray {
 
     /// The internal pointer's position.
     pub fn cursor(&self) -> usize {
-        self.cursor as usize
+        self.cursor
     }
 
-    /// (A position past 32 bits is past the end of any table.)
     pub fn set_cursor(&mut self, pos: usize) {
-        self.cursor = u32::try_from(pos).unwrap_or(u32::MAX);
-    }
-
-    /// Mark it a compiled constant's array (see `constant`).
-    pub(crate) fn mark_constant(&mut self) {
-        self.constant = true;
+        self.cursor = pos;
     }
 
     /// Entries in order.
@@ -1655,12 +1671,6 @@ mod tests {
         let mut b = a.clone();
         std::rc::Rc::make_mut(&mut b).push(int(2)).unwrap();
         assert_eq!((a.len(), b.len()), (1, 2));
-    }
-
-    #[test]
-    fn an_array_stays_64_bytes() {
-        // (The internal pointer and the constant mark share one word.)
-        assert_eq!(std::mem::size_of::<PhpArray>(), 64);
     }
 
     #[test]

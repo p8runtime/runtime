@@ -50,6 +50,22 @@ pub fn const_operand(k: usize) -> Reg {
     CONST_OPERAND | k as Reg
 }
 
+/// `NewArray`'s `n` bit: a keyed literal's array (a hash), its entries
+/// in the low 15 bits.
+pub const NEW_ARRAY_KEYED: u16 = 1 << 15;
+
+/// The room `NewArray { n }` asks `PhpArray::list_with_capacity` for (the
+/// loop's arm, given it as the instruction's operand, and `step` alike):
+/// `n` elements, or with [`NEW_ARRAY_KEYED`] the array's keyed room
+/// (`p8_runtime::array::KEYED_ROOM`) for the entries in the rest.
+pub fn new_array_room(n: u16) -> usize {
+    if n & NEW_ARRAY_KEYED != 0 {
+        p8_runtime::array::KEYED_ROOM | usize::from(n & !NEW_ARRAY_KEYED)
+    } else {
+        usize::from(n)
+    }
+}
+
 /// The `obj` operand of a property access (FetchProp, AssignProp,
 /// AssignPropOp, PropIncDec) that is the running method's `$this`, read
 /// from its frame: no register holds a copy (PHP's UNUSED op1 where
@@ -195,7 +211,9 @@ pub enum Instr {
     /// `a ?? b`: if `src` is set and not null, dst = it and jump
     JumpIfSet { src: Reg, dst: Reg, target: u32 },
     /// An empty array; `n` elements are about to be pushed onto it (a
-    /// list literal's), so it is made with room for them.
+    /// list literal's), so it is made with room for them. With
+    /// [`NEW_ARRAY_KEYED`] set in `n`: a keyed literal's (its first key a
+    /// string), made a hash with room for the rest (see [`new_array_room`]).
     NewArray { dst: Reg, n: u16 },
     /// arr[] = val (array literal building). `take`: `val` is a temporary
     /// read here for the last time, so its value is moved into the array

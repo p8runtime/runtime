@@ -1,8 +1,8 @@
 <?php
-// Array literals with literal keys and values only known when they run:
-// built as a copy of the literal's shape with those values written in.
-// Order, keys, copy-on-write and warnings must be what building the
-// array element by element gives.
+// Array literals with literal keys and values only known when they run
+// (a first string key: the array is a hash from the start, its small
+// tables kept for the next one). Order, keys, copy-on-write, warnings
+// and when objects in them go must be PHP's.
 
 class D {
     public function __construct(public int $n) {}
