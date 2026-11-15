@@ -1859,7 +1859,7 @@ impl Context<'_> {
                         pc = target as usize;
                     }
                 }
-                Instr::NewArray { dst, n } => reg!(dst) = Value::array(PhpArray::list_with_capacity(n as usize)),
+                Instr::NewArray { dst, n } => reg!(dst) = Value::array(PhpArray::list_with_capacity(p8_bytecode::new_array_room(n))),
                 Instr::ArrayPush { arr, val, take } => {
                     let v = self.operand_take(w, clo, val, take);
                     if let Some(a) = reg!(arr).array_mut()
