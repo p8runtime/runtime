@@ -63,8 +63,11 @@ $u = unserialize($s);
 var_dump($u[0] === $u[1], $u[2] === $u[3], $u[0] !== $u[2], $u[3]->name);
 
 // A property referring to another.
-$o = new stdClass;
-$o->a = 1;
+class Pair {
+    public $a = 1;
+    public $b;
+}
+$o = new Pair;
 $o->b = &$o->a;
 show($o);
 $u = unserialize(serialize($o));
@@ -129,8 +132,12 @@ $u[1] = 2;
 var_dump($u[0]);
 var_dump(unserialize('a:3:{i:0;O:8:"stdClass":0:{}i:1;r:2;i:2;R:3;}'));
 var_dump(unserialize('a:2:{i:5;a:0:{}i:1;R:2;}'));
-var_dump(unserialize('a:2:{i:0;s:1:"a";i:1;R:1;}'));
-var_dump(unserialize('a:1:{i:0;R:1;}'));
+// A reference to the array being read (shown by its parts: the array
+// holds itself).
+$u = unserialize('a:2:{i:0;s:1:"a";i:1;R:1;}');
+var_dump(count($u), $u[0], $u[1][1][1][0], is_array($u[1][1][1][1]));
+$u = unserialize('a:1:{i:0;R:1;}');
+var_dump(count($u), count($u[0][0][0]), is_array($u[0][0][0][0]));
 var_dump(unserialize('R:1;'));
 var_dump(unserialize('a:1:{R:1;i:1;}'));
 var_dump(unserialize('a:1:{r:1;i:1;}'));

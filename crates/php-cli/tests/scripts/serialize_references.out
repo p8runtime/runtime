@@ -14,7 +14,7 @@ bool(true)
 bool(true)
 bool(true)
 string(1) "q"
-O:8:"stdClass":2:{s:1:"a";i:1;s:1:"b";R:2;}
+O:4:"Pair":2:{s:1:"a";i:1;s:1:"b";R:2;}
 2
 a:1:{i:0;a:1:{i:0;R:2;}}
 bool(true)
@@ -35,7 +35,7 @@ array(3) {
 8
 string(9) "no object"
 
-Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 122
+Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 125
 bool(false)
 array(2) {
   [0]=>
@@ -46,13 +46,13 @@ array(2) {
   }
 }
 
-Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 124
+Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 127
 bool(false)
 
-Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 125
+Warning: unserialize(): Error at offset 13 of 14 bytes in %s on line 128
 bool(false)
 
-Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 126
+Warning: unserialize(): Error at offset 21 of 22 bytes in %s on line 129
 bool(false)
 object(stdClass)#7 (1) {
   ["p"]=>
@@ -77,36 +77,33 @@ array(2) {
   &array(0) {
   }
 }
-array(2) {
-  [0]=>
-  string(1) "a"
-  [1]=>
-  *RECURSION*
-}
-array(1) {
-  [0]=>
-  *RECURSION*
-}
+int(2)
+string(1) "a"
+string(1) "a"
+bool(true)
+int(1)
+int(1)
+bool(true)
 
-Warning: unserialize(): Error at offset 4 of 4 bytes in %s on line 134
+Warning: unserialize(): Error at offset 4 of 4 bytes in %s on line 141
 bool(false)
 
-Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 135
+Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 142
 bool(false)
 
-Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 136
+Warning: unserialize(): Error at offset 9 of 14 bytes in %s on line 143
 bool(false)
 
-Warning: unserialize(): Error at offset 17 of 23 bytes in %s on line 137
+Warning: unserialize(): Error at offset 17 of 23 bytes in %s on line 144
 bool(false)
 
-Warning: unserialize(): Error at offset 17 of 21 bytes in %s on line 138
+Warning: unserialize(): Error at offset 17 of 21 bytes in %s on line 145
 bool(false)
 
-Warning: unserialize(): Error at offset 21 of 26 bytes in %s on line 139
+Warning: unserialize(): Error at offset 21 of 26 bytes in %s on line 146
 bool(false)
 
-Warning: unserialize(): Error at offset 25 of 26 bytes in %s on line 140
+Warning: unserialize(): Error at offset 25 of 26 bytes in %s on line 147
 bool(false)
 array(2) {
   [0]=>
