@@ -122,6 +122,8 @@ echo "method closure: ", implode(',', array_map($b->scaled(...), [0])[0]), "\n";
 echo "static closure: ", implode(',', array_map(SubBox::made(...), [0])[0]), "\n";
 echo "builtin closure: ", implode(',', array_map(strlen(...), ['ab', 'cde'])), "\n";
 echo "trampoline closure: ", implode(' ', array_map((new Magic)->missing(...), [1, 2])), "\n";
+echo "trampoline two: ", implode(' ', array_map((new Magic)->pair(...), [1, 2], [3, 4])), "\n";
+echo "trampoline sort: ", implode(',', (function () { $l = [3, 1, 2]; usort($l, (new Magic)->cmp(...)); return $l; })()), "\n";
 echo "trampoline array: ", implode(' ', array_map([new Magic, 'missing'], [3])), "\n";
 echo "static trampoline: ", implode(' ', array_map(Magic::gone(...), [4])), "\n";
 echo "fromCallable trampoline: ", implode(' ', array_map(Closure::fromCallable([new Magic, 'other']), [5, 6])), "\n";
