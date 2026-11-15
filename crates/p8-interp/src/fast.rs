@@ -85,11 +85,19 @@ impl Context<'_> {
             // pointer, not a pc and the code's address and length. (The
             // pc is computed from it where something reads it: `pc!`.)
             let mut it = code[resume..].iter();
-            // The pc of the instruction running (the one the dispatch took
-            // last), until the arm moves `it` (`goto!`, `skip!`).
+            // Where `it` is: the pc of the instruction the dispatch takes
+            // next ...
+            macro_rules! next {
+                () => {
+                    code.len() - it.len()
+                };
+            }
+            // ... and so the pc of the instruction running (the one the
+            // dispatch took last), until the arm moves `it` (`goto!`,
+            // `skip!`).
             macro_rules! pc {
                 () => {
-                    code.len() - it.len() - 1
+                    next!() - 1
                 };
             }
             // On at instruction `$t` (a jump, a call's return address).
@@ -109,7 +117,7 @@ impl Context<'_> {
             // `step` then raises it.
             macro_rules! back {
                 ($target:expr) => {
-                    $target as usize <= pc!() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                    ($target as usize) < next!() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
                 };
             }
             // The instruction at the pc (or at `$at`) is `slow`'s
@@ -951,14 +959,11 @@ impl Context<'_> {
                         } else {
                             Some(s.clone())
                         };
-                        match v {
-                            Some(v) => {
-                                if put(&mut w[rx!(b)], v) && ids.has_pending() {
-                                    pending_at!(imm as usize, pc!());
-                                }
-                                goto!(imm);
+                        if let Some(v) = v {
+                            if put(&mut w[rx!(b)], v) && ids.has_pending() {
+                                pending_at!(imm as usize, pc!());
                             }
-                            None => {}
+                            goto!(imm);
                         }
                     }
                     // An array literal: the empty array, then its elements
