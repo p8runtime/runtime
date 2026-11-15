@@ -1,0 +1,181 @@
+v0 7 v0x v0 0 v0 t0 t0 v0
+v1 7 v1x v1 2 v1 t1 t1 v1
+v2 7 v2x v2 4 v2 t2 t2 v2
+v3 7 v3x v3 6 v3 t3 t3 v3
+P1 {"a":"A0"}
+P6 {"a":"A1","b":"b2","c":"c3","d":"D1","e":"e5","f":"f6"}
+P4 {"a":"A2","b":"b2","c":"c3","d":"D2"}
+Q6 {"f":"qf","e":"qe","d":"D3","c":"qc","b":"qb","a":"A3"}
+P5 {"a":"A4","b":"b2","c":"c3","d":"D4","e":"e5"}
+P2 {"a":"A5","b":"b2"}
+P6 {"a":"A6","b":"b2","c":"c3","d":"D6","e":"e5","f":"f6"}
+Q6 {"f":"qf","e":"qe","d":"D7","c":"qc","b":"qb","a":"A7"}
+P3 {"a":"A8","b":"b2","c":"c3"}
+P1 {"a":"A9"}
+P4 {"a":"A10","b":"b2","c":"c3","d":"D10"}
+after register write 0
+destruct by register 0
+after register write 1
+destruct by register 1
+after register write 2
+destruct by register 2
+after this write 0
+destruct by this 0
+after this write 1
+destruct by this 1
+after this write 2
+destruct by this 2
+kept still here
+xxxxxy
+destruct kept
+after unset kept
+after used write
+destruct used result
+ref 0 ref 10
+ref 1 ref 11
+ref 2 ref 12
+after unset ref
+1 0 1 
+global 1
+undefined 0: 0
+undefined 1: 1
+
+Warning: Undefined variable $undef in %s on line 148
+undefined 2: null
+undefined 3: 3
+int 1: ok
+this int 1: ok
+string 1: ok
+float 1: ok
+[1,"1",1,1]
+int 2: ok
+this int 2: ok
+string 2: ok
+float 2: ok
+[2,"2",2,2]
+int "3": ok
+this int "3": ok
+string "3": ok
+float "3": ok
+[3,"3",3,"3"]
+int 4: ok
+this int 4: ok
+string 4: ok
+float 4: ok
+[4,"4",4,4]
+int true: ok
+this int true: ok
+string true: ok
+float true: ok
+[1,"1",1,true]
+int "nope": TypeError: Cannot assign string to property T::$i of type int
+this int "nope": TypeError: Cannot assign string to property T::$i of type int
+string "nope": ok
+float "nope": TypeError: Cannot assign string to property T::$f of type float
+[1,"nope",1,"nope"]
+int 5: ok
+this int 5: ok
+string 5: ok
+float 5: ok
+[5,"5",5,5]
+int null: TypeError: Cannot assign null to property T::$i of type int
+this int null: TypeError: Cannot assign null to property T::$i of type int
+string null: ok
+float null: TypeError: Cannot assign null to property T::$f of type float
+[5,null,5,null]
+int [1]: TypeError: Cannot assign array to property T::$i of type int
+this int [1]: TypeError: Cannot assign array to property T::$i of type int
+string [1]: TypeError: Cannot assign array to property T::$s of type ?string
+float [1]: TypeError: Cannot assign array to property T::$f of type float
+[5,null,5,[1]]
+int 6: ok
+this int 6: ok
+string 6: ok
+float 6: ok
+[6,"6",6,6]
+uninit read 0: Error: Typed property T::$uninit must not be accessed before initialization
+int(40)
+uninit read 1: Error: Typed property T::$uninit must not be accessed before initialization
+int(41)
+uninit read 2: Error: Typed property T::$uninit must not be accessed before initialization
+int(42)
+readonly again 0: Error: Cannot modify readonly property RO::$m
+readonly outside 0: Error: Cannot modify readonly property RO::$m
+m0 0
+readonly again 1: Error: Cannot modify readonly property RO::$m
+readonly outside 1: Error: Cannot modify readonly property RO::$m
+m1 1
+readonly again 2: Error: Cannot modify readonly property RO::$m
+readonly outside 2: Error: Cannot modify readonly property RO::$m
+m2 2
+set visibility outside 0: Error: Cannot modify private(set) property AV::$p from global scope
+inside 0 inside 0
+set visibility outside 1: Error: Cannot modify private(set) property AV::$p from global scope
+set visibility child 1: Error: Cannot modify private(set) property AV::$p from scope AVChild
+inside 1 child 1
+set visibility outside 2: Error: Cannot modify private(set) property AV::$p from global scope
+inside 2 inside 2
+write 0
+write 1
+__set p = "write 2"
+__get p
+__set p = "write 3"
+__get p
+write 0
+unset
+write 1
+unset
+write 2
+unset
+write 3
+unset
+NoMagic turn 0
+__set p = "turn 1"
+Magic __get p
+NoMagic turn 2
+Magic turn 3
+NoMagic turn 4
+hook set hooked 0
+plain 0 HOOKED 0
+hook set hooked 1
+plain 1 HOOKED 1
+hook set hooked 2
+plain 2 HOOKED 2
+
+Deprecated: Creation of dynamic property Dyn::$extra is deprecated in %s on line 271
+extra again 0 std 0
+
+Deprecated: Creation of dynamic property Dyn::$extra is deprecated in %s on line 271
+extra again 1 std 1
+
+Deprecated: Creation of dynamic property Dyn::$extra is deprecated in %s on line 271
+extra again 2 std 2
+Base Base loose 0 / -
+Child Child base secret / loose 1
+Base Child loose 2 / loose 1
+Base Base loose 3 / -
+Child Child loose 2 / loose 4
+outside 0: Error: Cannot access private property Base::$secret
+Base method 0 / -
+outside 1: Error: Cannot access private property Child::$secret
+Child method 1 / mine 1
+outside 2: Error: Cannot access private property Child::$secret
+Child method 2 / mine 2
+outside 3: Error: Cannot access private property Base::$secret
+Base method 3 / -
+(L constructed) plain 2
+(L constructed) ghost: ghost 1 made y
+ghost: ghost 2
+(L constructed) proxy: proxy 1 made y
+(L constructed) inside: inside 1 made y
+plain again: plain 3
+through reference 0
+through reference 1
+through reference 2
+object: ok
+NULL: Error: Attempt to assign property "p" on null
+integer: Error: Attempt to assign property "p" on int
+string: Error: Attempt to assign property "p" on string
+array: Error: Attempt to assign property "p" on array
+object: ok
+end
