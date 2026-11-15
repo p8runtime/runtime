@@ -733,15 +733,28 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
         return None;
     }
     let slot = site.slot as usize;
+    Some((slot, plain_prop(o, slot, scope.1, v, reinit)?))
+}
+
+/// `plain_slot`'s tests of the property itself, for a write whose entry,
+/// object and value passed the others (the loop's write, on an entry
+/// that is no plain store's: `assign_prop`): untyped or plainly of its
+/// type, its readonly state and set visibility (`guarded_write`).
+#[inline(always)]
+pub(crate) fn plain_prop(o: &p8_runtime::object::Object, slot: usize, scope: Option<&Class>, v: &Value, reinit: bool) -> Option<Plain> {
     let prop = o.class.properties.get(slot)?;
     let mut plain = Plain::Any;
     if prop.readonly || prop.set_visibility.is_some() {
-        plain = guarded_write(prop, scope.1, reinit)?;
+        plain = guarded_write(prop, scope, reinit)?;
     }
-    if prop.ty_decl.as_ref().is_some_and(|t| !t.quick(v)) {
+    // (Not `is_some_and`: a build kept that a call, the arm's registers
+    // spilled around it.)
+    if let Some(t) = &prop.ty_decl
+        && !t.quick(v)
+    {
         return None;
     }
-    Some((slot, plain))
+    Some(plain)
 }
 
 /// What a plain write to a slot needs of the slot's state.

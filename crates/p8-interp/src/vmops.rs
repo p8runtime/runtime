@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::fast::{Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
-use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_slot, refill_prop};
+use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_prop, plain_slot, refill_prop};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -552,19 +552,26 @@ fn push_ref(var: &Value, v: Value) -> bool {
 #[inline(always)]
 pub(crate) fn write_slot(o: &p8_runtime::object::Object, slot: usize, plain: Plain, v: &Value) -> bool {
     match o.slots().get(slot) {
-        Some(s)
-            if (o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 && plain == Plain::Any)
-                || {
-                    let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
-                    if plain == Plain::Unset { unset && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0 } else { !unset }
-                } =>
-        {
+        Some(s) if slot_writable(o, s, plain) => {
             let mut cur = s.replace(Value::UNDEF);
             let _ = put_var(&mut cur, v.clone());
             p8_runtime::object::put_slot(s, cur);
             true
         }
         _ => false,
+    }
+}
+
+/// Whether slot `s` of `o` may take a write `plain_prop` found plain
+/// (`plain`): any slot of a class without __set and its kin; else a set
+/// one (an unset one may be theirs); a readonly property's first write,
+/// an unset slot of a class without them.
+#[inline(always)]
+pub(crate) fn slot_writable(o: &p8_runtime::object::Object, s: &std::cell::Cell<Value>, plain: Plain) -> bool {
+    let magic = o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS != 0;
+    (!magic && plain == Plain::Any) || {
+        let unset = p8_runtime::object::Slot::peek(s, Value::is_undef);
+        if plain == Plain::Unset { unset && !magic } else { !unset }
     }
 }
 
@@ -655,12 +662,14 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
     };
     let v = hx.v::<S::Val>(val);
     let e = entry.get();
-    let mut released = if e.plain_write == Rc::as_ptr(&o.class) as usize
-        && (e.scope == 0 || e.scope == hx.scope())
-        && o.lazy.get() == 0
-        && !v.is_undef()
-        && !v.is_reference()
-        && let Some(cell) = o.slot_at(e.slot as usize)
+    let class = Rc::as_ptr(&o.class) as usize;
+    let cell = if e.class == class && (e.scope == 0 || e.scope == hx.scope()) && o.lazy.get() == 0 && !v.is_undef() && !v.is_reference() {
+        o.slot_at(e.slot as usize)
+    } else {
+        None
+    };
+    let mut released = if let Some(cell) = cell
+        && (e.plain_write == class || plain_prop(o, e.slot as usize, hx.top.scope.as_deref(), v, hx.reinit).is_some_and(|plain| slot_writable(o, cell, plain)))
     {
         store_slot(cell, v.clone())
     } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {
@@ -720,15 +729,13 @@ fn store_through(cell: &std::cell::Cell<Value>, reference: Value) -> bool {
     released
 }
 
-/// `assign_prop` when the entry's plain store does not apply: the entry
-/// filled again for a class or scope it has not seen (`refill_prop`), and
-/// the write made when `plain_slot` finds it one with nothing to report
-/// (a typed property's value plainly of its type, a readonly property's
-/// first write from its class, a set visibility its class passes, a set
-/// slot of a class with __set). False: nothing written (the cold path's).
-/// Inline: a typed property's write is common (Laravel's), and a call
-/// for it cost more than the tests (+0.9% Laravel execution out of line).
-#[inline(always)]
+/// `assign_prop` when the entry does not answer for this object, scope or
+/// value: the entry filled again for a class or scope it has not seen
+/// (`refill_prop`), and the write made when `plain_slot` finds it one
+/// with nothing to report. False: nothing written (the cold path's). Out
+/// of line: the entry's own class and scope, the common case, never come
+/// here (a typed property's write among them: `plain_prop` in the arm).
+#[inline(never)]
 fn assign_prop_guarded(entry: &std::cell::Cell<PropSite>, o: &p8_runtime::object::Object, v: &Value, name: &Value, scope: Option<&Rc<Class>>, reinit: bool) -> bool {
     let at = (scope.map_or(0, |c| Rc::as_ptr(c) as usize), scope.map(|c| &**c));
     let found = match plain_slot(entry.get(), o, at, v, reinit) {
