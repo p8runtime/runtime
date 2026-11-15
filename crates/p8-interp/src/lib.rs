@@ -4155,8 +4155,10 @@ impl Context<'_> {
     /// class's test, a variadic's, the TypeErrors. `step` runs it, and the
     /// loop's VerifyArgs arm when an argument is not plainly of its type.
     #[inline(never)]
-    pub(crate) fn verify_args_ops(&mut self, regs: &mut Vec<Value>, _clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
-        self.verify_args(regs, base, argc)?;
+    pub(crate) fn verify_args_ops(&mut self, regs: &mut Vec<Value>, clo: &Closure, base: usize, argc: usize, at: usize) -> Result<Next, Throw> {
+        if !classes::args_widened(&mut regs[base..], clo, argc) {
+            self.verify_args(regs, base, argc)?;
+        }
         Ok(Next::Go(at + 1))
     }
 
