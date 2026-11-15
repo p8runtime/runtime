@@ -1,0 +1,152 @@
+-- names
+frames@14 < show@37
+#0 %s(37): show(1, 2)
+int(2)
+frames@14 < show@38
+#0 %s(38): show(1, 2, 3)
+int(3)
+frames@14 < show@39
+#0 %s(39): show()
+int(0)
+frames@14 < show@40
+#0 %s(40): show()
+int(0)
+-- methods
+frames@14 < show@21 < C->m@43
+#0 %s(21): show(1)
+#1 %s(43): C->m(1)
+string(2) "c1"
+frames@14 < show@21 < C->m@44
+#0 %s(21): show(1)
+#1 %s(44): C->m(1)
+string(2) "c1"
+frames@14 < show@22 < C::s@45
+#0 %s(22): show(1)
+#1 %s(45): C::s(1)
+string(2) "s1"
+frames@14 < show@22 < C::s@46
+#0 %s(22): show(1)
+#1 %s(46): C::s(1)
+string(2) "s1"
+frames@14 < show@21 < C->m@23 < C->viaThis@47
+#0 %s(21): show(2)
+#1 %s(23): C->m(2)
+#2 %s(47): C->viaThis()
+
+Deprecated: Use of "static" in callables is deprecated in %s on line 24
+frames@14 < show@22 < C::s@24 < C::viaStatic@47
+#0 %s(22): show(3)
+#1 %s(24): C::s(3)
+#2 %s(47): C::viaStatic()
+string(2) "c2"
+string(2) "s3"
+-- closures
+frames@14 < show@50 < {closure:%s:50}@50
+#0 %s(50): show(1)
+#1 %s(50): {closure:%s:50}(1)
+int(8)
+frames@14 < show@51 < {closure:%s:51}@51
+#0 %s(51): show(5)
+#1 %s(51): {closure:%s:51}(5)
+int(1)
+frames@14 < show@52
+#0 %s(52): show(9)
+int(1)
+-- nested
+frames@14 < show@55 < inner_fn@54 < outer@56
+#0 %s(55): show('in')
+#1 %s(54): inner_fn()
+#2 %s(56): outer()
+int(1)
+-- hooks
+frames@34 < filter_up@30 < Hooks->apply@62
+frames@14 < show@21 < C->m@30 < Hooks->apply@62
+#0 %s(21): show('X')
+#1 %s(30): C->m('X')
+#2 %s(62): Hooks->apply('X')
+string(4) "[cX]"
+-- builtins
+string(3) "ABC"
+string(4) "abab"
+ValueError: array_chunk(): Argument #2 ($length) must be greater than 0
+#0 %s(65): array_chunk(Array, 0)
+#1 %s(17): {closure:%s:65}()
+#2 %s(65): trace(Object(Closure))
+#3 {main}
+ValueError: array_chunk(): Argument #2 ($length) must be greater than 0
+#0 %s(66): array_chunk(Array, 0)
+#1 %s(17): {closure:%s:66}()
+#2 %s(66): trace(Object(Closure))
+#3 {main}
+-- exceptions
+Exception: thrown 1
+#0 %s(68): thrower(1)
+#1 %s(17): {closure:%s:68}()
+#2 %s(68): trace(Object(Closure))
+#3 {main}
+Exception: thrown 2
+#0 %s(69): thrower(2)
+#1 %s(17): {closure:%s:69}()
+#2 %s(69): trace(Object(Closure))
+#3 {main}
+ArgumentCountError: Too few arguments to function C::m(), 0 passed in %s on line 70 and exactly 1 expected
+#0 %s(70): C->m()
+#1 %s(17): {closure:%s:70}()
+#2 %s(70): trace(Object(Closure))
+#3 {main}
+#0 %s(71): thrower(3)
+#1 {main}
+-- errors
+call_user_func(): Argument #1 ($callback) must be a valid callback, function "nope" not found or invalid function name
+#0 {main}
+call_user_func_array(): Argument #2 ($args) must be of type array, int given
+#0 {main}
+call_user_func_array(): Argument #1 ($callback) must be a valid callback, function "nope" not found or invalid function name
+#0 {main}
+call_user_func(): Argument #1 ($callback) must be a valid callback, class C does not have a method "nope"
+#0 {main}
+Too few arguments to function thrower(), 0 passed in %s on line 77 and exactly 1 expected
+#0 %s(77): thrower()
+#1 {main}
+call_user_func() expects at least 1 argument, 0 given
+#0 %s(78): call_user_func()
+#1 {main}
+call_user_func_array() expects exactly 2 arguments, 1 given
+#0 %s(79): call_user_func_array('show')
+#1 {main}
+-- by reference
+
+Warning: bump(): Argument #1 ($x) must be passed by reference, value given in %s on line 83
+frames@81 < bump@83
+int(2)
+int(1)
+frames@81 < bump@85
+int(2)
+int(2)
+-- the builtin's frame
+frames@14 < show@-(no file) < call_user_func@88
+#0 [internal function]: show(1)
+#1 %s(88): call_user_func('show', 1)
+int(1)
+frames@14 < show@-(no file) < call_user_func@90
+#0 [internal function]: show(2)
+#1 %s(90): call_user_func('show', 2)
+int(1)
+frames@14 < show@-(no file) < call_user_func@91
+#0 [internal function]: show()
+#1 %s(91): call_user_func('show')
+int(0)
+frames@14 < show@-(no file) < call_user_func_array@93
+#0 [internal function]: show(3)
+#1 %s(93): call_user_func_array('show', Array)
+int(1)
+Exception: thrown 4
+#0 [internal function]: thrower(4)
+#1 %s(94): call_user_func('thrower', 4)
+#2 %s(17): {closure:%s:94}()
+#3 %s(94): trace(Object(Closure))
+#4 {main}
+-- generators and arguments
+012
+[1,2,3][4,5]
+3628800

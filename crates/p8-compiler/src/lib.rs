@@ -460,7 +460,9 @@ impl FnBuilder<'_> {
     }
 
     /// The site of the name spelled `display`; a new one's name, symbol
-    /// and spelling from `make`, and whether it is new.
+    /// and spelling from `make`, and whether it is new. (In line: a call's
+    /// compile looks a site up for every call.)
+    #[inline(always)]
     fn site(&mut self, constant: bool, display: &[u8], make: impl FnOnce() -> (Text, Sym, Text)) -> (u16, bool) {
         // One site per spelling: a call's messages name it as written
         // (`$o->foobar()` after `$o->FooBar()` says "foobar").
@@ -473,8 +475,21 @@ impl FnBuilder<'_> {
         let i = self.sites.len() as u16;
         index.insert(display.to_vec(), i);
         let (name, sym, display) = make();
-        self.sites.push(Site { name, sym, fallback: None, display });
+        self.sites.push(Site { name, sym, fallback: None, display, user_call: false });
         (i, true)
+    }
+
+    /// The site of a call PHP compiles to ZEND_INIT_USER_CALL (see
+    /// `Site::user_call`), spelled `display`: one of its own beside the
+    /// name's plain site (keyed past any name: a NUL ends the spelling).
+    fn user_call_site(&mut self, display: &[u8], make: impl FnOnce() -> (Text, Sym, Text)) -> u16 {
+        let mut key = display.to_vec();
+        key.push(0);
+        let (site, new) = self.site(false, &key, make);
+        if new {
+            self.sites[usize::from(site)].user_call = true;
+        }
+        site
     }
 
     /// A site of its own for a method call (`$o->m()`, `$o?->m()`,
@@ -491,7 +506,7 @@ impl FnBuilder<'_> {
             return site;
         }
         let s = &self.sites[usize::from(site)];
-        let copy = Site { name: s.name.clone(), sym: s.sym, fallback: None, display: s.display.clone() };
+        let copy = Site { name: s.name.clone(), sym: s.sym, fallback: None, display: s.display.clone(), user_call: false };
         self.sites.push(copy);
         (self.sites.len() - 1) as u16
     }
@@ -6356,12 +6371,17 @@ impl<'src> Compiler<'src> {
             builtin.map(|i| self.registry.by_ref(i, n))
         };
         let modes: Vec<Option<bool>> = (0..args.len()).map(by_ref).collect();
-        let (site, _) = f.site(false, text, || {
+        let texts = || {
             // One text for both when the name is written in lowercase.
             let display = Text::from(text);
             let lower_text = if lower.as_slice() == text { display.clone() } else { Text::from(lower.as_slice()) };
             (lower_text, sym, display)
-        });
+        };
+        // call_user_func(callback, ...) and call_user_func_array(callback,
+        // args) named here (no fallback; the arguments, positional, are
+        // checked below): ZEND_INIT_USER_CALL (zend_try_compile_special_func).
+        let user_call = fallback.is_none() && matches!((lower.as_slice(), args.len()), (b"call_user_func", 1..) | (b"call_user_func_array", 2));
+        let site = if user_call { f.user_call_site(text, texts) } else { f.site(false, text, texts).0 };
         // (A site's fallback is the same each time it is set: its spelling
         // decides it. Set once.)
         if f.sites[site as usize].fallback.is_none()

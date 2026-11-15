@@ -351,6 +351,7 @@ impl Isolate {
         let ids = Rc::new(Ids::default());
         let resource_ids = Rc::new(Ids::monotonic_beside(&ids));
         let user_calls = [b"call_user_func".as_slice(), b"call_user_func_array"].map(|n| self.registry.lookup(n).unwrap_or(usize::MAX));
+        let user_call_twins = user_calls.map(|i| self.registry.twin(i).unwrap_or(usize::MAX));
         Context {
             stop,
             isolate: self,
@@ -422,6 +423,7 @@ impl Isolate {
             natives: Natives::default(),
             running_builtin: None,
             user_calls,
+            user_call_twins,
             named_calls: std::array::from_fn(|_| (Value::UNDEF, 0)),
             statics: HashMap::default(),
             magic_guard: Vec::new(),
@@ -618,6 +620,10 @@ pub struct Context<'i> {
     /// not registered), which a call site runs on a function's name
     /// directly (`call_by_name`).
     pub(crate) user_calls: [usize; 2],
+    /// Their twins (`Registry::add_twin`; usize::MAX: none): what a call
+    /// site PHP compiles to ZEND_INIT_USER_CALL resolves to
+    /// (`Site::user_call`), run by `user_call` with no frame of its own.
+    pub(crate) user_call_twins: [usize; 2],
     /// The functions of PHP code `call_by_name` found by name, each with
     /// the string that named it (held, so its address names no other),
     /// by that address: a name called again (a hook's) is not looked up.
