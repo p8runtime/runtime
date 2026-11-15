@@ -44,7 +44,14 @@ pub fn trace_string_within(trace: &Value, room: usize) -> Result<String, usize> 
             out.push_str(&get("function").map(|f| text(&f)).unwrap_or_default());
             out.push('(');
             if let Some(args) = get("args").as_ref().and_then(Value::as_array) {
-                let shown: Vec<String> = args.iter().map(|(_, a)| trace_arg(&a.deref())).collect();
+                // A named one (a variadic parameter's) as `name: value`.
+                let shown: Vec<String> = args
+                    .iter()
+                    .map(|(k, a)| match k {
+                        Key::Str(name) => format!("{}: {}", String::from_utf8_lossy(name.as_bytes()), trace_arg(&a.deref())),
+                        Key::Int(_) => trace_arg(&a.deref()),
+                    })
+                    .collect();
                 out.push_str(&shown.join(", "));
             }
             out.push_str(")\n");
