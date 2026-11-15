@@ -1,0 +1,25 @@
+destruct fill
+a unset
+d unset
+5
+4 7 8
+4
+v:1,2,3
+destruct temp
+after new
+1
+in holds
+destruct local
+2
+after holds
+2,4,6
+destruct cmp
+destruct cmp
+destruct cmp
+1,2,3
+from include 7
+caught deep
+div
+caught no missing
+5050
+end
