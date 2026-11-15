@@ -60,8 +60,30 @@ fn the_boundary_is_one_audited_file() {
     assert!(blocks > 0, "no unsafe block found: the check reads the wrong file");
 }
 
-#[test]
-fn p8_links_no_c() {
+/// The `-sys` crates that build and link no C, each with why.
+const NO_C_SYS: &[(&str, &str)] = &[
+    // Rust declarations of macOS's own framework (chrono's time zone
+    // lookup, which turso_core also uses): no C is compiled for it.
+    ("core-foundation-sys", "macOS's framework, declared in Rust"),
+    // Linux's kernel ABI as Rust constants and types (rustix's backend on
+    // Linux, via turso_core): no build script, no `links`, no extern block
+    // (#559). `allowed_sys_crates_build_nothing` checks it stays so.
+    ("linux-raw-sys", "Linux's syscall ABI, as Rust types and constants"),
+];
+
+/// The crates that mean C is built or linked: a `-sys` crate not in
+/// `NO_C_SYS`, a C compiler driver, a C library's binding.
+fn c_crates(tree: &str) -> Vec<&str> {
+    tree.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| !NO_C_SYS.iter().any(|(allowed, _)| name == allowed))
+        .filter(|name| name.ends_with("-sys") || ["cc", "cmake", "openssl", "native-tls", "ring", "aws-lc-rs"].contains(name))
+        .collect()
+}
+
+/// `cargo tree`'s list of what p8 depends on for this platform: one
+/// `name vX.Y.Z` per line.
+fn p8_tree() -> String {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
         .args(["tree", "-p", "p8", "-e", "normal", "--prefix", "none", "--format", "{p}"])
@@ -69,17 +91,66 @@ fn p8_links_no_c() {
         .output()
         .expect("run cargo tree");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let tree = String::from_utf8_lossy(&out.stdout);
-    let offenders: Vec<&str> = tree
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        // core-foundation-sys is Rust declarations of macOS's own framework (chrono's
-        // time zone lookup, which turso_core also uses): no C is compiled for it.
-        .filter(|name| *name != "core-foundation-sys")
-        .filter(|name| name.ends_with("-sys") || ["cc", "openssl", "native-tls", "ring", "aws-lc-rs"].contains(name))
-        .collect();
-    assert!(offenders.is_empty(), "p8 depends on C: {offenders:?}");
+    let tree = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(tree.lines().any(|l| l.starts_with("p8-interp ")), "cargo tree output not understood:\n{tree}");
+    tree
+}
+
+#[test]
+fn p8_links_no_c() {
+    let tree = p8_tree();
+    let offenders = c_crates(&tree);
+    assert!(offenders.is_empty(), "p8 depends on C: {offenders:?}");
+}
+
+/// The rule itself: a C `-sys` crate or a C build tool is caught wherever
+/// it is; only the reasoned exceptions pass.
+#[test]
+fn the_c_check_catches_c_crates() {
+    let tree = "p8 v0.1.0 (/p8)\nlinux-raw-sys v0.11.0\nrustix v1.0.0\ncore-foundation-sys v0.8.7\nlibsqlite3-sys v0.30.1\ncc v1.2.0\nopenssl-sys v0.9.100\nlinux-raw-c-sys v0.1.0\n";
+    // (An exception is its exact name: one like it is not let through.)
+    assert_eq!(c_crates(tree), ["libsqlite3-sys", "cc", "openssl-sys", "linux-raw-c-sys"]);
+    assert!(c_crates("p8 v0.1.0\nlinux-raw-sys v0.11.0\ncore-foundation-sys v0.8.7\n").is_empty());
+}
+
+/// Each `NO_C_SYS` crate in p8's tree still builds nothing: its manifest
+/// (as `cargo metadata` finds it) names no build script and no native
+/// library (`links`), and it has no build.rs that cargo would run.
+#[test]
+fn allowed_sys_crates_build_nothing() {
+    let tree = p8_tree();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run cargo metadata");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let metadata = String::from_utf8_lossy(&out.stdout);
+    let manifests: Vec<&str> = metadata.split("\"manifest_path\":\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+    let mut checked = 0;
+    for line in tree.lines() {
+        let mut words = line.split_whitespace();
+        let (Some(name), Some(version)) = (words.next(), words.next()) else { continue };
+        if !NO_C_SYS.iter().any(|(allowed, _)| *allowed == name) {
+            continue;
+        }
+        let dir = format!("/{name}-{}/Cargo.toml", version.trim_start_matches('v'));
+        let manifest = manifests.iter().find(|m| m.ends_with(&dir)).unwrap_or_else(|| panic!("{name} {version}: no manifest in cargo metadata"));
+        let toml = std::fs::read_to_string(manifest).expect("the crate's Cargo.toml");
+        let key = |k: &str| toml.lines().map(str::trim).find(|l| l.split('=').next().is_some_and(|key| key.trim() == k)).map(str::to_owned);
+        assert!(key("links").is_none(), "{name}: links a native library ({manifest})");
+        let build = key("build");
+        let build_rs = Path::new(manifest).with_file_name("build.rs").exists();
+        assert!(
+            build.as_deref().is_some_and(|b| b.ends_with("false")) || (build.is_none() && !build_rs),
+            "{name}: has a build script ({manifest}): it may build C, and NO_C_SYS no longer holds for it"
+        );
+        checked += 1;
+    }
+    // (Each platform has one of them: core-foundation-sys on macOS,
+    // linux-raw-sys on Linux.)
+    assert!(checked > 0 || !cfg!(any(target_os = "macos", target_os = "linux")), "no NO_C_SYS crate found in p8's tree: the check reads the wrong output");
 }
 
 /// The one file that reads the process's working directory: where a
