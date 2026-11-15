@@ -1,0 +1,103 @@
+map name: 2,4,6,8
+map \name: 2,4,6,8
+filter name: 2,3,4
+map closure use: 11,12,13,14
+map arrow: 10,20,30,40
+use by reference: 10
+map static: -1,-2,-3,-4
+map keys too: ax,by
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+  [2]=>
+  string(4) "next"
+}
+array(2) {
+  [3]=>
+  int(2)
+  [1]=>
+  int(4)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [2]=>
+  int(3)
+}
+array(0) {
+}
+map defaults: p-B,q-B
+map extra none: 5,6
+filter both: 2
+reduce: 110
+reduce name: 10
+usort name: 1,1,2,3,4,5,6,9
+usort closure: 9,6,5,4,3,2,1,1
+preg: a3b6c9
+variadic: 2
+typed: 5,6
+typed error: typed(): Argument #1 ($x) must be of type int, string given
+by ref: 
+Warning: by_ref(): Argument #1 ($x) must be passed by reference, value given in %s on line 68
+
+Warning: by_ref(): Argument #1 ($x) must be passed by reference, value given in %s on line 68
+a!,b!
+words: a,b
+gen: 10,11
+count error: ArgumentCountError
+thrown: three line 20
+  thrower
+  array_map line 82
+deep: 50
+where: where < array_map
+where closure: where < {closure:%s:93} < array_map
+this: 3,6
+private: s1,s2
+static: SubBox,SubBox
+scope: SubBox/Box/SubBox
+method closure: 3,6
+static closure: SubBox,SubBox
+builtin closure: 2,3
+trampoline closure: missing(1) missing(2)
+trampoline two: pair(1,3) pair(2,4)
+trampoline sort: 3,1,2
+trampoline array: missing(3)
+static trampoline: static gone(4)
+fromCallable trampoline: other(5) other(6)
+native method closure: 2020,01
+statics: 1,2,3
+cufa: 15
+cufa args kept: 7,8
+cufa defaults: x-B
+cufa extra: 1+2,3
+cufa none: 
+cufa named: M-N
+cufa hash list: 11
+cufa ref list: r! r!
+cufa by-ref param: 
+Warning: by_ref(): Argument #1 ($x) must be passed by reference, value given in %s on line 150
+p! p
+cufa reference value: 3
+cufa count error: Too few arguments to function needs_two(), 1 passed in %s on line 155 and exactly 2 expected
+cufa many: same
+cufa where: where
+cufa typed: 42
+cufa gen: 1
+cufa gen: 2
+hooks: V_S1_s1
+cufa list freed: called with one
+one
+called with two
+destruct 1
+after
