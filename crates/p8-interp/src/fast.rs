@@ -935,17 +935,14 @@ impl Context<'_> {
                     // `['key' => 1]`: the key, the value or both literals.
                     Op::ArraySetC => {
                         ops!(a, b, c, imm);
-                        // A literal string key naming no int (KEY_STR), in
-                        // program memory: set by its head (`insert_istr`).
-                        if imm & insn::KEY_STR != 0
-                            && let Some(s) = cst!(imm & 0x3fff).as_istr()
-                        {
-                            let val = if imm & insn::VAL_CONST != 0 { cst_src!(imm >> 14 & 0x3fff) } else { reg_src!(c) };
-                            if !w[rx!(a)].is_array() {
+                        // A literal string key naming no int (KEY_STR): out
+                        // of line on the arm's operands (`array_set_str`);
+                        // what it leaves (not an array, an undefined value)
+                        // is `step`'s.
+                        if imm & insn::KEY_STR != 0 {
+                            if !array_set_str(&mut w[..], &clo.consts, a, c, imm) {
                                 slow!();
                             }
-                            let Some(v) = taken(&mut w[..], val, imm & insn::TAKE != 0) else { slow!() };
-                            w[rx!(a)].array_mut().expect("checked above").insert_istr(s, v);
                             done!(true);
                         } else {
                             let key = if imm & insn::KEY_CONST != 0 { cst_src!(imm & 0x3fff) } else { reg_src!(b) };
@@ -3100,6 +3097,30 @@ pub(crate) fn src<'w, 'c: 'w>(w: &'w [Value], s: Src<'c>) -> &'w Value {
         Src::Reg(r) => &w[usize::from(r)],
         Src::Const(c) => c,
     }
+}
+
+/// ArraySetC of a literal string key that names no int (KEY_STR) into the
+/// literal's array `a`: a program-memory key set by its head
+/// (`PhpArray::insert_istr`), any other (code compiled at run time) as a
+/// string key, with no numeric test either way. False, with nothing done,
+/// when `a` is no array or the value is undefined (`step`'s).
+///
+/// Out of line: inline, its own path in `execute` moved the registers of
+/// the loop's other arms (WordPress paid more there than the keys saved).
+#[inline(never)]
+fn array_set_str(w: &mut [Value], consts: &[Value], a: u8, c: u8, imm: u32) -> bool {
+    let val = if imm & insn::VAL_CONST != 0 { Src::Const(&consts[(imm >> 14 & 0x3fff) as usize]) } else { Src::Reg(Reg::from(c)) };
+    if !w[usize::from(a)].is_array() {
+        return false;
+    }
+    let key = &consts[(imm & 0x3fff) as usize];
+    let Some(v) = taken(w, val, imm & insn::TAKE != 0) else { return false };
+    let arr = w[usize::from(a)].array_mut().expect("checked above");
+    match key.as_istr() {
+        Some(s) => arr.insert_istr(s, v),
+        None => arr.insert(Key::Str(key.cloned_str().expect("KEY_STR names a string")), v),
+    }
+    true
 }
 
 /// An operand to store (`operand_take`): moved out of its register when

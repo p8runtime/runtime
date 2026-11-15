@@ -1221,9 +1221,10 @@ impl PhpArray {
 
     /// `insert` of a program-memory string key that names no int (a
     /// keyed literal's constant key, ZEND_INIT_ARRAY's interned one):
-    /// into a hash, one call with no key enum and no numeric test, the
-    /// key's handle made only when it is new.
-    #[inline(never)]
+    /// into a hash, with no key enum and no numeric test, the key's handle
+    /// made only when it is new. (Inline into its caller, the
+    /// interpreter's out-of-line `array_set_str`: one call per element.)
+    #[inline]
     pub fn insert_istr(&mut self, s: &'static IStr, value: Value) {
         crate::counts::bump(crate::counts::Count::Insert);
         match &mut self.storage {
