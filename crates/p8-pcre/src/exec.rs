@@ -137,9 +137,32 @@ pub(crate) fn exec_into(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, c
     // With captures to recover the DFA path is three passes (forward, at
     // the candidate starts, then the machine at the start found), which a
     // short subject does not repay.
-    let worth = p.slots == 2 || s.len() - start >= 32;
-    exec_into_dfa(p, s, start, opts, caps, worth && dfa_allowed(opts))
+    let rest = s.len() - start;
+    let worth = p.slots == 2 || rest >= 32;
+    let dfa = worth && dfa_allowed(opts) && p.dfa.is_some();
+    if dfa && p.slots > 2 && rest < VM_FIRST {
+        // A subject still short: the machine alone, held to a few steps
+        // (fewer than the match limit the DFA may run under): it settles
+        // nearly every search sooner than the DFA's passes. Its answer is
+        // the one they give: the first start where the machine matches is
+        // the leftmost the DFA finds, and the machine then runs anchored
+        // there. One that stops on the budget (or on the depth limit) is
+        // searched as before, as if this try had not been made.
+        let budget = MatchOptions { match_limit: VM_BUDGET, ..opts.clone() };
+        if let Ok(found) = exec_into_dfa(p, s, start, &budget, caps, false) {
+            return Ok(found);
+        }
+    }
+    exec_into_dfa(p, s, start, opts, caps, dfa)
 }
+
+/// Below this many bytes from the start offset, a search with captures
+/// tries the machine alone first (see [`exec_into`]).
+const VM_FIRST: usize = 128;
+/// The machine's steps on that first try: well under the DFA's lowest
+/// match limit ([`dfa_allowed`]), so a search it finishes is one the full
+/// limit would have let finish the same way.
+const VM_BUDGET: u64 = 4096;
 
 /// [`exec_into`], with the DFA used (when the program has one) or not.
 pub(crate) fn exec_into_dfa(p: &Prog, s: &[u8], start: usize, opts: &MatchOptions, caps: &mut Captures, use_dfa: bool) -> Result<bool, MatchError> {
@@ -197,19 +220,34 @@ pub(crate) fn exec_into_dfa(p: &Prog, s: &[u8], start: usize, opts: &MatchOption
         nest: 0,
     };
     let found = search(&mut vm, from, anchored);
-    let Vm { slots, mut stack, mark, .. } = vm;
+    let Vm { slots, mut stack, mark, regs, frames, targets, .. } = vm;
     caps.slots = slots;
     stack.clear();
     // (Not a big one: a cached pattern would hold it for the request.)
     if stack.capacity() <= 1024 {
-        p.stack.set(stack);
+        release(p.stack.replace(stack));
     }
+    release(regs);
+    release(frames);
+    release(targets);
     let end = found?;
     if let Some(end) = end {
         caps.slots[1] = Some(end);
         caps.mark = mark.map(|m| p.marks[m as usize].clone());
     }
     Ok(end.is_some())
+}
+
+/// Drops a Vec, with no call when it never had room (a search that used
+/// no recursion, lookbehind or loop registers): such a Vec holds nothing
+/// and owns no memory, so forgetting it is dropping it.
+#[inline(always)]
+fn release<T>(v: Vec<T>) {
+    if v.capacity() == 0 {
+        std::mem::forget(v);
+    } else {
+        drop(v);
+    }
 }
 
 /// Where a match can start at or after `at`: the next byte a match can
@@ -223,7 +261,7 @@ pub(crate) fn next_start(p: &Prog, s: &[u8], at: usize) -> Option<usize> {
         First::Two(a, b) => memchr::memchr2(*a, *b, rest),
         First::Three(a, b, c) => memchr::memchr3(*a, *b, *c, rest),
         First::Set(set) => rest.iter().position(|&b| set[b as usize]),
-        First::Text(finder) => finder.find(rest),
+        First::Text(finder) => crate::compile::find_text(finder, rest),
     };
     n.map(|n| at + n)
 }
@@ -281,6 +319,7 @@ fn search(vm: &mut Vm, start: usize, anchored: bool) -> Result<Option<usize>, Ma
 }
 
 impl Vm<'_> {
+    #[inline]
     fn step(&mut self) -> Result<(), MatchError> {
         self.steps += 1;
         if self.steps > self.match_limit {
@@ -289,6 +328,7 @@ impl Vm<'_> {
         Ok(())
     }
 
+    #[inline]
     fn push_choice(&mut self, bt: Bt) -> Result<(), MatchError> {
         self.step()?;
         self.depth += 1;
@@ -404,7 +444,7 @@ impl Vm<'_> {
     /// `atom` as many more times as it matches from `at`, up to `max` in
     /// all (`count` so far): where that ends, and the count. A class runs
     /// over single-byte characters straight from its bitmap.
-    #[inline]
+    #[inline(always)]
     fn take_greedy(&self, atom: Atom, mut at: usize, mut count: u32, max: u32) -> (usize, u32) {
         if let Atom::Set(i) = atom {
             let low = &self.p.sets[i as usize].low;
@@ -560,6 +600,19 @@ impl Vm<'_> {
                     }
                     _ => false,
                 },
+                Inst::Lit { at, len } => {
+                    let (at, len) = (*at as usize, *len as usize);
+                    match self.s.get(pos..pos + len) {
+                        // (A byte loop: these are short, and a memcmp call
+                        // costs more than comparing them.)
+                        Some(sub) if sub.iter().zip(&prog.lits[at..at + len]).all(|(a, b)| a == b) => {
+                            pos += len;
+                            pc += len as u32;
+                            true
+                        }
+                        _ => false,
+                    }
+                }
                 Inst::CharNc(c) => match self.char_at(pos) {
                     Some((d, n)) if self.caseless_eq(d, *c) => {
                         pos += n;
@@ -656,19 +709,9 @@ impl Vm<'_> {
                 }
                 Inst::Repeat { atom, min, max, kind } => {
                     let (atom, min, max, kind) = (*atom, *min, *max, *kind);
-                    let mut at = pos;
-                    let mut count = 0;
-                    let mut ok = true;
-                    while count < min {
-                        match self.atom(atom, at) {
-                            Some(n) => at = n,
-                            None => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        count += 1;
-                    }
+                    // The first `min`, as many as match up to there.
+                    let (mut at, count) = self.take_greedy(atom, pos, 0, min);
+                    let ok = count == min;
                     if ok {
                         match kind {
                             RepeatKind::Greedy | RepeatKind::Possessive => {
