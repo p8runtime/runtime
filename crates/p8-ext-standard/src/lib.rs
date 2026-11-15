@@ -245,6 +245,10 @@ fn register(registry: &mut Registry) {
     registry.mark_reenters(array2::REENTER);
     registry.mark_reenters(info::REENTER);
     registry.mark_reenters(callback::REENTER);
+    // A call PHP compiles to ZEND_INIT_USER_CALL runs its callback as the
+    // caller's own call: the engine resolves its site to the twin.
+    registry.add_twin("call_user_func");
+    registry.add_twin("call_user_func_array");
     registry.unchecked(&["assert"]);
     // (count: a Countable's count() is PHP code.)
     // (The ob_* functions run output handlers, PHP code.)
