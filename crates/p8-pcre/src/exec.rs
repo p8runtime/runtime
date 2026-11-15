@@ -429,7 +429,7 @@ impl Vm<'_> {
     /// `atom` as many more times as it matches from `at`, up to `max` in
     /// all (`count` so far): where that ends, and the count. A class runs
     /// over single-byte characters straight from its bitmap.
-    #[inline]
+    #[inline(always)]
     fn take_greedy(&self, atom: Atom, mut at: usize, mut count: u32, max: u32) -> (usize, u32) {
         if let Atom::Set(i) = atom {
             let low = &self.p.sets[i as usize].low;
