@@ -130,6 +130,8 @@ fn literal_runs() {
     assert_eq!(whole("x(?:abc)+y", "xabcabcy").as_deref(), Some("xabcabcy"));
     assert_eq!(whole("x(?:abc)+y", "xabcaby"), None);
     assert_eq!(m_opts("ab€cd", "xab€cd", &utf()).unwrap()[0].as_deref(), Some("ab€cd"));
+    // é is one character but two bytes in UTF mode: not part of a run.
+    assert_eq!(m_opts("café", "un café", &utf()).unwrap()[0].as_deref(), Some("café"));
     let latin1 = "\u{e9}t\u{e9}";
     assert_eq!(lits(latin1, &Options::default()), 1, "outside UTF mode every character is a byte");
 }
