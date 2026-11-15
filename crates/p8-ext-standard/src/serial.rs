@@ -12,6 +12,7 @@ use p8_runtime::number::{Precision, float_to_string};
 use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 pub static BUILTINS: &[Builtin] = &[
@@ -32,9 +33,12 @@ struct Writer<'c> {
     /// result), which stops at the first object ([`Halt::Object`]).
     ctx: Option<&'c mut dyn Ctx>,
     out: Vec<u8>,
-    /// Values written so far (r:N counts them from 1).
+    /// Values written so far (r:N and R:N count them from 1).
     count: usize,
     objects: Vec<(*const Object, usize)>,
+    /// The references written, each with its number (held: a cell freed
+    /// while writing cannot have its address taken for one written).
+    refs: Vec<(Rc<RefCell<Value>>, usize)>,
 }
 
 /// Why writing stopped.
@@ -64,7 +68,7 @@ impl Halt {
 
 impl<'c> Writer<'c> {
     fn new(ctx: Option<&'c mut dyn Ctx>, out: Vec<u8>) -> Self {
-        Writer { ctx, out, count: 0, objects: Vec::new() }
+        Writer { ctx, out, count: 0, objects: Vec::new(), refs: Vec::new() }
     }
 
     /// The Ctx objects are written with (object() runs only with one:
@@ -155,8 +159,28 @@ impl<'c> Writer<'c> {
             }
             Kind::Str => self.string(v.as_str().expect("a string").as_bytes()),
             Kind::Ref => {
+                // A reference takes one number (the value in it is not
+                // counted again) and is `R:N;` where it is met again; one
+                // to an object goes by the object's number; one held in one
+                // place only is its value (php_add_var_hash,
+                // php_var_serialize_nested_data).
                 self.count -= 1;
-                let inner = v.as_reference().expect("a reference").borrow().clone();
+                let cell = v.as_reference().expect("a reference");
+                let inner = cell.borrow().clone();
+                if Rc::strong_count(cell) > 1 {
+                    let object = inner.as_object().filter(|o| o.class.flags & CLASS_RESOURCE == 0);
+                    let seen = match object {
+                        Some(o) => self.objects.iter().find(|(p, _)| *p == Rc::as_ptr(o)).map(|&(_, n)| n),
+                        None => self.refs.iter().find(|(r, _)| Rc::ptr_eq(r, cell)).map(|&(_, n)| n),
+                    };
+                    if let Some(n) = seen {
+                        self.tagged(b"R:", Self::len(n), b";");
+                        return Ok(());
+                    }
+                    if object.is_none() {
+                        self.refs.push((Rc::clone(cell), self.count + 1));
+                    }
+                }
                 self.value(&inner)?;
             }
             Kind::Array => {
@@ -298,8 +322,8 @@ pub(crate) fn serialized(ctx: &mut dyn Ctx, v: &Value) -> Result<Vec<u8>, Throw>
 /// offset after it; None where it is not one (Err: what an autoloader
 /// threw).
 pub(crate) fn read_value(ctx: &mut dyn Ctx, data: &[u8]) -> Result<Option<(Value, usize)>, Throw> {
-    let mut r = Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() };
-    match r.value(ctx) {
+    let mut r = Reader::new(data, None);
+    match r.read(ctx) {
         Ok(v) => Ok(Some((v, r.at))),
         Err(Bad::At(_)) => Ok(None),
         Err(Bad::Threw(t)) => Err(t),
@@ -340,7 +364,7 @@ pub struct Unserializer<'a> {
 
 impl<'a> Unserializer<'a> {
     pub fn new(data: &'a [u8]) -> Unserializer<'a> {
-        Unserializer { r: Reader { s: data, at: 0, values: Vec::new(), allowed: None, wakeups: Vec::new() } }
+        Unserializer { r: Reader::new(data, None) }
     }
 
     /// The offset the next value is read from.
@@ -356,7 +380,7 @@ impl<'a> Unserializer<'a> {
     /// The next value (Ok(Err): the offset it stopped at where there is
     /// none; Err: what an autoloader threw).
     pub fn value(&mut self, ctx: &mut dyn Ctx) -> Result<Result<Value, usize>, Throw> {
-        match self.r.value(ctx) {
+        match self.r.read(ctx) {
             Ok(v) => Ok(Ok(v)),
             Err(Bad::At(at)) => Ok(Err(at)),
             Err(Bad::Threw(t)) => Err(t),
@@ -383,6 +407,15 @@ fn serialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 /// None for an object anywhere in it (the call is made).
 pub(crate) fn serialize_quick(args: &[Value]) -> Option<Value> {
     let [v] = args else { return None };
+    // (The argument is a value, as serialize() takes it: a reference
+    // passed is the value in it.)
+    let inner;
+    let v = if v.is_reference() {
+        inner = v.deref();
+        &inner
+    } else {
+        v
+    };
     let mut w = Writer::new(None, PhpStr::scratch(64));
     w.value(v).ok()?;
     Some(Value::str(PhpStr::from_scratch(w.out)))
@@ -391,8 +424,12 @@ pub(crate) fn serialize_quick(args: &[Value]) -> Option<Value> {
 struct Reader<'a> {
     s: &'a [u8],
     at: usize,
-    /// Every value read, in order (for r:N and R:N).
+    /// Every value read, in order (for r:N and R:N; `R:N;` is not one).
     values: Vec<Value>,
+    /// The numbers (from 0) of the values an `R:N;` in the value being
+    /// read names, in order: each is read as a reference, which the `R:`
+    /// shares (PHP turns the value into one in place).
+    refs: Vec<usize>,
     allowed: Option<Vec<Vec<u8>>>,
     wakeups: Vec<(Rc<Object>, Option<PhpArray>)>,
 }
@@ -411,6 +448,91 @@ impl From<Throw> for Bad {
 }
 
 impl<'a> Reader<'a> {
+    fn new(s: &'a [u8], allowed: Option<Vec<Vec<u8>>>) -> Reader<'a> {
+        Reader { s, at: 0, values: Vec::new(), refs: Vec::new(), allowed, wakeups: Vec::new() }
+    }
+
+    /// The value at the offset, as unserialize() returns it: where an
+    /// `R:N;` names a value in it, that value is read as a reference (the
+    /// one the value itself is, if it is that, is the value in it).
+    fn read(&mut self, ctx: &mut dyn Ctx) -> Result<Value, Bad> {
+        self.refs.clear();
+        if self.s[self.at.min(self.s.len())..].windows(2).any(|w| w == b"R:") {
+            let mut skim = Reader::new(self.s, None);
+            skim.at = self.at;
+            let mut count = self.values.len();
+            // (Where it is not well formed, the read below says where; the
+            // numbers found before that are the ones it can meet.)
+            let _ = skim.skim(&mut count, &mut self.refs);
+            self.refs.sort_unstable();
+            self.refs.dedup();
+        }
+        let v = self.value(ctx)?;
+        Ok(if v.is_reference() { v.deref() } else { v })
+    }
+
+    /// The value at the offset read as value() reads it, for the numbers
+    /// `R:N;` names alone: nothing is made, looked up or warned about.
+    /// `count`: the values before it, numbered as value() numbers them.
+    fn skim(&mut self, count: &mut usize, refs: &mut Vec<usize>) -> Result<(), Bad> {
+        let Some(&tag) = self.s.get(self.at) else { return Err(Bad::At(self.at)) };
+        self.at += 1;
+        self.expect(if tag == b'N' { b';' } else { b':' })?;
+        if tag == b'R' {
+            if let Some(n) = usize::try_from(self.int(b';')?).ok().and_then(|n| n.checked_sub(1)) {
+                refs.push(n);
+            }
+            return Ok(());
+        }
+        *count += 1;
+        match tag {
+            b'N' => {}
+            b'b' | b'i' | b'r' => {
+                self.int(b';')?;
+            }
+            b'd' => {
+                while self.at < self.s.len() && self.s[self.at] != b';' {
+                    self.at += 1;
+                }
+                self.expect(b';')?;
+            }
+            b's' | b'E' => {
+                self.bytes()?;
+                self.expect(b';')?;
+            }
+            b'a' | b'O' => {
+                if tag == b'O' {
+                    self.bytes()?;
+                    self.expect(b':')?;
+                }
+                let n = self.int(b':')?;
+                self.expect(b'{')?;
+                for _ in 0..n {
+                    // A key (an int or a string) is not counted.
+                    if !matches!(self.s.get(self.at), Some(b'i' | b's')) {
+                        return Err(Bad::At(self.at));
+                    }
+                    self.skim(count, refs)?;
+                    *count -= 1;
+                    self.skim(count, refs)?;
+                }
+                self.expect(b'}')?;
+            }
+            _ => return Err(Bad::At(self.at)),
+        }
+        Ok(())
+    }
+
+    /// The number after `r:` or `R:` (digits only, then `;`), as an index
+    /// into the values read; Err at `start` where it is not one.
+    fn back_number(&mut self, start: usize) -> Result<usize, Bad> {
+        if !self.s.get(self.at).is_some_and(u8::is_ascii_digit) {
+            return Err(Bad::At(start));
+        }
+        let n = self.int(b';').map_err(|_| Bad::At(start))?;
+        Ok(usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).unwrap_or(usize::MAX))
+    }
+
     /// The objects read get their __unserialize() or __wakeup(), in order,
     /// once the whole value is read (PHP's delayed calls).
     fn wake(&mut self, ctx: &mut dyn Ctx) -> Result<(), Throw> {
@@ -470,8 +592,22 @@ impl<'a> Reader<'a> {
             return Err(Bad::At(start));
         }
         self.at += 2;
+        if tag == b'R' {
+            // The value it names (a reference read() made it), shared; an
+            // `R:N;` is not a value of its own. (Err after it where it names
+            // none, as PHP reports.)
+            let n = self.back_number(start)?;
+            return self.values.get(n).cloned().ok_or(Bad::At(self.at));
+        }
         let slot = self.values.len();
         self.values.push(Value::NULL);
+        // A value an `R:N;` names is read into a reference made first (an
+        // `R:N;` inside it may name it).
+        let cell = (!self.refs.is_empty() && self.refs.binary_search(&slot).is_ok()).then(|| {
+            let cell = Rc::new(RefCell::new(Value::NULL));
+            self.values[slot] = Value::reference(Rc::clone(&cell));
+            cell
+        });
         let v = match tag {
             b'N' => Value::NULL,
             b'b' => match self.int(b';')? {
@@ -501,10 +637,13 @@ impl<'a> Reader<'a> {
                 // (One copy, a short one in the string's own allocation.)
                 Value::str(PhpStr::from(b))
             }
-            b'r' | b'R' => {
-                self.values.pop();
-                let n = self.int(b';')? as usize;
-                return self.values.get(n.wrapping_sub(1)).cloned().ok_or(Bad::At(start));
+            // The object an earlier value is (a value of its own).
+            b'r' => {
+                let n = self.back_number(start)?;
+                match self.values.get(n).map(Value::deref) {
+                    Some(o) if o.is_object() => o,
+                    _ => return Err(Bad::At(self.at)),
+                }
             }
             b'a' => {
                 let n = self.int(b':')?;
@@ -565,7 +704,12 @@ impl<'a> Reader<'a> {
                         (o, true)
                     }
                 };
-                self.values[slot] = Value::object(Rc::clone(&o));
+                // (There before its properties are read: an r: in them
+                // names it.)
+                match &cell {
+                    Some(c) => *c.borrow_mut() = Value::object(Rc::clone(&o)),
+                    None => self.values[slot] = Value::object(Rc::clone(&o)),
+                }
                 let custom = !incomplete && o.class.method(b"__unserialize").is_some();
                 let mut data = PhpArray::new();
                 for _ in 0..n {
@@ -587,12 +731,39 @@ impl<'a> Reader<'a> {
             }
             _ => return Err(Bad::At(start)),
         };
-        self.values[slot] = v.clone();
-        Ok(v)
+        match cell {
+            Some(c) => {
+                *c.borrow_mut() = v;
+                Ok(Value::reference(c))
+            }
+            None => {
+                self.values[slot] = v.clone();
+                Ok(v)
+            }
+        }
     }
 
     fn key(&mut self, ctx: &mut dyn Ctx) -> Result<Key, Bad> {
         let at = self.at;
+        match (self.s.get(at), self.s.get(at + 1)) {
+            (Some(b'i'), Some(b':')) => {
+                self.at += 2;
+                return Ok(Key::Int(self.int(b';')?));
+            }
+            (Some(b's'), Some(b':')) => {
+                self.at += 2;
+                let b = self.bytes()?;
+                self.expect(b';')?;
+                return Ok(Key::from_string(PhpStr::from(b)));
+            }
+            // A back-reference is no key (Err after it, as PHP reports).
+            (Some(b'r' | b'R'), Some(b':')) => {
+                self.at += 2;
+                self.back_number(at)?;
+                return Err(Bad::At(self.at));
+            }
+            _ => {}
+        }
         let k = self.value(ctx)?;
         self.values.pop();
         if let Some(i) = k.as_int() {
@@ -692,8 +863,8 @@ fn unserialize(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     if data.is_empty() {
         return Ok(Value::FALSE);
     }
-    let mut r = Reader { s: data.as_bytes(), at: 0, values: Vec::new(), allowed, wakeups: Vec::new() };
-    match r.value(ctx) {
+    let mut r = Reader::new(data.as_bytes(), allowed);
+    match r.read(ctx) {
         Ok(v) => {
             r.wake(ctx)?;
             Ok(v)
