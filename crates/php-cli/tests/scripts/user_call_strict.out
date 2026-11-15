@@ -1,0 +1,25 @@
+-- unqualified
+#0 [internal function]: N\show()
+#1 %s(12): call_user_func('N\\show')
+#0 [internal function]: N\show()
+#1 %s(13): call_user_func_array('N\\show', Array)
+int(1)
+-- qualified
+#0 %s(16): N\show()
+#0 %s(17): N\show()
+N\typed(): Argument #1 ($x) must be of type int, string given, called in %s on line 18
+#0 %s(18): N\typed('2')
+#1 {main}
+-- imported
+#0 %s(23): N\show()
+N\typed(): Argument #1 ($x) must be of type int, string given, called in %s on line 24
+-- global
+f(): Argument #1 ($x) must be of type int, string given, called in %s on line 29
+#0 %s(29): f('4')
+#1 {main}
+f(): Argument #1 ($x) must be of type int, string given, called in %s on line 30
+#0 %s(30): f('5')
+#1 {main}
+int(6)
+int(7)
+int(3)

@@ -650,6 +650,11 @@ pub struct Registry {
     startup_checks: Vec<fn(&mut dyn Ctx)>,
     /// Every name compiled code and the builtins use (see [`crate::symbol`]).
     symbols: std::sync::Arc<crate::symbol::Symbols>,
+    /// The builtins `add_twin` asked a twin for, until every extension
+    /// has registered.
+    twin_names: Vec<&'static str>,
+    /// Each twin, (the builtin's index, the twin's).
+    twins: Vec<(usize, usize)>,
 }
 
 /// A class an extension declares: its methods are Rust. The engine links
@@ -688,7 +693,34 @@ impl Registry {
             registry.module = extension.name;
             (extension.register)(&mut registry);
         }
+        registry.make_twins();
         registry
+    }
+
+    /// A twin of builtin `name`: a copy of it (its entry, its call as
+    /// every extension marked it, its deprecation) at an index of its own
+    /// that no name finds (`lookup`, `function_names` leave it out). The
+    /// engine resolves a call site to it when the site runs the builtin
+    /// its own way (call_user_func compiled to ZEND_INIT_USER_CALL: no
+    /// frame of its own); it is the builtin everywhere else.
+    pub fn add_twin(&mut self, name: &'static str) {
+        self.twin_names.push(name);
+    }
+
+    fn make_twins(&mut self) {
+        for name in std::mem::take(&mut self.twin_names) {
+            let Some(i) = self.lookup(name.as_bytes()) else { continue };
+            let twin = self.functions.len();
+            self.functions.push(self.functions[i]);
+            self.calls.push(self.calls[i]);
+            self.deprecations.push(self.deprecations[i].clone());
+            self.twins.push((i, twin));
+        }
+    }
+
+    /// Builtin `i`'s twin (`add_twin`), if it has one.
+    pub fn twin(&self, i: usize) -> Option<usize> {
+        self.twins.iter().find(|t| t.0 == i).map(|t| t.1)
     }
 
     pub fn add_classes(&mut self, classes: &'static [ClassSpec]) {
@@ -886,9 +918,10 @@ impl Registry {
         self.index.get(&sym).copied()
     }
 
-    /// Every builtin's name, in the order registered.
+    /// Every builtin's name, in the order registered (a twin is not
+    /// another function).
     pub fn function_names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.functions.iter().map(|f| f.name)
+        self.functions.iter().enumerate().filter(|(i, _)| !self.twins.iter().any(|t| t.1 == *i)).map(|(_, f)| f.name)
     }
 
     pub fn function(&self, i: usize) -> Entry {
