@@ -1279,7 +1279,13 @@ impl Context<'_> {
             }
             Some((slot, _)) => object.slots()[slot].set(Value::reference(cell)),
             None => {
-                self.write_prop(target, name, Value::NULL)?;
+                // Made as a write makes it (its deprecation, a mangled
+                // name's error) when it is not there; one that is keeps its
+                // place, and a reference it holds is let go, not written
+                // through (`write_prop`'s).
+                if pname.as_bytes().first() == Some(&0) || !object.dynamic().contains_key(&Key::from_string(pname.clone())) {
+                    self.write_prop(target, name, Value::NULL)?;
+                }
                 object.dynamic_mut().insert(Key::from_string(pname), Value::reference(cell));
             }
         }
@@ -1295,8 +1301,18 @@ impl Context<'_> {
             None if name.as_bytes().first() == Some(&0) => return Err(self.throw("Error", "Cannot access property starting with \"\\0\"")),
             None => {
                 let key = Key::from_string(name.clone());
-                let exists = object.dynamic().contains_key(&key);
-                if !exists && object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
+                // One that holds a reference (`$o->b = &$o->a`, unserialize's
+                // `R:`) is written through it, as a declared slot's
+                // `assign` is: the reference stays (zend_assign_to_variable
+                // on the property's zval).
+                let held = object.dynamic().get(&key).map(|v| v.as_reference().map(Rc::clone));
+                if let Some(Some(cell)) = held {
+                    // (The old value goes once the reference is let go.)
+                    let prev = std::mem::replace(&mut *cell.borrow_mut(), value);
+                    drop(prev);
+                    return Ok(());
+                }
+                if held.is_none() && object.class.lower != b"stdclass" && object.class.flags & p8_runtime::object::CLASS_ALLOW_DYNAMIC == 0 {
                     self.diags.push(p8_runtime::ops::Diag::Deprecated(format!(
                         "Creation of dynamic property {}::${} is deprecated",
                         text(&object.class.name),
