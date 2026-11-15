@@ -8,7 +8,7 @@ use crate::{arg, str_arg};
 use p8_runtime::array::{Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Fault, FastBuiltin, OrFault, Throw};
 use p8_runtime::lent;
-use p8_runtime::string::PhpStr;
+use p8_runtime::string::{PhpStr, ShortBuild};
 use p8_runtime::value::Value;
 
 use memchr::memmem;
@@ -300,14 +300,58 @@ fn find_all<'a>(haystack: &'a [u8], needle: &'a [u8], fold: bool) -> Hits<'a> {
     debug_assert!(!needle.is_empty());
     match needle {
         _ if fold && foldable(needle) => Hits::Folded { haystack, needle, from: 0 },
+        [b] if haystack.len() <= SHORT_HAYSTACK => Hits::ShortByte { haystack, byte: *b, from: 0 },
         [b] => Hits::Byte(memchr::memchr_iter(*b, haystack)),
         _ => Hits::Bytes(memmem::find_iter(haystack, needle)),
+    }
+}
+
+/// The longest haystack a one-byte search reads a word at a time in line
+/// (`find_byte_short`); a longer one is memchr's, whose call and setup
+/// cost more than such a scan.
+const SHORT_HAYSTACK: usize = 64;
+
+/// The first `b` in `h` (short: `SHORT_HAYSTACK`), eight bytes at a time
+/// with no call: a word's bytes equal to `b` are its zero bytes once
+/// xored with `b` in every byte, and the lowest bit the zero-byte test
+/// sets is the first such byte's (a borrow only reaches bytes above a
+/// zero one). The last bytes are the last word, those already read
+/// masked off.
+#[inline]
+fn find_byte_short(h: &[u8], b: u8) -> Option<usize> {
+    const ONES: u64 = u64::MAX / 255;
+    const HIGHS: u64 = ONES << 7;
+    let every = ONES * u64::from(b);
+    let zeros = |w: &[u8; 8]| {
+        let x = u64::from_le_bytes(*w) ^ every;
+        x.wrapping_sub(ONES) & !x & HIGHS
+    };
+    let mut at = 0;
+    while let Some(w) = h.get(at..).and_then(|rest| rest.first_chunk::<8>()) {
+        let z = zeros(w);
+        if z != 0 {
+            return Some(at + (z.trailing_zeros() / 8) as usize);
+        }
+        at += 8;
+    }
+    if at == h.len() {
+        return None;
+    }
+    match h.last_chunk::<8>() {
+        Some(w) => {
+            // (The window starts `seen` bytes before `at`: 1 to 7.)
+            let seen = at - (h.len() - 8);
+            let z = zeros(w) & (u64::MAX << (8 * seen));
+            (z != 0).then(|| h.len() - 8 + (z.trailing_zeros() / 8) as usize)
+        }
+        None => h.iter().position(|&c| c == b),
     }
 }
 
 /// `find_all`'s iterator.
 #[allow(clippy::large_enum_variant)] // one per search, on the stack: boxing the searcher would allocate per call
 enum Hits<'a> {
+    ShortByte { haystack: &'a [u8], byte: u8, from: usize },
     Byte(memchr::Memchr<'a>),
     Bytes(memmem::FindIter<'a, 'a>),
     Folded { haystack: &'a [u8], needle: &'a [u8], from: usize },
@@ -316,8 +360,14 @@ enum Hits<'a> {
 impl Iterator for Hits<'_> {
     type Item = usize;
 
+    #[inline]
     fn next(&mut self) -> Option<usize> {
         match self {
+            Hits::ShortByte { haystack, byte, from } => {
+                let at = *from + find_byte_short(&haystack[*from..], *byte)?;
+                *from = at + 1;
+                Some(at)
+            }
             Hits::Byte(it) => it.next(),
             Hits::Bytes(it) => it.next(),
             Hits::Folded { haystack, needle, from } => {
@@ -605,23 +655,56 @@ fn strncasecmp(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
 
 /// Replace every `search` in `subject` (case-insensitively if `fold`),
 /// counting replacements; None when there is nothing to replace (the
-/// subject stays as it is, uncopied).
-fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count: &mut i64) -> Option<Vec<u8>> {
-    if search.is_empty() {
-        return None;
+/// subject stays as it is, uncopied). A short result is built in its
+/// own buffer (`ShortBuild`: no memcpy call, no second copy); once it
+/// would not fit, what was built goes on in the scratch buffer.
+fn replace_one(subject: &[u8], search: &[u8], replace: &[u8], fold: bool, count: &mut i64) -> Option<PhpStr> {
+    match search {
+        [] => None,
+        // One byte in a short subject: the search in line (no iterator
+        // call per hit).
+        [b] if subject.len() <= SHORT_HAYSTACK && !(fold && foldable(search)) => {
+            replace_hits(subject, 1, replace, count, |from| Some(from + find_byte_short(&subject[from..], *b)?))
+        }
+        _ => {
+            let mut hits = find_all(subject, search, fold);
+            replace_hits(subject, search.len(), replace, count, |_| hits.next())
+        }
     }
-    let mut hits = find_all(subject, search, fold);
-    let first = hits.next()?;
-    let mut out = PhpStr::scratch(subject.len());
+}
+
+/// `replace_one`'s build, the hits of a search `len` bytes long given by
+/// `next` (the first at or after the offset it is given).
+#[inline(always)]
+fn replace_hits(subject: &[u8], len: usize, replace: &[u8], count: &mut i64, mut next: impl FnMut(usize) -> Option<usize>) -> Option<PhpStr> {
+    let mut found = Some(next(0)?);
+    let mut short = ShortBuild::new();
     let mut i = 0;
-    for found in std::iter::once(first).chain(hits) {
-        out.extend_from_slice(&subject[i..found]);
-        out.extend_from_slice(replace);
-        i = found + search.len();
+    while let Some(at) = found {
+        if at - i + replace.len() > short.room() {
+            break;
+        }
+        short.push(&subject[i..at]);
+        short.push(replace);
+        i = at + len;
         *count += 1;
+        found = next(i);
+    }
+    if found.is_none() && subject.len() - i <= short.room() {
+        short.push(&subject[i..]);
+        return Some(short.finish());
+    }
+    let mut out = PhpStr::scratch(subject.len());
+    out.extend_from_slice(short.as_bytes());
+    while let Some(at) = found {
+        out.extend_from_slice(&subject[i..at]);
+        out.extend_from_slice(replace);
+        i = at + len;
+        *count += 1;
+        found = next(i);
     }
     out.extend_from_slice(&subject[i..]);
-    Some(out)
+    Some(PhpStr::from_scratch(out))
 }
 
 /// A value's bytes as a string: a string's own, else converted into `buf`.
@@ -642,7 +725,7 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
     let mut subject_buf = Vec::new();
     let subject_bytes = text_of(subject, &mut subject_buf, diags);
     // The text once something was replaced.
-    let mut text: Option<Vec<u8>> = None;
+    let mut text: Option<PhpStr> = None;
     match search.as_array() {
         Some(searches) => {
             // An array of replacements pairs up with the searches (a
@@ -658,7 +741,7 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
                     },
                     None => text_of(replace, &mut with_buf, diags),
                 };
-                if let Some(out) = replace_one(text.as_deref().unwrap_or(subject_bytes), needle, with, fold, count) {
+                if let Some(out) = replace_one(text.as_ref().map_or(subject_bytes, |t| t.as_bytes()), needle, with, fold, count) {
                     text = Some(out);
                 }
             }
@@ -671,13 +754,34 @@ fn replace_in(subject: &Value, search: &Value, replace: &Value, fold: bool, coun
         }
     }
     match text {
-        Some(t) => Value::str(PhpStr::from_scratch(t)),
+        Some(t) => Value::str(t),
         None if subject.is_str() => subject.clone(),
         None => Value::str(PhpStr::new(subject_buf)),
     }
 }
 
+/// str_replace/str_ireplace. Three strings, the common call, are read in
+/// place, with nothing to convert or report (what `replace_in` does for
+/// them, with no copies); anything else is `replace_values`'.
+#[inline(always)]
 fn replace(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, Throw> {
+    let (Some(search), Some(with), Some(subject)) = (lent::str(args, 0), lent::str(args, 1), lent::str(args, 2)) else {
+        return replace_values(ctx, args, fold);
+    };
+    let mut count = 0;
+    let result = match replace_one(subject.as_bytes(), search.as_bytes(), with.as_bytes(), fold, &mut count) {
+        Some(t) => Value::str(t),
+        None => args[2].clone(),
+    };
+    if let Some(cell) = args.get(3).and_then(Value::as_reference) {
+        *cell.borrow_mut() = Value::int(count);
+    }
+    Ok(result)
+}
+
+/// `replace` of arrays and of values made strings.
+#[inline(never)]
+fn replace_values(ctx: &mut dyn Ctx, args: &mut [Value], fold: bool) -> Result<Value, Throw> {
     let (search, with, subject) = (arg(args, 0), arg(args, 1), arg(args, 2));
     if search.is_str() && with.is_array() {
         let name = if fold { "str_ireplace" } else { "str_replace" };
@@ -760,7 +864,7 @@ fn strtr_pairs(ctx: &mut dyn Ctx, s: PhpStr, pairs: &PhpArray) -> Value {
         }
         let mut count = 0;
         return match replace_one(s.as_bytes(), key.as_bytes(), &with, false, &mut count) {
-            Some(out) => Value::str(PhpStr::from_scratch(out)),
+            Some(out) => Value::str(out),
             None => Value::str(s),
         };
     }

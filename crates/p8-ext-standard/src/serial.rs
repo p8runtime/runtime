@@ -8,7 +8,8 @@
 use crate::arg;
 use p8_runtime::array::{EntryHere, Key, PhpArray};
 use p8_runtime::ext::{Builtin, Ctx, Throw};
-use p8_runtime::number::{Precision, float_to_string};use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
+use p8_runtime::number::{Precision, float_to_string};
+use p8_runtime::object::{CLASS_ENUM, CLASS_RESOURCE, Class, Object, Visibility};
 use p8_runtime::string::PhpStr;
 use p8_runtime::value::{Kind, Value};
 use std::rc::Rc;
