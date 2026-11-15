@@ -76,10 +76,8 @@ fn call_user_func(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw>
 
 fn call_user_func_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
     let callable = arg(args, 0);
-    // References in the list stay ones: the callee takes them where its
-    // parameters do.
-    let mut rest: Vec<Value> = array(args, 1).values().cloned().collect();
-    ctx.call(&callable, &mut rest)
+    // (Its string keys are named arguments.)
+    ctx.call_list(&callable, &array(args, 1))
 }
 
 fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
