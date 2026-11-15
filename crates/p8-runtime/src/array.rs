@@ -25,6 +25,11 @@ const POOL_MAX: usize = 256;
 thread_local! {
     static VALUES: RefCell<Pool<Value>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
     static BUCKETS: RefCell<Pool<Bucket>> = const { RefCell::new(Pool { eight: Vec::new(), sixteen: Vec::new() }) };
+    /// Freed small tables (SMALL buckets) kept as tables: every bucket
+    /// empty room again (see [`keep_ready`]), so the next small table
+    /// takes one as it is (no room to fill), and its free empties only
+    /// the entries it held.
+    static READY: RefCell<Vec<Vec<Bucket>>> = const { RefCell::new(Vec::new()) };
     /// Arrays copied on this thread (zend_array_dup's count): every copy
     /// allocates, so counting one is noise beside it.
     static COPIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -81,6 +86,43 @@ fn give<T>(pool: &'static std::thread::LocalKey<RefCell<Pool<T>>>, mut v: Vec<T>
     });
 }
 
+/// A hash's table done with, its first `used` buckets the entries it held:
+/// kept ([`give`]), a small one (SMALL buckets) as a table. Its entries
+/// are emptied, in order (their values go now, as with `give`), and the
+/// table kept whole for [`take_ready`]; the room after them is empty
+/// already (a small table has no chains, so no bucket of it holds a
+/// chain head).
+#[inline(always)]
+fn give_table(mut table: Vec<Bucket>, used: usize) {
+    if table.len() != SMALL || table.capacity() != SMALL {
+        give(&BUCKETS, table);
+        return;
+    }
+    for b in &mut table[..used] {
+        b.h = 0;
+        b.key = None;
+        b.value = Value::NULL;
+        b.next = NONE;
+    }
+    debug_assert!(table.iter().all(Bucket::is_room));
+    // (Dropping the values may free other arrays, which keep theirs: the
+    // pool is not borrowed meanwhile.)
+    let _ = READY.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut()
+            && p.len() < POOL_MAX
+        {
+            p.push(table);
+        }
+    });
+}
+
+/// A kept small table, every bucket empty room ([`keep_ready`]); None when
+/// there is none.
+#[inline]
+fn take_ready() -> Option<Vec<Bucket>> {
+    READY.try_with(|p| p.try_borrow_mut().ok().and_then(|mut p| p.pop())).ok().flatten()
+}
+
 /// A values buffer with room for `n` (an object's properties, a frame's
 /// extra arguments): from the pool when `n` is a pooled size.
 pub fn values_buffer(n: usize) -> Vec<Value> {
@@ -100,7 +142,7 @@ impl Drop for Packed {
 
 impl Drop for Hashed {
     fn drop(&mut self) {
-        give(&BUCKETS, std::mem::take(&mut self.buckets));
+        give_table(std::mem::take(&mut self.buckets), self.used);
     }
 }
 
@@ -121,7 +163,10 @@ pub(crate) fn free(a: std::rc::Rc<PhpArray>) {
     let Some(mut array) = std::rc::Rc::into_inner(a) else { return };
     match &mut array.storage {
         Storage::Packed(p) => give(&VALUES, std::mem::take(&mut p.slots)),
-        Storage::Hashed(h) => give(&BUCKETS, std::mem::take(&mut h.buckets)),
+        Storage::Hashed(h) => {
+            let used = h.used;
+            give_table(std::mem::take(&mut h.buckets), used);
+        }
     }
     // What is left holds nothing (an empty Vec): its `Drop` would only
     // give back an empty buffer.
@@ -402,6 +447,13 @@ const MIN_SIZE: usize = 8;
 const MIN_PACKED: usize = 8;
 /// Up to this many buckets a table has no chains (scanned).
 const SMALL: usize = 8;
+/// In the room [`PhpArray::list_with_capacity`] is asked for: the array
+/// is a keyed literal's (its first key a string), made a hash with room
+/// for its entries at once, as PHP's INIT_ARRAY makes a literal's table
+/// with its size, rather than a list turned into a hash at that key.
+/// (Bit 31: what an instruction's 32-bit operand carries, and no list
+/// is asked for that much room: 2^31 values are 32 GB.)
+pub const KEYED_ROOM: usize = 1 << 31;
 
 #[derive(Debug)]
 struct Bucket {
@@ -423,6 +475,11 @@ impl Bucket {
     /// Room for an entry.
     fn empty() -> Bucket {
         Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: NONE }
+    }
+
+    /// Whether it is what [`Bucket::empty`] makes.
+    fn is_room(&self) -> bool {
+        self.h == 0 && self.key.is_none() && self.value.is_null() && self.next == NONE && self.head == NONE
     }
 }
 
@@ -520,9 +577,20 @@ impl Clone for Packed {
 /// the whole table), as PHP copies nNumUsed buckets and the hash part.
 impl Clone for Hashed {
     fn clone(&self) -> Self {
+        let (taken, room) = self.buckets.split_at(self.used);
+        // A small table into a kept one: its entries written over the
+        // room there (a small table's room is all empty, as the kept
+        // one's).
+        if self.buckets.len() == SMALL
+            && let Some(mut buckets) = take_ready()
+        {
+            for (to, b) in buckets.iter_mut().zip(taken) {
+                *to = Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: NONE };
+            }
+            return Hashed { buckets, used: self.used, live: self.live };
+        }
         // (In a kept buffer when its size is a pooled one.)
         let mut buckets = take(&BUCKETS, self.buckets.len());
-        let (taken, room) = self.buckets.split_at(self.used);
         buckets.extend(taken.iter().map(|b| Bucket { h: b.h, key: b.key.clone(), value: dup(&b.value), next: b.next, head: b.head }));
         buckets.extend(room.iter().map(|b| Bucket { h: 0, key: None, value: Value::NULL, next: NONE, head: b.head }));
         Hashed { buckets, used: self.used, live: self.live }
@@ -533,6 +601,11 @@ impl Hashed {
     /// Empty, with room for `n` entries before it grows.
     fn with_capacity(n: usize) -> Hashed {
         let size = n.max(MIN_SIZE).next_power_of_two();
+        if size == SMALL
+            && let Some(buckets) = take_ready()
+        {
+            return Hashed { buckets, used: 0, live: 0 };
+        }
         assert!(size < UNSET as usize, "array too large");
         let mut buckets = take(&BUCKETS, size);
         buckets.resize_with(size, Bucket::empty);
@@ -693,6 +766,19 @@ impl Hashed {
         }
     }
 
+    /// [`set`](Self::set) of a string key (a keyed literal's element, a
+    /// record's field): the handle kept as the key only when it is new,
+    /// with no key enum carried through the lookup.
+    #[inline(never)]
+    fn set_str(&mut self, s: PhpStr, value: Value) {
+        let h = s.hash();
+        let found = if self.small() { self.scan(h, Probe::Str(&s)) } else { self.find(h, Probe::Str(&s)) };
+        match found {
+            Some(i) => self.buckets[i].value = value,
+            None => self.insert_new(h, Some(s), value),
+        }
+    }
+
     /// A new entry, last in order (`key` not present).
     #[inline(always)]
     fn insert_new(&mut self, h: u64, key: Option<PhpStr>, value: Value) {
@@ -825,8 +911,13 @@ impl PhpArray {
         PhpArray { storage: Storage::Packed(Packed::default()), next_free: None, cursor: 0 }
     }
 
-    /// An empty list with room for `capacity` elements pushed onto it.
+    /// An empty list with room for `capacity` elements pushed onto it; with
+    /// [`KEYED_ROOM`] set in it, an empty hash with room for the rest
+    /// (an array literal's `NewArray`, see there).
     pub fn list_with_capacity(capacity: usize) -> Self {
+        if capacity & KEYED_ROOM != 0 {
+            return Self::hashed(capacity & !KEYED_ROOM);
+        }
         let slots = if capacity == 0 { Vec::new() } else { take(&VALUES, capacity) };
         PhpArray { storage: Storage::Packed(Packed { slots, holes: 0 }), next_free: None, cursor: 0 }
     }
@@ -1087,6 +1178,12 @@ impl PhpArray {
     /// Set `key` to `value` (in place if present, else appended in order).
     pub fn insert(&mut self, key: Key, value: Value) {
         crate::counts::bump(crate::counts::Count::Insert);
+        // A string key into a hash (a keyed literal's elements): straight
+        // to the table's lookup.
+        let key = match (&mut self.storage, key) {
+            (Storage::Hashed(h), Key::Str(s)) => return h.set_str(s, value),
+            (_, key) => key,
+        };
         if let Key::Int(k) = key {
             self.note_int_key(k);
         }
