@@ -93,6 +93,44 @@ for ($i = 0; $i < 3; $i++) {
     var_dump($b->p);
 }
 
+echo "-- an int property written with floats by every way there is, then op=\n";
+class IW { public int $p = 0; public ?int $q = null; }
+function after($what, $o) {
+    quiet("$what +=", fn() => add($o, 1.5));
+    var_dump($o->p);
+}
+for ($i = 0; $i < 3; $i++) {
+    $o = new IW;
+    $o->p = 2.0;
+    after('assigned 2.0', $o);
+    $o = new IW;
+    [$o->p] = [3.0];
+    after('destructured', $o);
+    $o = new IW;
+    foreach ([4.0] as $o->p) {}
+    after('foreach', $o);
+    $o = new IW;
+    (new ReflectionProperty(IW::class, 'p'))->setValue($o, 5.0);
+    after('reflection', $o);
+    $o = new IW;
+    $r = &$o->p;
+    $r = 7.0;
+    unset($r);
+    after('through a reference', $o);
+    $o = new IW;
+    $o->p = 8;
+    $o->p++;
+    $o->p /= 3;
+    after('/=', $o);
+    $o = new IW;
+    $o->p = PHP_INT_MAX;
+    quiet('overflow', fn() => add($o, 1));
+    after('overflowed', $o);
+    $o = new IW;
+    (function () { $this->p = 9.0; })->call($o);
+    after('closure', $o);
+}
+
 echo "-- the other operators on two floats\n";
 // (A fresh object after the division by zero: what a failed operator leaves
 // in a typed property is #438's; the value of a converted `%` or `.` on a
@@ -158,6 +196,23 @@ for ($i = 0; $i < 3; $i++) {
     $f = new F;
     unset($f->p);
     show('typed unset', fn() => add($f, 0.5));
+}
+
+echo "-- one site, classes in turn: its entry filled again for each\n";
+class M2 {
+    public $p = 1.0;
+    public function __get($n) { echo "__get $n\n"; return 2.5; }
+    public function __set($n, $v) { echo "__set $n $v\n"; }
+}
+class M3 extends M2 {}
+for ($i = 0; $i < 3; $i++) {
+    $u = new U;
+    $m = new M2;
+    $n = new M3;
+    unset($n->p);
+    var_dump(add($u, 1.0), add($m, 1.0), add($n, 1.0), add($u, 1.0), add($n, 1.0), add($m, 1.0));
+    $l = (new ReflectionClass(F::class))->newLazyGhost(function ($o) { echo "init\n"; $o->p = 4.0; });
+    var_dump(add(new F, 1.0), add($l, 1.0), add($l, 1.0));
 }
 
 echo "-- \$this, a constant operand, and the released value\n";

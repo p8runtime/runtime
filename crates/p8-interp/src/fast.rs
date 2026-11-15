@@ -1853,10 +1853,8 @@ impl Context<'_> {
                             o
                         };
                         let Some(site) = clo.props.get((imm & 0xffff) as usize) else { slow!() };
-                        refill_if_missed(site, o, &clo.consts[(imm & 0xffff) as usize], top.scope.as_ref());
-                        let scope = top.scope.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
                         let y = if imm & insn::PROP_OP_K != 0 { cst!(b) } else { &w[rx!(b)] };
-                        let Some(v) = prop_op(o, site.get(), scope, insn::binop(imm >> 16), y) else { slow!() };
+                        let Some(v) = prop_op(o, site, &clo.consts, (imm & 0xffff) as usize, top.scope.as_ref(), insn::binop(imm >> 16), y) else { slow!() };
                         done!(put(&mut w[rx!(c)], v));
                     }
                     // `unset($x)`: the register undefined (a destructor due
@@ -2765,11 +2763,19 @@ fn isset_path(w: &[Value], var: usize, keys: usize, n: usize) -> Option<bool> {
 /// computed with no diagnostic and no error (`ops::binary`: no user code
 /// runs for scalars) and of the property's type: written, and returned.
 /// None for anything else (`step`'s: magic, hooks, a reference, an unset
-/// slot, a warning, a coercion).
+/// slot, a warning, a coercion). An entry that does not answer for this
+/// class or scope is filled again for them here (`refill_prop`, from the
+/// name, `consts[site]`), not in the arm: the arm tests nothing of the
+/// entry.
 #[inline(never)]
-fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -> Option<Value> {
+fn prop_op(o: &Rc<Object>, entry: &Cell<PropSite>, consts: &[Value], site: usize, scope: Option<&Rc<Class>>, op: BinOp, y: &Value) -> Option<Value> {
     let scalar = |v: &Value| matches!(v.kind(), Kind::Null | Kind::Bool | Kind::Int | Kind::Float | Kind::Str);
-    let slot = cached_slot(site, o, scope)?;
+    let at = scope.map_or(0, |c| Rc::as_ptr(c) as usize);
+    let slot = match cached_slot(entry.get(), o, at) {
+        Some(slot) => slot,
+        None if refill_prop(entry, o, consts.get(site)?, scope) => cached_slot(entry.get(), o, at)?,
+        None => return None,
+    };
     let p = &o.class.properties[slot];
     if o.class.flags & p8_runtime::object::CLASS_HOOKS != 0 || p.readonly || p.set_visibility.is_some() || !scalar(y) {
         return None;
@@ -2798,7 +2804,9 @@ fn prop_op(o: &Rc<Object>, site: PropSite, scope: usize, op: BinOp, y: &Value) -
     }
     // Two floats added, subtracted or multiplied (a float property's
     // `+=`): `ops::binary`'s first case (`float_plain`), with no copy of
-    // the old value, no diagnostics list and no call.
+    // the old value, no diagnostics list and no call. (The type test
+    // stays: a float can be in a slot whose type does not take one,
+    // ReflectionProperty::setValue's, #576, and unserialize's, #577.)
     if let Some(b) = y.as_float()
         && let Some(new) = cell.peek(|v| p8_runtime::ops::float_plain(op, v.as_float()?, b))
     {

@@ -360,6 +360,100 @@ string + 1.0
 string(3) "2.5"
 bool * 0.0
 bool(false)
+-- an int property written with floats by every way there is, then op=
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in %s on line 17
+assigned 2.0 +=
+int(3)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+destructured +=
+int(4)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in %s on line 17
+foreach +=
+int(5)
+
+Deprecated: Implicit conversion from float 6.5 to int loses precision in %s on line 17
+reflection +=
+int(6)
+
+Deprecated: Implicit conversion from float 8.5 to int loses precision in %s on line 17
+through a reference +=
+int(8)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+/= +=
+int(4)
+overflow: TypeError: Cannot assign float to property IW::$p of type int
+overflowed +=: TypeError: Cannot assign float to property IW::$p of type int
+int(9223372036854775807)
+
+Deprecated: Implicit conversion from float 10.5 to int loses precision in %s on line 17
+closure +=
+int(10)
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in %s on line 17
+assigned 2.0 +=
+int(3)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+destructured +=
+int(4)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in %s on line 17
+foreach +=
+int(5)
+
+Deprecated: Implicit conversion from float 6.5 to int loses precision in %s on line 17
+reflection +=
+int(6)
+
+Deprecated: Implicit conversion from float 8.5 to int loses precision in %s on line 17
+through a reference +=
+int(8)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+/= +=
+int(4)
+overflow: TypeError: Cannot assign float to property IW::$p of type int
+overflowed +=: TypeError: Cannot assign float to property IW::$p of type int
+int(9223372036854775807)
+
+Deprecated: Implicit conversion from float 10.5 to int loses precision in %s on line 17
+closure +=
+int(10)
+
+Deprecated: Implicit conversion from float 3.5 to int loses precision in %s on line 17
+assigned 2.0 +=
+int(3)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+destructured +=
+int(4)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in %s on line 17
+foreach +=
+int(5)
+
+Deprecated: Implicit conversion from float 6.5 to int loses precision in %s on line 17
+reflection +=
+int(6)
+
+Deprecated: Implicit conversion from float 8.5 to int loses precision in %s on line 17
+through a reference +=
+int(8)
+
+Deprecated: Implicit conversion from float 4.5 to int loses precision in %s on line 17
+/= +=
+int(4)
+overflow: TypeError: Cannot assign float to property IW::$p of type int
+overflowed +=: TypeError: Cannot assign float to property IW::$p of type int
+int(9223372036854775807)
+
+Deprecated: Implicit conversion from float 10.5 to int loses precision in %s on line 17
+closure +=
+int(10)
 -- the other operators on two floats
 U / 2.0: float(0.25)
 U / 0.0: DivisionByZeroError: Division by zero
@@ -464,6 +558,49 @@ __get p
 __set p
 magic unset: float(3)
 typed unset: Error: Typed property F::$p must not be accessed before initialization
+-- one site, classes in turn: its entry filled again for each
+__get p
+__set p 3.5
+__get p
+__set p 3.5
+float(1.5)
+float(2)
+float(3.5)
+float(2.5)
+float(3.5)
+float(3)
+init
+float(1.5)
+float(5)
+float(6)
+__get p
+__set p 3.5
+__get p
+__set p 3.5
+float(1.5)
+float(2)
+float(3.5)
+float(2.5)
+float(3.5)
+float(3)
+init
+float(1.5)
+float(5)
+float(6)
+__get p
+__set p 3.5
+__get p
+__set p 3.5
+float(1.5)
+float(2)
+float(3.5)
+float(2.5)
+float(3.5)
+float(3)
+init
+float(1.5)
+float(5)
+float(6)
 -- $this, a constant operand, and the released value
 array(2) {
   [0]=>
