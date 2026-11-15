@@ -39,6 +39,10 @@ impl Context<'_> {
         // the next round of the frame loop runs that frame here, even at
         // pc 0 (another frame, a callee it left pushed, is entered).
         let mut handed_back = 0;
+        // The objects' ids, whose destructor queue every releasing write
+        // tests (`done!`): held here, a load nearer than the context's.
+        // (Set once, when the context is made.)
+        let ids = Rc::clone(&self.ids);
         // (An exception the loop's out-of-line paths raise leaves the loop
         // with it, `threw!`, and out of `execute` from one place.)
         let threw: Throw = 'frame: loop {
@@ -116,7 +120,7 @@ impl Context<'_> {
                 ($released:expr) => {{
                     let released: bool = $released;
                     pc += 1;
-                    if released && self.ids.has_pending() {
+                    if released && ids.has_pending() {
                         pending!();
                     }
                 }};
@@ -335,7 +339,7 @@ impl Context<'_> {
                             // assignment calls.)
                             let _ = put(&mut w[rx!($dst)], v);
                             pc = at + 1;
-                            if self.ids.has_pending() {
+                            if ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                             top = self.frames.top();
@@ -370,7 +374,7 @@ impl Context<'_> {
                     }
                     leave(&mut self.frames, regs, value);
                     pc = self.frames.top().pc as usize;
-                    if self.ids.has_pending() {
+                    if ids.has_pending() {
                         pc = threw!(self.after_errors(regs, pc, pc.saturating_sub(1)));
                     }
                     continue 'frame;
@@ -409,7 +413,7 @@ impl Context<'_> {
                         Ctl::Skip(released) => {
                             let at = pc;
                             pc += 2;
-                            if released && self.ids.has_pending() {
+                            if released && ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                         }
@@ -435,7 +439,7 @@ impl Context<'_> {
                         Ctl::Skip(released) => {
                             let at = pc;
                             pc += 2;
-                            if released && self.ids.has_pending() {
+                            if released && ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                         }
@@ -499,7 +503,7 @@ impl Context<'_> {
                             // (A destructor the sends made due: `step` sends
                             // them again, the same values, and runs it.)
                             match send_vars(&mut w[..], &clo.code.arg_vars[usize::from(vars)], rx!(args), callee) {
-                                Some(released) if !(released && self.ids.has_pending()) => {}
+                                Some(released) if !(released && ids.has_pending()) => {}
                                 _ => slow!(),
                             }
                         }
@@ -551,7 +555,7 @@ impl Context<'_> {
                                 }
                                 if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize }
                             };
-                            if self.ids.has_pending() {
+                            if ids.has_pending() {
                                 pending_at!(next, pc);
                             }
                             pc = next;
@@ -583,7 +587,7 @@ impl Context<'_> {
                         } else if step == Step::End {
                             pc += 1;
                         } else if step == Step::Freed {
-                            if self.ids.has_pending() {
+                            if ids.has_pending() {
                                 pending_at!(imm as usize + 1, imm as usize);
                             }
                             pc = imm as usize + 1;
@@ -708,7 +712,7 @@ impl Context<'_> {
                         if let Some(r) = r {
                             let at = pc;
                             pc += 2;
-                            if put(&mut w[rx!(a)], r) && self.ids.has_pending() {
+                            if put(&mut w[rx!(a)], r) && ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                         } else {
@@ -910,7 +914,7 @@ impl Context<'_> {
                         };
                         match v {
                             Some(v) => {
-                                if put(&mut w[rx!(b)], v) && self.ids.has_pending() {
+                                if put(&mut w[rx!(b)], v) && ids.has_pending() {
                                     pending_at!(imm as usize, pc);
                                 }
                                 pc = imm as usize;
@@ -1074,7 +1078,7 @@ impl Context<'_> {
                                 let args = rk!((imm >> 16) as usize);
                                 if imm & insn::ARG_CONST != 0 {
                                     let v = cst!(start).clone();
-                                    if put(&mut w[args], v) && self.ids.has_pending() {
+                                    if put(&mut w[args], v) && ids.has_pending() {
                                         pc += 1;
                                         pending!();
                                     }
@@ -1087,7 +1091,7 @@ impl Context<'_> {
                                             slow!()
                                         };
                                         let _ = put(&mut w[rk!(args + k)], v);
-                                        if self.ids.has_pending() {
+                                        if ids.has_pending() {
                                             pc += k + 1;
                                             pending!();
                                         }
@@ -1120,7 +1124,7 @@ impl Context<'_> {
                                         Some(v) if self.diags.is_empty() && self.pending_errors.is_empty() => {
                                             let _ = put(&mut w[rx!(c)], v);
                                             pc += 2;
-                                            if self.ids.has_pending() {
+                                            if ids.has_pending() {
                                                 pending_at!(pc, pc - 1);
                                             }
                                             top = self.frames.top();
@@ -1153,7 +1157,7 @@ impl Context<'_> {
                         } else {
                             let Some(v) = copied(&w[start]) else { slow!() };
                             done!(put(&mut w[rk!((imm >> 16) as usize)], v));
-                            if self.ids.has_pending() {
+                            if ids.has_pending() {
                                 pending!();
                             }
                         }
@@ -1486,7 +1490,7 @@ impl Context<'_> {
                             let released = released | clear(&mut w[dst]);
                             let at = pc;
                             pc += 2;
-                            if released && self.ids.has_pending() {
+                            if released && ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                         } else {
@@ -1561,7 +1565,7 @@ impl Context<'_> {
                             let released = released | clear(&mut w[dst]);
                             let at = pc;
                             pc += 2;
-                            if released && self.ids.has_pending() {
+                            if released && ids.has_pending() {
                                 pending_at!(pc, at);
                             }
                         } else {
@@ -1826,7 +1830,7 @@ impl Context<'_> {
                         if new {
                             done!(released);
                         } else {
-                            if released && self.ids.has_pending() {
+                            if released && ids.has_pending() {
                                 pending_at!(imm as usize, pc);
                             }
                             pc = imm as usize;
@@ -2994,8 +2998,16 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
     // A frame with an Extra (arguments past its parameters, variables
     // named at run time, an included file's shared scope): one test.
     if frames.slots[n].extra.is_some() {
-        leave_extra(frames, regs);
+        return leave_extra(frames, regs, value);
     }
+    leave_frame(frames, regs, n, value);
+}
+
+/// `leave` past the Extra: frame `n` (the top) popped, its registers
+/// cleared, the value put in the caller's result register. (Inline in
+/// `leave`, where `slots[n]` was just checked: no second bounds check.)
+#[inline(always)]
+fn leave_frame(frames: &mut Frames, regs: &mut [Value], n: usize, value: Value) {
     frames.len = n;
     let frame = &mut frames.slots[n];
     // Locals die with the frame (before the result lands: the result
@@ -3027,14 +3039,17 @@ pub(crate) fn leave(frames: &mut Frames, regs: &mut [Value], value: Value) {
 }
 
 /// `leave`'s part for a frame with an Extra: the bindings it shares given
-/// back, the Extra recycled. Out of line: `leave` is in every return arm.
+/// back, the Extra recycled, then the rest of `leave`. Out of line:
+/// `leave` is in every return arm.
 #[cold]
 #[inline(never)]
-fn leave_extra(frames: &mut Frames, regs: &mut [Value]) {
+fn leave_extra(frames: &mut Frames, regs: &mut [Value], value: Value) {
     give_back_shared(frames, regs);
-    if let Some(extra) = frames.slots[frames.len - 1].extra.take() {
+    let n = frames.len - 1;
+    if let Some(extra) = frames.slots[n].extra.take() {
         crate::frames::recycle_extra(&mut frames.spare, extra);
     }
+    leave_frame(frames, regs, n, value);
 }
 
 /// Whether a value holds nothing to release (a scalar, null, undefined):
