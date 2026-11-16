@@ -260,6 +260,11 @@ pub trait Ctx {
     /// through its get hook (from a builtin marked as reentering); None
     /// when it has none (unset, or virtual without a get hook).
     fn prop_value(&mut self, o: &Rc<crate::object::Object>, slot: usize) -> Result<Option<Value>, Throw>;
+    /// `value` as `o`'s declared property at `slot` takes it from code of
+    /// this strict_types (zend_verify_property_type): unchanged when the
+    /// property is untyped or the value is of its type, converted when the
+    /// mode allows it, else the TypeError an assignment throws.
+    fn typed_prop_value(&mut self, o: &crate::object::Object, slot: usize, value: Value, strict: bool) -> Result<Value, Throw>;
     /// A class constant's value, its code run first if it has not run yet
     /// (as `C::NAME` does); None when the class has no such constant.
     fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw>;

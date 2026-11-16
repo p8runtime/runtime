@@ -1526,7 +1526,13 @@ fn rpr_set_value(ctx: &mut dyn Ctx, this: &Rc<Object>, args: &mut [Value]) -> Re
     };
     let v = arg(args, 1);
     match slot.and_then(|_| o.class.slot(name.as_bytes(), Some(&class.lower))) {
-        Some(i) => o.slots()[i].assign(v),
+        // A typed property takes it as an assignment does, in coercive
+        // mode whatever the caller's strict_types (zend_update_property_ex
+        // checks it from setValue's own internal frame).
+        Some(i) => {
+            let v = ctx.typed_prop_value(&o, i, v, false)?;
+            o.slots()[i].assign(v)
+        }
         None => {
             o.dynamic_mut().insert(Key::from_string(PhpStr::from(name.as_str())), v);
         }
