@@ -1,0 +1,85 @@
+DivisionByZeroError: Division by zero
+f: float(0)
+DivisionByZeroError: Division by zero
+i: int(0)
+DivisionByZeroError: Division by zero
+nf: float(0)
+DivisionByZeroError: Division by zero
+ni: int(0)
+DivisionByZeroError: Division by zero
+m: int(0)
+DivisionByZeroError: Division by zero
+s: string(1) "6"
+DivisionByZeroError: Division by zero
+b: bool(true)
+DivisionByZeroError: Division by zero
+is: int(0)
+DivisionByZeroError: Division by zero
+fs: float(0)
+DivisionByZeroError: Division by zero
+if: int(0)
+DivisionByZeroError: Division by zero
+fi: int(0)
+TypeError: Unsupported operand types: string / int
+sb: string(1) "x"
+DivisionByZeroError: Division by zero
+u: int(9)
+DivisionByZeroError: Modulo by zero
+float(0)
+ArithmeticError: Bit shift by negative number
+int(0)
+ArithmeticError: Bit shift by negative number
+int(0)
+TypeError: Unsupported operand types: int ** array
+int(0)
+TypeError: Unsupported operand types: int + stdClass
+int(0)
+TypeError: Unsupported operand types: int - array
+int(0)
+Error: Object of class stdClass could not be converted to string
+int(0)
+TypeError: Unsupported operand types: int | stdClass
+int(0)
+TypeError: Unsupported operand types: array + int
+array(1) {
+  [0]=>
+  int(1)
+}
+TypeError: Cannot assign string to property C::$f of type float
+float(3)
+Error: Object of class stdClass could not be converted to string
+string(2) "ab"
+DivisionByZeroError: Division by zero
+int(0)
+DivisionByZeroError: Division by zero
+int(0)
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 82
+DivisionByZeroError: Modulo by zero
+float(0)
+int(-10)
+DivisionByZeroError: Division by zero
+int(0)
+int(12)
+DivisionByZeroError: Division by zero
+int(0)
+DivisionByZeroError: Modulo by zero
+float(0)
+DivisionByZeroError: Division by zero
+int(4)
+DivisionByZeroError: Division by zero
+int(4)
+DivisionByZeroError: Division by zero
+int(4)
+DivisionByZeroError: Division by zero
+int(3)
+DivisionByZeroError: Division by zero
+float(7)
+DivisionByZeroError: Division by zero
+array(1) {
+  ["k"]=>
+  float(7)
+}
+destructed
+TypeError: Unsupported operand types: D / int
+int(0)
