@@ -118,10 +118,16 @@ pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Val
     }
     for (i, arg) in args.iter_mut().enumerate() {
         let Some(param) = params.get(i).or_else(|| params.last().filter(|p| p.variadic)) else { break };
-        // By reference, or plainly of a type the parameter takes: nothing
-        // to check or convert (accepts would say Yes, convert would keep it).
+        if param.by_ref {
+            if by_ref_refuses(param, arg) {
+                return Err(type_refused(sig, i, param, arg));
+            }
+            continue;
+        }
+        // Plainly of a type the parameter takes: nothing to check or
+        // convert (accepts would say Yes, convert would keep it).
         // A plain callable is the engine's to check ([`callback_error`]).
-        if param.by_ref || pure_callable(param) || plainly(param, arg) {
+        if pure_callable(param) || plainly(param, arg) {
             continue;
         }
         match accepts(param, arg) {
@@ -134,25 +140,52 @@ pub fn check_counted(sig: &Sig, (required, max): (usize, usize), args: &mut [Val
                 type_to_string(param.mask, param.classes)
             ))),
             Accept::Deprecated(message) => diags.push(Diag::Deprecated(message)),
-            Accept::No => {
-                return Err((
-                    "TypeError",
-                    format!(
-                        "{}(): Argument #{}{} must be of type {}, {} given",
-                        sig.name,
-                        i + 1,
-                        label(param),
-                        type_to_string(param.mask, param.classes),
-                        value_name(arg)
-                    ),
-                ));
-            }
+            Accept::No => return Err(type_refused(sig, i, param, arg)),
         }
         if let Some(converted) = convert(param.mask, arg) {
             *arg = converted;
         }
     }
     Ok(())
+}
+
+/// Whether a by-reference `array` parameter (`array`, `?array` or
+/// `array|object`: the sort family, array_push, end, array_walk, ...)
+/// refuses the referenced value, of another kind (an undefined variable
+/// passed is null), as Z_PARAM_ARRAY_EX / Z_PARAM_ARRAY_OR_OBJECT_EX check
+/// it; nothing is converted. Other by-reference parameters (out
+/// parameters, untyped or scalar) are the builtin's to read. (As `accepts`
+/// answers for such a type, the referenced array, the common case, first.)
+#[inline]
+fn by_ref_refuses(param: &Param, value: &Value) -> bool {
+    let mask = param.mask;
+    if mask & T_ARRAY == 0 || mask & !(T_ARRAY | T_OBJECT | T_NULL) != 0 || !param.classes.is_empty() {
+        return false;
+    }
+    let refused = |v: &Value| match v.kind() {
+        Kind::Array => false,
+        Kind::Null | Kind::Undef => mask & T_NULL == 0,
+        Kind::Object => mask & T_OBJECT == 0,
+        _ => true,
+    };
+    match value.as_reference() {
+        Some(cell) => refused(&cell.borrow()),
+        None => refused(value),
+    }
+}
+
+/// The TypeError for argument `i` (0-based) of `sig`, `arg`, which its
+/// parameter does not take. `array|object` is named "array": ZPP's
+/// Z_PARAM_ARRAY_OR_OBJECT reports Z_EXPECTED_ARRAY.
+#[cold]
+#[inline(never)]
+fn type_refused(sig: &Sig, i: usize, param: &Param, arg: &Value) -> Refused {
+    let shown = if param.mask == T_ARRAY | T_OBJECT && param.classes.is_empty() {
+        "array".to_string()
+    } else {
+        type_to_string(param.mask, param.classes)
+    };
+    ("TypeError", format!("{}(): Argument #{}{} must be of type {shown}, {} given", sig.name, i + 1, label(param), value_name(arg)))
 }
 
 /// Whether `value` is of a kind `param` takes as it is: untyped or mixed,
@@ -436,5 +469,20 @@ mod tests {
         assert_eq!(r, Err(("TypeError", "str_repeat(): Argument #2 ($times) must be of type int, string given".into())));
         let (r, ..) = run("str_repeat", vec![s("a"), Value::TRUE, Value::int(1)]);
         assert_eq!(r, Err(("ArgumentCountError", "str_repeat() expects exactly 2 arguments, 3 given".into())));
+    }
+
+    /// A by-reference array parameter refuses another kind, null included;
+    /// out parameters take anything.
+    #[test]
+    fn by_ref_arrays_follow_php() {
+        let r = Value::new_reference;
+        let (res, ..) = run("sort", vec![r(Value::NULL)]);
+        assert_eq!(res, Err(("TypeError", "sort(): Argument #1 ($array) must be of type array, null given".into())));
+        let (res, ..) = run("end", vec![r(s("x"))]);
+        assert_eq!(res, Err(("TypeError", "end(): Argument #1 ($array) must be of type array, string given".into())));
+        let (res, ..) = run("sort", vec![r(Value::array(PhpArray::default()))]);
+        assert_eq!(res, Ok(()));
+        let (res, ..) = run("preg_match", vec![s("/a/"), s("a"), r(Value::int(1))]);
+        assert_eq!(res, Ok(()));
     }
 }

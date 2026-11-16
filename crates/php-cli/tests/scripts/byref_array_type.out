@@ -1,0 +1,58 @@
+usort: TypeError: usort(): Argument #1 ($array) must be of type array, null given
+uasort: TypeError: uasort(): Argument #1 ($array) must be of type array, null given
+uksort: TypeError: uksort(): Argument #1 ($array) must be of type array, null given
+sort: TypeError: sort(): Argument #1 ($array) must be of type array, null given
+rsort: TypeError: rsort(): Argument #1 ($array) must be of type array, null given
+asort: TypeError: asort(): Argument #1 ($array) must be of type array, null given
+arsort: TypeError: arsort(): Argument #1 ($array) must be of type array, null given
+ksort: TypeError: ksort(): Argument #1 ($array) must be of type array, null given
+krsort: TypeError: krsort(): Argument #1 ($array) must be of type array, null given
+natsort: TypeError: natsort(): Argument #1 ($array) must be of type array, null given
+natcasesort: TypeError: natcasesort(): Argument #1 ($array) must be of type array, null given
+shuffle: TypeError: shuffle(): Argument #1 ($array) must be of type array, null given
+array_pop: TypeError: array_pop(): Argument #1 ($array) must be of type array, null given
+array_shift: TypeError: array_shift(): Argument #1 ($array) must be of type array, null given
+end: TypeError: end(): Argument #1 ($array) must be of type array, null given
+reset: TypeError: reset(): Argument #1 ($array) must be of type array, null given
+next: TypeError: next(): Argument #1 ($array) must be of type array, null given
+prev: TypeError: prev(): Argument #1 ($array) must be of type array, null given
+array_push: TypeError: array_push(): Argument #1 ($array) must be of type array, null given
+array_unshift: TypeError: array_unshift(): Argument #1 ($array) must be of type array, null given
+array_splice: TypeError: array_splice(): Argument #1 ($array) must be of type array, null given
+array_walk: TypeError: array_walk(): Argument #1 ($array) must be of type array, null given
+array_walk_recursive: TypeError: array_walk_recursive(): Argument #1 ($array) must be of type array, null given
+sort(): Argument #1 ($array) must be of type array, null given on line 31
+NULL
+sort null: TypeError: sort(): Argument #1 ($array) must be of type array, null given
+sort string: TypeError: sort(): Argument #1 ($array) must be of type array, string given
+string(3) "abc"
+array_push int: TypeError: array_push(): Argument #1 ($array) must be of type array, int given
+int(5)
+end float: TypeError: end(): Argument #1 ($array) must be of type array, float given
+array_walk bool: TypeError: array_walk(): Argument #1 ($array) must be of type array, false given
+usort object: TypeError: usort(): Argument #1 ($array) must be of type array, stdClass given
+shuffle object: TypeError: shuffle(): Argument #1 ($array) must be of type array, stdClass given
+sort array: true
+1,2,3
+usort array: true
+3,2,1
+array_push array: 4
+3,2,1,9
+end array: 9
+cufa sort: TypeError: sort(): Argument #1 ($array) must be of type array, null given
+array_multisort(): Argument #1 ($array) must be an array or a sort flag that has not already been specified
+array_multisort(): Argument #1 ($array) must be an array or a sort flag
+array_multisort(): Argument #2 must be an array or a sort flag
+array_multisort(): Argument #2 must be a valid sort flag
+current: TypeError: current(): Argument #1 ($array) must be of type array, int given
+key: TypeError: key(): Argument #1 ($array) must be of type array, int given
+pos: TypeError: pos(): Argument #1 ($array) must be of type array, int given
+http_build_query: TypeError: http_build_query(): Argument #1 ($data) must be of type array, string given
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+string(3) "bbb"
+int(3)
+global marker

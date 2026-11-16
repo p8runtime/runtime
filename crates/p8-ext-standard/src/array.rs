@@ -642,6 +642,8 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
     // Each array, with its order (descending?) and flags.
     let mut arrays: Vec<(usize, bool, i64)> = Vec::new();
     let (mut order_free, mut type_free) = (false, false);
+    // "Argument #1 ($array)"; the rest are variadic, named by number alone.
+    let arg_no = |i: usize| if i == 0 { "#1 ($array)".to_string() } else { format!("#{}", i + 1) };
     for (i, a) in args.iter().enumerate() {
         let a = a.deref();
         match a.kind() {
@@ -661,12 +663,12 @@ fn array_multisort(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw
                         type_free = false;
                     }
                     0..=6 => {
-                        return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified", i + 1)));
+                        return Err(ctx.throw("TypeError", format!("array_multisort(): Argument {} must be an array or a sort flag that has not already been specified", arg_no(i))));
                     }
-                    _ => return Err(ctx.throw("ValueError", format!("array_multisort(): Argument #{} must be a valid sort flag", i + 1))),
+                    _ => return Err(ctx.throw("ValueError", format!("array_multisort(): Argument {} must be a valid sort flag", arg_no(i)))),
                 }
             }
-            _ => return Err(ctx.throw("TypeError", format!("array_multisort(): Argument #{} must be an array or a sort flag", i + 1))),
+            _ => return Err(ctx.throw("TypeError", format!("array_multisort(): Argument {} must be an array or a sort flag", arg_no(i)))),
         }
     }
     let columns: Vec<Vec<(Key, Value)>> = arrays
