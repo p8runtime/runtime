@@ -210,6 +210,11 @@ pub trait Ctx {
     /// one: its values in order (a reference stays one where the callee
     /// takes one), its string keys named arguments.
     fn call_list(&mut self, callable: &Value, list: &crate::array::PhpArray) -> Result<Value, Throw>;
+    /// forward_static_call(_array): [`Ctx::call`] on `args` (with `list`,
+    /// [`Ctx::call_list`] on it), where a call with no `$this` takes the
+    /// running code's called class when that is, or extends, the class
+    /// the callable names (late static binding passed on).
+    fn forward_static(&mut self, callable: &Value, args: &mut [Value], list: Option<&crate::array::PhpArray>) -> Result<Value, Throw>;
     /// is_callable(): whether `v` names something that can be called.
     fn is_callable(&mut self, v: &Value) -> bool;
     /// Why `v` cannot be called from the running code, as PHP words it

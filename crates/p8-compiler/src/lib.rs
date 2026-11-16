@@ -2908,6 +2908,12 @@ impl<'src> Compiler<'src> {
                 Some((name, class)) => place_of(name.as_bytes(), class.as_ref().map(|c| c.as_bytes())),
                 None => self.file.to_string(),
             }
+        } else if f.name.as_bytes().starts_with(b"{closure") {
+            // Made in a closure: that closure's name alone, no class and
+            // no `()` (zend_begin_func_decl: "If the parent function is a
+            // closure, don't redundantly add the classname and
+            // parentheses").
+            String::from_utf8_lossy(f.name.as_bytes()).into_owned()
         } else {
             place_of(f.name.as_bytes(), f.class.as_ref().map(|c| c.as_bytes()))
         };
