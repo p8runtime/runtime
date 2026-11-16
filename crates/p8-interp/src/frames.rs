@@ -106,6 +106,42 @@ pub(crate) fn give_back_shared(frames: &mut Frames, regs: &mut [Value]) {
 }
 
 impl Frame {
+    /// The frame's scope `scope` (a method's: the class its code is in):
+    /// kept as it is when the slot has that class already.
+    #[inline(always)]
+    pub(crate) fn keep_scope(&mut self, scope: &Rc<Class>) {
+        if !self.scope.as_ref().is_some_and(|s| Rc::ptr_eq(s, scope)) {
+            self.scope = Some(Rc::clone(scope));
+        }
+    }
+
+    /// The class the frame was called on, `called` (None: `$this`'s),
+    /// kept as it is when the slot has it already.
+    #[inline(always)]
+    pub(crate) fn keep_called(&mut self, called: Option<&Rc<Class>>) {
+        match called {
+            None => {
+                if self.called.is_some() {
+                    self.called = None;
+                }
+            }
+            Some(c) => {
+                if !self.called.as_ref().is_some_and(|s| Rc::ptr_eq(s, c)) {
+                    self.called = Some(Rc::clone(c));
+                }
+            }
+        }
+    }
+
+    /// The classes a method's frame left in its slot, given back (a
+    /// function's frame has none).
+    #[cold]
+    #[inline(never)]
+    fn forget_classes(&mut self) {
+        self.scope = None;
+        self.called = None;
+    }
+
     /// The class `static::` names: the one the frame was called on. A
     /// method frame with `$this` may leave `called` empty, as PHP takes it
     /// from `$this` (`Z_OBJCE(This)`): it is `$this`'s class.
@@ -318,11 +354,34 @@ impl Frames {
         self.push_code(func, base, argc, ret)
     }
 
-    /// `push`, of `func` (None: the next slot's). The slot takes a count
-    /// of the code only when it does not run it already: the same
-    /// function called again from the same depth takes none.
+    /// `call`, of a method: the slot's classes left as the last frame at
+    /// this depth had them (`leave` gives back only `$this`), for the
+    /// caller to set (`Frame::keep_scope`, `Frame::keep_called`), so that
+    /// a method of the class the slot has already takes no count of it and
+    /// gives none back.
+    #[inline(always)]
+    pub(crate) fn call_method(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        self.top_mut().pc = resume as u32;
+        self.push_slot(func, base, argc, ret)
+    }
+
+    /// `push_slot`, its classes none: the frame of a function, or of code
+    /// that sets them after the push.
     #[inline(always)]
     fn push_code(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        let frame = self.push_slot(func, base, argc, ret);
+        if frame.scope.is_some() || frame.called.is_some() {
+            frame.forget_classes();
+        }
+        frame
+    }
+
+    /// `push`, of `func` (None: the next slot's). The slot takes a count
+    /// of the code only when it does not run it already: the same
+    /// function called again from the same depth takes none. Its classes
+    /// are the last frame's at this depth (none in a new slot).
+    #[inline(always)]
+    fn push_slot(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
         let n = self.len;
         self.len = n + 1;
         if n >= self.slots.len() {

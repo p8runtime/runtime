@@ -1,0 +1,18 @@
+a-private Cannot access private property A::$secret
+B A/A
+A/B B/B a-private
+a-private Cannot access private property A::$secret c-private
+Cannot access private property A::$secret get_called_class() must be called from within a class
+A/B Cannot access private property C::$secret
+a-private Cannot access private property A::$secret
+B A/A
+A/B B/B a-private
+a-private Cannot access private property A::$secret c-private
+Cannot access private property A::$secret get_called_class() must be called from within a class
+A/B Cannot access private property C::$secret
+a-private Cannot access private property A::$secret
+B A/A
+A/B B/B a-private
+a-private Cannot access private property A::$secret c-private
+Cannot access private property A::$secret get_called_class() must be called from within a class
+A/B Cannot access private property C::$secret

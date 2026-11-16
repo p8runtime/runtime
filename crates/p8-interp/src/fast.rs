@@ -511,10 +511,10 @@ impl Context<'_> {
                         }
                         // (No Closure object: the slot's `owner` is empty,
                         // as `leave` left it.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
-                        frame.scope = Some(scope);
-                        frame.called = Some(called);
+                        frame.keep_scope(&scope);
+                        frame.keep_called(Some(&called));
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1223,19 +1223,26 @@ impl Context<'_> {
                             uncached!();
                         }
                         let Some(o) = w[rx!(obj)].as_object() else { uncached!() };
+                        let up = (word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX;
                         let mut declaring = &o.class;
-                        for _ in 0..(word >> p8_bytecode::callee::UP_SHIFT) as u32 & p8_bytecode::callee::UP_MAX {
+                        for _ in 0..up {
                             let Some(parent) = &declaring.parent else { uncached!() };
                             declaring = parent;
                         }
-                        let declaring = Rc::clone(declaring);
                         // The receiver moves out of its temporary into the
                         // call's `$this`: no count taken, none given back.
                         let Ok(this) = std::mem::replace(&mut w[rx!(obj)], Value::UNDEF).into_object() else { uncached!() };
+                        // (Its class's parents, `up` of them, are there:
+                        // walked above.)
+                        let mut declaring = &this.class;
+                        for _ in 0..up {
+                            declaring = declaring.parent.as_ref().expect("a parent walked above");
+                        }
                         // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.keep_scope(declaring);
+                        frame.keep_called(None);
                         frame.this = Some(this);
-                        frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1304,17 +1311,24 @@ impl Context<'_> {
                             let Some(parent) = &declaring.parent else { uncached!() };
                             declaring = parent;
                         }
-                        let declaring = Rc::clone(declaring);
+                        let up = q.up;
                         let this = Rc::clone(o);
                         // A temporary (`(new A)->f()`) is released as it is used:
                         // the call's `$this` holds the object.
                         if !on_this && is_temp(&clo.code, Reg::from(obj)) {
                             clear(&mut w[rx!(obj)]);
                         }
+                        // (Its class's parents, `up` of them, are there:
+                        // walked above.)
+                        let mut declaring = &this.class;
+                        for _ in 0..up {
+                            declaring = declaring.parent.as_ref().expect("a parent walked above");
+                        }
                         // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        frame.keep_scope(declaring);
+                        frame.keep_called(None);
                         frame.this = Some(this);
-                        frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1384,9 +1398,10 @@ impl Context<'_> {
                                 self.last_new = None;
                                 object.destructed.set(false);
                                 // (No `called`: it is the object's class, `called_class`.)
-                                let frame = self.frames.call(Some(&f), pc + 1, base + args as usize, n, NO_RET);
+                                let frame = self.frames.call_method(Some(&f), pc + 1, base + args as usize, n, NO_RET);
                                 frame.this = Some(object);
-                                frame.scope = Some(declaring);
+                                frame.keep_scope(&declaring);
+                                frame.keep_called(None);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
                                 continue 'frame;
@@ -1432,9 +1447,10 @@ impl Context<'_> {
                         place_spread(regs, at, list.as_array().expect("an array"));
                         drop(list);
                         // (No `called`: it is the object's class, `called_class`.)
-                        let frame = self.frames.call(Some(&f), pc + 1, at, n, NO_RET);
+                        let frame = self.frames.call_method(Some(&f), pc + 1, at, n, NO_RET);
                         frame.this = Some(object);
-                        frame.scope = Some(declaring);
+                        frame.keep_scope(&declaring);
+                        frame.keep_called(None);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -3075,11 +3091,11 @@ fn leave_frame(frames: &mut Frames, regs: &mut [Value], n: usize, value: Value) 
         clear(r);
     }
     // `$this` goes after the arguments, as in PHP (it decides which
-    // object id is free first).
-    if frame.scope.is_some() {
+    // object id is free first). The classes stay in the slot for the
+    // next frame at this depth (`Frames::call_method`; any other push
+    // gives them back).
+    if frame.this.is_some() {
         frame.this = None;
-        frame.scope = None;
-        frame.called = None;
     }
     // The Closure it was called as (a generator's frame gave its
     // Generator back before it got here).
