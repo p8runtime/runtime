@@ -76,9 +76,15 @@ impl Context<'_> {
             }
             handed_back = 0;
             let mut top = self.frames.top();
-            let mut clo = &*top.func;
+            // The frame's function, held here for the round: the closure
+            // and its code borrow this, not the context, so they stay as
+            // they are through what borrows the context whole (a
+            // frameless call, MakeClosure, StaticVar), and the code's end
+            // is fixed for the round (a jump makes only the position).
+            let func = Rc::clone(&top.func);
+            let clo = &*func;
             let base = top.base as usize;
-            let mut code = &clo.code.insns[..];
+            let code = &clo.code.insns[..];
             // The frame's instructions from the next one to run: the
             // dispatch takes the next of them, so a straight-line
             // instruction's arm moves nothing, and the loop keeps one
@@ -384,8 +390,6 @@ impl Context<'_> {
                                 pending_at!(at + 1, at);
                             }
                             top = self.frames.top();
-                            clo = &*top.func;
-                            code = &clo.code.insns[..];
                             goto!(at + 1);
                         }
                         r => {
@@ -1170,9 +1174,7 @@ impl Context<'_> {
                                                 pending_at!(pc + 2, pc + 1);
                                             }
                                             top = self.frames.top();
-                                            clo = &*top.func;
-                                            code = &clo.code.insns[..];
-                                            goto!(pc + 2);
+                                            skip!();
                                         }
                                         r => {
                                             // The argument register as the
@@ -1472,15 +1474,10 @@ impl Context<'_> {
                     // captures follow.
                     Op::MakeClosure => {
                         ops!(a, b, c, imm);
-                        let lambda = Arc::clone(&clo.code.lambdas[(imm & 0xffff) as usize]);
-                        let at = pc!();
-                        let object = self.make_closure(&lambda, imm >> 16 != 0);
+                        let object = self.make_closure(&clo.code.lambdas[(imm & 0xffff) as usize], imm >> 16 != 0);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after a frameless call.)
                         top = self.frames.top();
-                        clo = &*top.func;
-                        code = &clo.code.insns[..];
-                        goto!(at + 1);
                         done!(put(&mut w[rx!(a)], Value::object(object)));
                     }
                     // `...$rest`: its own argument (if passed) and those
@@ -1864,16 +1861,10 @@ impl Context<'_> {
                     // initializer when it was made before.
                     Op::StaticVar => {
                         ops!(a, b, c, imm);
-                        let func = Arc::clone(&clo.code);
-                        let at = pc!();
-                        let (cell, new) = self.static_var(&func, u16::from(b) | u16::from(c) << 8);
-                        drop(func);
+                        let (cell, new) = self.static_var(&clo.code, u16::from(b) | u16::from(c) << 8);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after MakeClosure.)
                         top = self.frames.top();
-                        clo = &*top.func;
-                        code = &clo.code.insns[..];
-                        goto!(at + 1);
                         let released = put(&mut w[rx!(a)], Value::reference(cell));
                         if new {
                             done!(released);
