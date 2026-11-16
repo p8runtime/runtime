@@ -5456,8 +5456,12 @@ impl Context<'_> {
         };
         let declared = func.params.iter().filter(|p| !p.variadic).count();
         let exactly = if func.required == declared { "exactly" } else { "at least" };
-        let name = match &func.class {
-            Some(class) => format!("{}::{}", String::from_utf8_lossy(class.as_bytes()), String::from_utf8_lossy(func.name.as_bytes())),
+        // A closure is named with the class it runs bound to (its scope:
+        // Closure::call's object's class, bind's), PHP's
+        // func->common.scope; anything else with the class it is in.
+        let class = if func.name.as_bytes().starts_with(b"{closure") { class.map(|(c, _)| c.as_bytes()) } else { func.class.as_ref().map(|c| c.as_bytes()) };
+        let name = match class {
+            Some(class) => format!("{}::{}", String::from_utf8_lossy(class), String::from_utf8_lossy(func.name.as_bytes())),
             None => String::from_utf8_lossy(func.name.as_bytes()).into_owned(),
         };
         Throw::Error {
