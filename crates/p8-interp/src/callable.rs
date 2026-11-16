@@ -516,7 +516,7 @@ impl Context<'_> {
 
     /// CallValue: call `callee` with the `argc` arguments at `args`
     /// (absolute registers), its result to `ret`.
-    pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+    pub(crate) fn call_value(&mut self, regs: &mut Vec<Value>, callee: &Value, args: usize, argc: usize, ret: u32, pc: usize) -> Result<Next, Throw> {
         // A Closure of PHP code: its frame made from the closure itself, and
         // its captured values put straight into the callee's variables, no
         // list of them made per call (ZEND_BIND_LEXICAL bound them once, at
@@ -540,13 +540,13 @@ impl Context<'_> {
     }
 
     /// `call_value` of a callable already resolved.
-    pub(crate) fn call_target(&mut self, regs: &mut Vec<Value>, target: Target, args: usize, argc: u8, ret: u32, pc: usize) -> Result<Next, Throw> {
+    pub(crate) fn call_target(&mut self, regs: &mut Vec<Value>, target: Target, args: usize, argc: usize, ret: u32, pc: usize) -> Result<Next, Throw> {
         match target {
             Target::Frame(m) => {
                 // Arguments arrive by value: a reference is read through,
                 // unless its parameter takes one (a spread call's).
                 let by_ref = |n: usize| matches!(&m.func, Code::User(f) if f.code.param_by_ref(n));
-                for (n, r) in regs[args..args + argc as usize].iter_mut().enumerate() {
+                for (n, r) in regs[args..args + argc].iter_mut().enumerate() {
                     if let Some(cell) = r.as_reference()
                         && !by_ref(n)
                     {
@@ -795,9 +795,9 @@ impl Context<'_> {
             self.run_destructors(regs)?;
         }
         match target {
-            Target::Frame(m) => self.call_method(regs, m, at, n as u8, (base + dst as usize) as u32, pc),
+            Target::Frame(m) => self.call_method(regs, m, at, n, (base + dst as usize) as u32, pc),
             Target::Builtin(b) => {
-                self.call_builtin(regs, base, b, args + 1, n as u8, dst)?;
+                self.call_builtin(regs, base, b, args + 1, n, dst)?;
                 Ok(Next::Go(pc))
             }
         }
@@ -1187,7 +1187,6 @@ impl Context<'_> {
     /// `run_nested_at`'s body, which every callback's run takes.)
     #[inline(always)]
     fn run_placed(&mut self, regs: &mut Vec<Value>, m: MethodFrame, argc: usize, at: usize) -> Result<Value, Throw> {
-        let argc = argc as u8;
         let (saved_pc, saved_floor) = (self.pc, self.frames.floor);
         let caller_pc = self.frames.last().map_or(0, |f| f.pc);
         // The callee's result lands in its first register (written after

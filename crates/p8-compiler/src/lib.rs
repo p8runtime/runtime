@@ -1255,9 +1255,12 @@ pub(crate) fn map_regs(instr: &mut Instr, mut f: impl FnMut(Reg) -> Reg) {
 
 pub use p8_bytecode::Program;
 
-/// Whether a call's arguments go as one array (`...` or a named argument).
+/// Whether a call's arguments go as one array (`...`, a named argument,
+/// or more than 255 of them).
 fn needs_spread(args: &[p8_syntax::ast::Arg]) -> bool {
-    args.iter().any(|a| a.unpack || a.name.is_some())
+    // More than a call instruction's u8 count can hold: the arguments go
+    // as one list too, which the spread call places whatever its length.
+    args.len() > usize::from(u8::MAX) || args.iter().any(|a| a.unpack || a.name.is_some())
 }
 
 /// Whether `$a[…]…`'s root is a static property (`C::$a[k]`).
