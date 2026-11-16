@@ -514,7 +514,7 @@ impl Context<'_> {
                         let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
                         frame.keep_scope(&scope);
-                        frame.keep_called(Some(&called));
+                        frame.called = Some(called);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -1241,7 +1241,6 @@ impl Context<'_> {
                         // (No `called`: it is `$this`'s class, `called_class`.)
                         let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.keep_scope(declaring);
-                        frame.keep_called(None);
                         frame.this = Some(this);
                         enter(&mut self.frames, regs);
                         pc = 0;
@@ -1327,7 +1326,6 @@ impl Context<'_> {
                         // (No `called`: it is `$this`'s class, `called_class`.)
                         let frame = self.frames.call_method(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.keep_scope(declaring);
-                        frame.keep_called(None);
                         frame.this = Some(this);
                         enter(&mut self.frames, regs);
                         pc = 0;
@@ -1401,7 +1399,6 @@ impl Context<'_> {
                                 let frame = self.frames.call_method(Some(&f), pc + 1, base + args as usize, n, NO_RET);
                                 frame.this = Some(object);
                                 frame.keep_scope(&declaring);
-                                frame.keep_called(None);
                                 enter(&mut self.frames, regs);
                                 pc = 0;
                                 continue 'frame;
@@ -1450,7 +1447,6 @@ impl Context<'_> {
                         let frame = self.frames.call_method(Some(&f), pc + 1, at, n, NO_RET);
                         frame.this = Some(object);
                         frame.keep_scope(&declaring);
-                        frame.keep_called(None);
                         enter(&mut self.frames, regs);
                         pc = 0;
                         continue 'frame;
@@ -3091,11 +3087,15 @@ fn leave_frame(frames: &mut Frames, regs: &mut [Value], n: usize, value: Value) 
         clear(r);
     }
     // `$this` goes after the arguments, as in PHP (it decides which
-    // object id is free first). The classes stay in the slot for the
+    // object id is free first). The scope stays in the slot for the
     // next frame at this depth (`Frames::call_method`; any other push
-    // gives them back).
+    // gives it back); the class a static call was made on does not (a
+    // method's frame has none: `$this`'s).
     if frame.this.is_some() {
         frame.this = None;
+    }
+    if frame.called.is_some() {
+        frame.called = None;
     }
     // The Closure it was called as (a generator's frame gave its
     // Generator back before it got here).
