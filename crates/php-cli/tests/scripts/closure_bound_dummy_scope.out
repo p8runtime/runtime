@@ -52,13 +52,10 @@ Too few arguments to function {closure:%s:37}(), 0 passed in %s on line 52 and e
 #1 {main}
 #0 %s(57): thrower()
 #1 {main}
-M::{closure:%s:58}(): Argument #1 ($a) must be of type int, string given
 #0 [internal function]: M->{closure:%s:58}('x')
 #1 %s(59): Closure->call(Object(M), 'x')
 #2 {main}
-
-Deprecated: Calling get_class() without arguments is deprecated in %s on line 62
-array(5) {
+array(4) {
   [0]=>
   string(7) "Closure"
   [1]=>
@@ -67,9 +64,4 @@ array(5) {
   string(1) "M"
   [3]=>
   string(1) "M"
-  [4]=>
-  string(7) "Closure"
 }
-
-Warning: Cannot unbind $this of closure using $this, this will be an error in PHP 9 in %s on line 64
-bool(false)

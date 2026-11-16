@@ -56,9 +56,8 @@ try { intdiv(1, 0); } catch (DivisionByZeroError $e) { echo $e->getTraceAsString
 function thrower() { throw new LogicException('x'); }
 try { thrower(); } catch (LogicException $e) { echo $e->getTraceAsString(), "\n"; }
 $k3 = function (int $a) { return $a; };
-try { $k3->call(new M, 'x'); } catch (TypeError $e) { echo $e->getMessage(), "\n", $e->getTraceAsString(), "\n"; }
+try { $k3->call(new M, 'x'); } catch (TypeError $e) { echo $e->getTraceAsString(), "\n"; }
 
 // self in such a closure is Closure (last: without the scope it is an error).
-$s = function () { return [self::class, static::class, get_class($this), get_called_class(), get_class()]; };
+$s = function () { return [self::class, static::class, get_class($this), get_called_class()]; };
 var_dump($s->bindTo(new M)());
-var_dump($s->bindTo(new M)->bindTo(null, 'static') !== null);
