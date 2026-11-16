@@ -740,6 +740,23 @@ impl Context<'_> {
                             done!(put(&mut w[rx!(arg)], v));
                         }
                     }
+                    // Frees one after another (`Op::FreeRun`): each as
+                    // P8_FREE runs it, then pc past them all, with one
+                    // dispatch. A release that left a destructor due stops
+                    // the run there: it runs at that Free's pc, and the
+                    // loop goes on with the next Free, which runs alone.
+                    Op::FreeRun => {
+                        ops!(a, b, c, imm);
+                        let regs = u64::from(a) | u64::from(b) << 8 | u64::from(imm) << 16;
+                        let at = pc;
+                        for i in 0..usize::from(c) {
+                            if clear(&mut w[rx!((regs >> (8 * i)) as u8)]) && ids.has_pending() {
+                                pc = at + i + 1;
+                                pending!();
+                            }
+                        }
+                        pc = at + usize::from(c);
+                    }
                     Op::Jump => {
                         let imm = insn.imm;
                         if back!(imm) {
