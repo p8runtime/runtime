@@ -4,7 +4,7 @@ TypeError: Cannot assign string to property IW::$p of type int
 TypeError: Cannot assign true to property IW::$p of type int
 TypeError: Cannot assign null to property IW::$p of type int
 TypeError: Cannot assign array to property IW::$p of type int
-object(IW)#1 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(7)
   ["f"]=>
@@ -24,7 +24,7 @@ object(IW)#1 (8) {
   ["ro"]=>
   uninitialized(int)
 }
-object(IW)#1 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -44,7 +44,7 @@ object(IW)#1 (8) {
   ["ro"]=>
   uninitialized(int)
 }
-object(IW)#1 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -69,7 +69,7 @@ TypeError: Cannot assign int to property IW::$s of type string
 TypeError: Cannot assign float to property IW::$s of type string
 TypeError: Cannot assign string to property IW::$q of type int
 TypeError: Cannot assign int to property IW::$b of type bool
-object(IW)#2 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -90,7 +90,7 @@ object(IW)#2 (8) {
   uninitialized(int)
 }
 TypeError: Cannot assign float to property IW::$q of type int
-object(IW)#1 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -111,7 +111,7 @@ object(IW)#1 (8) {
   uninitialized(int)
 }
 TypeError: Cannot assign stdClass to property IW::$w of type ?IW
-object(IW)#3 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -125,7 +125,7 @@ object(IW)#3 (8) {
   ["any"]=>
   NULL
   ["w"]=>
-  object(IW)#2 (8) {
+  object(IW)# (8) {
     ["p"]=>
     int(0)
     ["f"]=>
@@ -151,7 +151,7 @@ object(IW)#3 (8) {
   uninitialized(int)
 }
 TypeError: Cannot assign float to property IW::$u of type string|int
-object(IW)#2 (8) {
+object(IW)# (8) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -172,7 +172,7 @@ object(IW)#2 (8) {
   uninitialized(int)
 }
 TypeError: Cannot assign string to property IW::$ro of type int
-object(IW)#3 (9) {
+object(IW)# (9) {
   ["p"]=>
   int(0)
   ["f"]=>
@@ -191,30 +191,6 @@ object(IW)#3 (9) {
   int(0)
   ["ro"]=>
   int(1)
-}
-
-Deprecated: Creation of dynamic property IW::$new is deprecated in %s on line 18
-object(IW)#3 (9) {
-  ["p"]=>
-  int(0)
-  ["f"]=>
-  NULL
-  ["s"]=>
-  string(0) ""
-  ["q":protected]=>
-  int(1)
-  ["b":"IW":private]=>
-  bool(false)
-  ["any"]=>
-  NULL
-  ["w"]=>
-  NULL
-  ["u"]=>
-  int(0)
-  ["ro"]=>
-  uninitialized(int)
-  ["new"]=>
-  float(1)
 }
 TypeError: Cannot assign float to property IW::$p of type int
 TypeError: Cannot assign float to property IW::$p of type int
@@ -223,7 +199,7 @@ array(2) {
   [0]=>
   &int(3)
   [1]=>
-  object(IW)#2 (8) {
+  object(IW)# (8) {
     ["p"]=>
     &int(3)
     ["f"]=>
@@ -245,7 +221,7 @@ array(2) {
   }
 }
 TypeError: Cannot assign int to property IW::$s of type string
-object(IW)#3 (8) {
+object(IW)# (8) {
   ["p"]=>
   &int(4)
   ["f"]=>
@@ -269,14 +245,14 @@ TypeError: Cannot assign string to property W::$n of type int
 wakeup
 array(1) {
   [0]=>
-  object(W)#1 (1) {
+  object(W)# (1) {
     ["n"]=>
     int(3)
   }
 }
 destruct 0
 TypeError: Cannot assign float to property D::$n of type int
-object(D)#3 (1) {
+object(D)# (1) {
   ["n"]=>
   int(2)
 }

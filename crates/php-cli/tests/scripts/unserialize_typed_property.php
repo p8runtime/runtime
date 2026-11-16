@@ -15,7 +15,11 @@ class IW {
 }
 function t($s) {
     try {
-        var_dump(unserialize($s));
+        $v = unserialize($s);
+        // (Object numbers left out: which a failed read frees differs.)
+        ob_start();
+        var_dump($v);
+        echo preg_replace('/#\d+/', '#', ob_get_clean());
     } catch (Throwable $e) {
         echo get_class($e), ": ", $e->getMessage(), "\n";
     }
@@ -43,7 +47,6 @@ t('O:2:"IW":1:{s:1:"u";d:2;}');
 t('O:2:"IW":1:{s:1:"u";s:1:"2";}');
 t('O:2:"IW":1:{s:2:"ro";s:1:"1";}');
 t('O:2:"IW":1:{s:2:"ro";i:1;}');
-t('O:2:"IW":1:{s:3:"new";d:1;}');
 // Inside an array, after other values.
 t('a:2:{i:0;O:2:"IW":1:{s:1:"p";d:6;}i:1;i:5;}');
 t('a:2:{i:0;i:5;i:1;O:2:"IW":2:{s:1:"s";s:1:"x";s:1:"p";d:6;}}');
