@@ -718,7 +718,7 @@ impl<'a> Reader<'a> {
                     if custom {
                         data.insert(k, v);
                     } else {
-                        set_property(&o, k, v);
+                        set_property(ctx, &o, k, v)?;
                     }
                 }
                 self.expect(b'}')?;
@@ -814,8 +814,11 @@ fn object_class(ctx: &mut dyn Ctx, name: &[u8]) -> Result<Option<Rc<Class>>, Opt
 }
 
 /// A property from its serialized name: "\0*\0p" protected, "\0C\0p"
-/// private to C, else public (or dynamic).
-fn set_property(o: &Object, key: Key, v: Value) {
+/// private to C, else public (or dynamic). A typed declared property
+/// takes the value as strict code assigns it (php_var_unserialize's
+/// zend_verify_prop_assignable_by_ref, strict): an int for a float is
+/// widened, any other value not of its type is the TypeError.
+fn set_property(ctx: &mut dyn Ctx, o: &Object, key: Key, v: Value) -> Result<(), Throw> {
     let raw = match &key {
         Key::Int(i) => i.to_string().into_bytes(),
         Key::Str(s) => s.as_bytes().to_vec(),
@@ -841,11 +844,25 @@ fn set_property(o: &Object, key: Key, v: Value) {
         }
     };
     match slot {
-        Some(i) => o.slots()[i].set(v),
+        Some(i) => {
+            // (A value an `R:` shares is checked, and widened, in its
+            // reference, which the property then holds.)
+            let v = match v.as_reference() {
+                Some(cell) => {
+                    let inner = cell.borrow().clone();
+                    let checked = ctx.typed_prop_value(o, i, inner, true)?;
+                    *cell.borrow_mut() = checked;
+                    v
+                }
+                None => ctx.typed_prop_value(o, i, v, true)?,
+            };
+            o.slots()[i].set(v)
+        }
         None => {
             o.dynamic_mut().insert(Key::from_string(PhpStr::from(name)), v);
         }
     }
+    Ok(())
 }
 
 /// unserialize(string $data, array $options = [])

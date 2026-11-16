@@ -1,0 +1,260 @@
+TypeError: Cannot assign float to property IW::$p of type int
+TypeError: Cannot assign float to property IW::$p of type int
+TypeError: Cannot assign string to property IW::$p of type int
+TypeError: Cannot assign true to property IW::$p of type int
+TypeError: Cannot assign null to property IW::$p of type int
+TypeError: Cannot assign array to property IW::$p of type int
+object(IW)# (8) {
+  ["p"]=>
+  int(7)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  float(6)
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign string to property IW::$f of type ?float
+TypeError: Cannot assign int to property IW::$s of type string
+TypeError: Cannot assign float to property IW::$s of type string
+TypeError: Cannot assign string to property IW::$q of type int
+TypeError: Cannot assign int to property IW::$b of type bool
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(true)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign float to property IW::$q of type int
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  float(1.5)
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign stdClass to property IW::$w of type ?IW
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  object(IW)# (8) {
+    ["p"]=>
+    int(0)
+    ["f"]=>
+    NULL
+    ["s"]=>
+    string(0) ""
+    ["q":protected]=>
+    int(1)
+    ["b":"IW":private]=>
+    bool(false)
+    ["any"]=>
+    NULL
+    ["w"]=>
+    NULL
+    ["u"]=>
+    int(0)
+    ["ro"]=>
+    uninitialized(int)
+  }
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign float to property IW::$u of type string|int
+object(IW)# (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  string(1) "2"
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign string to property IW::$ro of type int
+object(IW)# (9) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  NULL
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  int(1)
+}
+TypeError: Cannot assign float to property IW::$p of type int
+TypeError: Cannot assign float to property IW::$p of type int
+TypeError: Cannot assign float to property IW::$p of type int
+array(2) {
+  [0]=>
+  &int(3)
+  [1]=>
+  object(IW)# (8) {
+    ["p"]=>
+    &int(3)
+    ["f"]=>
+    NULL
+    ["s"]=>
+    string(0) ""
+    ["q":protected]=>
+    int(1)
+    ["b":"IW":private]=>
+    bool(false)
+    ["any"]=>
+    NULL
+    ["w"]=>
+    NULL
+    ["u"]=>
+    int(0)
+    ["ro"]=>
+    uninitialized(int)
+  }
+}
+TypeError: Cannot assign int to property IW::$s of type string
+object(IW)# (8) {
+  ["p"]=>
+  &int(4)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["q":protected]=>
+  int(1)
+  ["b":"IW":private]=>
+  bool(false)
+  ["any"]=>
+  &int(4)
+  ["w"]=>
+  NULL
+  ["u"]=>
+  int(0)
+  ["ro"]=>
+  uninitialized(int)
+}
+TypeError: Cannot assign string to property W::$n of type int
+wakeup
+array(1) {
+  [0]=>
+  object(W)# (1) {
+    ["n"]=>
+    int(3)
+  }
+}
+destruct 0
+TypeError: Cannot assign float to property D::$n of type int
+object(D)# (1) {
+  ["n"]=>
+  int(2)
+}
+destruct 2
+end
