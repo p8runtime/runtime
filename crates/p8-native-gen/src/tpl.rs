@@ -118,6 +118,12 @@ pub fn ret<S: spec::Ret>(e: &mut Emit, _: args::Ret) -> R {
     e.hand_back()
 }
 
+/// `Op::FreeRun`: its first Free alone, as `free`; the Frees after it are
+/// in the code as they are, each compiled as its own.
+pub fn free_run(e: &mut Emit, insn: &Insn) -> R {
+    free(e, args::Free { reg: u32::from(insn.a) })
+}
+
 /// `Op::ReturnNull`: as `ret`.
 pub fn ret_null(e: &mut Emit, _: &Insn) -> R {
     e.hand_back()

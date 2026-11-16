@@ -521,7 +521,7 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
         },
         Instr::Assign { var, src } => enc::assign(enc::Assign { var: o(var)?, src: o(src)? }),
         Instr::AssignTake { var, src } => enc::assign_take(enc::AssignTake { var: o(var)?, src: o(src)? }),
-        Instr::Free { reg } => enc::free(enc::Free { reg: o(reg)? }),
+        Instr::Free { reg } => free_run(code, pc).or_else(|| enc::free(enc::Free { reg: o(reg)? })),
         Instr::Return { src } => enc::ret(enc::Ret { src: o(src)? }),
         Instr::InstanceOf { dst, src, class } => {
             // (A class in a register, `parent`: OTHER, always out of line.)
@@ -895,6 +895,31 @@ fn lower_in(code: &[Instr], pc: usize, consts: &[Frozen], ncv: Reg, classes: &[C
     }
 }
 
+/// The most Frees one `Op::FreeRun` releases: two in its a and b bytes,
+/// four in its imm.
+pub const FREE_RUN: usize = 6;
+
+/// `Op::FreeRun` at `pc`: the Free there and the Frees right after it
+/// (up to FREE_RUN in all), each of a register in the window; None when
+/// the next instruction is not one of them. The `Instr`s stay as they
+/// are, so a jump to a later Free of the run runs the rest from there.
+fn free_run(code: &[Instr], pc: usize) -> Option<Insn> {
+    let mut regs = [0u8; FREE_RUN];
+    let mut n = 0;
+    while n < FREE_RUN
+        && let Some(&Instr::Free { reg }) = code.get(pc + n)
+        && const_index(reg).is_none()
+        && let Some(x) = r(reg)
+    {
+        regs[n] = x;
+        n += 1;
+    }
+    if n < 2 {
+        return None;
+    }
+    Some(Insn { op: Op::FreeRun, a: regs[0], b: regs[1], c: n as u8, imm: u32::from_le_bytes([regs[2], regs[3], regs[4], regs[5]]) })
+}
+
 /// `Op::IntrinsicRegs` at `pc`: the `Move` of a register (not a
 /// constant) into the one argument register of the intrinsic of one
 /// argument right after it (strlen .. is_object, `INTRINSICS`), whose
@@ -1024,6 +1049,30 @@ mod tests {
         for pc in [4, 6, 8, 9] {
             assert_ne!(at(pc).op, Op::IntrinsicRegs, "pc {pc}");
         }
+    }
+
+    #[test]
+    fn frees_one_after_another_become_one_free_run() {
+        let free = |reg| Instr::Free { reg };
+        let mut code = vec![free(3), free(4), free(5), Instr::Jump { target: 0 }, free(6), Instr::Jump { target: 0 }];
+        // Seven in a row: the first takes six, the second the six after it.
+        code.extend((10..17).map(free));
+        code.push(Instr::Jump { target: 0 });
+        // A register past the window ends the run.
+        code.extend([free(20), free(21), free(300), free(22)]);
+        let consts = consts();
+        let at = |pc| lower_at(&code, pc, &consts, 0).unwrap();
+        assert_eq!(at(0), Insn { op: Op::FreeRun, a: 3, b: 4, c: 3, imm: 5 });
+        assert_eq!(at(1), Insn { op: Op::FreeRun, a: 4, b: 5, c: 2, imm: 0 });
+        assert_eq!(at(2).op, Op::P8_FREE);
+        assert_eq!(at(4).op, Op::P8_FREE);
+        assert_eq!(at(6), Insn { op: Op::FreeRun, a: 10, b: 11, c: 6, imm: u32::from_le_bytes([12, 13, 14, 15]) });
+        assert_eq!(at(7), Insn { op: Op::FreeRun, a: 11, b: 12, c: 6, imm: u32::from_le_bytes([13, 14, 15, 16]) });
+        assert_eq!(at(12).op, Op::P8_FREE);
+        assert_eq!(at(14), Insn { op: Op::FreeRun, a: 20, b: 21, c: 2, imm: 0 });
+        assert_eq!(at(15).op, Op::P8_FREE);
+        assert_eq!(lower_at(&code, 16, &consts, 0).map(|i| i.op), None);
+        assert_eq!(at(17).op, Op::P8_FREE);
     }
 
     #[test]
