@@ -154,6 +154,11 @@ hand AssignOp native=assign_op
 /// a's step (imm: INC, POST) into b
 hand IncDec
 hand LoadNull native=load_null
+/// A Free followed by more Frees (`free_run`): c of them (2 to FREE_RUN),
+/// their registers a, b, then imm's bytes from the lowest; pc goes past
+/// them all. The Frees after it are lowered as they are, for a jump to
+/// one of them.
+hand FreeRun native=free_run
 /// a = !b
 hand Not
 hand ToBool
