@@ -117,7 +117,8 @@ impl Context<'_> {
             // `step` then raises it.
             macro_rules! back {
                 ($target:expr) => {
-                    ($target as usize) < next!() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                    // (Compared as addresses, `it`'s own: no pc computed.)
+                    code.as_ptr().wrapping_add($target as usize) < it.as_slice().as_ptr() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
                 };
             }
             // The instruction at the pc (or at `$at`) is `slow`'s
