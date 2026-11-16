@@ -1064,6 +1064,42 @@ impl Context<'_> {
         self.call_target_with_regs(regs, target, &mut args)
     }
 
+    /// forward_static_call(`callable`, ...`args`), or with `list`
+    /// forward_static_call_array(`callable`, `list`), from the builtin: as
+    /// call_user_func(_array), but a call with no `$this` takes the
+    /// running code's called class (late static binding passed on) when
+    /// that class is, or extends, the one the callable resolved to.
+    pub(crate) fn forward_static_from_builtin(&mut self, callable: &Value, args: &mut [Value], list: Option<&PhpArray>) -> Result<Value, Throw> {
+        let mut regs = std::mem::take(&mut self.isolate.regs);
+        let r = self.forward_static_with_regs(&mut regs, callable, args, list);
+        self.isolate.regs = regs;
+        r
+    }
+
+    fn forward_static_with_regs(&mut self, regs: &mut Vec<Value>, callable: &Value, args: &mut [Value], list: Option<&PhpArray>) -> Result<Value, Throw> {
+        let mut target = self.resolve_lent(regs, callable)?;
+        if let Target::Frame(m) = &mut target
+            && m.this.is_none()
+            && let (_, Some(here)) = self.scope()
+            && m.called.as_ref().is_some_and(|c| here.is_a(&c.lower))
+        {
+            m.called = Some(here);
+        }
+        let mut placed;
+        let args = match list {
+            Some(list) if names_arguments(list) => {
+                placed = self.user_call_named(&mut target, list)?;
+                &mut placed[..]
+            }
+            Some(list) => {
+                placed = list.values().cloned().collect();
+                &mut placed[..]
+            }
+            None => args,
+        };
+        self.call_target_with_regs(regs, target, args)
+    }
+
     /// What `callable` calls, the registers lent meanwhile: a class it
     /// names is autoloaded there (zend_is_callable_ex), not by running it
     /// again.
