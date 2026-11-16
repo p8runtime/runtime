@@ -1,0 +1,26 @@
+array_map name: Too few arguments to function two(), 1 passed and exactly 2 expected
+array_map closure: Too few arguments to function {closure:%s:14}(), 1 passed and exactly 2 expected
+array_map method: Too few arguments to function M::two(), 1 passed and exactly 2 expected
+array_map static: Too few arguments to function M::stwo(), 1 passed and exactly 2 expected
+array_filter: Too few arguments to function two(), 1 passed and exactly 2 expected
+usort: Too few arguments to function {closure:%s:15}(), 2 passed and exactly 3 expected
+array_walk: Too few arguments to function {closure:%s:15}(), 2 passed and exactly 3 expected
+array_reduce: Too few arguments to function {closure:%s:15}(), 2 passed and exactly 3 expected
+preg_replace_callback: Too few arguments to function two(), 1 passed and exactly 2 expected
+iterator_apply: Too few arguments to function two(), 0 passed and exactly 2 expected
+ReflectionFunction::invoke: Too few arguments to function two(), 1 passed and exactly 2 expected
+ReflectionFunction::invokeArgs: Too few arguments to function two(), 1 passed and exactly 2 expected
+ReflectionMethod::invoke: Too few arguments to function M::two(), 1 passed and exactly 2 expected
+Closure::__invoke: Too few arguments to function {closure:%s:14}(), 1 passed and exactly 2 expected
+direct: Too few arguments to function two(), 1 passed in %s on line 43 and exactly 2 expected
+spread: Too few arguments to function two(), 1 passed in %s on line 44 and exactly 2 expected
+dynamic: Too few arguments to function two(), 1 passed in %s on line 45 and exactly 2 expected
+method: Too few arguments to function M::two(), 1 passed in %s on line 46 and exactly 2 expected
+static: Too few arguments to function M::stwo(), 1 passed in %s on line 47 and exactly 2 expected
+closure: Too few arguments to function {closure:%s:14}(), 1 passed in %s on line 48 and exactly 2 expected
+call_user_func: Too few arguments to function two(), 1 passed in %s on line 49 and exactly 2 expected
+call_user_func_array: Too few arguments to function two(), 1 passed in %s on line 50 and exactly 2 expected
+call_user_func method: Too few arguments to function M::two(), 1 passed in %s on line 51 and exactly 2 expected
+call_user_func closure: Too few arguments to function {closure:%s:14}(), 1 passed in %s on line 52 and exactly 2 expected
+new: Too few arguments to function N::__construct(), 1 passed in %s on line 53 and exactly 2 expected
+inside a callback: Too few arguments to function two(), 1 passed in %s on line 56 and exactly 2 expected

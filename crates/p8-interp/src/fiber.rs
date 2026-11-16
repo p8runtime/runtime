@@ -171,7 +171,7 @@ impl Context<'_> {
         state(fiber).borrow_mut().status = Status::Running;
         self.enter_fiber(fiber, task);
         let mut regs = std::mem::take(&mut self.isolate.regs);
-        let next = self.call_method(&mut regs, m, at, args.len() as u8, at as u32, 0);
+        let next = self.call_method(&mut regs, m, at, args.len(), at as u32, 0);
         let r = match next {
             Err(t) => Err(t),
             Ok(Next::Go(_)) => Ok(()),

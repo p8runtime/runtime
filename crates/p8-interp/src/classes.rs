@@ -1387,6 +1387,26 @@ impl Context<'_> {
         Ok(())
     }
 
+    /// `$o->name op= v` whose operation threw: a typed declared property
+    /// this code may write (not readonly, its set visibility allowing it)
+    /// is given what PHP leaves in it (`TypeDecl::after_failed_op`, by the
+    /// writing code's strict_types); any other keeps its value. (A hooked
+    /// or magic property is not written: its update never got here.)
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn failed_prop_op(&mut self, target: &Value, name: &Value) {
+        let Some(object) = target.deref().cloned_object() else { return };
+        let Ok(name) = self.prop_name(name) else { return };
+        let Ok(Some((slot, prop))) = self.prop_slot(&object, name.as_bytes()) else { return };
+        let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
+        if prop.readonly || !self.may_set(&object, prop) {
+            return;
+        }
+        if let Some(left) = prop.ty_decl.as_ref().and_then(|t| t.after_failed_op(strict)) {
+            object.slots()[slot].assign(left);
+        }
+    }
+
     /// The value a property holds right now, for a read-modify-write
     /// (`$o->p += 1`): what fetch_prop gives, without its warnings for a
     /// missing property becoming errors.

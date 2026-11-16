@@ -1,0 +1,6 @@
+DivisionByZeroError: Division by zero
+int(7)
+DivisionByZeroError: Modulo by zero
+float(2)
+ArithmeticError: Bit shift by negative number
+int(5)
