@@ -5447,10 +5447,13 @@ impl Context<'_> {
         // innermost builtin running was entered above the running frame.
         let natives = &self.natives;
         let by_builtin = natives.len > 0 && natives.slots[natives.len - 1].depth == self.frames.len();
-        self.failed_call(func.name.as_bytes(), class, args);
         let from = if by_builtin {
+            // Its frame, from no file, is over the builtin's in the trace
+            // (the builtin's own entry is made where its call fails).
+            self.failed_callee = Some(Self::call_entry(None, func.name.as_bytes(), class, args));
             String::new()
         } else {
+            self.failed_call(func.name.as_bytes(), class, args);
             let (file, line) = self.location();
             format!(" in {file} on line {line}")
         };

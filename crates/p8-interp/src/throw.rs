@@ -272,9 +272,17 @@ impl Context<'_> {
     /// function given too few arguments): the trace shows it on top.
     pub(crate) fn failed_call(&mut self, function: &[u8], class: Option<(&PhpStr, bool)>, args: &[Value]) {
         let (file, line) = self.location();
+        self.failed_call = Some(Self::call_entry(Some((&file, line)), function, class, args));
+    }
+
+    /// A call's trace entry: from `at` (file, line), or from no file (a
+    /// builtin's call).
+    pub(crate) fn call_entry(at: Option<(&str, u32)>, function: &[u8], class: Option<(&PhpStr, bool)>, args: &[Value]) -> PhpArray {
         let mut entry = new_entry();
-        entry.insert_absent(key(FILE), Value::str(PhpStr::from(&*file)));
-        entry.insert_absent(key(LINE), Value::int(i64::from(line)));
+        if let Some((file, line)) = at {
+            entry.insert_absent(key(FILE), Value::str(PhpStr::from(file)));
+            entry.insert_absent(key(LINE), Value::int(i64::from(line)));
+        }
         entry.insert_absent(key(FUNCTION), Value::str(PhpStr::from(function)));
         if let Some((class, this)) = class {
             entry.insert_absent(key(CLASS), Value::str(class.clone()));
@@ -282,7 +290,7 @@ impl Context<'_> {
         }
         let args: Vec<Value> = args.iter().filter(|v| !v.is_undef()).map(Value::deref).collect();
         entry.insert_absent(key(ARGS), Value::array(PhpArray::from_list(args)));
-        self.failed_call = Some(entry);
+        entry
     }
 
     /// The object an engine error (`Throw::Error`) becomes.
@@ -328,6 +336,7 @@ impl Context<'_> {
         let mut charge = Charge { left: hard.saturating_sub(stack) };
         // (It is raised at an interrupt: no builtin's call is on top.)
         self.failed_call = None;
+        self.failed_callee = None;
         let trace = self.trace_charged(regs, false, 0, &mut charge)?;
         let text = p8_runtime::trace::trace_string_within(&Value::array(trace), charge.left)?;
         charge.left -= text.capacity();
@@ -337,11 +346,16 @@ impl Context<'_> {
     }
 
     /// The trace of where an error is being raised: the calls that led
-    /// here, under the builtin it was raised in (`failed_call`), if any.
+    /// here, under the builtin it was raised in (`failed_call`), if any,
+    /// and the call that builtin made (`failed_callee`), if any.
     fn raised_trace(&mut self, regs: &dyn Fn(usize) -> Value) -> PhpArray {
         let trace = self.trace(regs);
-        let Some(top) = self.failed_call.take() else { return trace };
-        let mut with = PhpArray::from_list(vec![Value::array(top)]);
+        let callee = self.failed_callee.take();
+        let top: Vec<Value> = callee.into_iter().chain(self.failed_call.take()).map(Value::array).collect();
+        if top.is_empty() {
+            return trace;
+        }
+        let mut with = PhpArray::from_list(top);
         for (_, v) in trace.iter() {
             let _ = with.push(v.clone());
         }

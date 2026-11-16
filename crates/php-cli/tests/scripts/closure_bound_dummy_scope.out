@@ -1,0 +1,75 @@
+Too few arguments to function Closure::{closure:%s:18}(), 0 passed in %s on line 19 and exactly 1 expected
+  #0 Closure -> {closure:%s:18} closure_bound_dummy_scope.php:19 args 0
+Too few arguments to function Closure::{closure:%s:18}(), 0 passed in %s on line 20 and exactly 1 expected
+  #0 Closure -> {closure:%s:18} closure_bound_dummy_scope.php:20 args 0
+Too few arguments to function Closure::{closure:%s:18}(), 0 passed in %s on line 21 and exactly 1 expected
+  #0 Closure -> {closure:%s:18} closure_bound_dummy_scope.php:21 args 0
+Too few arguments to function {closure:%s:18}(), 0 passed in %s on line 22 and exactly 1 expected
+  #0 - - {closure:%s:18} closure_bound_dummy_scope.php:22 args 0
+Too few arguments to function Closure::{closure:%s:18}(), 0 passed in %s on line 24 and exactly 1 expected
+  #0 Closure :: {closure:%s:18} closure_bound_dummy_scope.php:24 args 0
+Too few arguments to function M::{closure:%s:18}(), 0 passed in %s on line 25 and exactly 1 expected
+  #0 M -> {closure:%s:18} closure_bound_dummy_scope.php:25 args 0
+string(7) "Closure"
+string(1) "M"
+string(1) "M"
+NULL
+Cannot access private property M::$x
+int(1)
+Too few arguments to function {closure:%s:33}(), 0 passed in %s on line 34 and exactly 1 expected
+  #0 - - {closure:%s:33} closure_bound_dummy_scope.php:34 args 0
+-- builtin callers
+Too few arguments to function M::{closure:%s:37}(), 0 passed and exactly 1 expected
+  #0 M -> {closure:%s:37} [internal] args 0
+  #1 Closure -> call closure_bound_dummy_scope.php:38 args 1
+#0 [internal function]: M->{closure:%s:37}()
+#1 %s(39): Closure->call(Object(M))
+#2 {main}
+Too few arguments to function {closure:%s:40}(), 1 passed and exactly 2 expected
+  #0 - - {closure:%s:40} [internal] args 1
+  #1 - - array_map closure_bound_dummy_scope.php:40 args 2
+TypeError
+Too few arguments to function {closure:%s:44}(), 2 passed and exactly 3 expected
+  #0 - - {closure:%s:44} [internal] args 2
+  #1 - - usort closure_bound_dummy_scope.php:44 args 2
+Too few arguments to function f2(), 1 passed in %s on line 46 and exactly 2 expected
+  #0 - - f2 closure_bound_dummy_scope.php:46 args 1
+Too few arguments to function f2(), 1 passed and exactly 2 expected
+  #0 - - f2 [internal] args 1
+  #1 - - array_map closure_bound_dummy_scope.php:47 args 2
+Too few arguments to function C::__construct(), 0 passed and exactly 1 expected
+  #0 C -> __construct [internal] args 0
+  #1 ReflectionClass -> newInstance closure_bound_dummy_scope.php:49 args 0
+Too few arguments to function C::m(), 1 passed and exactly 2 expected
+  #0 C -> m [internal] args 1
+  #1 ReflectionMethod -> invoke closure_bound_dummy_scope.php:50 args 2
+Too few arguments to function C::m(), 1 passed and exactly 2 expected
+  #0 C -> m [internal] args 1
+  #1 - - array_map closure_bound_dummy_scope.php:51 args 2
+Too few arguments to function {closure:%s:37}(), 0 passed in %s on line 52 and exactly 1 expected
+  #0 - - {closure:%s:37} closure_bound_dummy_scope.php:52 args 0
+#0 %s(55): intdiv(1, 0)
+#1 {main}
+#0 %s(57): thrower()
+#1 {main}
+M::{closure:%s:58}(): Argument #1 ($a) must be of type int, string given
+#0 [internal function]: M->{closure:%s:58}('x')
+#1 %s(59): Closure->call(Object(M), 'x')
+#2 {main}
+
+Deprecated: Calling get_class() without arguments is deprecated in %s on line 62
+array(5) {
+  [0]=>
+  string(7) "Closure"
+  [1]=>
+  string(1) "M"
+  [2]=>
+  string(1) "M"
+  [3]=>
+  string(1) "M"
+  [4]=>
+  string(7) "Closure"
+}
+
+Warning: Cannot unbind $this of closure using $this, this will be an error in PHP 9 in %s on line 64
+bool(false)

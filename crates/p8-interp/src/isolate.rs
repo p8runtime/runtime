@@ -374,6 +374,7 @@ impl Isolate {
             pc: 0,
             classes,
             failed_call: None,
+            failed_callee: None,
             class_defs: Vec::new(),
             declared: HashMap::default(),
             class_origins: HashMap::default(),
@@ -493,6 +494,11 @@ pub struct Context<'i> {
     /// The frame of a call that failed before it ran, for the trace of
     /// the error it raised (see `failed_call`).
     pub(crate) failed_call: Option<PhpArray>,
+    /// The frame of a call a builtin made that failed before it ran (a
+    /// callback given too few arguments): over `failed_call`'s, the
+    /// builtin's, from no file, as PHP's callee frame shows ("[internal
+    /// function]").
+    pub(crate) failed_callee: Option<PhpArray>,
     /// The script's class declarations (DeclareClass indexes them), and
     /// which are linked.
     pub(crate) class_defs: Vec<Arc<ClassDef>>,
