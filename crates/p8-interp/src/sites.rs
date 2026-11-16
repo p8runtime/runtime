@@ -1044,18 +1044,26 @@ impl Context<'_> {
     /// frame keeps is counted. None for anything else: no record, a
     /// native method, another class or scope, an instance method with no
     /// `$this` of the class's kind (the error).
-    #[inline(never)]
+    ///
+    /// In the arm itself (inline): out of line, a hit paid a call's
+    /// register saves and its answer through memory, about a quarter of
+    /// what it cost. A named class, what most such calls name, is tested
+    /// first, with no table jump on the reference's kind.
+    #[inline(always)]
     pub(crate) fn static_site(&self, clo: &Closure, class: u16, method: usize) -> Option<StaticHit> {
         use p8_bytecode::ClassRef;
         let q = clo.methods[method].user.get();
         let top = self.frames.last()?;
         let kind = &clo.code.classes[class as usize];
-        let target = match kind {
-            ClassRef::Named(..) | ClassRef::Forward(..) => SiteClass::Named(clo.class_refs[class as usize].borrow().upgrade()?),
-            ClassRef::Scope => SiteClass::There(top.scope.as_ref()?),
-            ClassRef::ParentScope => SiteClass::There(top.scope.as_ref()?.parent.as_ref()?),
-            ClassRef::Static => SiteClass::There(top.called_class()?),
-            ClassRef::Dynamic(_) => return None,
+        let target = if let ClassRef::Named(..) | ClassRef::Forward(..) = kind {
+            SiteClass::Named(clo.class_refs[class as usize].borrow().upgrade()?)
+        } else {
+            SiteClass::There(match kind {
+                ClassRef::Scope => top.scope.as_ref()?,
+                ClassRef::ParentScope => top.scope.as_ref()?.parent.as_ref()?,
+                ClassRef::Static => top.called_class()?,
+                ClassRef::Named(..) | ClassRef::Forward(..) | ClassRef::Dynamic(_) => return None,
+            })
         };
         let named = target.class();
         if !q.is_static_for(named, top.scope.as_ref()) {
