@@ -1361,22 +1361,7 @@ impl Context<'_> {
         let value = match &prop.ty_decl {
             Some(ty) => {
                 let strict = self.frames.last().is_some_and(|f| f.func.code.strict);
-                match self.check_type(ty, &value, strict)? {
-                    Ok(Some(converted)) => converted,
-                    Ok(None) => value,
-                    Err(()) => {
-                        return Err(self.throw(
-                            "TypeError",
-                            format!(
-                                "Cannot assign {} to property {}::${} of type {}",
-                                p8_runtime::args::value_name(&value),
-                                text(&prop.declaring_name),
-                                text(name),
-                                ty.shown()
-                            ),
-                        ));
-                    }
-                }
+                self.prop_type_check(prop, ty, name, value, strict)?
             }
             None => value,
         };
@@ -1385,6 +1370,26 @@ impl Context<'_> {
         }
         object.slots()[slot].assign(value);
         Ok(())
+    }
+
+    /// `value` as declared property `prop` (named `name`) of type `ty`
+    /// takes it from code of this strict_types (zend_verify_property_type):
+    /// converted when the mode allows it, else the TypeError a store throws.
+    pub(crate) fn prop_type_check(&mut self, prop: &Property, ty: &p8_runtime::types::TypeDecl, name: &p8_runtime::string::StrHead, value: Value, strict: bool) -> Result<Value, Throw> {
+        match self.check_type(ty, &value, strict)? {
+            Ok(Some(converted)) => Ok(converted),
+            Ok(None) => Ok(value),
+            Err(()) => Err(self.throw(
+                "TypeError",
+                format!(
+                    "Cannot assign {} to property {}::${} of type {}",
+                    p8_runtime::args::value_name(&value),
+                    text(&prop.declaring_name),
+                    text(name),
+                    ty.shown()
+                ),
+            )),
+        }
     }
 
     /// `$o->name op= v` whose operation threw: a typed declared property
