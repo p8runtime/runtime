@@ -243,6 +243,12 @@ impl Context<'_> {
             self.warn(format!("Cannot rebind scope of closure created from {what}, this will be an error in PHP 9"));
             return Ok(Value::NULL);
         }
+        // Bound to an object with no scope: the dummy scope Closure
+        // (zend_create_closure_ex), its self and its name's class.
+        let scope = match scope {
+            None if this.is_some() => Some(Rc::clone(&self.classes[&self.isolate.known.closure])),
+            scope => scope,
+        };
         let called = this.as_ref().map(|t| Rc::clone(&t.class)).or_else(|| scope.clone());
         let copy = ClosureData {
             func: data.func.clone(),
