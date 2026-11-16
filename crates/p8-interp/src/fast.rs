@@ -27,10 +27,12 @@ impl Context<'_> {
     /// pc, `step`'s.
     #[inline(never)]
     pub(crate) fn execute(&mut self, regs: &mut Vec<Value>) -> Result<(), Throw> {
-        let mut pc = self.frames.last().expect("a frame").pc as usize;
+        // Where the next round of the frame loop starts the frame (the
+        // inner loop's own position is its iterator, `it`).
+        let mut resume = self.frames.last().expect("a frame").pc as usize;
         // Fiber::throw(): the exception is raised where the fiber went on.
         if let Some(e) = self.fiber_throw.take() {
-            pc = self.unwind(regs, Throw::Object(e), pc.saturating_sub(1))?;
+            resume = self.unwind(regs, Throw::Object(e), resume.saturating_sub(1))?;
         }
         // Each round of this loop is one frame's run (the frame's code and
         // window are read once); the inner loop goes back here whenever
@@ -59,14 +61,14 @@ impl Context<'_> {
             // it hands the frame back: every call path comes here. (An
             // executable with no native code tests that alone, not each
             // frame's function.)
-            if pc == 0
+            if resume == 0
                 && self.isolate.native.is_some()
                 && handed_back != self.frames.len()
                 && let Some(id) = self.frames.top().func.code.native
             {
                 let depth = self.frames.len();
                 match threw!(self.native_entry(regs, id)) {
-                    Flow::Go(next) => pc = next,
+                    Flow::Go(next) => resume = next,
                     Flow::Done => return Ok(()),
                 }
                 handed_back = depth;
@@ -77,49 +79,90 @@ impl Context<'_> {
             let mut clo = &*top.func;
             let base = top.base as usize;
             let mut code = &clo.code.insns[..];
+            // The frame's instructions from the next one to run: the
+            // dispatch takes the next of them, so a straight-line
+            // instruction's arm moves nothing, and the loop keeps one
+            // pointer, not a pc and the code's address and length. (The
+            // pc is computed from it where something reads it: `pc!`.)
+            let mut it = code[resume..].iter();
+            // Where `it` is: the pc of the instruction the dispatch takes
+            // next ...
+            macro_rules! next {
+                () => {
+                    code.len() - it.len()
+                };
+            }
+            // ... and so the pc of the instruction running (the one the
+            // dispatch took last), until the arm moves `it` (`goto!`,
+            // `skip!`).
+            macro_rules! pc {
+                () => {
+                    next!() - 1
+                };
+            }
+            // On at instruction `$t` (a jump, a call's return address).
+            macro_rules! goto {
+                ($t:expr) => {
+                    it = code[$t as usize..].iter()
+                };
+            }
+            // Past the next instruction too (the one this instruction did
+            // the work of).
+            macro_rules! skip {
+                () => {{
+                    let _ = it.next();
+                }};
+            }
             // A loop's backward branch is where an interrupt is noticed:
             // `step` then raises it.
             macro_rules! back {
                 ($target:expr) => {
-                    $target as usize <= pc && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
+                    // (Compared as addresses, `it`'s own: no pc computed.)
+                    code.as_ptr().wrapping_add($target as usize) < it.as_slice().as_ptr() && self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT
                 };
             }
-            // The instruction at `pc` is `slow`'s (`step`'s): run it there,
-            // then start over with the frame as it left it.
+            // The instruction at the pc (or at `$at`) is `slow`'s
+            // (`step`'s): run it there, then start over with the frame as
+            // it left it.
             macro_rules! slow {
-                () => {{
-                    match threw!(self.slow(regs, pc)) {
-                        Flow::Go(next) => pc = next,
+                () => {
+                    slow!(pc!())
+                };
+                ($at:expr) => {{
+                    let at: usize = $at;
+                    match threw!(self.slow(regs, at)) {
+                        Flow::Go(next) => resume = next,
                         Flow::Done => return Ok(()),
                     }
                     continue 'frame;
                 }};
             }
             // A write freed an object with a destructor: it runs before
-            // the next instruction.
+            // the next instruction (the instruction at the pc is done).
             macro_rules! pending {
                 () => {{
-                    pc = threw!(self.after_errors(regs, pc, pc.saturating_sub(1)));
-                    continue 'frame;
+                    let at = pc!();
+                    pending_at!(at + 1, at);
                 }};
             }
             // The same for an instruction that jumped: `$next` is where it
             // goes on, `$at` the instruction itself.
             macro_rules! pending_at {
                 ($next:expr, $at:expr) => {{
-                    pc = threw!(self.after_errors(regs, $next, $at));
+                    let (next, at): (usize, usize) = ($next, $at);
+                    resume = threw!(self.after_errors(regs, next, at));
                     continue 'frame;
                 }};
             }
-            // The straight-line instruction at `pc` is done; `$released`
-            // says whether its write released memory (`put`), which is
-            // when a destructor may be due (it runs at this instruction's
-            // pc, as PHP runs it where the value went). A plain overwrite
-            // tests nothing.
+            // The straight-line instruction at the pc is done (the next
+            // one is the dispatch's already); `$released` says whether
+            // its write released memory (`put`), which is when a
+            // destructor may be due (it runs at this instruction's pc, as
+            // PHP runs it where the value went). A plain overwrite tests
+            // nothing.
             macro_rules! done {
                 ($released:expr) => {{
                     let released: bool = $released;
-                    pc += 1;
                     if released && ids.has_pending() {
                         pending!();
                     }
@@ -304,13 +347,12 @@ impl Context<'_> {
                         Some(b) if $holds(n, b) => {
                             if back!($target) {
                                 // The step is done: the test (next) sees the interrupt.
-                                pc += 1;
-                                slow!();
+                                slow!(pc!() + 1);
                             }
-                            pc = $target as usize;
+                            goto!($target);
                         }
-                        Some(_) => pc += 2,
-                        None => pc += 1,
+                        Some(_) => skip!(),
+                        None => {}
                     }
                 }};
             }
@@ -338,16 +380,16 @@ impl Context<'_> {
                             // (A tag test, not the out-of-line drop an
                             // assignment calls.)
                             let _ = put(&mut w[rx!($dst)], v);
-                            pc = at + 1;
                             if ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 1, at);
                             }
                             top = self.frames.top();
                             clo = &*top.func;
                             code = &clo.code.insns[..];
+                            goto!(at + 1);
                         }
                         r => {
-                            pc = threw!(self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps)));
+                            resume = threw!(self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps)));
                             continue 'frame;
                         }
                     }
@@ -370,12 +412,13 @@ impl Context<'_> {
                 ($v:expr) => {{
                     let value: Value = $v;
                     if self.frames.len() == self.frames.floor + 1 {
-                        return self.ret_floor(regs, pc, value);
+                        let at = pc!();
+                        return self.ret_floor(regs, at, value);
                     }
                     leave(&mut self.frames, regs, value);
-                    pc = self.frames.top().pc as usize;
+                    resume = self.frames.top().pc as usize;
                     if ids.has_pending() {
-                        pc = threw!(self.after_errors(regs, pc, pc.saturating_sub(1)));
+                        resume = threw!(self.after_errors(regs, resume, resume.saturating_sub(1)));
                     }
                     continue 'frame;
                 }};
@@ -385,8 +428,9 @@ impl Context<'_> {
             // frame as it left it ...
             macro_rules! cold {
                 ($m:ident) => {{
-                    match threw!(self.cold(regs, pc, Self::$m)) {
-                        Flow::Go(next) => pc = next,
+                    let at = pc!();
+                    match threw!(self.cold(regs, at, Self::$m)) {
+                        Flow::Go(next) => resume = next,
                         Flow::Done => return Ok(()),
                     }
                     continue 'frame;
@@ -398,8 +442,9 @@ impl Context<'_> {
             // it.
             macro_rules! out {
                 ($ops:expr, $run:expr) => {{
-                    match threw!(self.out_of_line(regs, pc, $ops, $run)) {
-                        Flow::Go(next) => pc = next,
+                    let at = pc!();
+                    match threw!(self.out_of_line(regs, at, $ops, $run)) {
+                        Flow::Go(next) => resume = next,
                         Flow::Done => return Ok(()),
                     }
                     continue 'frame;
@@ -411,17 +456,17 @@ impl Context<'_> {
                     match $call {
                         Ctl::Next(released) => done!(released),
                         Ctl::Skip(released) => {
-                            let at = pc;
-                            pc += 2;
+                            let at = pc!();
+                            skip!();
                             if released && ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 2, at);
                             }
                         }
                         Ctl::Jump(target) => {
                             if back!(target) {
                                 cold!($m);
                             }
-                            pc = target as usize;
+                            goto!(target);
                         }
                         Ctl::Return(value) => ret!(value),
                         Ctl::Cold => cold!($m),
@@ -439,10 +484,10 @@ impl Context<'_> {
                     match $h(hx!(), $args) {
                         Ctl::Next(released) => done!(released),
                         Ctl::Skip(released) => {
-                            let at = pc;
-                            pc += 2;
+                            let at = pc!();
+                            skip!();
                             if released && ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 2, at);
                             }
                         }
                         Ctl::Jump(target) => {
@@ -450,7 +495,7 @@ impl Context<'_> {
                                 // (`out_of_line` raises the interrupt.)
                                 out!($args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args));
                             }
-                            pc = target as usize;
+                            goto!(target);
                         }
                         Ctl::Return(value) => ret!(value),
                         Ctl::Cold => out!($args, |cx, regs, clo, base, _, at, args| cx.$m$(::<$s>)?(regs, clo, base, at, args)),
@@ -458,7 +503,11 @@ impl Context<'_> {
                 }};
             }
             loop {
-                let insn: &Insn = &code[pc];
+                // (Running off the code's end is a bug of the code's, a
+                // panic, as the index past it was.)
+                let Some(insn) = it.next() else {
+                    panic!("the code's end reached")
+                };
                 let op = insn.op;
                 // An arm's operands, read in the arm: read before the match,
                 // they would all be loaded (and kept) on every dispatch.
@@ -511,12 +560,12 @@ impl Context<'_> {
                         }
                         // (No Closure object: the slot's `owner` is empty,
                         // as `leave` left it.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call(Some(target), pc!() + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = this;
                         frame.scope = Some(scope);
                         frame.called = Some(called);
                         enter(&mut self.frames, regs);
-                        pc = 0;
+                        resume = 0;
                         continue 'frame;
                     }};
                 }
@@ -540,13 +589,13 @@ impl Context<'_> {
                         } else {
                             iter_step(&mut w[..], Reg::from(a), Reg::from(b))
                         };
-                        if step == Step::Stepped {
-                            pc += 1;
-                        } else if step == Step::End {
-                            pc = imm as usize;
-                        } else {
+                        // (Stepped: on with the next instruction.)
+                        if step == Step::End {
+                            goto!(imm);
+                        } else if step != Step::Stepped {
+                            let at = pc!();
                             let next = if step == Step::Freed {
-                                pc + 1
+                                at + 1
                             } else {
                                 if !w[rx!(a)].is_array() {
                                     if w[rx!(a)].is_object() {
@@ -555,12 +604,12 @@ impl Context<'_> {
                                     }
                                     slow!();
                                 }
-                                if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { pc + 1 } else { imm as usize }
+                                if iter_next(&mut w[..], Reg::from(a), Reg::from(b), Reg::from(c), $key) { at + 1 } else { imm as usize }
                             };
                             if ids.has_pending() {
-                                pending_at!(next, pc);
+                                pending_at!(next, at);
                             }
-                            pc = next;
+                            goto!(next);
                         }
                     }};
                 }
@@ -584,17 +633,18 @@ impl Context<'_> {
                         } else {
                             iter_step_here(&mut w[..], Reg::from(a), Reg::from(b))
                         };
+                        // (The end: on with the next instruction.)
                         if step == Step::Stepped {
-                            pc = imm as usize + 1;
+                            goto!(imm as usize + 1);
                         } else if step == Step::End {
-                            pc += 1;
+                            // (Nothing to move.)
                         } else if step == Step::Freed {
                             if ids.has_pending() {
                                 pending_at!(imm as usize + 1, imm as usize);
                             }
-                            pc = imm as usize + 1;
+                            goto!(imm as usize + 1);
                         } else {
-                            pc = imm as usize;
+                            goto!(imm);
                         }
                     }};
                 }
@@ -628,7 +678,6 @@ impl Context<'_> {
                         if !args_plain(clo, &w[..], top.argc as usize) {
                             out!((), |cx, regs, clo, base, argc, at, ()| cx.verify_args_ops(regs, clo, base, argc, at));
                         }
-                        pc += 1;
                     }
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
@@ -644,7 +693,7 @@ impl Context<'_> {
                             // arm's operands (`verify_return_ops`).
                             out!((Reg::from(insn.a), insn.b != 0), |cx, regs, clo, base, _, at, ops| cx.verify_return_ops(regs, clo, base, at, ops))
                         }
-                        _ => pc += 1,
+                        _ => {}
                     },
                     // A builtin PHP compiles to an opcode (strlen, count, the
                     // type tests, array_key_exists): the plain case here, once
@@ -666,7 +715,8 @@ impl Context<'_> {
                         // line as the Call arm's (`builtin_call`).
                         macro_rules! call {
                             () => {{
-                                pc = threw!(self.builtin_call(regs, pc, base, i, (Reg::from(b), c, Reg::from(a))));
+                                let at = pc!();
+                                resume = threw!(self.builtin_call(regs, at, base, i, (Reg::from(b), c, Reg::from(a))));
                                 continue 'frame;
                             }};
                         }
@@ -712,10 +762,10 @@ impl Context<'_> {
                             _ => None,
                         };
                         if let Some(r) = r {
-                            let at = pc;
-                            pc += 2;
+                            let at = pc!();
+                            skip!();
                             if put(&mut w[rx!(a)], r) && ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 2, at);
                             }
                         } else {
                             let Some(v) = copied(&w[rx!(b)]) else { slow!() };
@@ -745,7 +795,7 @@ impl Context<'_> {
                         if back!(imm) {
                             slow!();
                         }
-                        pc = imm as usize;
+                        goto!(imm);
                     }
                     // A comparison (`<=>` is `step`'s): two ints inline, the
                     // rest through `test`.
@@ -763,11 +813,9 @@ impl Context<'_> {
                             && *i != i64::MAX
                         {
                             *i += 1;
-                            pc += 1;
                         } else if let Some(cell) = r.as_reference()
                             && step_ref(cell, i64::checked_add).is_some()
                         {
-                            pc += 1;
                         } else {
                             // (Anything else: out of line, `inc_dec_var_ops`.)
                             out!((Reg::from(insn.a), true), |cx, regs, clo, base, _, at, ops| cx.inc_dec_var_ops(regs, clo, base, at, ops));
@@ -788,11 +836,9 @@ impl Context<'_> {
                             && *i != i64::MIN
                         {
                             *i -= 1;
-                            pc += 1;
                         } else if let Some(cell) = r.as_reference()
                             && step_ref(cell, i64::checked_sub).is_some()
                         {
-                            pc += 1;
                         } else {
                             out!((Reg::from(insn.a), false), |cx, regs, clo, base, _, at, ops| cx.inc_dec_var_ops(regs, clo, base, at, ops));
                         }
@@ -914,14 +960,11 @@ impl Context<'_> {
                         } else {
                             Some(s.clone())
                         };
-                        match v {
-                            Some(v) => {
-                                if put(&mut w[rx!(b)], v) && ids.has_pending() {
-                                    pending_at!(imm as usize, pc);
-                                }
-                                pc = imm as usize;
+                        if let Some(v) = v {
+                            if put(&mut w[rx!(b)], v) && ids.has_pending() {
+                                pending_at!(imm as usize, pc!());
                             }
-                            None => pc += 1,
+                            goto!(imm);
                         }
                     }
                     // An array literal: the empty array, then its elements
@@ -979,7 +1022,7 @@ impl Context<'_> {
                             out!((Reg::from(a), Reg::from(b), imm), |cx, regs, clo, base, _, at, ops| cx.iter_init_ops(regs, clo, base, at, ops))
                         };
                         if arr.is_empty() {
-                            pc = imm as usize;
+                            goto!(imm);
                         } else {
                             let v = w[rx!(a)].clone();
                             let released = put(&mut w[rx!(b)], v) | put(&mut w[rk!(rx!(b) + 1)], Value::int(0));
@@ -1037,9 +1080,9 @@ impl Context<'_> {
                                 if !direct(target.shape, &target.code, n) || self.stop.load(AtomicOrdering::Relaxed) != NO_INTERRUPT {
                                     uncached!();
                                 }
-                                self.frames.call(Some(target), pc + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
+                                self.frames.call(Some(target), pc!() + 1, base + args as usize, n as usize, (base + dst as usize) as u32);
                                 bind(&mut self.frames, regs, target.shape, base + args as usize, n as usize);
-                                pc = 0;
+                                resume = 0;
                                 continue 'frame;
                             }
                             Some(&Callee::Builtin(i)) => {
@@ -1052,9 +1095,10 @@ impl Context<'_> {
                                     && call.plain(&w[start..start + n])
                                     && (!self.header_callback_set || self.out.started)
                                 {
-                                    frameless!(i, run, start, n, dst, true, pc);
+                                    frameless!(i, run, start, n, dst, true, pc!());
                                 } else {
-                                    pc = threw!(self.builtin_call(regs, pc, base, i, (Reg::from(args), n as u8, Reg::from(dst))));
+                                    let at = pc!();
+                                    resume = threw!(self.builtin_call(regs, at, base, i, (Reg::from(args), n as u8, Reg::from(dst))));
                                     continue 'frame;
                                 }
                             }
@@ -1081,30 +1125,26 @@ impl Context<'_> {
                                 if imm & insn::ARG_CONST != 0 {
                                     let v = cst!(start).clone();
                                     if put(&mut w[args], v) && ids.has_pending() {
-                                        pc += 1;
                                         pending!();
                                     }
                                 } else {
                                     for k in 0..n {
                                         // (Stopped at a Move, the ones
                                         // before it are done: on from it.)
-                                        let Some(v) = copied(&w[rk!(start + k)]) else {
-                                            pc += k;
-                                            slow!()
-                                        };
+                                        let Some(v) = copied(&w[rk!(start + k)]) else { slow!(pc!() + k) };
                                         let _ = put(&mut w[rk!(args + k)], v);
                                         if ids.has_pending() {
-                                            pc += k + 1;
-                                            pending!();
+                                            let at = pc!() + k;
+                                            pending_at!(at + 1, at);
                                         }
                                     }
                                 }
                                 // (The Call is at pc + n: its result register
                                 // is this instruction's, and the caller goes
                                 // on after it.)
-                                self.frames.call(Some(target), pc + n + 1, base + args, n, (base + rx!(c)) as u32);
+                                self.frames.call(Some(target), pc!() + n + 1, base + args, n, (base + rx!(c)) as u32);
                                 bind(&mut self.frames, regs, target.shape, base + args, n);
-                                pc = 0;
+                                resume = 0;
                                 continue 'frame;
                             }
                         } else if let Some(&Callee::Builtin(i)) = site {
@@ -1120,25 +1160,26 @@ impl Context<'_> {
                                     && (!self.header_callback_set || self.out.started)
                                 {
                                     let mut arg = [cst!(start).clone()];
+                                    let pc = pc!();
                                     self.pc = pc + 2;
                                     let r = self.frameless_run(i, run, &mut arg);
                                     match r {
                                         Some(v) if self.diags.is_empty() && self.pending_errors.is_empty() => {
                                             let _ = put(&mut w[rx!(c)], v);
-                                            pc += 2;
                                             if ids.has_pending() {
-                                                pending_at!(pc, pc - 1);
+                                                pending_at!(pc + 2, pc + 1);
                                             }
                                             top = self.frames.top();
                                             clo = &*top.func;
                                             code = &clo.code.insns[..];
+                                            goto!(pc + 2);
                                         }
                                         r => {
                                             // The argument register as the
                                             // checked path would have it.
                                             let at = rk!((imm >> 16) as usize);
                                             let _ = put(&mut w[at], arg[0].clone());
-                                            pc = threw!(self.frameless_tail(regs, pc + 1, i, r, (base + at, 1, base + rx!(c), true)));
+                                            resume = threw!(self.frameless_tail(regs, pc + 1, i, r, (base + at, 1, base + rx!(c), true)));
                                             continue 'frame;
                                         }
                                     }
@@ -1149,7 +1190,7 @@ impl Context<'_> {
                                 && call.plain(&w[start..start + n])
                                 && (!self.header_callback_set || self.out.started)
                             {
-                                frameless!(i, run, start, n, c, false, pc + n);
+                                frameless!(i, run, start, n, c, false, pc!() + n);
                                 continue;
                             }
                         }
@@ -1205,11 +1246,11 @@ impl Context<'_> {
                         // call's `$this`: no count taken, none given back.
                         let Ok(this) = std::mem::replace(&mut w[rx!(obj)], Value::UNDEF).into_object() else { uncached!() };
                         // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call(Some(target), pc!() + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
-                        pc = 0;
+                        resume = 0;
                         continue 'frame;
                     }
                     // InitMethod and MethodCall in one, for a call no
@@ -1284,11 +1325,11 @@ impl Context<'_> {
                             clear(&mut w[rx!(obj)]);
                         }
                         // (No `called`: it is `$this`'s class, `called_class`.)
-                        let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call(Some(target), pc!() + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
-                        pc = 0;
+                        resume = 0;
                         continue 'frame;
                     }
                     // `new C` of a class the site's cache has, whose objects
@@ -1356,11 +1397,11 @@ impl Context<'_> {
                                 self.last_new = None;
                                 object.destructed.set(false);
                                 // (No `called`: it is the object's class, `called_class`.)
-                                let frame = self.frames.call(Some(&f), pc + 1, base + args as usize, n, NO_RET);
+                                let frame = self.frames.call(Some(&f), pc!() + 1, base + args as usize, n, NO_RET);
                                 frame.this = Some(object);
                                 frame.scope = Some(declaring);
                                 enter(&mut self.frames, regs);
-                                pc = 0;
+                                resume = 0;
                                 continue 'frame;
                             }
                             None => {
@@ -1404,11 +1445,11 @@ impl Context<'_> {
                         place_spread(regs, at, list.as_array().expect("an array"));
                         drop(list);
                         // (No `called`: it is the object's class, `called_class`.)
-                        let frame = self.frames.call(Some(&f), pc + 1, at, n, NO_RET);
+                        let frame = self.frames.call(Some(&f), pc!() + 1, at, n, NO_RET);
                         frame.this = Some(object);
                         frame.scope = Some(declaring);
                         enter(&mut self.frames, regs);
-                        pc = 0;
+                        resume = 0;
                         continue 'frame;
                     }
                     // `C::f()` the site's cache has for this class and scope:
@@ -1423,7 +1464,7 @@ impl Context<'_> {
                     // method takes one so, else copied (an undefined one,
                     // the warning: `step`).
                     Op::StaticCallVars => {
-                        let Instr::StaticCall { vars, .. } = clo.code.code[pc] else { slow!() };
+                        let Instr::StaticCall { vars, .. } = clo.code.code[pc!()] else { slow!() };
                         static_call!(Some(vars))
                     }
                     // A closure (`function () {..}`, `fn () =>`) of this
@@ -1432,12 +1473,14 @@ impl Context<'_> {
                     Op::MakeClosure => {
                         ops!(a, b, c, imm);
                         let lambda = Arc::clone(&clo.code.lambdas[(imm & 0xffff) as usize]);
+                        let at = pc!();
                         let object = self.make_closure(&lambda, imm >> 16 != 0);
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after a frameless call.)
                         top = self.frames.top();
                         clo = &*top.func;
                         code = &clo.code.insns[..];
+                        goto!(at + 1);
                         done!(put(&mut w[rx!(a)], Value::object(object)));
                     }
                     // `...$rest`: its own argument (if passed) and those
@@ -1460,7 +1503,6 @@ impl Context<'_> {
                         if !unpack_array(&mut w[rx!(a)], list) {
                             slow!();
                         }
-                        pc += 1;
                     }
                     // `$o->p[k0].. = v` on a declared property the name's
                     // cache entry answers (`assign_prop_path`); anything
@@ -1490,10 +1532,10 @@ impl Context<'_> {
                         if unused {
                             // (What the skipped Free does: a stale value there goes now.)
                             let released = released | clear(&mut w[dst]);
-                            let at = pc;
-                            pc += 2;
+                            let at = pc!();
+                            skip!();
                             if released && ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 2, at);
                             }
                         } else {
                             done!(released);
@@ -1565,10 +1607,10 @@ impl Context<'_> {
                         if unused {
                             // (What the skipped Free does: a stale value there goes now.)
                             let released = released | clear(&mut w[dst]);
-                            let at = pc;
-                            pc += 2;
+                            let at = pc!();
+                            skip!();
                             if released && ids.has_pending() {
-                                pending_at!(pc, at);
+                                pending_at!(at + 2, at);
                             }
                         } else {
                             done!(released);
@@ -1703,7 +1745,9 @@ impl Context<'_> {
                     // into it.
                     Op::ArgDefault => {
                         ops!(a, b, c, imm);
-                        pc = if usize::from(a) < top.argc as usize && !w[rx!(a)].is_undef() { imm as usize } else { pc + 1 };
+                        if usize::from(a) < top.argc as usize && !w[rx!(a)].is_undef() {
+                            goto!(imm);
+                        }
                     }
                     // Whether `f($a['k'])` sends by reference, from the
                     // function or builtin the call site resolved to (not
@@ -1734,7 +1778,7 @@ impl Context<'_> {
                         let Some(empty) = empty else { slow!() };
                         let cell = make_ref(&mut w[..], Reg::from(a));
                         if empty {
-                            pc = imm as usize;
+                            goto!(imm);
                         } else {
                             let it = rx!(b);
                             let released = put(&mut w[it], Value::int(0)) | put(&mut w[rk!(it + 1)], Value::reference(cell));
@@ -1758,7 +1802,7 @@ impl Context<'_> {
                                 }
                                 done!(released);
                             }
-                            None => pc = (imm & !insn::ITER_KEY) as usize,
+                            None => goto!(imm & !insn::ITER_KEY),
                         }
                     }
                     // `$f(..)` of a Closure of PHP code (not a generator's,
@@ -1789,7 +1833,7 @@ impl Context<'_> {
                             general!();
                         }
                         let (f, this, scope, called, owner) = (Rc::clone(f), data.this.clone(), data.scope.clone(), data.called.clone(), Rc::clone(o));
-                        let frame = self.frames.call(Some(&f), pc + 1, base + args, n, (base + dst as usize) as u32);
+                        let frame = self.frames.call(Some(&f), pc!() + 1, base + args, n, (base + dst as usize) as u32);
                         frame.this = this;
                         frame.scope = scope;
                         frame.called = called;
@@ -1802,7 +1846,7 @@ impl Context<'_> {
                                 regs[base + args + *r as usize] = v.clone();
                             }
                         }
-                        pc = 0;
+                        resume = 0;
                         continue 'frame;
                     }
                     // `[$a, 'k' => $b] = $src`: an element there of an array
@@ -1821,6 +1865,7 @@ impl Context<'_> {
                     Op::StaticVar => {
                         ops!(a, b, c, imm);
                         let func = Arc::clone(&clo.code);
+                        let at = pc!();
                         let (cell, new) = self.static_var(&func, u16::from(b) | u16::from(c) << 8);
                         drop(func);
                         // (The context was borrowed whole: the frame's view
@@ -1828,14 +1873,15 @@ impl Context<'_> {
                         top = self.frames.top();
                         clo = &*top.func;
                         code = &clo.code.insns[..];
+                        goto!(at + 1);
                         let released = put(&mut w[rx!(a)], Value::reference(cell));
                         if new {
                             done!(released);
                         } else {
                             if released && ids.has_pending() {
-                                pending_at!(imm as usize, pc);
+                                pending_at!(imm as usize, pc!());
                             }
-                            pc = imm as usize;
+                            goto!(imm);
                         }
                     }
                     // `$o->p op= v` on a scalar in the declared slot the
@@ -1910,7 +1956,6 @@ impl Context<'_> {
                         if let Some(arr) = w[rx!(a)].array_mut() {
                             let _ = arr.push(Value::reference(cell));
                         }
-                        pc += 1;
                     }
                     // `C::$name op= v`: out of line on the arm's operands
                     // (`assign_static_prop_op_ops`).
@@ -1959,9 +2004,8 @@ impl Context<'_> {
                     // `$a = &$b`: b made a reference, a bound to its cell.
                     Op::BindRef => {
                         ops!(a, b, c, imm);
-                        if a == b {
-                            pc += 1;
-                        } else {
+                        // (`$a = &$a`: nothing to do.)
+                        if a != b {
                             let cell = make_ref(&mut w[..], Reg::from(b));
                             done!(put(&mut w[rx!(a)], Value::reference(cell)));
                         }
@@ -2158,7 +2202,6 @@ impl Context<'_> {
                         {
                             self.error_level = level;
                         }
-                        pc += 1;
                     }
                     // `-$x` of an int (not the least: a float) or a float
                     // (`negate_float`); anything else (a conversion, a
@@ -2226,7 +2269,6 @@ impl Context<'_> {
                         };
                         let Some(data) = w[rx!(a)].as_object().and_then(|o| callable::closure_data(o)) else { slow!() };
                         data.captured.borrow_mut().push(v);
-                        pc += 1;
                     }
                     // `$x::class` of an object (through a reference too):
                     // its class's name (shared, as PHP's interned name). A
