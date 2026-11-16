@@ -1,0 +1,17 @@
+{closure:{closure:FILE:11}:11}
+{closure:{closure:FILE:13}:13}
+{closure:{closure:{closure:FILE:15}:15}:15}
+{closure:outer():17}
+{closure:{closure:outer():17}:17}
+{closure:C::m():21}
+{closure:{closure:C::m():21}:21}
+Too few arguments to function C::{closure:{closure:C::m():21}:21}()
+Too few arguments to function C::{closure:C::s():22}()
+Too few arguments to function {closure:{closure:FILE:11}:11}()
+Too few arguments to function M::{closure:FILE:31}()
+Too few arguments to function M::{closure:C::s():22}()
+Too few arguments to function M::{closure:FILE:31}()
+Too few arguments to function M::{closure:C::s():22}()
+Too few arguments to function {closure:C::s():22}()
+{closure:FILE:31}
+Too few arguments to function C::{closure:{closure:C::m():21}:21}(), 0 passed in FILE on line 38 and exactly 1 expected
