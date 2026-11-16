@@ -17,6 +17,8 @@ use std::rc::Rc;
 pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "call_user_func", run: call_user_func, by_ref: &[] },
     Builtin { name: "call_user_func_array", run: call_user_func_array, by_ref: &[] },
+    Builtin { name: "forward_static_call", run: forward_static_call, by_ref: &[] },
+    Builtin { name: "forward_static_call_array", run: forward_static_call_array, by_ref: &[] },
     Builtin { name: "is_callable", run: is_callable, by_ref: &[] },
     Builtin { name: "array_map", run: array_map, by_ref: &[] },
     Builtin { name: "array_filter", run: array_filter, by_ref: &[] },
@@ -78,6 +80,23 @@ fn call_user_func_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, 
     let callable = arg(args, 0);
     // (Its string keys are named arguments.)
     ctx.call_list(&callable, &array(args, 1))
+}
+
+/// forward_static_call(callable $callback, mixed ...$args): only from code
+/// in a class (its message otherwise); late static binding passed on.
+fn forward_static_call(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callable = arg(args, 0);
+    if ctx.scope().is_none() {
+        return Err(ctx.throw("Error", "Cannot call forward_static_call() when no class scope is active".into()));
+    }
+    let mut rest: Vec<Value> = args[1..].iter().map(Value::deref).collect();
+    ctx.forward_static(&callable, &mut rest, None)
+}
+
+/// forward_static_call_array(callable $callback, array $args).
+fn forward_static_call_array(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {
+    let callable = arg(args, 0);
+    ctx.forward_static(&callable, &mut [], Some(&array(args, 1)))
 }
 
 fn is_callable(ctx: &mut dyn Ctx, args: &mut [Value]) -> Result<Value, Throw> {

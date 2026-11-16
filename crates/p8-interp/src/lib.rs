@@ -6518,6 +6518,13 @@ impl Ctx for Context<'_> {
         self.call_list_from_builtin(callable, list)
     }
 
+    fn forward_static(&mut self, callable: &Value, args: &mut [Value], list: Option<&PhpArray>) -> Result<Value, Throw> {
+        if self.isolate.regs.is_empty() {
+            return Err(Ctx::fatal(self, "a builtin that takes no callable called back into PHP".into()));
+        }
+        self.forward_static_from_builtin(callable, args, list)
+    }
+
     fn is_callable(&mut self, v: &Value) -> bool {
         self.callable(v)
     }

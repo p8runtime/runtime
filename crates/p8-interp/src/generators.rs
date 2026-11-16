@@ -60,6 +60,10 @@ pub(crate) struct GenState {
     /// passes on to the generator it goes through (PHP sends to and
     /// throws into the innermost one, zend_generator_get_current).
     passed: Option<Result<Value, Rc<Object>>>,
+    /// The frame's Extra while it is suspended: the arguments past the
+    /// parameters (a variadic's, func_get_args()'s) and its run-time
+    /// variables, given to the frame each time it resumes.
+    extra: Option<Box<crate::frames::Extra>>,
 }
 
 pub(crate) struct Gen(RefCell<GenState>);
@@ -93,11 +97,14 @@ impl Context<'_> {
         let code = &func.code;
         let mut window = vec![Value::UNDEF; code.nregs as usize];
         let nparams = code.params.len();
-        for (i, r) in regs[args..args + argc].iter_mut().enumerate() {
-            let v = std::mem::replace(r, Value::UNDEF);
-            if i < nparams {
-                window[i] = v;
-            }
+        let mut extra = None;
+        if argc > nparams {
+            let mut e = Box::<crate::frames::Extra>::default();
+            e.args = regs[args + nparams..args + argc].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)).collect();
+            extra = Some(e);
+        }
+        for (i, r) in regs[args..args + argc.min(nparams)].iter_mut().enumerate() {
+            window[i] = std::mem::replace(r, Value::UNDEF);
         }
         if argc < nparams && !func.defaults.is_empty() {
             crate::fast::fill_defaults(&func.defaults, &mut window[..nparams], argc);
@@ -128,6 +135,7 @@ impl Context<'_> {
             resume_dst: None,
             delegate: None,
             passed: None,
+            extra,
         };
         let class = Rc::clone(&self.classes[&self.isolate.known.generator]);
         Object::with_data(class, &self.ids, Some(Rc::new(Gen(RefCell::new(state)))))
@@ -137,7 +145,7 @@ impl Context<'_> {
     /// the yield it stopped at gives; `throw` is thrown there instead.
     pub(crate) fn resume(&mut self, regs: &mut Vec<Value>, object: &Rc<Object>, sent: Value, mut throw: Option<Rc<Object>>) -> Result<(), Throw> {
         let state = gen_of(object).expect("a Generator");
-        let (func, pc, argc, this, scope, called) = {
+        let (func, pc, argc, this, scope, called, extra) = {
             let mut s = state.0.borrow_mut();
             if s.finished {
                 return match throw {
@@ -153,7 +161,7 @@ impl Context<'_> {
                 s.advanced = true;
             }
             s.started = true;
-            (Rc::clone(&s.func), s.pc, s.argc, s.this.clone(), s.scope.clone(), s.called.clone())
+            (Rc::clone(&s.func), s.pc, s.argc, s.this.clone(), s.scope.clone(), s.called.clone(), s.extra.take())
         };
         let at = match self.frames.last() {
             Some(top) => top.base as usize + top.func.code.nregs as usize,
@@ -189,6 +197,7 @@ impl Context<'_> {
             frame.this = this;
             frame.scope = scope;
             frame.called = called;
+            frame.extra = extra;
             frame.owner = Some(Rc::clone(object));
         }
         self.frames.floor = index;
@@ -233,8 +242,10 @@ impl Context<'_> {
         frame.this = None;
         frame.scope = None;
         frame.called = None;
+        let extra = frame.extra.take();
         let state = gen_of(&generator).expect("a Generator");
         let mut s = state.0.borrow_mut();
+        s.extra = extra;
         s.regs = regs[base..base + nregs].iter_mut().map(|r| std::mem::replace(r, Value::UNDEF)).collect();
         s.pc = resume_pc as u32;
         s.resume_dst = dst;
