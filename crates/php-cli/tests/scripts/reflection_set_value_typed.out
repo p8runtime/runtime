@@ -1,0 +1,155 @@
+int(5)
+
+Deprecated: Implicit conversion from float 5.5 to int loses precision in %s on line 23
+int(5)
+int(7)
+int(7)
+int(8)
+TypeError: Cannot assign string to property IW::$p of type int
+  kept: 8
+TypeError: Cannot assign string to property IW::$p of type int
+  kept: 8
+int(1)
+TypeError: Cannot assign null to property IW::$p of type int
+  kept: 1
+TypeError: Cannot assign array to property IW::$p of type int
+  kept: 1
+TypeError: Cannot assign float to property IW::$p of type int
+  kept: 1
+TypeError: Cannot assign float to property IW::$p of type int
+  kept: 1
+TypeError: Cannot assign stdClass to property IW::$p of type int
+  kept: 1
+int(0)
+float(3)
+float(2.5)
+TypeError: Cannot assign string to property IW::$f of type ?float
+  kept: 2.5
+float(1)
+NULL
+string(1) "3"
+string(3) "2.5"
+string(1) "1"
+TypeError: Cannot assign null to property IW::$s of type string
+  kept: '1'
+TypeError: Cannot assign stdClass to property IW::$s of type string
+  kept: '1'
+int(2)
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 23
+int(2)
+string(1) "3"
+int(1)
+string(1) "x"
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+TypeError: Cannot assign array to property IW::$b of type bool
+  kept: false
+int(9)
+TypeError: Cannot assign string to property IW::$priv of type int
+  kept: 9
+int(4)
+float(1.5)
+object(Child)#4 (8) {
+  ["p"]=>
+  int(0)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["u"]=>
+  int(0)
+  ["b"]=>
+  bool(false)
+  ["priv":"IW":private]=>
+  int(1)
+  ["ro"]=>
+  uninitialized(int)
+  ["plain"]=>
+  NULL
+  ["w"]=>
+  NULL
+}
+TypeError: Cannot assign stdClass to property IW::$w of type ?IW
+  kept: \Child::__set_state(array(
+   'p' => 0,
+   'f' => NULL,
+   's' => '',
+   'u' => 0,
+   'b' => false,
+   'priv' => 1,
+   'plain' => NULL,
+   'w' => NULL,
+))
+int(12)
+int(12)
+TypeError: Cannot assign string to property IW::$p of type int
+  kept: 12
+int(12)
+int(13)
+TypeError: Cannot assign string to property IW::$p of type int
+  kept: 13
+int(21)
+TypeError: Cannot assign array to property IW::$p of type int
+  kept: 21
+object(IW)#1 (9) {
+  ["p"]=>
+  int(13)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(1) "1"
+  ["u"]=>
+  string(1) "x"
+  ["b"]=>
+  bool(false)
+  ["priv":"IW":private]=>
+  int(9)
+  ["ro"]=>
+  int(4)
+  ["plain"]=>
+  float(1.5)
+  ["w"]=>
+  object(Child)#4 (8) {
+    ["p"]=>
+    int(0)
+    ["f"]=>
+    NULL
+    ["s"]=>
+    string(0) ""
+    ["u"]=>
+    int(0)
+    ["b"]=>
+    bool(false)
+    ["priv":"IW":private]=>
+    int(1)
+    ["ro"]=>
+    uninitialized(int)
+    ["plain"]=>
+    NULL
+    ["w"]=>
+    NULL
+  }
+}
+object(Child)#5 (8) {
+  ["p"]=>
+  int(21)
+  ["f"]=>
+  NULL
+  ["s"]=>
+  string(0) ""
+  ["u"]=>
+  int(0)
+  ["b"]=>
+  bool(false)
+  ["priv":"IW":private]=>
+  int(1)
+  ["ro"]=>
+  uninitialized(int)
+  ["plain"]=>
+  NULL
+  ["w"]=>
+  NULL
+}

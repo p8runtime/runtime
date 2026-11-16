@@ -6608,6 +6608,14 @@ impl Ctx for Context<'_> {
         }
     }
 
+    fn typed_prop_value(&mut self, o: &Object, slot: usize, value: Value, strict: bool) -> Result<Value, Throw> {
+        let prop = &o.class.properties[slot];
+        match &prop.ty_decl {
+            Some(ty) => self.prop_type_check(prop, ty, &prop.name, value, strict),
+            None => Ok(value),
+        }
+    }
+
     fn class_constant(&mut self, class: &Rc<Class>, name: &[u8]) -> Result<Option<Value>, Throw> {
         let Some(c) = class.constants.get(name) else { return Ok(None) };
         // An enum case is its object (constant(), reflection), not its value.
