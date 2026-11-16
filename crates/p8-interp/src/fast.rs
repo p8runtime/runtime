@@ -75,10 +75,24 @@ impl Context<'_> {
                 continue 'frame;
             }
             handed_back = 0;
-            let mut top = self.frames.top();
-            let mut clo = &*top.func;
-            let base = top.base as usize;
-            let mut code = &clo.code.insns[..];
+            let base = self.frames.top().base as usize;
+            // The register file is kept a window ahead of every frame
+            // (`enter`), so the frame's fixed window always exists.
+            // (One test: the slice's own check is the same compare.)
+            let w: &mut [Value; WINDOW] = if regs.len() >= base + WINDOW {
+                (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
+            } else {
+                grow_window(regs, base)
+            };
+            // Each round of this loop reads the frame's view from the frame
+            // stack: again after what borrows the whole context and leaves
+            // the frame as it is (a frameless call, MakeClosure,
+            // StaticVar), at `resume`. Within one round the code is fixed,
+            // so its end is too, and a jump moves only the position.
+            'code: loop {
+            let top = self.frames.top();
+            let clo = &*top.func;
+            let code = &clo.code.insns[..];
             // The frame's instructions from the next one to run: the
             // dispatch takes the next of them, so a straight-line
             // instruction's arm moves nothing, and the loop keeps one
@@ -182,14 +196,6 @@ impl Context<'_> {
                     ($e) & (WINDOW - 1)
                 };
             }
-            // The register file is kept a window ahead of every frame
-            // (`enter`), so the frame's fixed window always exists.
-            // (One test: the slice's own check is the same compare.)
-            let w: &mut [Value; WINDOW] = if regs.len() >= base + WINDOW {
-                (&mut regs[base..base + WINDOW]).try_into().expect("a window's worth of registers")
-            } else {
-                grow_window(regs, base)
-            };
             // A constant operand (an `Op::*C` form): the closure's constant
             // (`Function::consts`, thawed once), read in place as PHP reads a
             // CONST operand from the op_array. `lower` keeps the index in
@@ -383,10 +389,8 @@ impl Context<'_> {
                             if ids.has_pending() {
                                 pending_at!(at + 1, at);
                             }
-                            top = self.frames.top();
-                            clo = &*top.func;
-                            code = &clo.code.insns[..];
-                            goto!(at + 1);
+                            resume = at + 1;
+                            continue 'code;
                         }
                         r => {
                             resume = threw!(self.frameless_tail(regs, at, $i, r, (base + $start, $n, base + rx!($dst), $temps)));
@@ -1169,10 +1173,8 @@ impl Context<'_> {
                                             if ids.has_pending() {
                                                 pending_at!(pc + 2, pc + 1);
                                             }
-                                            top = self.frames.top();
-                                            clo = &*top.func;
-                                            code = &clo.code.insns[..];
-                                            goto!(pc + 2);
+                                            resume = pc + 2;
+                                            continue 'code;
                                         }
                                         r => {
                                             // The argument register as the
@@ -1183,7 +1185,6 @@ impl Context<'_> {
                                             continue 'frame;
                                         }
                                     }
-                                    continue;
                                 }
                             } else if let Some(run) = call.frameless
                                 && matches!(run, Imp::Lent(_))
@@ -1191,7 +1192,6 @@ impl Context<'_> {
                                 && (!self.header_callback_set || self.out.started)
                             {
                                 frameless!(i, run, start, n, c, false, pc!() + n);
-                                continue;
                             }
                         }
                         if imm & insn::ARG_CONST != 0 {
@@ -1475,13 +1475,13 @@ impl Context<'_> {
                         let lambda = Arc::clone(&clo.code.lambdas[(imm & 0xffff) as usize]);
                         let at = pc!();
                         let object = self.make_closure(&lambda, imm >> 16 != 0);
+                        if put(&mut w[rx!(a)], Value::object(object)) && ids.has_pending() {
+                            pending_at!(at + 1, at);
+                        }
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after a frameless call.)
-                        top = self.frames.top();
-                        clo = &*top.func;
-                        code = &clo.code.insns[..];
-                        goto!(at + 1);
-                        done!(put(&mut w[rx!(a)], Value::object(object)));
+                        resume = at + 1;
+                        continue 'code;
                     }
                     // `...$rest`: its own argument (if passed) and those
                     // past the parameters, as a list (named arguments no
@@ -1868,21 +1868,15 @@ impl Context<'_> {
                         let at = pc!();
                         let (cell, new) = self.static_var(&func, u16::from(b) | u16::from(c) << 8);
                         drop(func);
+                        let released = put(&mut w[rx!(a)], Value::reference(cell));
+                        let next = if new { at + 1 } else { imm as usize };
+                        if released && ids.has_pending() {
+                            pending_at!(next, at);
+                        }
                         // (The context was borrowed whole: the frame's view
                         // is read again, as after MakeClosure.)
-                        top = self.frames.top();
-                        clo = &*top.func;
-                        code = &clo.code.insns[..];
-                        goto!(at + 1);
-                        let released = put(&mut w[rx!(a)], Value::reference(cell));
-                        if new {
-                            done!(released);
-                        } else {
-                            if released && ids.has_pending() {
-                                pending_at!(imm as usize, pc!());
-                            }
-                            goto!(imm);
-                        }
+                        resume = next;
+                        continue 'code;
                     }
                     // `$o->p op= v` on a scalar in the declared slot the
                     // name's cache entry answers, with a scalar, computed
@@ -2294,6 +2288,7 @@ impl Context<'_> {
                         ret!(Value::NULL);
                     }
                 })
+            }
             }
         };
         Err(threw)
