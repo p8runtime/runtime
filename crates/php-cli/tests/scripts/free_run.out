@@ -1,0 +1,22 @@
+~t1
+~t2
+4
+in 0
+~a1
+~a2
+after foreach
+~n1
+~n2
+~n3
+n1n2n3
+0,10,20,1,11,21,2,12,22 36
+~p
+~q
+bool(false)
+~p1
+~q1
+bool(true)
+~boom
+~quiet
+caught from boom
+end
