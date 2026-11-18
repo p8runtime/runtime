@@ -369,7 +369,7 @@ impl Context<'_> {
 /// from code in `scope` (0: any, for a public property), keep it at `slot`.
 /// What it skips on a hit is the name lookup and the visibility check, as
 /// PHP's does (zend_fetch_property_address / FETCH_OBJ_R's CACHED_PTR).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct PropSite {
     pub(crate) class: usize,
     pub(crate) scope: usize,
@@ -387,6 +387,15 @@ pub(crate) struct PropSite {
     /// state (`write`). One word: the loop reads it whole for the slot, and
     /// the rest costs nothing there until a write is a typed one.
     pub(crate) word: u64,
+}
+
+/// An entry that answers for no class (no class is at address 0). Its
+/// `write` is 3, None as 0 is: an entry of all zero bytes made every
+/// closure's entries with a memset, which cost more than the stores.
+impl Default for PropSite {
+    fn default() -> PropSite {
+        PropSite { class: 0, scope: 0, plain_write: 0, word: 3 << 48 }
+    }
 }
 
 impl PropSite {
@@ -691,6 +700,10 @@ pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usiz
     let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared && !guarded { 0 } else { scope };
     let class = Rc::as_ptr(&o.class) as usize;
     let plain = !guarded && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
+    if plain {
+        // (A plain store's entry: its write never asks `tags` or `write`.)
+        return Some(PropSite::new(class, scope, slot, class, 0, None));
+    }
     let write = if !guarded {
         Some(Plain::Any)
     } else if declared_in(o, prop, scope) {
@@ -700,7 +713,7 @@ pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usiz
         None
     };
     let tags = prop.ty_decl.as_ref().map_or(u16::MAX, |t| t.plain_tags());
-    Some(PropSite::new(class, scope, slot, if plain { class } else { 0 }, tags, write))
+    Some(PropSite::new(class, scope, slot, 0, tags, write))
 }
 
 /// Whether the class at address `scope` is the one declaring `prop` in
