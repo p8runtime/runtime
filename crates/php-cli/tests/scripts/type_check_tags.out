@@ -1,0 +1,260 @@
+== round 0
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 16
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 16
+  p_int(): Argument #1 ($x) must be of type int, string given, called in %s on line 78
+  p_int(): Argument #1 ($x) must be of type int, array given, called in %s on line 78
+  p_int(): Argument #1 ($x) must be of type int, Other given, called in %s on line 78
+p_int: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_float(): Argument #1 ($x) must be of type float, string given, called in %s on line 78
+  p_float(): Argument #1 ($x) must be of type float, array given, called in %s on line 78
+  p_float(): Argument #1 ($x) must be of type float, Other given, called in %s on line 78
+p_float: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric=7.0, heap numeric=44.0, float string=2.5, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_string(): Argument #1 ($x) must be of type string, array given, called in %s on line 78
+  p_string(): Argument #1 ($x) must be of type string, Other given, called in %s on line 78
+p_string: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+  p_bool(): Argument #1 ($x) must be of type bool, array given, called in %s on line 78
+  p_bool(): Argument #1 ($x) must be of type bool, Other given, called in %s on line 78
+p_bool: null: TypeError, true=true, false=false, int=true, neg=true, float=true, whole float=true, numeric=true, heap numeric=true, float string=true, word=true, empty=false, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name=true
+  p_array(): Argument #1 ($x) must be of type array, string given, called in %s on line 78
+  p_array(): Argument #1 ($x) must be of type array, Other given, called in %s on line 78
+p_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 21
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 21
+  p_nint(): Argument #1 ($x) must be of type ?int, string given, called in %s on line 78
+  p_nint(): Argument #1 ($x) must be of type ?int, array given, called in %s on line 78
+  p_nint(): Argument #1 ($x) must be of type ?int, Other given, called in %s on line 78
+p_nint: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 22
+  p_union(): Argument #1 ($x) must be of type string|int, array given, called in %s on line 78
+  p_union(): Argument #1 ($x) must be of type string|int, Other given, called in %s on line 78
+p_union: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+  p_fs(): Argument #1 ($x) must be of type string|float, array given, called in %s on line 78
+  p_fs(): Argument #1 ($x) must be of type string|float, Other given, called in %s on line 78
+p_fs: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+p_mixed: null=NULL, true=true, false=false, int=5, neg=-3, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array=array(2), base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name='strlen'
+  p_iter(): Argument #1 ($x) must be of type Traversable|array, string given, called in %s on line 78
+  p_iter(): Argument #1 ($x) must be of type Traversable|array, Other given, called in %s on line 78
+p_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_call(): Argument #1 ($x) must be of type callable, string given, called in %s on line 78
+  p_call(): Argument #1 ($x) must be of type callable, array given, called in %s on line 78
+  p_call(): Argument #1 ($x) must be of type callable, Other given, called in %s on line 78
+p_call: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure=Closure, callable name='strlen'
+  p_object(): Argument #1 ($x) must be of type object, string given, called in %s on line 78
+  p_object(): Argument #1 ($x) must be of type object, array given, called in %s on line 78
+p_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name: TypeError
+  p_true(): Argument #1 ($x) must be of type true, string given, called in %s on line 78
+  p_true(): Argument #1 ($x) must be of type true, array given, called in %s on line 78
+  p_true(): Argument #1 ($x) must be of type true, Other given, called in %s on line 78
+p_true: null: TypeError, true=true, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_false(): Argument #1 ($x) must be of type false, string given, called in %s on line 78
+  p_false(): Argument #1 ($x) must be of type false, array given, called in %s on line 78
+  p_false(): Argument #1 ($x) must be of type false, Other given, called in %s on line 78
+p_false: null: TypeError, true: TypeError, false=false, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_null(): Argument #1 ($x) must be of type null, string given, called in %s on line 78
+  p_null(): Argument #1 ($x) must be of type null, array given, called in %s on line 78
+  p_null(): Argument #1 ($x) must be of type null, Other given, called in %s on line 78
+p_null: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_base(): Argument #1 ($x) must be of type Base, string given, called in %s on line 78
+  p_base(): Argument #1 ($x) must be of type Base, array given, called in %s on line 78
+  p_base(): Argument #1 ($x) must be of type Base, Other given, called in %s on line 78
+p_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_shape(): Argument #1 ($x) must be of type ?Shape, string given, called in %s on line 78
+  p_shape(): Argument #1 ($x) must be of type ?Shape, array given, called in %s on line 78
+  p_shape(): Argument #1 ($x) must be of type ?Shape, Other given, called in %s on line 78
+p_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_inter(): Argument #1 ($x) must be of type Base&Shape, string given, called in %s on line 78
+  p_inter(): Argument #1 ($x) must be of type Base&Shape, array given, called in %s on line 78
+  p_inter(): Argument #1 ($x) must be of type Base&Shape, Other given, called in %s on line 78
+p_inter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  p_bs(): Argument #1 ($x) must be of type Base|string, array given, called in %s on line 78
+  p_bs(): Argument #1 ($x) must be of type Base|string, Other given, called in %s on line 78
+p_bs: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base=Base, sub=Sub, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 35
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 35
+  p_scalar_or_obj(): Argument #1 ($x) must be of type Base|int|null, string given, called in %s on line 78
+  p_scalar_or_obj(): Argument #1 ($x) must be of type Base|int|null, array given, called in %s on line 78
+  p_scalar_or_obj(): Argument #1 ($x) must be of type Base|int|null, Other given, called in %s on line 78
+p_scalar_or_obj: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 37
+  r_int(): Return value must be of type int, string returned
+  r_int(): Return value must be of type int, array returned
+  r_int(): Return value must be of type int, Other returned
+r_int: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_float(): Return value must be of type float, string returned
+  r_float(): Return value must be of type float, array returned
+  r_float(): Return value must be of type float, Other returned
+r_float: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric=7.0, heap numeric=44.0, float string=2.5, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_string(): Return value must be of type string, array returned
+  r_string(): Return value must be of type string, Other returned
+r_string: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+  r_bool(): Return value must be of type bool, array returned
+  r_bool(): Return value must be of type bool, Other returned
+r_bool: null: TypeError, true=true, false=false, int=true, neg=true, float=true, whole float=true, numeric=true, heap numeric=true, float string=true, word=true, empty=false, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name=true
+  r_array(): Return value must be of type array, string returned
+  r_array(): Return value must be of type array, Other returned
+r_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 42
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 42
+  r_nint(): Return value must be of type ?int, string returned
+  r_nint(): Return value must be of type ?int, array returned
+  r_nint(): Return value must be of type ?int, Other returned
+r_nint: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 43
+  r_union(): Return value must be of type string|int, array returned
+  r_union(): Return value must be of type string|int, Other returned
+r_union: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+r_mixed: null=NULL, true=true, false=false, int=5, neg=-3, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array=array(2), base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name='strlen'
+  r_iter(): Return value must be of type Traversable|array, string returned
+  r_iter(): Return value must be of type Traversable|array, Other returned
+r_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_object(): Return value must be of type object, string returned
+  r_object(): Return value must be of type object, array returned
+r_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name: TypeError
+  r_true(): Return value must be of type true, string returned
+  r_true(): Return value must be of type true, array returned
+  r_true(): Return value must be of type true, Other returned
+r_true: null: TypeError, true=true, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_false(): Return value must be of type false, string returned
+  r_false(): Return value must be of type false, array returned
+  r_false(): Return value must be of type false, Other returned
+r_false: null: TypeError, true: TypeError, false=false, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_null(): Return value must be of type null, string returned
+  r_null(): Return value must be of type null, array returned
+  r_null(): Return value must be of type null, Other returned
+r_null: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_base(): Return value must be of type Base, string returned
+  r_base(): Return value must be of type Base, array returned
+  r_base(): Return value must be of type Base, Other returned
+r_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_shape(): Return value must be of type ?Shape, string returned
+  r_shape(): Return value must be of type ?Shape, array returned
+  r_shape(): Return value must be of type ?Shape, Other returned
+r_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+  r_bs(): Return value must be of type Base|string, array returned
+  r_bs(): Return value must be of type Base|string, Other returned
+r_bs: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base=Base, sub=Sub, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+== round 1
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 16
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 16
+p_int: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_float: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric=7.0, heap numeric=44.0, float string=2.5, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_string: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+p_bool: null: TypeError, true=true, false=false, int=true, neg=true, float=true, whole float=true, numeric=true, heap numeric=true, float string=true, word=true, empty=false, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name=true
+p_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 21
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 21
+p_nint: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 22
+p_union: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+p_fs: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+p_mixed: null=NULL, true=true, false=false, int=5, neg=-3, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array=array(2), base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name='strlen'
+p_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_call: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure=Closure, callable name='strlen'
+p_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name: TypeError
+p_true: null: TypeError, true=true, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_false: null: TypeError, true: TypeError, false=false, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_null: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_inter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+p_bs: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base=Base, sub=Sub, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 35
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 35
+p_scalar_or_obj: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 37
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 37
+r_int: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_float: null: TypeError, true=1.0, false=0.0, int=5.0, neg=-3.0, float=1.5, whole float=2.0, numeric=7.0, heap numeric=44.0, float string=2.5, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_string: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+r_bool: null: TypeError, true=true, false=false, int=true, neg=true, float=true, whole float=true, numeric=true, heap numeric=true, float string=true, word=true, empty=false, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name=true
+r_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 42
+
+Deprecated: Implicit conversion from float-string "2.5" to int loses precision in %s on line 42
+r_nint: null=NULL, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric=7, heap numeric=44, float string=2, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 43
+r_union: null: TypeError, true=1, false=0, int=5, neg=-3, float=1, whole float=2, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+r_mixed: null=NULL, true=true, false=false, int=5, neg=-3, float=1.5, whole float=2.0, numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array=array(2), base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name='strlen'
+r_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, str obj=Str, closure=Closure, callable name: TypeError
+r_true: null: TypeError, true=true, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_false: null: TypeError, true: TypeError, false=false, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_null: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, neg: TypeError, float: TypeError, whole float: TypeError, numeric: TypeError, heap numeric: TypeError, float string: TypeError, word: TypeError, empty: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, str obj: TypeError, closure: TypeError, callable name: TypeError
+r_bs: null: TypeError, true='1', false='', int='5', neg='-3', float='1.5', whole float='2', numeric='7', heap numeric='44', float string='2.5', word='abc', empty='', array: TypeError, base=Base, sub=Sub, other: TypeError, str obj='str', closure: TypeError, callable name='strlen'
+1array(1)'c'NULL5 2NULL'3'NULL5 3Other'x'Sub5 41'y'NULL9
+Too few arguments to function some(), 1 passed in %s on line 92 and at least 2 expected
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 93
+some(): Argument #4 ($d) must be of type ?Base, Other given, called in %s on line 94
+1array(1)'c'NULL5 2NULL'3'NULL5 3Other'x'Sub5 41'y'NULL9
+Too few arguments to function some(), 1 passed in %s on line 92 and at least 2 expected
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 93
+some(): Argument #4 ($d) must be of type ?Base, Other given, called in %s on line 94
+1array(1)'c'NULL5 2NULL'3'NULL5 3Other'x'Sub5 41'y'NULL9
+Too few arguments to function some(), 1 passed in %s on line 92 and at least 2 expected
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 93
+some(): Argument #4 ($d) must be of type ?Base, Other given, called in %s on line 94
+6'7' 6'7' 3NULL
+by_ref(): Argument #1 ($x) must be of type int, string given, called in %s on line 103
+6'7' 6'7' 3NULL
+by_ref(): Argument #1 ($x) must be of type int, string given, called in %s on line 103
+6'7' 6'7' 3NULL
+by_ref(): Argument #1 ($x) must be of type int, string given, called in %s on line 103
+1,2,3  13 4:5
+ints(): Argument #3 must be of type int, string given, called in %s on line 111
+rest(): Argument #1 ($first) must be of type int, array given, called in %s on line 112
+1,2,3  13 4:5
+ints(): Argument #3 must be of type int, string given, called in %s on line 111
+rest(): Argument #1 ($first) must be of type int, array given, called in %s on line 112
+1,2,3  13 4:5
+ints(): Argument #3 must be of type int, string given, called in %s on line 111
+rest(): Argument #1 ($first) must be of type int, array given, called in %s on line 112
+Box Box BigBox BigBox
+Box Box BigBox BigBox
+Box Box BigBox BigBox
+Box Box BigBox BigBox
+Box::put(): Argument #1 ($b) must be of type Base, Other given, called in %s on line 125
+Box::self(): Argument #1 ($other) must be of type Box, Base given, called in %s on line 131
+1,2 3 NULL 1NULL
+bad_int(): Return value must be of type int, string returned
+no_value(): Return value must be of type int, none returned
+1,2 3 NULL 1NULL
+bad_int(): Return value must be of type int, string returned
+no_value(): Return value must be of type int, none returned
+3 1 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 149
+1
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 148
+2
+3 1 
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %s on line 149
+1
+
+Deprecated: Implicit conversion from float 2.5 to int loses precision in %s on line 148
+2

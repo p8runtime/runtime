@@ -1,0 +1,96 @@
+== round 0
+  p_int(): Argument #1 ($x) must be of type int, string given, called in %s on line 60
+p_int: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_float(): Argument #1 ($x) must be of type float, string given, called in %s on line 60
+p_float: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_string(): Argument #1 ($x) must be of type string, int given, called in %s on line 60
+p_string: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+  p_bool(): Argument #1 ($x) must be of type bool, int given, called in %s on line 60
+  p_bool(): Argument #1 ($x) must be of type bool, string given, called in %s on line 60
+p_bool: null: TypeError, true=true, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_array(): Argument #1 ($x) must be of type array, int given, called in %s on line 60
+  p_array(): Argument #1 ($x) must be of type array, string given, called in %s on line 60
+p_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_nint(): Argument #1 ($x) must be of type ?int, string given, called in %s on line 60
+p_nint: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_union: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+p_fs: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+p_mixed: null=NULL, true=true, false=false, int=5, float=1.5, numeric='7', heap numeric='44', word='abc', array=array(2), base=Base, sub=Sub, other=Other, closure=Closure, callable name='strlen'
+  p_iter(): Argument #1 ($x) must be of type Traversable|array, int given, called in %s on line 60
+  p_iter(): Argument #1 ($x) must be of type Traversable|array, string given, called in %s on line 60
+p_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_call(): Argument #1 ($x) must be of type callable, int given, called in %s on line 60
+  p_call(): Argument #1 ($x) must be of type callable, string given, called in %s on line 60
+p_call: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure=Closure, callable name='strlen'
+  p_object(): Argument #1 ($x) must be of type object, int given, called in %s on line 60
+  p_object(): Argument #1 ($x) must be of type object, string given, called in %s on line 60
+p_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, closure=Closure, callable name: TypeError
+  p_true(): Argument #1 ($x) must be of type true, int given, called in %s on line 60
+  p_true(): Argument #1 ($x) must be of type true, string given, called in %s on line 60
+p_true: null: TypeError, true=true, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_false(): Argument #1 ($x) must be of type false, int given, called in %s on line 60
+  p_false(): Argument #1 ($x) must be of type false, string given, called in %s on line 60
+p_false: null: TypeError, true: TypeError, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  p_base(): Argument #1 ($x) must be of type Base, int given, called in %s on line 60
+  p_base(): Argument #1 ($x) must be of type Base, string given, called in %s on line 60
+p_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+  p_shape(): Argument #1 ($x) must be of type ?Shape, int given, called in %s on line 60
+  p_shape(): Argument #1 ($x) must be of type ?Shape, string given, called in %s on line 60
+p_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+  p_scalar_or_obj(): Argument #1 ($x) must be of type Base|int|null, string given, called in %s on line 60
+p_scalar_or_obj: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+  r_int(): Return value must be of type int, string returned
+r_int: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  r_float(): Return value must be of type float, string returned
+r_float: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  r_string(): Return value must be of type string, int returned
+r_string: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+  r_bool(): Return value must be of type bool, int returned
+  r_bool(): Return value must be of type bool, string returned
+r_bool: null: TypeError, true=true, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+  r_nint(): Return value must be of type ?int, string returned
+r_nint: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+r_union: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+r_mixed: null=NULL, true=true, false=false, int=5, float=1.5, numeric='7', heap numeric='44', word='abc', array=array(2), base=Base, sub=Sub, other=Other, closure=Closure, callable name='strlen'
+  r_base(): Return value must be of type Base, int returned
+  r_base(): Return value must be of type Base, string returned
+r_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+  r_shape(): Return value must be of type ?Shape, int returned
+  r_shape(): Return value must be of type ?Shape, string returned
+r_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+== round 1
+p_int: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_float: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_string: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+p_bool: null: TypeError, true=true, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_array: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_nint: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_union: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+p_fs: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+p_mixed: null=NULL, true=true, false=false, int=5, float=1.5, numeric='7', heap numeric='44', word='abc', array=array(2), base=Base, sub=Sub, other=Other, closure=Closure, callable name='strlen'
+p_iter: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array=array(2), base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_call: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure=Closure, callable name='strlen'
+p_object: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other=Other, closure=Closure, callable name: TypeError
+p_true: null: TypeError, true=true, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_false: null: TypeError, true: TypeError, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+p_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+p_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+p_scalar_or_obj: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+r_int: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+r_float: null: TypeError, true: TypeError, false: TypeError, int=5.0, float=1.5, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+r_string: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+r_bool: null: TypeError, true=true, false=false, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+r_nint: null=NULL, true: TypeError, false: TypeError, int=5, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name: TypeError
+r_union: null: TypeError, true: TypeError, false: TypeError, int=5, float: TypeError, numeric='7', heap numeric='44', word='abc', array: TypeError, base: TypeError, sub: TypeError, other: TypeError, closure: TypeError, callable name='strlen'
+r_mixed: null=NULL, true=true, false=false, int=5, float=1.5, numeric='7', heap numeric='44', word='abc', array=array(2), base=Base, sub=Sub, other=Other, closure=Closure, callable name='strlen'
+r_base: null: TypeError, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+r_shape: null=NULL, true: TypeError, false: TypeError, int: TypeError, float: TypeError, numeric: TypeError, heap numeric: TypeError, word: TypeError, array: TypeError, base=Base, sub=Sub, other: TypeError, closure: TypeError, callable name: TypeError
+1'b''c'NULL 22'x'Sub 3.03.0 1,2,3
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 76
+ints(): Argument #2 must be of type int, float given, called in %s on line 77
+1'b''c'NULL 22'x'Sub 3.03.0 1,2,3
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 76
+ints(): Argument #2 must be of type int, float given, called in %s on line 77
+1'b''c'NULL 22'x'Sub 3.03.0 1,2,3
+some(): Argument #1 ($a) must be of type int, string given, called in %s on line 76
+ints(): Argument #2 must be of type int, float given, called in %s on line 77

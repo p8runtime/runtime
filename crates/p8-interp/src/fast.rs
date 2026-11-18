@@ -633,6 +633,9 @@ impl Context<'_> {
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     // (A variable bound by reference: its value, `quick_ref`.)
+                    // A value of a kind the type takes whole: its tag's bit
+                    // (`Closure::ret_tags`, none for a generator).
+                    Op::VerifyReturn if clo.ret_tags & w[rx!(insn.a)].tag_bit() != 0 => pc += 1,
                     Op::VerifyReturn => match &clo.code.ret_type {
                         Some(ty)
                             if clo.code.is_generator
@@ -2321,8 +2324,38 @@ pub(crate) enum Flow {
 /// convert. A reference is tested by its value (`verify_args` checks
 /// that); a typed variadic by each element of its list (CollectVariadic
 /// made it), as ZEND_RECV_VARIADIC checks them.
+///
+/// An argument whose tag its parameter takes (`Closure::arg_tags`) is
+/// answered by that one bit, and an object of the class its parameter's
+/// memo holds by the memo; the rest, one by one (`arg_plain`). A
+/// function with a typed variadic: every parameter (`params_plain`).
 #[inline]
 pub(crate) fn args_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
+    match &clo.arg_tags {
+        Some(tags) => tags
+            .iter()
+            .zip(w)
+            .take(argc)
+            .enumerate()
+            .all(|(i, (&t, v))| t & v.tag_bit() != 0 || ClassMemo::hit(clo.type_memo.get(i), v) || arg_plain(clo, i, v)),
+        None => params_plain(clo, w, argc),
+    }
+}
+
+/// Argument `i` (passed) plainly of its parameter's type, past the tests
+/// of its tag and the class memo (`args_plain`).
+#[inline(never)]
+fn arg_plain(clo: &Closure, i: usize, v: &Value) -> bool {
+    match &clo.code.params[i].ty {
+        Some(ty) => plain_arg(clo.type_memo.get(i), ty, v),
+        None => true,
+    }
+}
+
+/// `args_plain` of a function with a typed variadic, by its parameters.
+#[cold]
+#[inline(never)]
+fn params_plain(clo: &Closure, w: &[Value], argc: usize) -> bool {
     clo.code.params.iter().zip(w).enumerate().all(|(i, (p, v))| match &p.ty {
         None => true,
         Some(ty) if p.variadic => variadic_plain(ty, v),
