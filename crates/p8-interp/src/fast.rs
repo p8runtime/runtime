@@ -633,6 +633,9 @@ impl Context<'_> {
                     // A return value plainly of the declared type (anything
                     // else, a generator's included: `step`).
                     // (A variable bound by reference: its value, `quick_ref`.)
+                    // A value of a kind the type takes whole: its tag's bit
+                    // (`Closure::ret_tags`, none for a generator).
+                    Op::VerifyReturn if clo.ret_tags & w[rx!(insn.a)].tag_bit() != 0 => pc += 1,
                     Op::VerifyReturn => match &clo.code.ret_type {
                         Some(ty)
                             if clo.code.is_generator

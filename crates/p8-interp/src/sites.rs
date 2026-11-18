@@ -47,6 +47,11 @@ pub struct Closure {
     /// Empty when no parameter has a type; None when a variadic one has
     /// (each of its list's elements is checked).
     pub(crate) arg_tags: Option<Box<[u16]>>,
+    /// The tags (`Value::tag_bit`) of the values the return type takes as
+    /// they are (its `plain_tags`): the loop's VerifyReturn arm passes
+    /// them on that one bit. Every tag when there is no return type; none
+    /// for a generator (its return is not checked there).
+    pub(crate) ret_tags: u16,
     /// `C::NAME`, a public constant that is not an enum case (or
     /// `C::class`): its value, as last read, by the name's constant (one
     /// entry per constant, as `props`), with the class it was read for
@@ -230,10 +235,15 @@ impl Closure {
         } else {
             Some(Box::default())
         };
+        let ret_tags = match &code.ret_type {
+            _ if code.is_generator => 0,
+            Some(t) => t.plain_tags(),
+            None => u16::MAX,
+        };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
         let shape = Shape::of(&code);
-        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, arg_tags, class_consts, statics, globals: OnceCell::new(), shape })
+        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, arg_tags, ret_tags, class_consts, statics, globals: OnceCell::new(), shape })
     }
 
     /// The stand-in for a declared function or method whose closure has not
