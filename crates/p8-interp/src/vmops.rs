@@ -666,7 +666,7 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
     let e = entry.get();
     let class = Rc::as_ptr(&o.class) as usize;
     let cell = if e.class == class && (e.scope == 0 || e.scope == hx.scope()) && o.lazy.get() == 0 && !v.is_undef() && !v.is_reference() {
-        o.slot_at(e.slot as usize)
+        o.slot_at(e.slot())
     } else {
         None
     };

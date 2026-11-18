@@ -2434,7 +2434,7 @@ impl Context<'_> {
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
                         && let Some(x) = cached_prop(site.get(), o, || self.scope_class())
                     {
-                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
+                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot());
                         let r = ops::binary(op, &x, &y, &mut self.diags);
                         self.report_diags();
                         let v = match r {
@@ -2498,7 +2498,7 @@ impl Context<'_> {
                     if let (Some(site), Some(o), true) = (site, target.as_object(), name!(name).is_str())
                         && let Some(old) = cached_prop(site.get(), o, || self.scope_class())
                     {
-                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot as usize);
+                        let (o, pname, slot) = (Rc::clone(o), name!(name).clone(), site.get().slot());
                         let r = if inc { ops::increment(&old, &mut self.diags) } else { ops::decrement(&old, &mut self.diags) };
                         self.report_diags();
                         let new = r.map_err(|e| self.op_error(e))?;
