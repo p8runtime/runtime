@@ -1,0 +1,225 @@
+== w_int
+int 7 -> int 7
+float 1.5 -> TypeError: Cannot assign float to property T::$p_int of type int
+float 2.0 -> TypeError: Cannot assign float to property T::$p_int of type int
+string '12' -> TypeError: Cannot assign string to property T::$p_int of type int
+string 'abc' -> TypeError: Cannot assign string to property T::$p_int of type int
+string '99' -> TypeError: Cannot assign string to property T::$p_int of type int
+bool true -> TypeError: Cannot assign true to property T::$p_int of type int
+bool false -> TypeError: Cannot assign false to property T::$p_int of type int
+null NULL -> TypeError: Cannot assign null to property T::$p_int of type int
+array -> TypeError: Cannot assign array to property T::$p_int of type int
+Base -> TypeError: Cannot assign Base to property T::$p_int of type int
+Sub -> TypeError: Cannot assign Sub to property T::$p_int of type int
+Other -> TypeError: Cannot assign Other to property T::$p_int of type int
+Str -> TypeError: Cannot assign Str to property T::$p_int of type int
+== w_float
+int 7 -> float 7.0
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> TypeError: Cannot assign string to property T::$p_float of type float
+string 'abc' -> TypeError: Cannot assign string to property T::$p_float of type float
+string '99' -> TypeError: Cannot assign string to property T::$p_float of type float
+bool true -> TypeError: Cannot assign true to property T::$p_float of type float
+bool false -> TypeError: Cannot assign false to property T::$p_float of type float
+null NULL -> TypeError: Cannot assign null to property T::$p_float of type float
+array -> TypeError: Cannot assign array to property T::$p_float of type float
+Base -> TypeError: Cannot assign Base to property T::$p_float of type float
+Sub -> TypeError: Cannot assign Sub to property T::$p_float of type float
+Other -> TypeError: Cannot assign Other to property T::$p_float of type float
+Str -> TypeError: Cannot assign Str to property T::$p_float of type float
+== w_string
+int 7 -> TypeError: Cannot assign int to property T::$p_string of type string
+float 1.5 -> TypeError: Cannot assign float to property T::$p_string of type string
+float 2.0 -> TypeError: Cannot assign float to property T::$p_string of type string
+string '12' -> string '12'
+string 'abc' -> string 'abc'
+string '99' -> string '99'
+bool true -> TypeError: Cannot assign true to property T::$p_string of type string
+bool false -> TypeError: Cannot assign false to property T::$p_string of type string
+null NULL -> TypeError: Cannot assign null to property T::$p_string of type string
+array -> TypeError: Cannot assign array to property T::$p_string of type string
+Base -> TypeError: Cannot assign Base to property T::$p_string of type string
+Sub -> TypeError: Cannot assign Sub to property T::$p_string of type string
+Other -> TypeError: Cannot assign Other to property T::$p_string of type string
+Str -> TypeError: Cannot assign Str to property T::$p_string of type string
+== w_bool
+int 7 -> TypeError: Cannot assign int to property T::$p_bool of type bool
+float 1.5 -> TypeError: Cannot assign float to property T::$p_bool of type bool
+float 2.0 -> TypeError: Cannot assign float to property T::$p_bool of type bool
+string '12' -> TypeError: Cannot assign string to property T::$p_bool of type bool
+string 'abc' -> TypeError: Cannot assign string to property T::$p_bool of type bool
+string '99' -> TypeError: Cannot assign string to property T::$p_bool of type bool
+bool true -> bool true
+bool false -> bool false
+null NULL -> TypeError: Cannot assign null to property T::$p_bool of type bool
+array -> TypeError: Cannot assign array to property T::$p_bool of type bool
+Base -> TypeError: Cannot assign Base to property T::$p_bool of type bool
+Sub -> TypeError: Cannot assign Sub to property T::$p_bool of type bool
+Other -> TypeError: Cannot assign Other to property T::$p_bool of type bool
+Str -> TypeError: Cannot assign Str to property T::$p_bool of type bool
+== w_array
+int 7 -> TypeError: Cannot assign int to property T::$p_array of type array
+float 1.5 -> TypeError: Cannot assign float to property T::$p_array of type array
+float 2.0 -> TypeError: Cannot assign float to property T::$p_array of type array
+string '12' -> TypeError: Cannot assign string to property T::$p_array of type array
+string 'abc' -> TypeError: Cannot assign string to property T::$p_array of type array
+string '99' -> TypeError: Cannot assign string to property T::$p_array of type array
+bool true -> TypeError: Cannot assign true to property T::$p_array of type array
+bool false -> TypeError: Cannot assign false to property T::$p_array of type array
+null NULL -> TypeError: Cannot assign null to property T::$p_array of type array
+array -> array
+Base -> TypeError: Cannot assign Base to property T::$p_array of type array
+Sub -> TypeError: Cannot assign Sub to property T::$p_array of type array
+Other -> TypeError: Cannot assign Other to property T::$p_array of type array
+Str -> TypeError: Cannot assign Str to property T::$p_array of type array
+== w_nint
+int 7 -> int 7
+float 1.5 -> TypeError: Cannot assign float to property T::$p_nint of type ?int
+float 2.0 -> TypeError: Cannot assign float to property T::$p_nint of type ?int
+string '12' -> TypeError: Cannot assign string to property T::$p_nint of type ?int
+string 'abc' -> TypeError: Cannot assign string to property T::$p_nint of type ?int
+string '99' -> TypeError: Cannot assign string to property T::$p_nint of type ?int
+bool true -> TypeError: Cannot assign true to property T::$p_nint of type ?int
+bool false -> TypeError: Cannot assign false to property T::$p_nint of type ?int
+null NULL -> null NULL
+array -> TypeError: Cannot assign array to property T::$p_nint of type ?int
+Base -> TypeError: Cannot assign Base to property T::$p_nint of type ?int
+Sub -> TypeError: Cannot assign Sub to property T::$p_nint of type ?int
+Other -> TypeError: Cannot assign Other to property T::$p_nint of type ?int
+Str -> TypeError: Cannot assign Str to property T::$p_nint of type ?int
+== w_union
+int 7 -> int 7
+float 1.5 -> TypeError: Cannot assign float to property T::$p_union of type string|int
+float 2.0 -> TypeError: Cannot assign float to property T::$p_union of type string|int
+string '12' -> string '12'
+string 'abc' -> string 'abc'
+string '99' -> string '99'
+bool true -> TypeError: Cannot assign true to property T::$p_union of type string|int
+bool false -> TypeError: Cannot assign false to property T::$p_union of type string|int
+null NULL -> TypeError: Cannot assign null to property T::$p_union of type string|int
+array -> TypeError: Cannot assign array to property T::$p_union of type string|int
+Base -> TypeError: Cannot assign Base to property T::$p_union of type string|int
+Sub -> TypeError: Cannot assign Sub to property T::$p_union of type string|int
+Other -> TypeError: Cannot assign Other to property T::$p_union of type string|int
+Str -> TypeError: Cannot assign Str to property T::$p_union of type string|int
+== w_fs
+int 7 -> float 7.0
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> string '12'
+string 'abc' -> string 'abc'
+string '99' -> string '99'
+bool true -> TypeError: Cannot assign true to property T::$p_fs of type string|float
+bool false -> TypeError: Cannot assign false to property T::$p_fs of type string|float
+null NULL -> TypeError: Cannot assign null to property T::$p_fs of type string|float
+array -> TypeError: Cannot assign array to property T::$p_fs of type string|float
+Base -> TypeError: Cannot assign Base to property T::$p_fs of type string|float
+Sub -> TypeError: Cannot assign Sub to property T::$p_fs of type string|float
+Other -> TypeError: Cannot assign Other to property T::$p_fs of type string|float
+Str -> TypeError: Cannot assign Str to property T::$p_fs of type string|float
+== w_mixed
+int 7 -> int 7
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> string '12'
+string 'abc' -> string 'abc'
+string '99' -> string '99'
+bool true -> bool true
+bool false -> bool false
+null NULL -> null NULL
+array -> array
+Base -> Base
+Sub -> Sub
+Other -> Other
+Str -> Str
+== w_base
+int 7 -> TypeError: Cannot assign int to property T::$p_base of type ?Base
+float 1.5 -> TypeError: Cannot assign float to property T::$p_base of type ?Base
+float 2.0 -> TypeError: Cannot assign float to property T::$p_base of type ?Base
+string '12' -> TypeError: Cannot assign string to property T::$p_base of type ?Base
+string 'abc' -> TypeError: Cannot assign string to property T::$p_base of type ?Base
+string '99' -> TypeError: Cannot assign string to property T::$p_base of type ?Base
+bool true -> TypeError: Cannot assign true to property T::$p_base of type ?Base
+bool false -> TypeError: Cannot assign false to property T::$p_base of type ?Base
+null NULL -> null NULL
+array -> TypeError: Cannot assign array to property T::$p_base of type ?Base
+Base -> Base
+Sub -> Sub
+Other -> TypeError: Cannot assign Other to property T::$p_base of type ?Base
+Str -> TypeError: Cannot assign Str to property T::$p_base of type ?Base
+== w_shape
+int 7 -> TypeError: Cannot assign int to property T::$p_shape of type Shape
+float 1.5 -> TypeError: Cannot assign float to property T::$p_shape of type Shape
+float 2.0 -> TypeError: Cannot assign float to property T::$p_shape of type Shape
+string '12' -> TypeError: Cannot assign string to property T::$p_shape of type Shape
+string 'abc' -> TypeError: Cannot assign string to property T::$p_shape of type Shape
+string '99' -> TypeError: Cannot assign string to property T::$p_shape of type Shape
+bool true -> TypeError: Cannot assign true to property T::$p_shape of type Shape
+bool false -> TypeError: Cannot assign false to property T::$p_shape of type Shape
+null NULL -> TypeError: Cannot assign null to property T::$p_shape of type Shape
+array -> TypeError: Cannot assign array to property T::$p_shape of type Shape
+Base -> Base
+Sub -> Sub
+Other -> TypeError: Cannot assign Other to property T::$p_shape of type Shape
+Str -> TypeError: Cannot assign Str to property T::$p_shape of type Shape
+== w_num
+int 7 -> int 7
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> TypeError: Cannot assign string to property T::$p_num of type int|float
+string 'abc' -> TypeError: Cannot assign string to property T::$p_num of type int|float
+string '99' -> TypeError: Cannot assign string to property T::$p_num of type int|float
+bool true -> TypeError: Cannot assign true to property T::$p_num of type int|float
+bool false -> TypeError: Cannot assign false to property T::$p_num of type int|float
+null NULL -> TypeError: Cannot assign null to property T::$p_num of type int|float
+array -> TypeError: Cannot assign array to property T::$p_num of type int|float
+Base -> TypeError: Cannot assign Base to property T::$p_num of type int|float
+Sub -> TypeError: Cannot assign Sub to property T::$p_num of type int|float
+Other -> TypeError: Cannot assign Other to property T::$p_num of type int|float
+Str -> TypeError: Cannot assign Str to property T::$p_num of type int|float
+== w_this_int
+int 7 -> int 7
+float 1.5 -> TypeError: Cannot assign float to property T::$p_int of type int
+float 2.0 -> TypeError: Cannot assign float to property T::$p_int of type int
+string '12' -> TypeError: Cannot assign string to property T::$p_int of type int
+string 'abc' -> TypeError: Cannot assign string to property T::$p_int of type int
+string '99' -> TypeError: Cannot assign string to property T::$p_int of type int
+bool true -> TypeError: Cannot assign true to property T::$p_int of type int
+bool false -> TypeError: Cannot assign false to property T::$p_int of type int
+null NULL -> TypeError: Cannot assign null to property T::$p_int of type int
+array -> TypeError: Cannot assign array to property T::$p_int of type int
+Base -> TypeError: Cannot assign Base to property T::$p_int of type int
+Sub -> TypeError: Cannot assign Sub to property T::$p_int of type int
+Other -> TypeError: Cannot assign Other to property T::$p_int of type int
+Str -> TypeError: Cannot assign Str to property T::$p_int of type int
+== w_this_float
+int 7 -> float 7.0
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> TypeError: Cannot assign string to property T::$p_float of type float
+string 'abc' -> TypeError: Cannot assign string to property T::$p_float of type float
+string '99' -> TypeError: Cannot assign string to property T::$p_float of type float
+bool true -> TypeError: Cannot assign true to property T::$p_float of type float
+bool false -> TypeError: Cannot assign false to property T::$p_float of type float
+null NULL -> TypeError: Cannot assign null to property T::$p_float of type float
+array -> TypeError: Cannot assign array to property T::$p_float of type float
+Base -> TypeError: Cannot assign Base to property T::$p_float of type float
+Sub -> TypeError: Cannot assign Sub to property T::$p_float of type float
+Other -> TypeError: Cannot assign Other to property T::$p_float of type float
+Str -> TypeError: Cannot assign Str to property T::$p_float of type float
+== w_ro
+int 7 -> float 7.0
+float 1.5 -> float 1.5
+float 2.0 -> float 2.0
+string '12' -> TypeError: Cannot assign string to property T::$p_ro of type float
+string 'abc' -> TypeError: Cannot assign string to property T::$p_ro of type float
+string '99' -> TypeError: Cannot assign string to property T::$p_ro of type float
+bool true -> TypeError: Cannot assign true to property T::$p_ro of type float
+bool false -> TypeError: Cannot assign false to property T::$p_ro of type float
+null NULL -> TypeError: Cannot assign null to property T::$p_ro of type float
+array -> TypeError: Cannot assign array to property T::$p_ro of type float
+Base -> TypeError: Cannot assign Base to property T::$p_ro of type float
+Sub -> TypeError: Cannot assign Sub to property T::$p_ro of type float
+Other -> TypeError: Cannot assign Other to property T::$p_ro of type float
+Str -> TypeError: Cannot assign Str to property T::$p_ro of type float
