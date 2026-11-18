@@ -40,6 +40,13 @@ pub struct Closure {
     /// one per parameter, then the return type's; empty when no type
     /// names a class.
     pub(crate) type_memo: Box<[ClassMemo]>,
+    /// Per parameter, the tags (`Value::tag_bit`) of the arguments it
+    /// takes as they are with no test past the tag (`args_plain`): its
+    /// type's `plain_tags` and an undefined value (an argument not
+    /// passed, its default's to fill), every tag when it has no type.
+    /// Empty when no parameter has a type; None when a variadic one has
+    /// (each of its list's elements is checked).
+    pub(crate) arg_tags: Option<Box<[u16]>>,
     /// `C::NAME`, a public constant that is not an enum case (or
     /// `C::class`): its value, as last read, by the name's constant (one
     /// entry per constant, as `props`), with the class it was read for
@@ -157,6 +164,16 @@ impl ClassMemo {
         }
     }
 
+    /// Whether `v` is an object of the class `memo` accepted last (`quick`
+    /// is true for it), with nothing learned on a miss.
+    #[inline(always)]
+    pub(crate) fn hit(memo: Option<&ClassMemo>, v: &Value) -> bool {
+        match (v.as_object(), memo) {
+            (Some(o), Some(m)) => m.addr.get() == Rc::as_ptr(&o.class) as usize,
+            _ => false,
+        }
+    }
+
     #[inline(never)]
     fn learn(&self, ty: &p8_runtime::types::TypeDecl, o: &Rc<Object>) -> bool {
         if !ty.quick_object(o) {
@@ -206,10 +223,17 @@ impl Closure {
         } else {
             Box::default()
         };
+        let arg_tags = if code.params.iter().any(|p| p.variadic && p.ty.is_some()) {
+            None
+        } else if code.params.iter().any(|p| p.ty.is_some()) {
+            Some(code.params.iter().map(|p| p.ty.as_ref().map_or(u16::MAX, |t| t.plain_tags() | Value::tags_of(Kind::Undef))).collect())
+        } else {
+            Some(Box::default())
+        };
         let class_consts = code.consts.iter().map(|_| RefCell::default()).collect();
         let statics = code.consts.iter().map(|_| RefCell::default()).collect();
         let shape = Shape::of(&code);
-        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, class_consts, statics, globals: OnceCell::new(), shape })
+        Rc::new(Closure { code, consts, sites, props, methods, index: Cell::new(u32::MAX), news, class_refs, defaults, type_memo, arg_tags, class_consts, statics, globals: OnceCell::new(), shape })
     }
 
     /// The stand-in for a declared function or method whose closure has not

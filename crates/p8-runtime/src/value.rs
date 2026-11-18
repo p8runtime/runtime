@@ -607,6 +607,30 @@ impl Value {
         }
     }
 
+    /// The tag as one bit (bit n for tag n), so a set of tags (`tags_of`)
+    /// is tested in one instruction: a declared type's check of a value
+    /// of a kind it takes whole (`TypeDecl::plain_tags`).
+    #[inline(always)]
+    pub fn tag_bit(&self) -> u16 {
+        1 << self.tag()
+    }
+
+    /// The tag bits (`tag_bit`) of the values of `kind`: a string's two,
+    /// the program-memory one and the counted one.
+    pub fn tags_of(kind: Kind) -> u16 {
+        match kind {
+            Kind::Null => 1 << 0,
+            Kind::Bool => 1 << 1,
+            Kind::Int => 1 << 2,
+            Kind::Float => 1 << 3,
+            Kind::Undef => 1 << 4,
+            Kind::Str => 1 << 5 | 1 << 6,
+            Kind::Array => 1 << 7,
+            Kind::Ref => 1 << 8,
+            Kind::Object => 1 << 9,
+        }
+    }
+
     #[inline(always)]
     pub fn as_bool(&self) -> Option<bool> {
         match self.0 {
@@ -1427,6 +1451,31 @@ mod tests {
         }
         // Two words, the tag first: the payload at offset 8 in every variant.
         assert_eq!((mem::size_of::<Repr>(), mem::align_of::<Repr>()), (16, 8));
+    }
+
+    /// A value's tag bit is among its kind's (`tags_of`) and no other
+    /// kind's: a set of kinds' tags tests exactly those kinds.
+    #[test]
+    fn a_tag_bit_is_its_kinds_alone() {
+        let kinds = [Kind::Null, Kind::Bool, Kind::Int, Kind::Float, Kind::Undef, Kind::Str, Kind::Array, Kind::Ref, Kind::Object];
+        let values = [
+            Value::NULL,
+            Value::UNDEF,
+            Value::TRUE,
+            Value::FALSE,
+            Value::int(-7),
+            Value::float(1.5),
+            Value::istr(IStr::intern(b"a tag bit").expect("room")),
+            Value::str("heap"),
+            Value::array(PhpArray::new()),
+            Value::new_reference(Value::int(1)),
+        ];
+        for v in &values {
+            for k in kinds {
+                assert_eq!(Value::tags_of(k) & v.tag_bit() != 0, k == v.kind(), "{:?} in {k:?}'s tags", v.kind());
+            }
+        }
+        assert_eq!(kinds.iter().fold(0, |all, &k| all | Value::tags_of(k)).count_ones(), 10);
     }
 
     #[test]

@@ -67,26 +67,49 @@ impl TypeDecl {
     /// False only means the full check (`verify`) decides.
     #[inline]
     pub fn quick(&self, v: &Value) -> bool {
-        let bit = match v.kind() {
+        match v.kind() {
+            Kind::Bool => self.mask & (T_BOOL | T_MIXED | if v.as_bool().expect("a bool") { T_TRUE } else { T_FALSE }) != 0,
+            // A named class or interface the object's class is or extends
+            // (`self`/`parent` never match a class name here: `verify`
+            // resolves them), or a Closure where a callable is wanted.
+            Kind::Object => self.quick_object(v.as_object().expect("an object")),
+            k => self.takes_whole(k),
+        }
+    }
+
+    /// Whether `quick` takes every value of `kind` by its kind alone (no
+    /// bool's value, no object's class): its bit, or mixed. Never an
+    /// undefined value or a reference.
+    #[inline(always)]
+    fn takes_whole(&self, kind: Kind) -> bool {
+        let bit = match kind {
             Kind::Null => T_NULL,
-            Kind::Bool => T_BOOL | if v.as_bool().expect("a bool") { T_TRUE } else { T_FALSE },
+            Kind::Bool => T_BOOL,
             Kind::Int => T_INT,
             Kind::Float => T_FLOAT,
             Kind::Str => T_STRING,
             Kind::Array => T_ARRAY,
-            // A named class or interface the object's class is or extends
-            // (`self`/`parent` never match a class name here: `verify`
-            // resolves them), or a Closure where a callable is wanted.
-            Kind::Object => return self.quick_object(v.as_object().expect("an object")),
+            Kind::Object => T_OBJECT,
             Kind::Undef | Kind::Ref => return false,
         };
         self.mask & (bit | T_MIXED) != 0
     }
 
+    /// The tags (`Value::tags_of`) of the kinds `quick` takes whole: a
+    /// value whose tag bit is among them is plainly of this type, with no
+    /// test past its tag (a check made once per function, then one bit
+    /// test per value). Any other value is `quick`'s to decide.
+    pub fn plain_tags(&self) -> u16 {
+        [Kind::Null, Kind::Bool, Kind::Int, Kind::Float, Kind::Str, Kind::Array, Kind::Object, Kind::Undef, Kind::Ref]
+            .into_iter()
+            .filter(|&k| self.takes_whole(k))
+            .fold(0, |tags, k| tags | Value::tags_of(k))
+    }
+
     /// `quick` of an object: its verdict depends on the object's class
     /// alone (callers may remember it per class).
     pub fn quick_object(&self, o: &Object) -> bool {
-        self.mask & (T_OBJECT | T_MIXED) != 0
+        self.takes_whole(Kind::Object)
             || (self.mask & T_CALLABLE != 0 && o.class.lower.as_slice() == b"closure")
             || if self.intersection {
                 !self.lower.is_empty() && self.lower.iter().all(|c| o.class.is_a(c.as_bytes()))
