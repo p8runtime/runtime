@@ -39,6 +39,9 @@ impl Context<'_> {
         // the next round of the frame loop runs that frame here, even at
         // pc 0 (another frame, a callee it left pushed, is entered).
         let mut handed_back = 0;
+        // Whether the executable has native code (set before any request
+        // runs, `Isolate::set_native`): read once, not at every frame.
+        let native = self.isolate.native.is_some();
         // The objects' ids, whose destructor queue every releasing write
         // tests (`done!`): held here, a load nearer than the context's.
         // (Set once, when the context is made.)
@@ -60,7 +63,7 @@ impl Context<'_> {
             // executable with no native code tests that alone, not each
             // frame's function.)
             if pc == 0
-                && self.isolate.native.is_some()
+                && native
                 && handed_back != self.frames.len()
                 && let Some(id) = self.frames.top().func.code.native
             {
@@ -515,7 +518,9 @@ impl Context<'_> {
                         frame.this = this;
                         frame.scope = Some(scope);
                         frame.called = Some(called);
-                        enter(&mut self.frames, regs);
+                        // (The frame's numbers are in hand: `bind`, not
+                        // `enter`, which reads them back from the frame.)
+                        bind(&mut self.frames, regs, target.shape, base + args as usize, n);
                         pc = 0;
                         continue 'frame;
                     }};
@@ -1239,7 +1244,7 @@ impl Context<'_> {
                         let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
-                        enter(&mut self.frames, regs);
+                        bind(&mut self.frames, regs, target.shape, base + args as usize, n);
                         pc = 0;
                         continue 'frame;
                     }
@@ -1318,7 +1323,7 @@ impl Context<'_> {
                         let frame = self.frames.call(Some(target), pc + 1, base + args as usize, n, (base + dst as usize) as u32);
                         frame.this = Some(this);
                         frame.scope = Some(declaring);
-                        enter(&mut self.frames, regs);
+                        bind(&mut self.frames, regs, target.shape, base + args as usize, n);
                         pc = 0;
                         continue 'frame;
                     }
@@ -1390,7 +1395,7 @@ impl Context<'_> {
                                 let frame = self.frames.call(Some(&f), pc + 1, base + args as usize, n, NO_RET);
                                 frame.this = Some(object);
                                 frame.scope = Some(declaring);
-                                enter(&mut self.frames, regs);
+                                bind(&mut self.frames, regs, f.shape, base + args as usize, n);
                                 pc = 0;
                                 continue 'frame;
                             }
@@ -1438,7 +1443,7 @@ impl Context<'_> {
                         let frame = self.frames.call(Some(&f), pc + 1, at, n, NO_RET);
                         frame.this = Some(object);
                         frame.scope = Some(declaring);
-                        enter(&mut self.frames, regs);
+                        bind(&mut self.frames, regs, f.shape, at, n);
                         pc = 0;
                         continue 'frame;
                     }
@@ -1825,7 +1830,7 @@ impl Context<'_> {
                         frame.scope = scope;
                         frame.called = called;
                         frame.owner = Some(Rc::clone(&owner));
-                        enter(&mut self.frames, regs);
+                        bind(&mut self.frames, regs, f.shape, base + args, n);
                         if !f.code.bound.is_empty()
                             && let Some(data) = callable::closure_data(&owner)
                         {
@@ -3100,10 +3105,10 @@ fn leave_frame(frames: &mut Frames, regs: &mut [Value], n: usize, value: Value) 
     // Locals die with the frame (before the result lands: the result
     // register may be inside the window).
     let base = frame.base as usize;
-    let code = &frame.func.code;
     // The variables, and the temporaries unless the code frees each
     // where it dies (`frees_temps`), as PHP's are: then they are empty.
-    let end = base + if code.frees_temps { code.ncv as usize } else { usize::from(code.nregs) };
+    // (`Shape::clear`, worked out once per closure.)
+    let end = base + frame.func.shape.clear as usize;
     for r in &mut regs[base..end] {
         clear(r);
     }

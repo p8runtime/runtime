@@ -267,6 +267,21 @@ pub(crate) fn recycle_extra(spare: &mut Vec<Box<Extra>>, mut extra: Box<Extra>) 
     }
 }
 
+/// A reused slot made the frame of `func` (None: the code it runs
+/// already), its window at `base`. The slot takes a count of the code
+/// only when it does not run it already: the same function called again
+/// from the same depth takes none.
+#[inline(always)]
+fn fill(slot: &mut Frame, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) {
+    if let Some(func) = func
+        && !Rc::ptr_eq(&slot.func, func)
+    {
+        p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
+        slot.func = Rc::clone(func);
+    }
+    (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
+}
+
 impl Frames {
     #[inline(always)]
     pub(crate) fn len(&self) -> usize {
@@ -312,15 +327,33 @@ impl Frames {
     /// A call's frame above the running one, which goes on at `resume`
     /// when it returns: `func` (None: the slot the push reuses runs it
     /// already). The frame pushed.
+    ///
+    /// The caller's slot and the one the push reuses are one slice of two,
+    /// so one bounds check covers both and the length is read once; a
+    /// push past every slot so far is `call_new`'s.
     #[inline(always)]
     pub(crate) fn call(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
+        let n = self.len;
+        match self.slots.get_mut(n.wrapping_sub(1)..=n) {
+            Some([caller, slot]) => {
+                caller.pc = resume as u32;
+                fill(slot, func, base, argc, ret);
+            }
+            _ => return self.call_new(func, resume, base, argc, ret),
+        }
+        self.len = n + 1;
+        &mut self.slots[n]
+    }
+
+    /// `call` at a depth no frame has reached yet (no slot to reuse).
+    #[cold]
+    #[inline(never)]
+    fn call_new(&mut self, func: Option<&Rc<Closure>>, resume: usize, base: usize, argc: usize, ret: u32) -> &mut Frame {
         self.top_mut().pc = resume as u32;
         self.push_code(func, base, argc, ret)
     }
 
-    /// `push`, of `func` (None: the next slot's). The slot takes a count
-    /// of the code only when it does not run it already: the same
-    /// function called again from the same depth takes none.
+    /// `push`, of `func` (None: the next slot's).
     #[inline(always)]
     fn push_code(&mut self, func: Option<&Rc<Closure>>, base: usize, argc: usize, ret: u32) -> &mut Frame {
         let n = self.len;
@@ -329,13 +362,7 @@ impl Frames {
             return self.grow(func.expect("a new slot's function"), base, argc, ret);
         }
         let slot = &mut self.slots[n];
-        if let Some(func) = func
-            && !Rc::ptr_eq(&slot.func, func)
-        {
-            p8_runtime::counts::bump(p8_runtime::counts::Count::CodeCounted);
-            slot.func = Rc::clone(func);
-        }
-        (slot.pc, slot.base, slot.ret, slot.argc, slot.global) = (0, base as u32, ret, argc as u32, false);
+        fill(slot, func, base, argc, ret);
         slot
     }
 

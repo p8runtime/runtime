@@ -1,0 +1,23 @@
+ P(p) P(q,7,8)
+[0] ab aBC axC a+1|2 010BC0+2|3 Qzbc q1Qqbcq+2|3
+12 23 nozo 121 ~m0 unset:0 nozp
+P/made/0 Q/t/2  P(n0) P(0,4,5)n0 0
+cfb7 cd7 g0 g3
+40 P12345 3
+~w0 70:w0 after-wide ~n0 n0 after-narrow
+
+[1] ab aBC axC a+1|2 111BC1+2|3 Qzbc q1Qqbcq+2|3
+12 23 nozo 121 ~m1 unset:1 nozp
+P/made/0 Q/t/2  P(n1) P(1,4,5)n1 1
+cfb14 cd14 g0 g3
+70 P123456 3
+~w1 70:w1 after-wide ~n1 n1 after-narrow
+
+[2] ab aBC axC a+1|2 212BC2+2|3 Qzbc q1Qqbcq+2|3
+12 23 nozo 121 ~m2 unset:2 nozp
+P/made/0 Q/t/2  P(n2) P(2,4,5)n2 2
+cfb21 cd21 g0 g3
+100 P1234567 3
+~w2 70:w2 after-wide ~n2 n2 after-narrow
+
+calls 21

@@ -94,12 +94,22 @@ pub(crate) struct Shape {
     /// extra and no default is filled in), for code that is not a
     /// generator's; no count (`u32::MAX`) for a generator's.
     pub(crate) exact: u32,
+    /// The registers `leave` empties from the base: the variables, and
+    /// the temporaries unless the code frees each where it dies
+    /// (`Function::frees_temps`), as PHP's are.
+    pub(crate) clear: u32,
 }
 
 impl Shape {
     fn of(code: &Function) -> Shape {
         let nparams = code.params.len() as u32;
-        Shape { need: u32::from(code.nregs).max(crate::fast::WINDOW as u32), nparams, ncv: u32::from(code.ncv), exact: if code.is_generator { u32::MAX } else { nparams } }
+        Shape {
+            need: u32::from(code.nregs).max(crate::fast::WINDOW as u32),
+            nparams,
+            ncv: u32::from(code.ncv),
+            exact: if code.is_generator { u32::MAX } else { nparams },
+            clear: if code.frees_temps { u32::from(code.ncv) } else { u32::from(code.nregs) },
+        }
     }
 }
 
