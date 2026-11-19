@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::fast::{Src, WINDOW, Wrote, clear, copied, identical_rest, is_owner, is_set, isset_elem, loose_eq_rest, owner_write, put, put_var, read_ref, ref_object, set_int_elem, test, truth, write_ref};
-use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_prop, plain_slot, refill_prop};
+use crate::sites::{Plain, PropSite, cached_prop, dynamic_prop, plain_slot, refill_prop, typed_write};
 use p8_bytecode::insn::args;
 use p8_bytecode::insn::kind::Kind;
 use p8_bytecode::insn::kinds::*;
@@ -645,9 +645,11 @@ fn fetch_prop_miss(w: &mut [Value; WINDOW], clo: &Closure, top: &Frame, dst: u32
 /// is), so the common write asks nothing of the property, the class's
 /// flags or the slot's state: that address and the entry's scope, the
 /// object not lazy, a defined value that is no reference, then the store
-/// (`store_slot`). The rest (`assign_prop_guarded`): an entry for another
-/// class or scope, filled again; a typed, readonly or set-visibility
-/// property, or a class with __set and its kin, through `plain_slot`'s
+/// (`store_slot`). A typed, readonly or set-visibility property, or a
+/// class with __set and its kin: what the entry says of the property,
+/// made once (`typed_write`: a typed write of a value of a tag its type
+/// takes whole is one bit test). The rest (`assign_prop_guarded`): an
+/// entry for another class or scope, filled again, and `plain_slot`'s
 /// tests. What neither takes is cold. TAKE: the value's temporary is
 /// released after.
 #[inline(always)]
@@ -664,12 +666,12 @@ pub(crate) fn assign_prop<S: spec::AssignProp>(hx: Hx, args::AssignProp { obj, v
     let e = entry.get();
     let class = Rc::as_ptr(&o.class) as usize;
     let cell = if e.class == class && (e.scope == 0 || e.scope == hx.scope()) && o.lazy.get() == 0 && !v.is_undef() && !v.is_reference() {
-        o.slot_at(e.slot as usize)
+        o.slot_at(e.slot())
     } else {
         None
     };
     let mut released = if let Some(cell) = cell
-        && (e.plain_write == class || plain_prop(o, e.slot as usize, hx.top.scope.as_deref(), v, hx.reinit).is_some_and(|plain| slot_writable(o, cell, plain)))
+        && (e.plain_write == class || typed_write(e, o, cell, v, hx.reinit))
     {
         store_slot(cell, v.clone())
     } else if assign_prop_guarded(entry, o, v, &hx.clo.consts[site as usize], hx.top.scope.as_ref(), hx.reinit) {
@@ -734,7 +736,7 @@ fn store_through(cell: &std::cell::Cell<Value>, reference: Value) -> bool {
 /// (`refill_prop`), and the write made when `plain_slot` finds it one
 /// with nothing to report. False: nothing written (the cold path's). Out
 /// of line: the entry's own class and scope, the common case, never come
-/// here (a typed property's write among them: `plain_prop` in the arm).
+/// here (a typed property's write among them: `typed_write` in the arm).
 #[inline(never)]
 fn assign_prop_guarded(entry: &std::cell::Cell<PropSite>, o: &p8_runtime::object::Object, v: &Value, name: &Value, scope: Option<&Rc<Class>>, reinit: bool) -> bool {
     let at = (scope.map_or(0, |c| Rc::as_ptr(c) as usize), scope.map(|c| &**c));

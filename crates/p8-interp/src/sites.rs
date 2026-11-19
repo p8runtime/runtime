@@ -369,11 +369,10 @@ impl Context<'_> {
 /// from code in `scope` (0: any, for a public property), keep it at `slot`.
 /// What it skips on a hit is the name lookup and the visibility check, as
 /// PHP's does (zend_fetch_property_address / FETCH_OBJ_R's CACHED_PTR).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct PropSite {
     pub(crate) class: usize,
     pub(crate) scope: usize,
-    pub(crate) slot: u32,
     /// `class` when a write the entry answers is a plain store, whatever
     /// the slot holds (`prop_entry`): the property is untyped, not
     /// readonly, with no set visibility, in a class without __set and its
@@ -381,6 +380,60 @@ pub(crate) struct PropSite {
     /// the slot is, so the loop's write compares this with the object's
     /// class and asks nothing of the property (`assign_prop`).
     pub(crate) plain_write: usize,
+    /// The slot (low 32 bits); then, for a write the entry answers that is
+    /// no plain store, the tags (`Value::tag_bit`) of the values the
+    /// property's type takes as they are (its `plain_tags`; every tag for
+    /// an untyped one: `tags`), and what the write needs of the slot's
+    /// state (`write`). One word: the loop reads it whole for the slot, and
+    /// the rest costs nothing there until a write is a typed one.
+    pub(crate) word: u64,
+}
+
+/// An entry that answers for no class (no class is at address 0). Its
+/// `write` is 3, None as 0 is: an entry of all zero bytes made every
+/// closure's entries with a memset, which cost more than the stores.
+impl Default for PropSite {
+    fn default() -> PropSite {
+        PropSite { class: 0, scope: 0, plain_write: 0, word: 3 << 48 }
+    }
+}
+
+impl PropSite {
+    pub(crate) fn new(class: usize, scope: usize, slot: usize, plain_write: usize, tags: u16, write: Option<Plain>) -> PropSite {
+        let write = match write {
+            None => 0,
+            Some(Plain::Any) => 1,
+            Some(Plain::Unset) => 2,
+        };
+        PropSite { class, scope, plain_write, word: slot as u32 as u64 | u64::from(tags) << 32 | write << 48 }
+    }
+
+    /// The property's slot in the object.
+    #[inline(always)]
+    pub(crate) fn slot(self) -> usize {
+        self.word as u32 as usize
+    }
+
+    /// The tags of the values a write stores with no test past its tag
+    /// and the slot's state (`typed_write`).
+    #[inline(always)]
+    pub(crate) fn tags(self) -> u16 {
+        (self.word >> 32) as u16
+    }
+
+    /// What a write that is no plain store needs of the slot's state
+    /// (`slot_writable`), when the property's readonly state and set
+    /// visibility let code in the entry's scope write it
+    /// (`guarded_write`'s answer, made once); None: they do not, or the
+    /// entry may not say (the full write's).
+    #[inline(always)]
+    pub(crate) fn write(self) -> Option<Plain> {
+        match self.word >> 48 {
+            1 => Some(Plain::Any),
+            2 => Some(Plain::Unset),
+            _ => None,
+        }
+    }
 }
 
 /// A method call's cache entry: on an object of `class` (its address),
@@ -603,7 +656,7 @@ pub(crate) fn cached_prop<'a>(site: PropSite, o: &Rc<p8_runtime::object::Object>
             _ => return None,
         }
     }
-    let cell = o.slot_at(site.slot as usize)?;
+    let cell = o.slot_at(site.slot())?;
     let v = cell.replace(Value::UNDEF);
     if v.is_plain() {
         if v.is_undef() {
@@ -641,10 +694,40 @@ pub(crate) fn prop_entry(o: &p8_runtime::object::Object, name: &[u8], slot: usiz
         return None;
     }
     let shared = o.class.slots.get(name).is_some_and(|slots| slots.len() == 1);
-    let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared { 0 } else { scope };
+    // (A readonly or set-visibility property's entry is its scope's alone:
+    // whether a write is allowed depends on the scope, `write`.)
+    let guarded = prop.readonly || prop.set_visibility.is_some();
+    let scope = if prop.visibility == p8_runtime::object::Visibility::Public && shared && !guarded { 0 } else { scope };
     let class = Rc::as_ptr(&o.class) as usize;
-    let plain = !prop.readonly && prop.set_visibility.is_none() && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
-    Some(PropSite { class, scope, slot: slot as u32, plain_write: if plain { class } else { 0 } })
+    let plain = !guarded && prop.ty_decl.is_none() && o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0;
+    if plain {
+        // (A plain store's entry: its write never asks `tags` or `write`.)
+        return Some(PropSite::new(class, scope, slot, class, 0, None));
+    }
+    let write = if !guarded {
+        Some(Plain::Any)
+    } else if declared_in(o, prop, scope) {
+        // (`guarded_write` from the declaring class: the scope is it.)
+        Some(if prop.readonly { Plain::Unset } else { Plain::Any })
+    } else {
+        None
+    };
+    let tags = prop.ty_decl.as_ref().map_or(u16::MAX, |t| t.plain_tags());
+    Some(PropSite::new(class, scope, slot, 0, tags, write))
+}
+
+/// Whether the class at address `scope` is the one declaring `prop` in
+/// `o`'s chain (`guarded_write`'s test, by the class's name there: one
+/// class has a name in a request).
+fn declared_in(o: &p8_runtime::object::Object, prop: &p8_runtime::object::Property, scope: usize) -> bool {
+    let mut c = Some(&o.class);
+    while let Some(k) = c {
+        if k.lower == prop.declaring {
+            return Rc::as_ptr(k) as usize == scope;
+        }
+        c = k.parent.as_ref();
+    }
+    false
 }
 
 /// The declared slot of property `name` of `o` that code in `scope` sees
@@ -742,7 +825,7 @@ pub(crate) fn cached_slot(site: PropSite, o: &Rc<p8_runtime::object::Object>, sc
     if site.class != Rc::as_ptr(&o.class) as usize || (site.scope != 0 && site.scope != scope) || o.lazy.get() != 0 {
         return None;
     }
-    let slot = site.slot as usize;
+    let slot = site.slot();
     let unset = p8_runtime::object::Slot::peek(o.slots().get(slot)?, Value::is_undef);
     (!unset || o.class.flags & p8_runtime::object::CLASS_MAGIC_PROPS == 0).then_some(slot)
 }
@@ -766,14 +849,14 @@ pub(crate) fn plain_slot(site: PropSite, o: &p8_runtime::object::Object, scope: 
     if v.is_undef() || v.is_reference() {
         return None;
     }
-    let slot = site.slot as usize;
+    let slot = site.slot();
     Some((slot, plain_prop(o, slot, scope.1, v, reinit)?))
 }
 
 /// `plain_slot`'s tests of the property itself, for a write whose entry,
-/// object and value passed the others (the loop's write, on an entry
-/// that is no plain store's: `assign_prop`): untyped or plainly of its
-/// type, its readonly state and set visibility (`guarded_write`).
+/// object and value passed the others: untyped or plainly of its type,
+/// its readonly state and set visibility (`guarded_write`). (The loop's
+/// write asks its entry instead: `typed_write`.)
 #[inline(always)]
 pub(crate) fn plain_prop(o: &p8_runtime::object::Object, slot: usize, scope: Option<&Class>, v: &Value, reinit: bool) -> Option<Plain> {
     let prop = o.class.properties.get(slot)?;
@@ -789,6 +872,27 @@ pub(crate) fn plain_prop(o: &p8_runtime::object::Object, slot: usize, scope: Opt
         return None;
     }
     Some(plain)
+}
+
+/// `plain_prop`'s answer from the entry (`PropSite::write`, `tags`), for
+/// a write whose entry, object and value passed the others (the loop's
+/// write, on an entry that is no plain store's: `assign_prop`), and
+/// slot `cell`'s state for it (`slot_writable`): a property this scope
+/// may write (readonly: its first write, no clone re-initialized), a
+/// value of a tag its type takes whole, else plainly of its type
+/// (`typed_quick`, out of line).
+#[inline(always)]
+pub(crate) fn typed_write(e: PropSite, o: &p8_runtime::object::Object, cell: &Cell<Value>, v: &Value, reinit: bool) -> bool {
+    let Some(plain) = e.write() else { return false };
+    (plain == Plain::Any || !reinit) && (v.tag_bit() & e.tags() != 0 || typed_quick(o, e.slot(), v)) && crate::vmops::slot_writable(o, cell, plain)
+}
+
+/// `typed_write`'s value of no tag its property's type takes whole (an
+/// object of a named class, a bool of `true`/`false`, a value to coerce):
+/// the type's `quick`.
+#[inline(never)]
+fn typed_quick(o: &p8_runtime::object::Object, slot: usize, v: &Value) -> bool {
+    o.class.properties.get(slot).and_then(|p| p.ty_decl.as_ref()).is_some_and(|t| t.quick(v))
 }
 
 /// What a plain write to a slot needs of the slot's state.
